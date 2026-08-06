@@ -66,44 +66,24 @@ fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
 fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
     let payload = json!({
         "trust_domain": "ak:trust_domain:other.example",
-        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
     });
-    let err = cross_signing_reset_replay_check(
-        &payload,
-        "ak:event:01904100-0000-8000-8000-000000000001",
-        "ak:trust_domain:soland.local",
-    )
-    .unwrap_err();
+    let err = cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap_err();
     assert_eq!(err.0, ErrorCode::Unauthenticated);
 }
 
 #[test]
-fn cross_signing_reset_replay_rejects_wrong_event_id() {
-    let payload = json!({
-        "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000002",
-    });
-    let err = cross_signing_reset_replay_check(
-        &payload,
-        "ak:event:01904100-0000-8000-8000-000000000001",
-        "ak:trust_domain:soland.local",
-    )
-    .unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
+fn cross_signing_reset_replay_rejects_missing_trust_domain() {
+    let payload = json!({});
+    let err = cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap_err();
+    assert_eq!(err.0, ErrorCode::SchemaViolation);
 }
 
 #[test]
 fn cross_signing_reset_replay_passes_when_matched() {
     let payload = json!({
         "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
     });
-    cross_signing_reset_replay_check(
-        &payload,
-        "ak:event:01904100-0000-8000-8000-000000000001",
-        "ak:trust_domain:soland.local",
-    )
-    .unwrap();
+    cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap();
 }
 
 #[test]

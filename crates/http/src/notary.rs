@@ -1347,6 +1347,12 @@ pub struct FirstGenerationEventSealRequirement {
     pub payload:
         arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload,
     pub reanchor_digest: Hash,
+    /// Envelope digest of the paired `ak.device.authorize`.
+    ///
+    /// It is carried alongside the payload rather than read out of it: the
+    /// re-anchor commits to the authorize *payload* digest, so the envelope
+    /// digest only exists once both Events are formed.
+    pub replacement_authorize_digest: Hash,
     pub predecessor_refs: Vec<SealId>,
     pub accepted_frontier_refs: Vec<SealId>,
     pub required_delta: Vec<Hash>,
@@ -1673,13 +1679,13 @@ mod tests {
             "previous_device_generation": "1-QmPrevious",
             "new_device_generation": "2-QmCurrent",
             "pre_fence_basis": pre_fence_basis,
-            "replacement_authorize_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
-            "replacement_authorize_digest": replacement
+            "replacement_authorize_payload_digest": format!("sha256:{}", "9".repeat(64))
         }))
         .unwrap();
         FirstGenerationEventSealRequirement {
             payload,
             reanchor_digest: reanchor.clone(),
+            replacement_authorize_digest: replacement.clone(),
             accepted_frontier_refs: predecessor_refs.clone(),
             predecessor_refs,
             required_delta: vec![

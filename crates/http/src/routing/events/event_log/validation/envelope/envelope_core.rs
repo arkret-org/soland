@@ -522,7 +522,7 @@ async fn validate_event_envelope_with_ingress(
     if kind == "ak.cross_signing.reset" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         if let Err((code, reason)) =
-            cross_signing_reset_replay_check(&payload, &event_id, &state.config().trust_domain)
+            cross_signing_reset_replay_check(&payload, &state.config().trust_domain)
         {
             return Err(event_validation_error(
                 error_http_status(code),

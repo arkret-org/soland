@@ -152,12 +152,45 @@ pub fn stage_identity_anchor_events(
     }
     Ok(())
 }
+/// Locate the replacement `ak.device.authorize` that belongs to one accepted
+/// re-anchor.
+///
+/// The pairing lives in the authorize envelope: its `prev_refs` is exactly the
+/// re-anchor id (`key-management.md` §5.0.7). The re-anchor payload commits
+/// only to the authorize *payload* digest, because the authorize envelope
+/// already names the re-anchor and every `event_id` derives from its own
+/// signed content — an id or envelope-digest binding would make the two Events
+/// preimages of each other.
 #[doc(hidden)]
-pub fn identity_anchor_slot_conflicts<'a>(
+pub fn paired_replacement_authorize<'a>(
+    reanchor: &CanonicalEventRecord,
     records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
+) -> Option<&'a CanonicalEventRecord> {
+    records.into_iter().find(|candidate| {
+        candidate.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+            && candidate.actor_id == reanchor.actor_id
+            && candidate
+                .envelope
+                .pointer("/prev_refs")
+                .and_then(Value::as_array)
+                .is_some_and(|refs| {
+                    refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
+                })
+    })
+}
+
+/// Does the accepted history already hold a different unit in this re-anchor
+/// slot?
+///
+/// `records` MUST carry the actor's `ak.device.authorize` Events as well as the
+/// re-anchors: the replacement digest comparison reads the paired authorize
+/// Event, not a payload claim.
+#[doc(hidden)]
+pub fn identity_anchor_slot_conflicts(
+    records: &[&CanonicalEventRecord],
     slot: &IdentityAnchorReanchorSlot,
 ) -> bool {
-    records.into_iter().any(|record| {
+    records.iter().any(|record| {
         if record.actor_id != slot.actor_id || record.kind != "ak.device.reanchor" {
             return false;
         }
@@ -175,10 +208,8 @@ pub fn identity_anchor_slot_conflicts<'a>(
         same_slot
             && (candidate_version != slot.did_version_id
                 || record.canonical_digest != slot.reanchor_digest
-                || record
-                    .envelope
-                    .pointer("/payload/replacement_authorize_digest")
-                    .and_then(Value::as_str)
+                || paired_replacement_authorize(record, records.iter().copied())
+                    .map(|paired| paired.canonical_digest.as_str())
                     != Some(slot.authorize_digest.as_str()))
     })
 }

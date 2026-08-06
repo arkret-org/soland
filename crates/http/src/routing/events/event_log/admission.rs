@@ -180,17 +180,19 @@ pub(super) fn policy_bundle_value_from_state_payload(payload: &Value) -> &Value 
     payload.get("value").unwrap_or(payload)
 }
 
-/// `ak.cross_signing.reset` payload trust-domain & reset_event_id check.
-/// Spec T08.
+/// `ak.cross_signing.reset` payload trust-domain check. Spec T08.
 ///
 /// Verification order MUST be:
 /// 1. `payload.trust_domain` equals server's configured trust_domain (else
 ///    `cross_domain_replay_rejected`)
-/// 2. `payload.reset_event_id` equals the enclosing Event's id (else `reset_event_id_mismatch`)
-/// 3. signature check (existing path; not implemented here)
+/// 2. signature check (existing path; not implemented here)
+///
+/// There is deliberately no enclosing-`event_id` field to compare: the payload sits inside the
+/// `event_digest` preimage and `event_id` derives from that digest, so naming the enclosing
+/// Event inside the payload has no fixed point (encoding.md 6.0.1). Shell binding comes from the
+/// envelope proof, which is outside the preimage, plus the `previous_generation` precondition.
 pub fn cross_signing_reset_replay_check(
     payload: &Value,
-    event_id: &str,
     server_trust_domain: &str,
 ) -> Result<(), (ErrorCode, String)> {
     let payload_td = payload
@@ -217,31 +219,6 @@ pub fn cross_signing_reset_replay_check(
             ErrorCode::Unauthenticated,
             "cross_signing.reset.trust_domain does not match this \
              Principal Server's configured trust_domain"
-                .to_owned(),
-        ));
-    }
-    let payload_reset_event_id = payload
-        .get("reset_event_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            (
-                ErrorCode::SchemaViolation,
-                "cross_signing.reset payload missing required \
-                     `reset_event_id` field (wire-breaking)"
-                    .to_owned(),
-            )
-        })?;
-    if arkret_identifiers::EventId::new(payload_reset_event_id).is_err() {
-        return Err((
-            ErrorCode::SchemaViolation,
-            "cross_signing.reset.reset_event_id must be a ak:event:<uuidv7>".to_owned(),
-        ));
-    }
-    if payload_reset_event_id != event_id {
-        return Err((
-            ErrorCode::FailedPrecondition,
-            "cross_signing.reset.reset_event_id must equal the enclosing \
-             Event.event_id"
                 .to_owned(),
         ));
     }

@@ -579,6 +579,7 @@ async fn try_apply_device_generation_event_seal(
             &seal.predecessor_refs,
             &seal.delta,
             &requirement.reanchor_digest,
+            &requirement.replacement_authorize_digest,
         )
         .map_err(|error| seal_admission_error(format!("recovery-first Event Seal: {error}")))?;
     }
@@ -721,12 +722,11 @@ async fn try_apply_device_generation_event_seal(
         record.kind == "ak.device.reanchor" && !quarantined.contains(&record.canonical_digest)
     }) {
         anchor_event_ids.insert(record.event_id.clone());
-        if let Some(authorize_id) = record
-            .envelope
-            .pointer("/payload/replacement_authorize_event_id")
-            .and_then(serde_json::Value::as_str)
-        {
-            anchor_event_ids.insert(authorize_id.to_owned());
+        if let Some(authorize) = soland_services::events::paired_replacement_authorize(
+            record,
+            records_by_digest.values(),
+        ) {
+            anchor_event_ids.insert(authorize.event_id.clone());
         }
     }
     let mut new_ops: Vec<(

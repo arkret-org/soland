@@ -246,7 +246,12 @@ impl EventStore for MemoryEventStore {
         let mut staged_outbox = federation_outbox.clone();
         let reanchor_conflict = reanchor_slot
             .as_ref()
-            .is_some_and(|slot| identity_anchor_slot_conflicts(staged_events.values(), slot));
+            .is_some_and(|slot| {
+                identity_anchor_slot_conflicts(
+                    &staged_events.values().collect::<Vec<_>>(),
+                    slot,
+                )
+            });
         if reanchor_conflict {
             if !proposal_receipts.is_empty() {
                 return Err(PersistenceError::Conflict(

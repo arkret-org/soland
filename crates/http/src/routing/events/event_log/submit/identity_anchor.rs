@@ -1069,21 +1069,16 @@ fn conflicting_reanchor_slot(
             if !same_slot {
                 return false;
             }
-            let candidate_authorize_digest = record
-                .envelope
-                .pointer("/payload/replacement_authorize_digest")
-                .and_then(Value::as_str);
+            let candidate_authorize_digest = soland_services::events::paired_replacement_authorize(record, existing)
+                .map(|paired| paired.canonical_digest.as_str());
             candidate_version != Some(version_id)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
         .flat_map(|record| {
             std::iter::once(record.event_id.clone()).chain(
-                record
-                    .envelope
-                    .pointer("/payload/replacement_authorize_event_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
+                soland_services::events::paired_replacement_authorize(record, existing)
+                    .map(|paired| paired.event_id.clone()),
             )
         })
         .collect::<Vec<_>>();
@@ -1162,9 +1157,19 @@ async fn validate_unit_relationships(
 
     let payload = typed_device_reanchor_payload(&envelopes[0])?;
     let authorize = typed_device_authorize_payload(&envelopes[1])?;
+    // The re-anchor commits to the replacement by payload digest: the authorize
+    // envelope carries the re-anchor id in prev_refs (checked above) and every
+    // event_id derives from its own signed content, so an id or envelope-digest
+    // binding would make the two Events preimages of each other.
+    let replacement_payload_digest = soland_services::events::replacement_authorize_payload_digest(
+        &envelopes[1],
+        &second.canonical_digest,
+    )
+    .map_err(|message| {
+        SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+    })?;
     if payload.principal_id.as_str() != first.actor_id
-        || payload.replacement_authorize_event_id.as_str() != second.event_id
-        || payload.replacement_authorize_digest.as_str() != second.canonical_digest
+        || payload.replacement_authorize_payload_digest != replacement_payload_digest
         || authorize.principal_id.as_str() != first.actor_id
         || authorize.enrollment_authority_binding.is_none()
         || authorize.cross_signing_binding.is_some()
@@ -1172,7 +1177,7 @@ async fn validate_unit_relationships(
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "device_reanchor_authorize_mismatch",
-            "device re-anchor replacement authorization id/digest or generation binding mismatch",
+            "device re-anchor replacement authorization payload digest or generation binding mismatch",
         ));
     }
     validate_reanchor_recovery_session(state, &payload, &authorize).await?;

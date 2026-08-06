@@ -1487,10 +1487,26 @@ async fn continue_issue_terminal_receipt(
                         "accepted device re-anchor payload is invalid: {error}"
                     ))
                 })?;
+            // The unit binding is one-directional: the authorize envelope names
+            // the re-anchor in prev_refs, and the re-anchor payload commits to
+            // the authorize payload digest. See `key-management.md` §5.0.7.
+            let authorize_follows_reanchor = authorization_event
+                .envelope
+                .get("prev_refs")
+                .and_then(Value::as_array)
+                .is_some_and(|refs| {
+                    refs.len() == 1 && refs[0].as_str() == Some(reanchor_event_id.as_str())
+                });
+            let replacement_payload_digest =
+                soland_services::events::replacement_authorize_payload_digest(
+                    &authorization_event.envelope,
+                    &authorization_event.canonical_digest,
+                )
+                .map_err(AppError::internal)?;
             if reanchor_payload.principal_id != transaction.resource.principal_id
-                || reanchor_payload.replacement_authorize_event_id != authorize_event_id
-                || reanchor_payload.replacement_authorize_digest.as_str()
-                    != authorization_event.canonical_digest
+                || !authorize_follows_reanchor
+                || reanchor_payload.replacement_authorize_payload_digest
+                    != replacement_payload_digest
                 || did_entry_ref.as_deref().and_then(|reference| {
                     did_version_id_from_ref(&transaction.resource.principal_id, reference)
                 }) != Some(reanchor_payload.did_version_id.as_str())

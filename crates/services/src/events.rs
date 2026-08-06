@@ -348,6 +348,56 @@ pub struct AcceptedEvent {
 
 pub type CanonicalEventRecord = AcceptedEvent;
 
+/// Locate the replacement `ak.device.authorize` that belongs to one accepted
+/// B-model re-anchor.
+///
+/// The pairing lives in the authorize envelope: its `prev_refs` is exactly the
+/// re-anchor id (`key-management.md` §5.0.7). The re-anchor payload commits
+/// only to the authorize *payload* digest, because the authorize envelope
+/// already names the re-anchor and every `event_id` derives from its own
+/// signed content — an id or envelope-digest binding would make the two Events
+/// preimages of each other.
+pub fn paired_replacement_authorize<'a>(
+    reanchor: &CanonicalEventRecord,
+    records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
+) -> Option<&'a CanonicalEventRecord> {
+    records.into_iter().find(|candidate| {
+        candidate.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+            && candidate.actor_id == reanchor.actor_id
+            && candidate
+                .envelope
+                .pointer("/prev_refs")
+                .and_then(Value::as_array)
+                .is_some_and(|refs| {
+                    refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
+                })
+    })
+}
+
+/// Recompute the value a B-model re-anchor commits to.
+///
+/// The digest suite comes from the authorize envelope digest so the payload
+/// commitment and the envelope commitment always speak the same Realm live
+/// suite; inferring it from the payload would let the producer choose it.
+pub fn replacement_authorize_payload_digest(
+    authorize_envelope: &Value,
+    authorize_envelope_digest: &str,
+) -> Result<arkret_identifiers::Hash, String> {
+    let suite = authorize_envelope_digest
+        .split_once(':')
+        .map(|(suite, _)| suite)
+        .ok_or_else(|| "authorize envelope digest carries no suite prefix".to_owned())?;
+    let suite = arkret_canonical::digest_suite(suite)
+        .map_err(|_| format!("authorize envelope digest suite {suite} is not supported"))?;
+    let payload = authorize_envelope
+        .get("payload")
+        .ok_or_else(|| "authorize envelope carries no payload".to_owned())?;
+    arkret_models_collaboration::events_payloads::device_identity::device_authorize_replacement_payload_digest(
+        payload, suite,
+    )
+    .map_err(|error| format!("replacement authorize payload digest failed: {error}"))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CausalReachability {
     Reachable,

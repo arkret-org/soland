@@ -482,9 +482,11 @@ impl EventStore for PgEventStore {
                     lock_realm_actor(conn, lock_key).await?;
                 }
                 let reanchor_conflict = if let Some(slot) = reanchor_slot.as_ref() {
+                    // The replacement digest comparison reads the paired
+                    // authorize Event, so both unit kinds must be loaded.
                     let existing = sql_query(
                         "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-                         FROM canonical_events WHERE actor_id = $1 AND kind = 'ak.device.reanchor'",
+                         FROM canonical_events WHERE actor_id = $1 AND kind IN ('ak.device.reanchor', 'ak.device.authorize')",
                     )
                     .bind::<Text, _>(&slot.actor_id)
                     .load::<CanonicalEventRow>(&mut *conn)
@@ -493,7 +495,7 @@ impl EventStore for PgEventStore {
                     .into_iter()
                     .map(CanonicalEventRecord::from)
                     .collect::<Vec<_>>();
-                    identity_anchor_slot_conflicts(existing.iter(), slot)
+                    identity_anchor_slot_conflicts(&existing.iter().collect::<Vec<_>>(), slot)
                 } else {
                     false
                 };

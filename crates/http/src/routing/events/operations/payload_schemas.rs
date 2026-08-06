@@ -617,10 +617,6 @@ pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
         "trust_domain",
         "cross_signing reset requires trust_domain (Round R2/R3 wire-break)",
     ),
-    PayloadRequirement::Required(
-        "reset_event_id",
-        "cross_signing reset requires reset_event_id (Round R2/R3 wire-break)",
-    ),
 ];
 
 pub(crate) const CROSS_SIGNING_PUBLISH_REQUIREMENTS: &[PayloadRequirement] = &[

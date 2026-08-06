@@ -56,11 +56,10 @@ fn cross_signing_reset_event(
     .expect("reset Event signing");
     serde_json::to_value(event).expect("reset Event serializes")
 }
-fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value {
+fn base_reset_payload(principal_id: &str, proof: Value) -> Value {
     serde_json::json!({
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": event_id,
         "previous_generation": 1,
         "new_generation": 2,
         "reset_reason_code": "rotation",
@@ -1059,7 +1058,6 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
-        &event_id,
         serde_json::json!({
             "kind": "recovery_unlock",
             "recovery_session_id": recovery_session_id,
@@ -1119,7 +1117,6 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
-        &event_id,
         serde_json::json!({
             "kind": "trusted_recovery_service",
             "recovery_session_id": recovery_session_id,
@@ -1196,7 +1193,6 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
-        &event_id,
         serde_json::json!({
             "kind": "device_quorum",
             "threshold": 2,
@@ -1296,7 +1292,6 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
-        &event_id,
         serde_json::json!({
             "kind": "principal_signing",
             "verification_method": vm,
@@ -1356,7 +1351,6 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     let replay_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut replay_payload = base_reset_payload(
         &principal_id,
-        &replay_event_id,
         serde_json::json!({
             "kind": "principal_signing",
             "verification_method": vm,

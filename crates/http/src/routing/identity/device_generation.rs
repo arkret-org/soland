@@ -232,26 +232,7 @@ fn reanchor_unit_fingerprint(
     reanchor: &CanonicalEventRecord,
     records: &[CanonicalEventRecord],
 ) -> Option<String> {
-    let authorize_id = reanchor
-        .envelope
-        .pointer("/payload/replacement_authorize_event_id")
-        .and_then(Value::as_str)?;
-    let authorize_digest = reanchor
-        .envelope
-        .pointer("/payload/replacement_authorize_digest")
-        .and_then(Value::as_str)?;
-    let authorize = records.iter().find(|record| {
-        record.event_id == authorize_id
-            && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
-            && record.canonical_digest == authorize_digest
-            && record
-                .envelope
-                .get("prev_refs")
-                .and_then(Value::as_array)
-                .is_some_and(|refs| {
-                    refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
-                })
-    })?;
+    let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)?;
     Some(format!(
         "{}\u{0}{}\u{0}{}",
         reanchor
@@ -365,12 +346,10 @@ fn quarantined_generation_event_digests_from_records(
         }
         for candidate in candidates {
             quarantined_ids.insert(candidate.event_id.clone());
-            if let Some(authorize_id) = candidate
-                .envelope
-                .pointer("/payload/replacement_authorize_event_id")
-                .and_then(Value::as_str)
+            if let Some(authorize) =
+                soland_services::events::paired_replacement_authorize(candidate, records)
             {
-                quarantined_ids.insert(authorize_id.to_owned());
+                quarantined_ids.insert(authorize.event_id.clone());
             }
         }
     }
@@ -534,8 +513,6 @@ mod tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 json!({"payload": {
                     "did_version_id": "2-A",
-                    "replacement_authorize_event_id": authorize_a,
-                    "replacement_authorize_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }}),
             ),
             record(
@@ -550,8 +527,6 @@ mod tests {
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 json!({"payload": {
                     "did_version_id": "2-B",
-                    "replacement_authorize_event_id": authorize_b,
-                    "replacement_authorize_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
                 }}),
             ),
             record(
@@ -572,8 +547,6 @@ mod tests {
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 json!({"payload": {
                     "did_version_id": "3-C",
-                    "replacement_authorize_event_id": "ak:event:01904100-0000-8000-8000-000000000007",
-                    "replacement_authorize_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 }}),
             ),
             record(

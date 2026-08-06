@@ -1225,8 +1225,8 @@ mod sdk_artifact_schema_tests {
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
         let issued_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
-        // Round R2/R3 (T08) — trust_domain + reset_event_id are now wire-breaking
-        // required fields.
+        // Round R2/R3 (T08) — trust_domain is wire-breaking required. reset_event_id was
+        // retired: a payload cannot name the Event that carries it (encoding.md 6.0.1).
         let operation = cross_signing_reset(json!({
             "principal_id": "did:web:alice.example",
             "previous_generation": 1,
@@ -1239,7 +1239,6 @@ mod sdk_artifact_schema_tests {
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
-            "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
             "issued_at": issued_at
         }));
         assert_eq!(
@@ -1260,7 +1259,6 @@ mod sdk_artifact_schema_tests {
             "new_generation": 2,
             "reset_reason_code": "rotation",
             "trust_domain": "ak:trust_domain:soland.local",
-            "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
             "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
@@ -1280,7 +1278,6 @@ mod sdk_artifact_schema_tests {
                 "signature_algorithm": "Ed25519",
                 "signature": "abc"
             },
-            "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
             "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert!(
@@ -1306,7 +1303,6 @@ mod sdk_artifact_schema_tests {
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
-            "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
             "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
@@ -1326,7 +1322,6 @@ mod sdk_artifact_schema_tests {
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
-            "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000002",
             "issued_at": arkret_canonical::format_timestamp_canonical(
                 chrono::Utc::now() - chrono::Duration::seconds(
                     CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1

@@ -624,11 +624,8 @@ async fn materialize_realm_control_with_transported_seals(
         })
         .flat_map(|record| {
             std::iter::once(record.event_id.clone()).chain(
-                record
-                    .envelope
-                    .pointer("/payload/replacement_authorize_event_id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned),
+                soland_services::events::paired_replacement_authorize(record, realm_records.iter())
+                    .map(|paired| paired.event_id.clone()),
             )
         })
         .collect::<BTreeSet<_>>();
@@ -1219,20 +1216,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 format!("stored device re-anchor payload is invalid: {error}"),
             )
         })?;
-        let authorize = records
-            .iter()
-            .find(|record| {
-                record.event_id == payload.replacement_authorize_event_id.as_str()
-                    && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
-                    && record.canonical_digest == payload.replacement_authorize_digest.as_str()
-                    && record
-                        .envelope
-                        .get("prev_refs")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|refs| {
-                            refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
-                        })
-            })
+        let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)
             .ok_or_else(|| {
                 AppError::new(
                     ErrorCode::StateMismatch,
@@ -1254,6 +1238,19 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 format!("stored replacement device authorization payload is invalid: {error}"),
             )
         })?;
+        let replacement_payload_digest =
+            soland_services::events::replacement_authorize_payload_digest(
+                &authorize.envelope,
+                &authorize.canonical_digest,
+            )
+            .map_err(|message| AppError::new(ErrorCode::StateMismatch, message))?;
+        if replacement_payload_digest != payload.replacement_authorize_payload_digest
+        {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "stored replacement device authorization does not match the re-anchor payload digest",
+            ));
+        }
         if authorize_payload.principal_id.as_str() != actor {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
@@ -1303,22 +1300,18 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 format!("stored re-anchor digest is invalid: {error}"),
             )
         })?;
-        let required_delta = [
-            reanchor_digest.as_str(),
-            authorize.canonical_digest.as_str(),
-        ]
-        .into_iter()
-        .map(|digest| Hash::new(digest.to_owned()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!("stored re-anchor unit digest is invalid: {error}"),
-            )
-        })?;
+        let replacement_authorize_digest = Hash::new(authorize.canonical_digest.clone())
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!("stored re-anchor unit digest is invalid: {error}"),
+                )
+            })?;
+        let required_delta = vec![reanchor_digest.clone(), replacement_authorize_digest.clone()];
         requirement = Some(crate::notary::FirstGenerationEventSealRequirement {
             payload,
             reanchor_digest,
+            replacement_authorize_digest,
             predecessor_refs,
             accepted_frontier_refs,
             required_delta,
