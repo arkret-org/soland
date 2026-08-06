@@ -26,17 +26,16 @@ use arkret_models_collaboration::contact_operations::{
     ContactAcceptRequestBody, ContactOperationOutcome, ContactOperationRequestBody, ContactPeer,
     ContactRejectRequestBody, ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
+use arkret_models_collaboration::direct_conversation_ops::{
+    DirectConversationCoordinates, DirectConversationResolveOutcome,
+    DirectConversationResolveRequestBody, DirectConversationSendBlocker,
+};
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
     DirectConversationSummaryState,
 };
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use self::social::direct::{direct_active_generation_ref, direct_founder_for_pair};
-use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationCoordinates, DirectConversationResolveOutcome,
-    DirectConversationResolveRequestBody, DirectConversationSendBlocker,
-};
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
     AccountRegistrationEvidenceSummary, AccountRegistrationPolicy,
@@ -64,6 +63,7 @@ use soland_services::identity::{
     DirectConversationBindingRecord, SessionIdentityState as SessionRecord,
 };
 
+use self::social::direct::{direct_active_generation_ref, direct_founder_for_pair};
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
     revoke_sessions_for_actor,

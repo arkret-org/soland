@@ -6,6 +6,7 @@ mod mls_governance;
 mod payload_shape;
 
 pub(crate) use audit::append_encrypted_message_franking;
+pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
 #[cfg(test)]
 pub(super) use enrollment::validate_device_enrollment_authority_binding;
 pub(crate) use enrollment::{

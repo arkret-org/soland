@@ -2163,7 +2163,8 @@ async fn validate_direct_keypackage_consume(
     let welcome_ref = body.welcome_ref.as_str();
     // The binding no longer pins a founding MLS group: it is written once and never retired, and
     // participant authority always reads the *current* active generation. So the consume request is
-    // checked against the active-generation cell for this Realm, not against a frozen binding field.
+    // checked against the active-generation cell for this Realm, not against a frozen binding
+    // field.
     let active_group_id = direct_active_generation_group_id(state, realm_id.as_str()).await?;
     if body.mls_group_id.as_deref() != Some(active_group_id.as_str()) {
         return Err(AppError::new(
@@ -3524,7 +3525,10 @@ async fn direct_active_generation_group_id(
         else {
             continue;
         };
-        if best.as_ref().is_none_or(|(current, _)| generation > *current) {
+        if best
+            .as_ref()
+            .is_none_or(|(current, _)| generation > *current)
+        {
             best = Some((generation, group_id.to_owned()));
         }
     }

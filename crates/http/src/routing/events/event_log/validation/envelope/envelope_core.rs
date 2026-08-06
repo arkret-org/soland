@@ -605,15 +605,7 @@ async fn validate_event_envelope_with_ingress(
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
-    validate_strand_watch_audit_pair(
-        state,
-        &kind,
-        object,
-        &event_id,
-        &actor_id,
-        &canonical_digest,
-    )
-    .await?;
+    validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
     validate_event_proofs(
         object,
         state,

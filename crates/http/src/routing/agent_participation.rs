@@ -1,6 +1,5 @@
-use arkret_models_collaboration::governance::agent_participation::effective_participation;
 use arkret_models_collaboration::governance::agent_participation::{
-    ParticipationBits, ParticipationScope,
+    ParticipationBits, ParticipationScope, effective_participation,
 };
 use serde_json::Value;
 

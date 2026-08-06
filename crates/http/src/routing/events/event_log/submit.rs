@@ -874,6 +874,11 @@ async fn submit_event_batch_outcome_with_leases(
             "events submit batch exceeds max batch size",
         ));
     }
+    // strand-and-message.md 8.4: a cross-actor `.others` watch write is only admissible with
+    // its `ak.audit.accessed` partner in the same batch. The pairing is checked here rather
+    // than per envelope because the audit Event is authored after the write it records — the
+    // two cannot name each other (encoding.md 6.0.1), so neither is decidable alone.
+    validate_watch_set_others_audit_pairs(state, &envelopes).map_err(SubmitOneError::from)?;
     if batch_contains_identity_anchor(&envelopes) {
         return submit_identity_anchor_batch(
             state,

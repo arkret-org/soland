@@ -1069,8 +1069,9 @@ fn conflicting_reanchor_slot(
             if !same_slot {
                 return false;
             }
-            let candidate_authorize_digest = soland_services::events::paired_replacement_authorize(record, existing)
-                .map(|paired| paired.canonical_digest.as_str());
+            let candidate_authorize_digest =
+                soland_services::events::paired_replacement_authorize(record, existing)
+                    .map(|paired| paired.canonical_digest.as_str());
             candidate_version != Some(version_id)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())

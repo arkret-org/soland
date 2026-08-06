@@ -776,9 +776,8 @@ fn device_authorize_signature_value(
     match signature_material {
         SignatureMaterial::NonEmptyString(value) => Ok(value.as_str()),
         SignatureMaterial::Variant1(object) => {
-            if let Some(signature_algorithm) = object
-                .get("signature_algorithm")
-                .and_then(Value::as_str)
+            if let Some(signature_algorithm) =
+                object.get("signature_algorithm").and_then(Value::as_str)
                 && signature_algorithm != "Ed25519"
             {
                 return Err("device_authorize_device_signature_algorithm_unsupported");

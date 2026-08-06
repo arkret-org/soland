@@ -314,7 +314,6 @@ pub(crate) async fn validate_direct_binding_operation(
         "direct_conversation_binding_invalid"
     })?;
 
-
     // The canonical precursor Events are the admission authority. Projection
     // application is asynchronous, so consulting the derived Realm view here
     // creates a race when a binding immediately follows its accepted
@@ -598,8 +597,8 @@ async fn validate_direct_founder(
     };
 
     let basis = match payload.authorization_basis.kind {
-        // controller-to-own-Agent has no Contact basis: the founder is fixed to the controller so an
-        // Agent runtime key never needs Direct Conversation founding scope.
+        // controller-to-own-Agent has no Contact basis: the founder is fixed to the controller so
+        // an Agent runtime key never needs Direct Conversation founding scope.
         DirectConversationAuthorizationKind::ManagedAgentController => {
             DirectConversationFounderBasis::ControllerOwnedAgent {
                 controller_id: arkret_identifiers::Did::new(creator.to_owned())
@@ -738,9 +737,10 @@ pub(crate) fn direct_founder_basis_from_contact(
 > {
     // NOTE: glare bases (both sides requested concurrently) derive the founder from the
     // canonically-ordered pair of request refs. The stored ContactRecord keeps a single
-    // requester/target orientation and does not persist both request refs, so a glare pair cannot be
-    // derived here yet. We deliberately do NOT guess: guessing would let the two sides disagree
-    // about who may create, which is exactly the race founder derivation exists to remove.
+    // requester/target orientation and does not persist both request refs, so a glare pair cannot
+    // be derived here yet. We deliberately do NOT guess: guessing would let the two sides
+    // disagree about who may create, which is exactly the race founder derivation exists to
+    // remove.
     let request_issuer = arkret_identifiers::Did::new(record.requester.clone())
         .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
     Ok(
@@ -766,8 +766,8 @@ pub(crate) async fn direct_founder_for_pair(
     };
 
     let basis = if managed_agent {
-        // controller-to-own-Agent has no Contact basis; the founder is fixed to the controller so an
-        // Agent runtime key never needs Direct Conversation founding scope.
+        // controller-to-own-Agent has no Contact basis; the founder is fixed to the controller so
+        // an Agent runtime key never needs Direct Conversation founding scope.
         let controller = if state
             .agent_pairings()
             .agent(peer)
@@ -822,7 +822,10 @@ pub(crate) async fn direct_active_generation_ref(
             .get("mls_generation")
             .and_then(Value::as_u64)
             .unwrap_or_default();
-        if best.as_ref().is_none_or(|(current, _)| generation > *current) {
+        if best
+            .as_ref()
+            .is_none_or(|(current, _)| generation > *current)
+        {
             best = Some((generation, event.event_id));
         }
     }

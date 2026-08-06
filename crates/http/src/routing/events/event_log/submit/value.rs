@@ -209,6 +209,10 @@ pub(in crate::routing) async fn submit_event_value(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
+    // A cross-actor `.others` watch write needs its ak.audit.accessed partner in the same
+    // batch (strand-and-message.md 8.4), so a single-Event submit can never carry one.
+    validate_watch_set_others_audit_pairs(state, std::slice::from_ref(&envelope))
+        .map_err(SubmitOneError::from)?;
     // `event-auth-state-resolution.md` §5(1) — a managed Agent PCR genesis is
     // the delegated branch of the closed `ak.realm.create` anchor unit and
     // carries no `seal_basis`, so it needs the bootstrap CBA context. Only a

@@ -1244,8 +1244,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 &authorize.canonical_digest,
             )
             .map_err(|message| AppError::new(ErrorCode::StateMismatch, message))?;
-        if replacement_payload_digest != payload.replacement_authorize_payload_digest
-        {
+        if replacement_payload_digest != payload.replacement_authorize_payload_digest {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 "stored replacement device authorization does not match the re-anchor payload digest",
@@ -1300,14 +1299,17 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 format!("stored re-anchor digest is invalid: {error}"),
             )
         })?;
-        let replacement_authorize_digest = Hash::new(authorize.canonical_digest.clone())
-            .map_err(|error| {
+        let replacement_authorize_digest =
+            Hash::new(authorize.canonical_digest.clone()).map_err(|error| {
                 AppError::new(
                     ErrorCode::StateMismatch,
                     format!("stored re-anchor unit digest is invalid: {error}"),
                 )
             })?;
-        let required_delta = vec![reanchor_digest.clone(), replacement_authorize_digest.clone()];
+        let required_delta = vec![
+            reanchor_digest.clone(),
+            replacement_authorize_digest.clone(),
+        ];
         requirement = Some(crate::notary::FirstGenerationEventSealRequirement {
             payload,
             reanchor_digest,

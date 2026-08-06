@@ -1,6 +1,6 @@
 use super::super::*;
 use super::account_status::validate_account_status_service_binding;
-use super::audit::{validate_audit_accessed_payload, validate_strand_watch_audit_pair};
+use super::audit::{validate_audit_accessed_payload, validate_strand_watch_manage_others_levels};
 use super::enrollment::validate_device_enrollment_authority_binding;
 use super::mls_governance::projected_media_plaintext_service_present;
 use super::payload_shape::{
@@ -19,7 +19,7 @@ pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
     canonical::canonical_sha256(value).ok()
 }
 
-fn event_digest_suite(
+pub(super) fn event_digest_suite(
     state: &AppState,
     kind: &str,
     realm_id: &str,
@@ -52,7 +52,10 @@ fn realm_create_digest_algorithm(object: &serde_json::Map<String, Value>) -> Opt
         .map(ToOwned::to_owned)
 }
 
-fn event_digest_for_suite(bytes: &[u8], suite: &str) -> Result<String, EventValidationError> {
+pub(super) fn event_digest_for_suite(
+    bytes: &[u8],
+    suite: &str,
+) -> Result<String, EventValidationError> {
     arkret_canonical::canonical_digest_with_suite(bytes, suite)
         .map_err(|_| unsupported_digest_algorithm_error(suite))
 }
@@ -148,11 +151,10 @@ fn derive_realm_id_from_event_id(
             "actor_id must be a DID",
         )
     })?;
-    let payload_object = object.get("payload").and_then(|payload| payload.get("object"));
-    Ok(
-        arkret_wire::derive_genesis_realm_id(&event_id, &actor_id, payload_object)
-            .into_string(),
-    )
+    let payload_object = object
+        .get("payload")
+        .and_then(|payload| payload.get("object"));
+    Ok(arkret_wire::derive_genesis_realm_id(&event_id, &actor_id, payload_object).into_string())
 }
 
 mod applet;
