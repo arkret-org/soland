@@ -177,9 +177,9 @@ fn defer_due_proposals_after_failed_signing(
         .pending_control_records(realm_id, MAX_CONTROL_MOVES_PER_REALM)
         .map_err(|error| error.to_string())?;
     for record in records {
-        let Some(receipt) = record.proposal_receipt.as_ref() else {
+        let Some(receipt) = record.control_proposal_ack.as_ref() else {
             return Err(format!(
-                "pending Control Move {} has no proposal receipt",
+                "pending Control Move {} has no Control Proposal Ack",
                 record
                     .event
                     .event_digest()

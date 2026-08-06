@@ -33,16 +33,16 @@ pub(super) async fn submit_identity_anchor_batch(
     session: &SessionRecord,
     envelopes: Vec<Value>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
-    submitted_proposal_receipts: Option<&[Option<arkret_wire::ControlProposalReceipt>]>,
+    submitted_control_proposal_acks: Option<&[Option<arkret_wire::ControlProposalAck>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
             "identity anchor publication lease cardinality mismatch",
         ));
     }
-    if submitted_proposal_receipts.is_some_and(|receipts| receipts.len() != envelopes.len()) {
+    if submitted_control_proposal_acks.is_some_and(|receipts| receipts.len() != envelopes.len()) {
         return Err(unit_error(
-            "identity anchor proposal-receipt cardinality mismatch",
+            "identity anchor control-proposal-ack cardinality mismatch",
         ));
     }
     if envelopes.len() != 2 {
@@ -208,7 +208,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 format!("accepted identity anchor is not canonical Event wire: {error}"),
             )
         })?;
-    let proposal_receipts = if reanchor_conflict {
+    let control_proposal_acks = if reanchor_conflict {
         Vec::new()
     } else if is_bootstrap {
         // A self-principal PCR names the newly authorized device as founding
@@ -216,7 +216,7 @@ pub(super) async fn submit_identity_anchor_batch(
         // unit is committed. The Principal Server that performed lease
         // pre-admission acknowledges ingress; only the later client-signed
         // Seal provides control-plane finality.
-        if submitted_proposal_receipts.is_some_and(|receipts| receipts.iter().any(Option::is_some))
+        if submitted_control_proposal_acks.is_some_and(|receipts| receipts.iter().any(Option::is_some))
         {
             return Err(unit_error(
                 "self-principal bootstrap receipts are issued after complete lease pre-admission",
@@ -231,7 +231,7 @@ pub(super) async fn submit_identity_anchor_batch(
                     "self-principal bootstrap requires complete anchor-unit authorization leases",
                 )
             })?;
-        crate::control_proposal::mint_control_proposal_receipts(
+        crate::control_proposal::mint_control_proposal_acks(
             state,
             &RealmId::new(first.realm_id.clone()).map_err(|error| {
                 SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
@@ -245,14 +245,14 @@ pub(super) async fn submit_identity_anchor_batch(
             SubmitOneError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "quorum_unreachable",
-                format!("identity anchor proposal receipts unavailable: {error}"),
+                format!("identity anchor Control Proposal Acks unavailable: {error}"),
             )
         })?
     } else {
-        let submitted = submitted_proposal_receipts
+        let submitted = submitted_control_proposal_acks
             .and_then(|receipts| receipts.iter().cloned().collect::<Option<Vec<_>>>())
             .ok_or_else(|| {
-                unit_error("reanchor requires a proposal receipt for each Control Move")
+                unit_error("reanchor requires a Control Proposal Ack for each Control Move")
             })?;
         let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
             SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
@@ -271,13 +271,13 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?;
         for (event, receipt) in typed_control_events.iter().zip(&submitted) {
-            crate::control_proposal::verify_control_proposal_receipt(state, event, receipt, policy)
+            crate::control_proposal::verify_control_proposal_ack(state, event, receipt, policy)
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::PRECONDITION_FAILED,
                         "failed_precondition",
-                        format!("reanchor proposal receipt is invalid: {error}"),
+                        format!("reanchor Control Proposal Ack is invalid: {error}"),
                     )
                 })?;
         }
@@ -389,7 +389,7 @@ pub(super) async fn submit_identity_anchor_batch(
         state,
         session,
         &[(&first, &envelopes[0]), (&second, &envelopes[1])],
-        &proposal_receipts,
+        &control_proposal_acks,
         &publication_evidence,
     )
     .await?;
@@ -397,7 +397,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .event_queries()
         .store_identity_anchor_batch(
             records.clone(),
-            proposal_receipts.clone(),
+            control_proposal_acks.clone(),
             receipt,
             device_projection,
             frontier_cas,
@@ -450,7 +450,7 @@ pub(super) async fn submit_identity_anchor_batch(
                     format!("accepted identity anchor digest failed: {error}"),
                 )
             })?;
-            let receipt = proposal_receipts
+            let receipt = control_proposal_acks
                 .iter()
                 .find(|receipt| receipt.proposal_digest.as_str() == digest);
             state
@@ -537,7 +537,7 @@ pub(super) async fn submit_identity_anchor_batch(
             Some(cursor),
         );
         outcome.ingress_receipts = ingress_receipts;
-        outcome.control_proposal_receipts = proposal_receipts;
+        outcome.control_proposal_acks = control_proposal_acks;
         Ok(outcome)
     }
 }
@@ -616,11 +616,11 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         .iter()
         .map(|submission| submission.event.clone())
         .collect::<Vec<_>>();
-    let proposal_receipts = submissions
+    let control_proposal_acks = submissions
         .iter()
         .map(|submission| {
-            submission.control_proposal_receipt.clone().ok_or_else(|| {
-                unit_error("cross-signing recovery requires proposal receipts for both Events")
+            submission.control_proposal_ack.clone().ok_or_else(|| {
+                unit_error("cross-signing recovery requires Control Proposal Acks for both Events")
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -640,8 +640,8 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             format!("cross-signing proposal policy unavailable: {error}"),
         )
     })?;
-    for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
-        crate::control_proposal::verify_control_proposal_receipt(
+    for (event, receipt) in typed_control_events.iter().zip(&control_proposal_acks) {
+        crate::control_proposal::verify_control_proposal_ack(
             state,
             event,
             receipt,
@@ -652,7 +652,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 "failed_precondition",
-                format!("cross-signing proposal receipt is invalid: {error}"),
+                format!("cross-signing Control Proposal Ack is invalid: {error}"),
             )
         })?;
     }
@@ -757,7 +757,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         state,
         session,
         &[(&first, &envelopes[0]), (&second, &envelopes[1])],
-        &proposal_receipts,
+        &control_proposal_acks,
         &publication_evidence,
     )
     .await?;
@@ -765,7 +765,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         .event_queries()
         .store_identity_anchor_batch(
             records,
-            proposal_receipts.clone(),
+            control_proposal_acks.clone(),
             None,
             Some(device),
             None,
@@ -781,7 +781,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
                 format!("atomic cross-signing recovery commit failed: {error}"),
             )
         })?;
-    for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
+    for (event, receipt) in typed_control_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
             .put_pending_control_event_with_receipt(event, receipt)
@@ -831,7 +831,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         Some(cursor),
     );
     outcome.ingress_receipts = ingress_receipts;
-    outcome.control_proposal_receipts = proposal_receipts;
+    outcome.control_proposal_acks = control_proposal_acks;
     Ok(outcome)
 }
 
@@ -846,7 +846,7 @@ async fn identity_anchor_fanout_records(
     state: &AppState,
     session: &SessionRecord,
     unit: &[(&ValidatedEventEnvelope, &Value)],
-    proposal_receipts: &[arkret_wire::ControlProposalReceipt],
+    control_proposal_acks: &[arkret_wire::ControlProposalAck],
     publication_evidence: &[soland_services::events::PublicationEvidenceRecord],
 ) -> Result<Vec<soland_services::events::FederationDelivery>, SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
@@ -854,7 +854,7 @@ async fn identity_anchor_fanout_records(
     }
     let mut deliveries = Vec::new();
     for (parsed, envelope) in unit {
-        let proposal_receipt = proposal_receipts
+        let control_proposal_ack = control_proposal_acks
             .iter()
             .find(|receipt| receipt.proposal_digest.as_str() == parsed.canonical_digest);
         deliveries.extend(
@@ -864,7 +864,7 @@ async fn identity_anchor_fanout_records(
                 state,
                 parsed,
                 envelope,
-                proposal_receipt,
+                control_proposal_ack,
                 publication_evidence,
                 None,
             )
@@ -982,24 +982,24 @@ pub(super) async fn identical_historical_retry(
             })?;
             let indexed_receipt = state
                 .projections()
-                .control_proposal_receipt(&digest)
+                .control_proposal_ack(&digest)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",
-                        format!("stored Control Proposal receipt unavailable: {error}"),
+                        format!("stored Control Proposal Ack unavailable: {error}"),
                     )
                 })?;
             let durable_receipt = if indexed_receipt.is_none() {
                 state
                     .event_queries()
-                    .control_proposal_receipt_for_event(&record.event_id)
+                    .control_proposal_ack_for_event(&record.event_id)
                     .await
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "internal_error",
-                            format!("durable Control Proposal receipt unavailable: {error}"),
+                            format!("durable Control Proposal Ack unavailable: {error}"),
                         )
                     })?
             } else {
@@ -1025,7 +1025,7 @@ pub(super) async fn identical_historical_retry(
                     )
                 })?;
             if let Some(receipt) = receipt {
-                outcome.control_proposal_receipts.push(receipt);
+                outcome.control_proposal_acks.push(receipt);
             }
         }
         state.wake_control_seal_coordinator();

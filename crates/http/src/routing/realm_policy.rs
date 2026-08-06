@@ -286,7 +286,7 @@ async fn persist_canonical_policy_server_move(
     })?;
 
     // The normal Event pipeline has already committed the canonical Event,
-    // proposal receipt, federation outbox, and pending-control index. Prompt a
+    // Control Proposal Ack, federation outbox, and pending-control index. Prompt a
     // local notary round so the self-management response normally observes the
     // resulting Seal without inventing a separate projection-only fast path.
     match crate::notary::run_one_signing_pass(state, &realm_id, 1024).await {

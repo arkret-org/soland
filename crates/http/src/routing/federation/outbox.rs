@@ -1585,7 +1585,7 @@ mod tests {
                 event,
                 authorization_lease: Some(lease),
                 ingress_receipts: vec![receipt],
-                control_proposal_receipt: None,
+                control_proposal_ack: None,
                 membership_compensation_evidence: None,
             }
         };

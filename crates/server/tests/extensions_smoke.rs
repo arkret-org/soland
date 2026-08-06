@@ -131,7 +131,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 /// `event-auth-state-resolution.md` §5 makes a control-plane Event a Control
 /// Move whose `seal_basis.leaves` must be non-empty; unlike a DataEvent
 /// `seal_ref`, the leaves are not resolved into an authorization pre-state at
-/// admission, but proposal receipt admission still resolves the accepted
+/// admission, but Control Proposal Ack admission still resolves the accepted
 /// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-7000-8000-000000000001";

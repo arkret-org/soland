@@ -324,7 +324,7 @@ async fn validate_event_envelope_with_ingress(
     let realm_exists = realm_exists_in_index(state, &realm_id);
     // A managed-Agent PCR create is initially published through the batch
     // surface, then may be replayed through the single-submission surface to
-    // recover its stored proposal receipt. Let an already accepted Event id
+    // recover its stored Control Proposal Ack. Let an already accepted Event id
     // reach the submitter's canonical-byte duplicate check; only a different
     // create for the existing Realm is a `realm_already_exists` conflict here.
     let historical_realm_create = if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists {

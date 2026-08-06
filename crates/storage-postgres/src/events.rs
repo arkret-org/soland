@@ -153,7 +153,7 @@ async fn insert_canonical_event(
 async fn insert_pending_control_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
-    proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+    control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
 ) -> PersistenceResult<()> {
     let event =
         serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(|error| {
@@ -171,45 +171,45 @@ async fn insert_pending_control_event(
             "schema_violation: canonical digest differs from anchor Event digest".to_owned(),
         ));
     }
-    if let Some(proposal_receipt) = proposal_receipt {
-        if proposal_receipt.proposal_digest.as_str() != digest
-            || proposal_receipt.realm_id != event.realm_id
+    if let Some(control_proposal_ack) = control_proposal_ack {
+        if control_proposal_ack.proposal_digest.as_str() != digest
+            || control_proposal_ack.realm_id != event.realm_id
         {
             return Err(PersistenceError::Conflict(
-                "schema_violation: proposal receipt does not bind anchor Event".to_owned(),
+                "schema_violation: Control Proposal Ack does not bind anchor Event".to_owned(),
             ));
         }
-        proposal_receipt
+        control_proposal_ack
             .validate_protocol_bounds()
             .map_err(|error| {
                 PersistenceError::Conflict(format!(
-                    "schema_violation: invalid proposal receipt: {error}"
+                    "schema_violation: invalid Control Proposal Ack: {error}"
                 ))
             })?;
     }
-    let proposal_receipt = proposal_receipt
+    let control_proposal_ack = control_proposal_ack
         .map(serde_json::to_value)
         .transpose()
         .map_err(|error| {
-            PersistenceError::Internal(format!("proposal receipt encoding failed: {error}"))
+            PersistenceError::Internal(format!("Control Proposal Ack encoding failed: {error}"))
         })?;
     sql_query(
         "INSERT INTO state_control_events \
-         (event_digest, realm_id, event_json, proposal_receipt) VALUES ($1, $2, $3, $4) \
+         (event_digest, realm_id, event_json, control_proposal_ack) VALUES ($1, $2, $3, $4) \
          ON CONFLICT (event_digest) DO UPDATE SET \
-           proposal_receipt = COALESCE( \
-             state_control_events.proposal_receipt, EXCLUDED.proposal_receipt \
+           control_proposal_ack = COALESCE( \
+             state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
            ) \
          WHERE state_control_events.realm_id = EXCLUDED.realm_id \
            AND state_control_events.event_json = EXCLUDED.event_json \
-           AND (state_control_events.proposal_receipt IS NULL \
-             OR EXCLUDED.proposal_receipt IS NULL \
-             OR state_control_events.proposal_receipt = EXCLUDED.proposal_receipt)",
+           AND (state_control_events.control_proposal_ack IS NULL \
+             OR EXCLUDED.control_proposal_ack IS NULL \
+             OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
     )
     .bind::<Text, _>(&digest)
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Jsonb, _>(&record.envelope)
-    .bind::<Nullable<Jsonb>, _>(proposal_receipt.as_ref())
+    .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
     .execute(conn)
     .await
     .map_err(PersistenceError::database)
@@ -335,13 +335,13 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
 
 fn identity_anchor_receipt_cardinality_is_valid(
     record_count: usize,
-    proposal_receipt_count: usize,
+    control_proposal_ack_count: usize,
     reanchor_conflict: bool,
 ) -> bool {
     if reanchor_conflict {
-        proposal_receipt_count == 0
+        control_proposal_ack_count == 0
     } else {
-        proposal_receipt_count == record_count
+        control_proposal_ack_count == record_count
     }
 }
 
@@ -380,17 +380,17 @@ impl EventStore for PgEventStore {
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut receipts = BTreeMap::new();
-        for receipt in proposal_receipts {
+        for receipt in control_proposal_acks {
             if receipts
                 .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
                 .is_some()
             {
                 return Err(PersistenceError::Conflict(
-                    "schema_violation: duplicate Realm bootstrap proposal receipt".to_owned(),
+                    "schema_violation: duplicate Realm bootstrap Control Proposal Ack".to_owned(),
                 ));
             }
         }
@@ -405,13 +405,13 @@ impl EventStore for PgEventStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             for record in records {
                 insert_canonical_event(conn, &record).await?;
-                let proposal_receipt = receipts.get(&record.canonical_digest).ok_or_else(|| {
+                let control_proposal_ack = receipts.get(&record.canonical_digest).ok_or_else(|| {
                     PersistenceError::Conflict(
-                        "schema_violation: Realm bootstrap Event is missing proposal receipt"
+                        "schema_violation: Realm bootstrap Event is missing Control Proposal Ack"
                             .to_owned(),
                     )
                 })?;
-                insert_pending_control_event(conn, &record, Some(proposal_receipt)).await?;
+                insert_pending_control_event(conn, &record, Some(control_proposal_ack)).await?;
             }
             // Same transaction as the Events: the delivery intent for a Realm
             // genesis unit is not a post-commit best-effort follow-up.
@@ -427,7 +427,7 @@ impl EventStore for PgEventStore {
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
@@ -435,14 +435,14 @@ impl EventStore for PgEventStore {
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
-        let mut proposal_receipts_by_digest = BTreeMap::new();
-        for receipt in proposal_receipts {
-            if proposal_receipts_by_digest
+        let mut control_proposal_acks_by_digest = BTreeMap::new();
+        for receipt in control_proposal_acks {
+            if control_proposal_acks_by_digest
                 .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
                 .is_some()
             {
                 return Err(PersistenceError::Conflict(
-                    "schema_violation: duplicate identity anchor proposal receipt".to_owned(),
+                    "schema_violation: duplicate identity anchor Control Proposal Ack".to_owned(),
                 ));
             }
         }
@@ -501,7 +501,7 @@ impl EventStore for PgEventStore {
                 };
                 if !identity_anchor_receipt_cardinality_is_valid(
                     record_count,
-                    proposal_receipts_by_digest.len(),
+                    control_proposal_acks_by_digest.len(),
                     reanchor_conflict,
                 ) {
                     return Err(PersistenceError::Conflict(
@@ -518,7 +518,7 @@ impl EventStore for PgEventStore {
                         insert_pending_control_event(
                             conn,
                             &record,
-                            proposal_receipts_by_digest.get(&record.canonical_digest),
+                            control_proposal_acks_by_digest.get(&record.canonical_digest),
                         )
                         .await?;
                     }
@@ -821,7 +821,7 @@ mod identity_anchor_receipt_tests {
     use super::identity_anchor_receipt_cardinality_is_valid;
 
     #[test]
-    fn accepted_anchor_units_require_one_proposal_receipt_per_event() {
+    fn accepted_anchor_units_require_one_control_proposal_ack_per_event() {
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 0, false));
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 2, false));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 1, false));
@@ -829,7 +829,7 @@ mod identity_anchor_receipt_tests {
     }
 
     #[test]
-    fn reanchor_conflict_cannot_attach_proposal_receipts() {
+    fn reanchor_conflict_cannot_attach_control_proposal_acks() {
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
     }

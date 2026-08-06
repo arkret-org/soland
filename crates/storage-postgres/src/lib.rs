@@ -43,7 +43,7 @@ pub(crate) use soland_storage::{
     PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
     PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
-    ProjectionEventStore, ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
+    ProjectionEventStore, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
     PublicationEvidenceRecord, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
     RealmEventStats, RealmInviteRecord, RealmInviteStore, RealmModerationPolicyRecord,
     RealmModerationPolicyStore, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
@@ -103,7 +103,7 @@ mod notifications;
 mod organization_registration;
 mod policy;
 mod projection;
-mod proposal_receipts;
+mod control_proposal_acks;
 mod publication_evidence;
 mod push;
 mod realm_invites;
@@ -145,7 +145,7 @@ pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
 pub use projection::*;
-pub use proposal_receipts::*;
+pub use control_proposal_acks::*;
 pub use publication_evidence::*;
 pub use push::*;
 pub use realm_invites::*;

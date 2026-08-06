@@ -143,7 +143,7 @@ pub(crate) async fn prepare_standard_initial_submissions(
             .expect("single-DID proposal authority digest"),
         )
         .unwrap();
-        let member_receipt = arkret_wire::ProposalMemberReceipt::issue_with_signer(
+        let authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
             event.realm_id.clone(),
             proposal_digest,
             authority_set_ref,
@@ -151,15 +151,15 @@ pub(crate) async fn prepare_standard_initial_submissions(
             policy,
             proposal_authority,
         )
-        .expect("local Control Proposal member receipt");
-        let control_proposal_receipt =
-            arkret_wire::ControlProposalReceipt::from_member_receipts(vec![member_receipt], policy)
-                .expect("canonical Control Proposal receipt");
+        .expect("local Control Proposal authority Ack");
+        let control_proposal_ack =
+            arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy)
+                .expect("canonical Control Proposal Ack");
         let submission = arkret_wire::EventInitialSubmission {
             event,
             authorization_lease: Some(authorization_lease),
             cba_proof_bundles: Vec::new(),
-            control_proposal_receipt: Some(control_proposal_receipt),
+            control_proposal_ack: Some(control_proposal_ack),
             membership_compensation_evidence: None,
         };
         submission
@@ -1660,7 +1660,7 @@ fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBas
 
 /// The service DID every fixture Realm designates as its notary.
 ///
-/// A Control Move submitted to `/_arkret/self/events` has its proposal receipt
+/// A Control Move submitted to `/_arkret/self/events` has its Control Proposal Ack
 /// minted by this service, and `NotaryWorker::authority_set_ref_for_events`
 /// only issues one when the Realm's notary profile names the service. A fixture
 /// Realm notarised by its owner would be well-formed but unable to advance a

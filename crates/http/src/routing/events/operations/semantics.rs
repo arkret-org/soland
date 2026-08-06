@@ -153,7 +153,7 @@ fn validate_realm_proposal_policy(
             .map_err(|_| "Realm control proposal decision policy is invalid")
     };
     arkret_wire::ControlProposalDecisionPolicy {
-        receipt_sla: duration("receipt_sla_ms", 86_400_000)?,
+        proposal_intake_sla: duration("proposal_intake_sla_ms", 86_400_000)?,
         decision_window: duration("proposal_decision_window_ms", 30_000)?,
         absolute_horizon: duration("proposal_absolute_deadline_ms", 90_000)?,
         max_defers: u8::try_from(policy_value("max_proposal_defers", 2))

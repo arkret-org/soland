@@ -24,7 +24,7 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
         // be returned byte-identically on a duplicate, so only the caller that
         // owns the receipt store may populate this.
         ingress_receipts: Vec::new(),
-        control_proposal_receipts: Vec::new(),
+        control_proposal_acks: Vec::new(),
         quarantine: quarantine
             .into_iter()
             .filter_map(|event_id| EventId::new(event_id).ok())

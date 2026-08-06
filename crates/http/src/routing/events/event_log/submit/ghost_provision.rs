@@ -173,7 +173,7 @@ async fn prepare_ghost_event(
     let control_event_for_proposal = serde_json::from_value::<arkret_wire::Event>(envelope.clone())
         .ok()
         .filter(|event| event.seal_basis.is_some());
-    let control_proposal_receipt = if let Some(event) = control_event_for_proposal.as_ref() {
+    let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -231,11 +231,11 @@ async fn prepare_ghost_event(
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "quorum_unreachable",
-                    "this service cannot issue the current authority set's proposal receipt",
+                    "this service cannot issue the current authority set's Control Proposal Ack",
                 )
             })?;
         Some(
-            crate::control_proposal::mint_control_proposal_receipt(
+            crate::control_proposal::mint_control_proposal_ack(
                 state,
                 realm_id,
                 proposal_digest,
@@ -247,7 +247,7 @@ async fn prepare_ghost_event(
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
-                    format!("Control Proposal receipt signing failed: {error}"),
+                    format!("Control Proposal Ack signing failed: {error}"),
                 )
             })?,
         )
@@ -264,7 +264,7 @@ async fn prepare_ghost_event(
         state,
         &parsed,
         &envelope,
-        control_proposal_receipt.as_ref(),
+        control_proposal_ack.as_ref(),
         &[],
         None,
     )
@@ -289,7 +289,7 @@ async fn prepare_ghost_event(
             envelope,
             received_at,
         },
-        control_proposal_receipt,
+        control_proposal_ack,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {

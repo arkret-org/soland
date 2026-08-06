@@ -120,7 +120,7 @@ pub(in crate::routing) use validation::{
 mod sdk_projection;
 pub(crate) use sdk_projection::*;
 pub(crate) mod lease_issue;
-mod proposal_receipt_issue;
+mod control_proposal_ack_issue;
 
 #[cfg(test)]
 #[path = "event_log/admission_tests.rs"]

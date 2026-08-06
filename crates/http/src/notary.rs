@@ -404,20 +404,20 @@ impl NotaryWorker {
         for (digest, event) in ordered {
             let receipt = state
                 .projections()
-                .control_proposal_receipt(&digest)?
+                .control_proposal_ack(&digest)?
                 .ok_or_else(|| {
                     NotaryError::Store(format!(
-                        "locally signed Control Move {digest} has no immutable proposal receipt"
+                        "locally signed Control Move {digest} has no immutable Control Proposal Ack"
                     ))
                 })?;
             if receipt.proposal_digest != digest || receipt.realm_id != *realm_id {
                 return Err(NotaryError::Store(format!(
-                    "proposal receipt for Control Move {digest} has inconsistent binding"
+                    "Control Proposal Ack for Control Move {digest} has inconsistent binding"
                 )));
             }
             receipt.validate_protocol_bounds().map_err(|error| {
                 NotaryError::Store(format!(
-                    "proposal receipt for Control Move {digest} is invalid: {error}"
+                    "Control Proposal Ack for Control Move {digest} is invalid: {error}"
                 ))
             })?;
             let Some(hlc) = event.hlc.clone() else {
@@ -983,9 +983,9 @@ impl NotaryWorker {
                     "rejected Control Move {digest} has no pending record"
                 )));
             };
-            let Some(receipt) = record.proposal_receipt.as_ref() else {
+            let Some(receipt) = record.control_proposal_ack.as_ref() else {
                 return Err(NotaryError::Store(format!(
-                    "rejected Control Move {digest} has no proposal receipt"
+                    "rejected Control Move {digest} has no Control Proposal Ack"
                 )));
             };
             if record

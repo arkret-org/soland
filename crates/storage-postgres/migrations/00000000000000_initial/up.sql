@@ -338,7 +338,7 @@ CREATE TABLE public.state_control_events (
     event_digest text NOT NULL,
     realm_id text NOT NULL,
     event_json jsonb NOT NULL,
-    proposal_receipt jsonb,
+    control_proposal_ack jsonb,
     proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
     decision_overdue boolean DEFAULT false NOT NULL,
     sealed_by text,
@@ -1490,8 +1490,8 @@ CREATE TABLE public.idempotency_keys (
     expires_at timestamp with time zone NOT NULL
 );
 
-CREATE TABLE public.proposal_member_receipts (
-    receipt_key text PRIMARY KEY,
+CREATE TABLE public.control_proposal_authority_acks (
+    ack_key text PRIMARY KEY,
     request_hash text NOT NULL,
     response_body jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL

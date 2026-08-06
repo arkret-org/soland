@@ -101,7 +101,7 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
-        control_proposal_receipt: command.control_proposal_receipt,
+        control_proposal_ack: command.control_proposal_ack,
         projections: command
             .projections
             .into_iter()
@@ -142,7 +142,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         deliveries: Vec<crate::events::FederationDelivery>,
     ) -> crate::ServiceResult<()> {
         self.0
@@ -152,7 +152,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .into_iter()
                     .map(persistence_canonical_event)
                     .collect(),
-                proposal_receipts,
+                control_proposal_acks,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
             .await?;
@@ -161,7 +161,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
@@ -177,7 +177,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .into_iter()
                     .map(persistence_canonical_event)
                     .collect(),
-                proposal_receipts,
+                control_proposal_acks,
                 receipt,
                 device.map(|state| soland_storage::DeviceInventoryRecord {
                     actor: state.actor,
@@ -267,14 +267,14 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
     }
-    async fn control_proposal_receipt_for_event(
+    async fn control_proposal_ack_for_event(
         &self,
         event_id: &str,
-    ) -> crate::ServiceResult<Option<arkret_wire::ControlProposalReceipt>> {
+    ) -> crate::ServiceResult<Option<arkret_wire::ControlProposalAck>> {
         Ok(self
             .0
             .events()
-            .control_proposal_receipt_for_event(event_id)
+            .control_proposal_ack_for_event(event_id)
             .await?)
     }
     async fn realm_event_stats(

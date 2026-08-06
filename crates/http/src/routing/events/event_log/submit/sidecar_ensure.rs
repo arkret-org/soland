@@ -164,7 +164,7 @@ async fn validate_and_prepare(
             envelope,
             received_at,
         },
-        control_proposal_receipt: None,
+        control_proposal_ack: None,
         projections: vec![projected_event.clone()],
         idempotency: None,
         deliveries: Vec::new(),

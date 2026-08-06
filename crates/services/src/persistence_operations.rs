@@ -1046,31 +1046,31 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
         Ok(())
     }
 
-    async fn proposal_member_receipt(
+    async fn control_proposal_authority_ack(
         &self,
-        receipt_key: &str,
-    ) -> crate::ServiceResult<Option<crate::jobs::ProposalMemberReceiptState>> {
+        ack_key: &str,
+    ) -> crate::ServiceResult<Option<crate::jobs::ControlProposalAuthorityAckState>> {
         Ok(self
             .0
-            .proposal_member_receipts()
-            .get(receipt_key)
+            .control_proposal_authority_acks()
+            .get(ack_key)
             .await?
-            .map(|record| crate::jobs::ProposalMemberReceiptState {
-                receipt_key: record.receipt_key,
+            .map(|record| crate::jobs::ControlProposalAuthorityAckState {
+                ack_key: record.ack_key,
                 request_hash: record.request_hash,
                 response_body: record.response_body,
                 created_at: record.created_at,
             }))
     }
 
-    async fn store_proposal_member_receipt(
+    async fn store_control_proposal_authority_ack(
         &self,
-        record: crate::jobs::ProposalMemberReceiptState,
+        record: crate::jobs::ControlProposalAuthorityAckState,
     ) -> crate::ServiceResult<()> {
         self.0
-            .proposal_member_receipts()
-            .record(&soland_storage::ProposalMemberReceiptRecord {
-                receipt_key: record.receipt_key,
+            .control_proposal_authority_acks()
+            .record(&soland_storage::ControlProposalAuthorityAckRecord {
+                ack_key: record.ack_key,
                 request_hash: record.request_hash,
                 response_body: record.response_body,
                 created_at: record.created_at,

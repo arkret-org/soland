@@ -3,7 +3,7 @@ use soland_storage::contract_tests::{
     assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
-    assert_proposal_member_receipt_store_contract,
+    assert_control_proposal_authority_ack_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
@@ -12,7 +12,7 @@ use soland_storage::{
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
     PgIdempotencyStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore, PgProposalMemberReceiptStore,
+    PgProjectionEventStore, PgControlProposalAuthorityAckStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -43,14 +43,14 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_proposal_member_receipt_contract_when_configured() {
+async fn postgres_adapter_satisfies_control_proposal_authority_ack_contract_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
     };
     let _db_guard = DB_GUARD.lock().await;
-    let store = PgProposalMemberReceiptStore { pool };
-    let namespace = format!("postgres-proposal-receipt-{}", uuid::Uuid::now_v7());
-    assert_proposal_member_receipt_store_contract(&store, &namespace).await;
+    let store = PgControlProposalAuthorityAckStore { pool };
+    let namespace = format!("postgres-control-proposal-ack-{}", uuid::Uuid::now_v7());
+    assert_control_proposal_authority_ack_store_contract(&store, &namespace).await;
 }
 
 #[tokio::test]
@@ -122,7 +122,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-    let member = arkret_wire::ProposalMemberReceipt {
+    let member = arkret_wire::ControlProposalAuthorityAck {
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),
         received_at: now,
@@ -141,7 +141,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
             extra: Default::default(),
         },
     };
-    let receipt = arkret_wire::ControlProposalReceipt::from_member_receipts(
+    let receipt = arkret_wire::ControlProposalAck::from_authority_acks(
         vec![member],
         arkret_wire::ControlProposalDecisionPolicy::default(),
     )
@@ -162,7 +162,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 envelope,
                 received_at: now,
             },
-            control_proposal_receipt: Some(receipt),
+            control_proposal_ack: Some(receipt),
             projections: Vec::new(),
             idempotency: None,
             outbox: Vec::new(),

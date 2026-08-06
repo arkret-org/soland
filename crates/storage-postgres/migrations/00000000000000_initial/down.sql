@@ -97,7 +97,7 @@ DROP TABLE IF EXISTS sync_cursor_revocations CASCADE;
 DROP TABLE IF EXISTS websocket_auth_challenges CASCADE;
 DROP TABLE IF EXISTS websocket_auth_replay_ledger CASCADE;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
-DROP TABLE IF EXISTS proposal_member_receipts CASCADE;
+DROP TABLE IF EXISTS control_proposal_authority_acks CASCADE;
 DROP TABLE IF EXISTS webrtc_sessions CASCADE;
 DROP TABLE IF EXISTS service_identity_registrations CASCADE;
 DROP TABLE IF EXISTS service_identity CASCADE;

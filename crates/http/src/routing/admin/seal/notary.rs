@@ -381,7 +381,7 @@ pub(crate) async fn admin_reconfigure_notary(
         .ok_or_else(|| {
             app_error!(
                 ServiceUnavailable,
-                "this service cannot issue the current authority set's proposal receipt"
+                "this service cannot issue the current authority set's Control Proposal Ack"
             )
         })?;
     let policy = crate::control_proposal::control_proposal_policy(
@@ -398,7 +398,7 @@ pub(crate) async fn admin_reconfigure_notary(
     })?;
     let proposal_digest = arkret_identifiers::Hash::new(move_id.clone())
         .map_err(|error| app_error!(InternalError, "event digest is invalid: {error}"))?;
-    let receipt = crate::control_proposal::mint_control_proposal_receipt(
+    let receipt = crate::control_proposal::mint_control_proposal_ack(
         state,
         realm.clone(),
         proposal_digest,
@@ -409,7 +409,7 @@ pub(crate) async fn admin_reconfigure_notary(
     .map_err(|error| {
         app_error!(
             InternalError,
-            "Control Proposal receipt signing failed: {error}"
+            "Control Proposal Ack signing failed: {error}"
         )
     })?;
 

@@ -31,7 +31,7 @@ pub trait EventStore: Send + Sync {
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()>;
     /// Commit the closed identity-anchor unit, its signed receipt (for
@@ -41,7 +41,7 @@ pub trait EventStore: Send + Sync {
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
@@ -53,16 +53,16 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<EventBatchReceipt>>;
-    /// Proposal receipt committed in the same durable unit as `event_id`.
+    /// Control Proposal Ack committed in the same durable unit as `event_id`.
     ///
     /// This is the recovery source for adapters whose online control-event
     /// index is rebuilt after an ambiguous post-commit failure. PostgreSQL's
     /// control-event store is already the transactional source of truth, so
     /// adapters that do not maintain a separate index may use the default.
-    async fn control_proposal_receipt_for_event(
+    async fn control_proposal_ack_for_event(
         &self,
         _event_id: &str,
-    ) -> PersistenceResult<Option<arkret_wire::ControlProposalReceipt>> {
+    ) -> PersistenceResult<Option<arkret_wire::ControlProposalAck>> {
         Ok(None)
     }
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>>;
