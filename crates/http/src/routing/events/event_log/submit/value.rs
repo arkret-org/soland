@@ -967,6 +967,24 @@ pub(super) async fn submit_event_value_with_context(
     enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
+    // A registered kind that reaches here MUST yield a projection Operation.
+    // Everything the mapper can refuse on — an unregistered kind, an invalid
+    // `realm_id`, a non-object payload — was already validated above, so `None`
+    // means the mapper itself could not name the Operation. Skipping the rest
+    // of this function in that case is a fail-open: `validate_operation_semantics`
+    // below is where the kind's registered payload validator runs, so a payload
+    // that validator would reject would be committed instead. The Realm
+    // bootstrap lane already refuses the same condition
+    // (`realm_bootstrap.rs::submit_realm_bootstrap_batch`); the two lanes MUST
+    // agree, and this asymmetry is exactly how the projection outage of
+    // 2026-08-06 stayed silent.
+    if projection_operation.is_none() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("event kind {} has no projection operation", parsed.kind),
+        ));
+    }
     // v1 carries no producer `effects[]`, so every reducer preflight below has
     // to be handed the receiver's own registry-derived writes for this Event
     // (`event-and-patch.md` §2.4.2). Deriving them once here keeps the

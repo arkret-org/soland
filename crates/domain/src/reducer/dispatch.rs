@@ -814,7 +814,7 @@ fn apply_moderation_decision_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_moderation_decision(op, op.created_at)
+    s.apply_moderation_decision(op)
 }
 
 /// P2 — dispatch for `ak.moderation.decision.lift`. Projects an observed-

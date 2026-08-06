@@ -387,6 +387,19 @@ async fn persist_account_data_event(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("account_data Event signing failed: {error}")))?;
+    // `id-kind-registry.json` gives the `operation` kind `id_form:
+    // producer_allocated`, so the Operation id belongs to whoever authors the
+    // Event — here the service. A receiver cannot derive one from the
+    // content-bound (UUIDv8) Event id, and without it the accepted Event has no
+    // projection Operation, so the `ak.account_data.set` reducer never runs and
+    // the row this handler reads back immediately afterwards is never written.
+    // It goes in `unsigned`, after signing, because it is outside the signed
+    // canonical Event transcript (same slot and order as
+    // `arkret_event_draft::Operation::into_event_envelope`).
+    event.unsigned.insert(
+        "local_operation_idempotency_alias".to_owned(),
+        Value::String(crate::ids::generate_operation_id()),
+    );
     let mut service_session = session.clone();
     service_session.actor = state.service_id().clone();
     let envelope = serde_json::to_value(event).map_err(|error| {

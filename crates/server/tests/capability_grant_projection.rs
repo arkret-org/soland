@@ -30,13 +30,23 @@ const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-c1c1c1c1c1c1";
 const CIRCLE_B: &str = "ak:circle:01904100-0000-8000-8000-c2c2c2c2c2c2";
 
 fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
-    payload
-        .as_object_mut()
-        .expect("test payload object")
+    let operation_uuid = uuid::Uuid::now_v7().to_string();
+    let object = payload.as_object_mut().expect("test payload object");
+    object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(ISSUER.to_owned()));
+    // The registered or_set dot is `ak:event:<event_id>:<write_index>`, so a
+    // fixture Operation owes the Event id the submit path injects
+    // (`sdk_projection::projection_operation_from_event`). Retyping the
+    // producer-allocated uuid into the content-bound version nibble is enough:
+    // the fixture only needs a well-formed value that differs per Operation.
+    let mut event_uuid = operation_uuid.clone();
+    event_uuid.replace_range(14..15, "8");
+    object
+        .entry("event_id".to_owned())
+        .or_insert_with(|| Value::String(format!("ak:event:{event_uuid}")));
     Operation::create(
-        OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
+        OperationId::new(format!("ak:operation:{operation_uuid}")).unwrap(),
         RealmId::new(realm_id).unwrap(),
         kind,
         payload,

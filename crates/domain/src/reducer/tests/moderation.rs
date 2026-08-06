@@ -12,6 +12,11 @@ const MOD_APPEAL_ID: &str = "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
 const MOD_TARGET_REF: &str = "ak:message:01904100-0000-8000-8000-000000000777";
 const MOD_REQUEST_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The registered add dot of the seeded decision: `ak.moderation.decision`
+/// declares one `cell_writes[]` entry, so `event-and-patch.md` §2.4.2 makes it
+/// `<decision event id>:0`. `content-moderation.md` §2.6 requires the lift to
+/// name exactly this value in `observed_dots[]`.
+const MOD_DECISION_DOT: &str = "ak:event:01904100-0000-8000-8000-0d0d0d0d0d01:0";
 
 fn mod_decision_cell_ref() -> CellRef {
     CellRef::new(format!(
@@ -25,6 +30,10 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
         arkret_wire::EventKind::MODERATION_DECISION,
         MOD_REALM,
         serde_json::json!({
+            // A decision's `decision_id` is its own Event id, and the add dot
+            // is derived from that Event — the submit path injects `event_id`
+            // the same way (`sdk_projection::projection_operation_from_event`).
+            "event_id": MOD_DECISION_ID,
             "decision_id": MOD_DECISION_ID,
             "realm_id": MOD_REALM,
             "issuer": issuer,
@@ -80,11 +89,12 @@ fn moderation_decision_then_lift_converges_on_cell() {
         Some(CellState::Value(Value::Array(items))) => items,
         other => panic!("moderation target cell should contain an or_set array, got {other:?}"),
     };
+    // The add tag is the registered dot, not a decision/issuer/digest triple:
+    // it is what the lift's `observed_dots[]` has to name byte for byte
+    // (`content-moderation.md` §2.6).
     assert_eq!(
         items[0].get("tag").and_then(Value::as_str),
-        Some(
-            "quarantine:did:web:mod.example:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        )
+        Some(MOD_DECISION_DOT)
     );
 
     let lift = make_operation(
@@ -92,6 +102,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
+            "observed_dots": [MOD_DECISION_DOT],
             "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),
@@ -312,6 +323,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
+            "observed_dots": [MOD_DECISION_DOT],
             "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),

@@ -446,16 +446,24 @@ fn normalize_relation_create_payload(
     }
 }
 
+/// Domain separator for the Operation handle soland derives for an accepted
+/// Event. Versioned and distinct per id family, as
+/// [`arkret_identifiers::subject_derived_uuid`] requires.
+const EVENT_PROJECTION_OPERATION_DOMAIN: &[u8] = b"ak:operation:soland-event-projection:v1:";
+
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
-    // (`ak:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`).
-    // Older inkson builds shipped the event_id (ak:event:) verbatim in
-    // this slot; soland MUST NOT silently drop projection for such
-    // events ── fall through to the event_id-derived form so the
-    // projection chain (`project_accepted_operations` →
-    // `project_membership_operation` → RealmInviteRecord write) still
-    // runs. The alias-when-present remains the dedupe key for clients
-    // that submit it correctly.
+    // (`ak:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`). A client
+    // that authored the draft locally already dedupes on that value, so
+    // honouring it keeps a resubmission idempotent end to end.
+    //
+    // The alias lives in `unsigned`, which is outside the signed canonical
+    // Event transcript, so it is routinely absent: a federated Event, a
+    // non-SDK submitter, and every Event soland authors itself carry none.
+    // Server correctness MUST NOT depend on it — returning `None` here drops
+    // the entire projection chain for the Event, and with it
+    // `validate_operation_semantics`, so a payload the kind's registered
+    // validator would have rejected gets durably accepted instead.
     if let Some(alias) = envelope
         .get("unsigned")
         .and_then(Value::as_object)
@@ -465,8 +473,27 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     {
         return Some(operation_id);
     }
-    let suffix = event_id.strip_prefix("ak:event:")?;
-    OperationId::new(format!("ak:operation:{suffix}")).ok()
+    // Otherwise soland allocates the handle. `Operation` is
+    // `ak.local.operation_draft.v1` — an SDK-local reducer DTO, not a wire
+    // fact — so its id is the receiver's to mint, and `id-kind-registry.json`
+    // makes `operation` producer-allocated (UUIDv7). Deriving it from the
+    // Event id under a domain separator is what keeps it reproducible: live
+    // admission and `projection_operation_from_canonical_record` hydration
+    // must land on the same handle or the projection would re-key on reboot.
+    //
+    // Retyping the Event id into `ak:operation:<uuid>` — what this used to do
+    // — cannot work: an Event id is content-bound (UUIDv8, `encoding.md`
+    // §4.0), an Operation id is producer-allocated (UUIDv7), so the retyped
+    // value never validated and this function always returned `None`.
+    let event_id = EventId::new(event_id.to_owned()).ok()?;
+    OperationId::new(format!(
+        "ak:operation:{}",
+        arkret_identifiers::subject_derived_uuid(
+            EVENT_PROJECTION_OPERATION_DOMAIN,
+            event_id.as_str(),
+        )
+    ))
+    .ok()
 }
 
 #[cfg(test)]

@@ -530,9 +530,49 @@ fn grant_action_covers(grant: &crate::capability::Grant, action: &str) -> bool {
         .any(|holder| arkret_policy::action_covers_event_kinds(holder, action).unwrap_or(false))
 }
 
-/// or_set add dot for a capability event. Deterministic per accepted event.
-fn capability_add_dot(operation: &Operation) -> String {
-    operation.operation_id.to_string()
+/// The 0-based index of `ak.component.capability.grant.v1` in the
+/// `ak.capability.grant` registry `cell_writes[]`. The contract declares
+/// exactly one write, so the dot's third segment is `0`.
+const CAPABILITY_GRANT_WRITE_INDEX: usize = 0;
+
+/// or_set add dot for a capability grant.
+///
+/// `event-and-patch.md` §2.4.2 fixes the dot to
+/// `ak:event:<event_id>:<write_index>` and states outright that reading the
+/// third segment as anything else — a payload index, arrival order, or a local
+/// counter — produces different dot sets across implementations. This used to
+/// return the soland-local `ak:operation:<uuid>` handle, which is not that
+/// value at all: a peer folding the same Event derived a different tag, so the
+/// two OR-Sets could never converge and an `or_set_remove_observed` issued
+/// elsewhere could not name soland's add.
+///
+/// The format itself is pinned by `ak.vector.encoding.or_set_dot_and_batch_tag.v1`,
+/// so it is read from the SDK rather than re-spelled here.
+fn capability_add_dot(operation: &Operation) -> Option<String> {
+    let event_id = operation.payload.get("event_id").and_then(Value::as_str)?;
+    Some(arkret_schema::or_set_dot(
+        event_id,
+        CAPABILITY_GRANT_WRITE_INDEX,
+    ))
+}
+
+/// The `event_id` a fixture Operation carries so [`capability_add_dot`] can
+/// derive its registered dot, mirroring what
+/// `sdk_projection::projection_operation_from_event` injects on the submit
+/// path.
+///
+/// Retypes the fixture's producer-allocated Operation uuid into the
+/// content-bound version nibble an Event id carries. Fixtures that reuse one
+/// Operation id across calls keep sharing one dot — the idempotent re-add the
+/// previous `ak:operation:` tag also produced.
+#[cfg(test)]
+fn fixture_event_id_for_operation(operation_id: &str) -> String {
+    let mut uuid = operation_id
+        .strip_prefix("ak:operation:")
+        .expect("fixture operation id is typed")
+        .to_owned();
+    uuid.replace_range(14..15, "8");
+    format!("ak:event:{uuid}")
 }
 
 /// Pull the canonical grant body out of an `ak.capability.grant` payload.
@@ -1513,8 +1553,15 @@ impl ProjectionState {
                 Value::Array(authority_root_refs),
             );
         }
+        // Fail closed rather than invent a tag: an add whose dot is not the
+        // registered one is unremovable by any conforming observed-remove.
+        let Some(tag) = capability_add_dot(operation) else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_add_dot_unresolved".to_owned(),
+            };
+        };
         items.push(serde_json::json!({
-            "tag": capability_add_dot(operation),
+            "tag": tag,
             "value": value,
         }));
         self.cells
@@ -2047,15 +2094,17 @@ mod agent_key_tests {
     }
 
     fn op(object_kind: &str, mut payload: serde_json::Value) -> Operation {
-        payload
-            .as_object_mut()
-            .expect("test payload object")
+        const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000ff";
+        let object = payload.as_object_mut().expect("test payload object");
+        object
             .entry("sender".to_owned())
             .or_insert_with(|| serde_json::Value::String(REALM_OWNER.to_owned()));
+        object.entry("event_id".to_owned()).or_insert_with(|| {
+            serde_json::Value::String(super::fixture_event_id_for_operation(OPERATION_ID))
+        });
         Operation {
             schema: "ak.schema.operation.v1".to_owned(),
-            operation_id: OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000ff")
-                .unwrap(),
+            operation_id: OperationId::new(OPERATION_ID).unwrap(),
             record_kind: "operation".to_owned(),
             operation_kind: OperationKind::Create,
             realm_id: RealmId::new(REALM.to_owned()).unwrap(),
@@ -2766,11 +2815,13 @@ mod authority_cycle_tests {
         authority_grant_id: &str,
         constraints: serde_json::Value,
     ) -> Operation {
+        const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000fe";
         Operation::create(
-            OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
+            OperationId::new(OPERATION_ID).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
+                "event_id": super::fixture_event_id_for_operation(OPERATION_ID),
                 "grant_id": grant_id,
                 "grant": {
                     "issuer": "did:web:alice.example",
@@ -2795,11 +2846,13 @@ mod authority_cycle_tests {
         subject: &str,
         constraints: serde_json::Value,
     ) -> Operation {
+        const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000fd";
         Operation::create(
-            OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
+            OperationId::new(OPERATION_ID).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
+                "event_id": super::fixture_event_id_for_operation(OPERATION_ID),
                 "grant_id": grant_id,
                 "grant": {
                     "issuer": issuer,
@@ -3022,11 +3075,13 @@ mod federation_revoke_fanout_tests {
     const OWNER_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d0";
 
     fn capability_op(operation_id: &str, kind: &str, mut payload: serde_json::Value) -> Operation {
-        payload
-            .as_object_mut()
-            .expect("test payload object")
+        let object = payload.as_object_mut().expect("test payload object");
+        object
             .entry("sender".to_owned())
             .or_insert_with(|| serde_json::Value::String(OWNER.to_owned()));
+        object.entry("event_id".to_owned()).or_insert_with(|| {
+            serde_json::Value::String(super::fixture_event_id_for_operation(operation_id))
+        });
         Operation::create(
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
@@ -3202,14 +3257,14 @@ mod realm_owner_authority_tests {
         subject: &str,
         actions: serde_json::Value,
     ) -> Operation {
+        let operation_id =
+            format!("ak:operation:01980000-0000-7000-8000-0000000000{operation_slot}");
         Operation::create(
-            OperationId::new(format!(
-                "ak:operation:01980000-0000-7000-8000-0000000000{operation_slot}"
-            ))
-            .unwrap(),
+            OperationId::new(operation_id.clone()).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
+                "event_id": super::fixture_event_id_for_operation(&operation_id),
                 "grant_id": grant_id,
                 "grant": {
                     "id": grant_id,

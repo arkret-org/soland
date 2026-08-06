@@ -4,14 +4,17 @@
 //! events. Projects the six active moderation kinds into the canonical cells
 //! declared by `event-kind-registry.json`:
 //!
-//! - `ak.moderation.decision` -> `ak.component.moderation_state.v1` (or_set, one cell per
-//!   `payload.target_ref`). The add value is the decision snapshot (`decision_id` / `issuer` /
-//!   `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check can
-//!   reverse-resolve the original decision issuer from the cell.
-//! - `ak.moderation.decision.lift` -> observed-remove / supersede on the same target cell. It marks
-//!   entries whose `decision_id` matches `payload.decision_ref` as lifted. Terminal per
-//!   content-moderation.md §2.6 (same §12.1 rule as capabilities): once a decision_id is lifted, a
-//!   later re-add stays lifted.
+//! - `ak.moderation.decision` -> `ak.component.moderation_state.v1` (or_set add, one cell per
+//!   `payload.target_ref`). The add tag is the registered dot `ak:event:<event_id>:<write_index>`
+//!   (`event-and-patch.md` §2.4.2); the add value is the decision snapshot (`decision_id` /
+//!   `issuer` / `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check
+//!   can reverse-resolve the original decision issuer from the cell.
+//! - `ak.moderation.decision.lift` -> `or_set_remove_dots` on the same target cell, removing
+//!   exactly the dots enumerated in `payload.observed_dots[]` (content-moderation.md §2.6). It is
+//!   deliberately NOT a bulk remove keyed by `decision_id`: §2.6 forbids `or_set_remove_observed`
+//!   here by name, because lifting one review must not implicitly lift another issuer's decision. A
+//!   replacement decision issued in the same batch is a new dot on the same cell and coexists with
+//!   what survived (§2.6 last paragraph), so an add is never pre-tombstoned.
 //! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
 //!   (fsm, one cell per `payload.appeal_id`). Deterministic state machine (none) → submitted →
 //!   under_review → decided → closed, with `close` also reachable from submitted / under_review
@@ -91,8 +94,51 @@ fn moderation_request_canonical_digest(operation: &Operation) -> Option<String> 
     })
 }
 
-fn moderation_add_tag(decision_kind: &str, issuer: &str, request_digest: &str) -> String {
-    format!("{decision_kind}:{issuer}:{request_digest}")
+/// The 0-based index of `ak.component.moderation_state.v1` in the
+/// `ak.moderation.decision` registry `cell_writes[]`. The contract declares
+/// exactly one write.
+const MODERATION_DECISION_WRITE_INDEX: usize = 0;
+
+/// or_set add dot for `ak.moderation.decision`.
+///
+/// The registry row projects `{"kind":"or_set_add","tag":{"dot":true}}`, so the
+/// tag is the registered dot of `event-and-patch.md` §2.4.2 —
+/// `ak:event:<event_id>:<write_index>`. This used to be
+/// `<decision_kind>:<issuer>:<request_digest>`, which no peer folding the same
+/// Event would reproduce, and which `ak.moderation.decision.lift` cannot name:
+/// `content-moderation.md` §5.5.1 makes lift remove producer-enumerated
+/// `observed_dots[]`, and those dots are this value.
+fn moderation_add_tag(operation: &Operation) -> Option<String> {
+    let event_id = operation.payload.get("event_id").and_then(Value::as_str)?;
+    Some(arkret_schema::or_set_dot(
+        event_id,
+        MODERATION_DECISION_WRITE_INDEX,
+    ))
+}
+
+/// The removal set of `ak.moderation.decision.lift`.
+///
+/// `content-moderation.md` §2.6: the payload MUST carry `observed_dots[]`, the
+/// removal set is byte-equal to it, and every dot's `event_id` segment MUST
+/// equal the `decision_ref` uuid. `decision_ref` is `ak:event:<uuid>` and a dot
+/// is `ak:event:<uuid>:<write_index>`; §2.4.2 provides no `event_ref -> dot`
+/// derivation, so the two are checked against each other rather than one being
+/// computed from the other. Returns `None` — fail closed — when the field is
+/// absent, empty, malformed, or names a dot belonging to another decision.
+fn moderation_lift_observed_dots(operation: &Operation, decision_ref: &str) -> Option<Vec<String>> {
+    let dots = operation.payload.get("observed_dots")?.as_array()?;
+    if dots.is_empty() {
+        return None;
+    }
+    let expected_prefix = format!("{decision_ref}:");
+    dots.iter()
+        .map(|dot| {
+            let dot = dot.as_str()?;
+            let write_index = dot.strip_prefix(&expected_prefix)?;
+            (!write_index.is_empty() && write_index.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| dot.to_owned())
+        })
+        .collect()
 }
 
 fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
@@ -277,11 +323,7 @@ impl ProjectionState {
 
     /// P2 — project `ak.moderation.decision` as an or_set add on the
     /// moderation_state cell keyed by `payload.target_ref`.
-    pub(crate) fn apply_moderation_decision(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
+    pub(crate) fn apply_moderation_decision(&mut self, operation: &Operation) -> ProjectionEffect {
         let decision_id = moderation_decision_id(operation);
         let Some(target_ref) = payload_ref(operation, "target_ref") else {
             return ProjectionEffect::Rejected {
@@ -335,12 +377,11 @@ impl ProjectionState {
         };
 
         let mut items = self.moderation_cell_items(&cell_ref);
-        // §2.6 terminal: a re-add of an already-lifted decision_id does NOT
-        // revive. Carry the lifted tombstone onto the new add.
-        let terminal_lifted = Self::moderation_cell_has_lifted_item(
-            &self.moderation_items_for_decision(&decision_id),
-        );
-        let tag = moderation_add_tag(&decision_kind, &issuer, &request_digest);
+        let Some(tag) = moderation_add_tag(operation) else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_decision_add_dot_unresolved".to_owned(),
+            };
+        };
         let mut value = operation.payload.clone();
         if let Value::Object(map) = &mut value {
             map.insert("decision_id".to_owned(), Value::String(decision_id.clone()));
@@ -353,12 +394,6 @@ impl ProjectionState {
             );
             map.entry("realm_id".to_owned())
                 .or_insert_with(|| Value::String(realm_id.clone()));
-            if terminal_lifted {
-                map.insert("lifted".to_owned(), Value::Bool(true));
-                map.entry("lifted_at".to_owned()).or_insert_with(|| {
-                    Value::String(arkret_canonical::format_timestamp_canonical(now))
-                });
-            }
         }
         items.push(serde_json::json!({
             "tag": tag,
@@ -373,9 +408,17 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project `ak.moderation.decision.lift` as an or_set observed-remove
-    /// / supersede on the moderation_state cell keyed by `payload.target_ref`.
-    /// Idempotent: lifting an already-lifted decision converges.
+    /// P2 — project `ak.moderation.decision.lift` as the registered
+    /// `or_set_remove_dots` on the moderation_state cell keyed by
+    /// `payload.target_ref`.
+    ///
+    /// `content-moderation.md` §2.6 makes the removal set **byte-equal** to
+    /// `payload.observed_dots[]`, and requires each dot's `event_id` segment to
+    /// equal the `decision_ref` uuid — that pair is the machine-readable form of
+    /// "解除一条 review 不得隐式 lift 其它 issuer 的 decision". This used to
+    /// select by `decision_id` and mark every matching add lifted, which is the
+    /// `or_set_remove_observed` shape §2.6 forbids by name for exactly that
+    /// reason. Idempotent: re-lifting an already-removed dot converges.
     pub(crate) fn apply_moderation_decision_lift(
         &mut self,
         operation: &Operation,
@@ -393,6 +436,11 @@ impl ProjectionState {
                 reason: "moderation_lift_target_ref_missing".to_owned(),
             };
         };
+        let Some(observed_dots) = moderation_lift_observed_dots(operation, &decision_id) else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_lift_observed_dots_invalid".to_owned(),
+            };
+        };
         let realm_id = operation.realm_id.to_string();
         let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
             return ProjectionEffect::Rejected {
@@ -402,44 +450,28 @@ impl ProjectionState {
 
         let mut items = self.moderation_cell_items(&cell_ref);
         let lifted_at = arkret_canonical::format_timestamp_canonical(now);
-        if items.is_empty() {
-            // Lift-before-decision (or lift of a decision this server never
-            // projected): write a tombstone-only item so the terminal rule
-            // holds and a later re-add of the same decision_id stays lifted.
-            items.push(serde_json::json!({
-                "tag": format!("lift:{}:{}", decision_id, operation.operation_id),
-                "value": {
-                    "decision_id": decision_id.clone(),
-                    "target_ref": target_ref.clone(),
-                    "realm_id": realm_id.clone(),
-                    "lifted": true,
-                    "lifted_at": lifted_at,
-                },
-            }));
-        } else {
-            // Observed-remove: mark every surviving add for this decision_id
-            // lifted (terminal). Repeated lift is idempotent.
-            let mut lifted_any = false;
-            for item in &mut items {
-                let target = if item.get("value").is_some() {
-                    item.get_mut("value").expect("value present")
-                } else {
-                    item
-                };
-                if let Value::Object(map) = target {
-                    if map.get("decision_id").and_then(Value::as_str) != Some(decision_id.as_str())
-                    {
-                        continue;
+        for dot in &observed_dots {
+            let existing = items
+                .iter_mut()
+                .find(|item| item.get("tag").and_then(Value::as_str) == Some(dot.as_str()));
+            match existing {
+                Some(item) => {
+                    let target = if item.get("value").is_some() {
+                        item.get_mut("value").expect("value present")
+                    } else {
+                        item
+                    };
+                    if let Value::Object(map) = target {
+                        map.insert("lifted".to_owned(), Value::Bool(true));
+                        map.entry("lifted_at".to_owned())
+                            .or_insert_with(|| Value::String(lifted_at.clone()));
                     }
-                    map.insert("lifted".to_owned(), Value::Bool(true));
-                    map.entry("lifted_at".to_owned())
-                        .or_insert_with(|| Value::String(lifted_at.clone()));
-                    lifted_any = true;
                 }
-            }
-            if !lifted_any {
-                items.push(serde_json::json!({
-                    "tag": format!("lift:{}:{}", decision_id, operation.operation_id),
+                // Lift-before-decision, or a decision this server never
+                // projected. An OR-Set remove has to record the dot, or a later
+                // add carrying it would revive what was already removed.
+                None => items.push(serde_json::json!({
+                    "tag": dot,
                     "value": {
                         "decision_id": decision_id.clone(),
                         "target_ref": target_ref.clone(),
@@ -447,7 +479,7 @@ impl ProjectionState {
                         "lifted": true,
                         "lifted_at": lifted_at,
                     },
-                }));
+                })),
             }
         }
         self.cells

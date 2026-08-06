@@ -98,8 +98,25 @@ async fn put_account_data(
     (status, body)
 }
 
+/// Stand a plaintext Realm up through its canonical `ak.realm.create`.
+///
+/// `realm-and-space.md` §2.5 makes the genesis Event the sole writer of the
+/// Realm's seven registered cells, and admission resolves every later Event's
+/// reducer profile from one of them (`ak.component.realm.reducer_profile.v1`).
+/// A fixture that writes only the Realm directory and the `realm_meta`
+/// projection leaves that cell unmaterialized, so the server correctly answers
+/// `dependency_missing` for every ordinary Event in the Realm.
+///
+/// [`soland_test_support::cba_basis::seed_realm_genesis_event`] authors that
+/// genesis Event and folds it through the same reducer the submit path uses,
+/// so all seven cells — reducer profile, authority root, metadata, notary,
+/// create log, creator membership — are derived from the Event rather than
+/// hand-seeded. The directory entry and `realm_meta` row that follow are
+/// soland-local read projections, and they restate the genesis object rather
+/// than inventing values it does not carry.
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
     let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
+    soland_test_support::cba_basis::seed_realm_genesis_event(&state, &realm_id, owner).await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -128,7 +145,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
                 preview_policy_digest: None,
                 asset_privacy_policy: None,
                 asset_privacy_policy_digest: None,
-                encryption_profile: None,
+                encryption_profile: Some("none".to_owned()),
                 plaintext_visible_services: std::collections::BTreeSet::from([
                     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                 ]),
@@ -209,6 +226,19 @@ fn signed_actor_private_event_envelope(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .expect("SDK Event signer accepts actor-private fixture");
+    // `id-kind-registry.json` gives the `operation` kind `id_form:
+    // producer_allocated`, so the Operation id is the producer's to mint and a
+    // receiver cannot derive one from the content-bound (UUIDv8) Event id.
+    // Every real submitter carries it in this slot — that is what
+    // `arkret_event_draft::Operation::into_event_envelope` writes, after the
+    // proofs, because `unsigned` is outside the signed canonical transcript.
+    // Without it soland has no Operation for the Event and skips both the
+    // kind's registered payload validator and the reducer projection, so the
+    // fixture has to submit it the way a client does.
+    event.unsigned.insert(
+        "local_operation_idempotency_alias".to_owned(),
+        Value::String(arkret_identifiers::new_prefixed_uuid7("ak:operation:")),
+    );
     serde_json::to_value(event).expect("SDK Event serializes")
 }
 
@@ -343,6 +373,17 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
     let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
+    // The REST surface authors its `ak.account_data.set` into the owner's
+    // Principal Control Realm (`persist_account_data_event`), and dev-login
+    // registers an account without standing that Realm up. It owes the same
+    // canonical genesis as any other Realm, or admission rightly refuses every
+    // Event in it for an unmaterialized reducer-profile cell.
+    soland_test_support::cba_basis::seed_realm_genesis_event(
+        &state,
+        &soland_test_support::principal_control_realm_for_did(&actor),
+        &actor,
+    )
+    .await;
     let desktop = dev_token(
         state.clone(),
         &actor,
@@ -528,9 +569,22 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         }),
     )
     .await;
-    assert_ne!(
-        put["status"], "accepted",
+    // Asserting only "not accepted" would pass for any error at all, including
+    // one raised before the payload was ever looked at. The floor this case
+    // exists for is `discovery/client-preferences.md` §3.5: `ak.account.blocklist`
+    // is a registered encrypted account-data key, so the carrier — not just the
+    // outcome — is what has to fail.
+    assert_eq!(
+        put["error"]["code"],
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
         "plaintext blocklist must be rejected: {put}"
+    );
+    assert!(
+        put["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("encrypted")),
+        "plaintext blocklist must be rejected by the encrypted-carrier floor, \
+         not by an unrelated error: {put}"
     );
 
     let encrypted_blocklist =
