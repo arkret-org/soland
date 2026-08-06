@@ -940,18 +940,14 @@ pub(crate) fn expected_strand_id_for_scope(scope_id: &str) -> String {
 }
 
 pub(crate) fn event_canonical_digest(event: &Value) -> String {
-    // Mirror server-side `event_canonical_source` (arkret-spec
-    // conformance-vectors.md §1.6): canonical digest is sha256 over the
-    // event envelope JSON with `proofs`, `unsigned`, and the derived
-    // `canonical_digest` / `canonical_hash` slots removed.
-    let mut canonical = event.clone();
-    if let Value::Object(object) = &mut canonical {
-        object.remove("proofs");
-        object.remove("unsigned");
-        object.remove("canonical_digest");
-        object.remove("canonical_hash");
-    }
-    sha256_json(&canonical)
+    // The digest the server computes is sha256 over the SDK Event digest
+    // preimage (`event_canonical_bytes` -> `Event::digest_payload`), so this
+    // helper calls the same SDK function rather than restating the exclusion
+    // rule. Its previous hand-rolled copy kept `event_id` and `actor_kind` in
+    // the preimage and stripped two slots (`canonical_digest`,
+    // `canonical_hash`) that no longer exist on the envelope, which made every
+    // digest it produced unreachable for the server.
+    sha256_json(&arkret_wire::event_digest_preimage(event).expect("event envelope is an object"))
 }
 
 /// Give `event` the CBA envelope shape its kind's registry row declares.
