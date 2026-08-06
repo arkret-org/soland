@@ -486,29 +486,28 @@ fn validate_subject_proof(
     Ok(())
 }
 
-fn value_allowlists_service(value: &Value, service_id: &str) -> bool {
-    match value {
-        Value::Array(items) => items
-            .iter()
-            .any(|item| item.is_object() && value_allowlists_service(item, service_id)),
-        Value::Object(object) => object.iter().any(|(key, item)| {
-            let key_matches = matches!(
-                key.as_str(),
-                "allowed_verification_service_ids"
-                    | "verification_service_ids"
-                    | "third_party_verification_service_ids"
-                    | "third_party_invite_verification_services"
-            );
-            if key_matches {
-                item.as_array()
-                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(service_id)))
-                    || item.as_str() == Some(service_id)
-            } else {
-                value_allowlists_service(item, service_id)
-            }
-        }),
-        _ => false,
-    }
+/// `third-party-invites.md` — the only authority for third-party invite
+/// verification services is the current accepted
+/// `ak.realm.policy_bundle` component
+/// `allowed_third_party_invite_verification_service_ids`. It is read at the
+/// bundle's top level only: the payload is the flat closed
+/// `realm_policy_bundle_payload` object and every revision carries the whole
+/// component set forward, so a nested occurrence is never authoritative.
+///
+/// Absent component and empty array both mean deny-all. There is no
+/// deployment config, `ServiceDescribe` self-declaration or local allow row
+/// fallback, and no alternate spelling of the field name is honoured — a
+/// service that guesses its way into some other key must not gain claim
+/// authority.
+fn value_allowlists_service(policy_bundle: &Value, service_id: &str) -> bool {
+    policy_bundle
+        .get("allowed_third_party_invite_verification_service_ids")
+        .and_then(Value::as_array)
+        .is_some_and(|allowset| {
+            allowset
+                .iter()
+                .any(|allowed| allowed.as_str() == Some(service_id))
+        })
 }
 
 fn cleanup_third_party_projection(invite: &mut InviteProjection) {

@@ -99,7 +99,7 @@ fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, ser
             REALM,
             json!({
                 "policy_revision": 1,
-                "third_party_invite_verification_services": services
+                "allowed_third_party_invite_verification_service_ids": services
             }),
         ),
         hlc,
@@ -286,6 +286,76 @@ fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
         rejected,
         ProjectionEffect::Rejected { ref reason } if reason == "verification_service_not_authorized"
     ));
+}
+
+#[test]
+fn invite_claim_rejects_empty_policy_allowlist() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("invite-claim-empty-allowset");
+    seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
+    seed_realm_policy_allowlist(&mut state, &hlc, vec![]);
+
+    let rejected = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::INVITE_CLAIM,
+            REALM,
+            claim_payload("nonce-empty-allowset", TOKEN_COMMITMENT, SERVICE),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        rejected,
+        ProjectionEffect::Rejected { ref reason } if reason == "verification_service_not_authorized"
+    ));
+}
+
+/// Only the normative top-level
+/// `allowed_third_party_invite_verification_service_ids` component grants
+/// claim authority. Any other spelling, and any nested occurrence of the
+/// normative name, is inert data.
+#[test]
+fn invite_claim_ignores_non_normative_allowlist_spellings() {
+    for decoy in [
+        json!({
+            "policy_revision": 1,
+            "third_party_invite_verification_services": [SERVICE]
+        }),
+        json!({
+            "policy_revision": 1,
+            "allowed_verification_service_ids": [SERVICE]
+        }),
+        json!({
+            "policy_revision": 1,
+            "join_policy": {
+                "allowed_third_party_invite_verification_service_ids": [SERVICE]
+            }
+        }),
+    ] {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("invite-claim-decoy-allowset");
+        seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
+        state.apply(
+            &make_operation(arkret_wire::EventKind::REALM_POLICY_BUNDLE, REALM, decoy),
+            &hlc,
+        );
+
+        let rejected = state.apply(
+            &make_operation(
+                arkret_wire::EventKind::INVITE_CLAIM,
+                REALM,
+                claim_payload("nonce-decoy-allowset", TOKEN_COMMITMENT, SERVICE),
+            ),
+            &hlc,
+        );
+        assert!(
+            matches!(
+                rejected,
+                ProjectionEffect::Rejected { ref reason }
+                    if reason == "verification_service_not_authorized"
+            ),
+            "non-normative allowlist carrier must not authorize a verification service"
+        );
+    }
 }
 
 #[test]
