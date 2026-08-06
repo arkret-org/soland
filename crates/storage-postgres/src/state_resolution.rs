@@ -10,7 +10,7 @@ use arkret_state::state::{
     SealedControlEventRecord, StoreError, StoreResult, compute_state_root, control_event_digest,
 };
 use arkret_wire::{
-    Bottom, ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalAck, Event,
+    Bottom, ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event,
     LatticeOp, Seal,
 };
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
@@ -97,13 +97,13 @@ struct MemoryEventSealCommitStore {
 }
 
 fn validate_proposal_decision_append(
-    receipt: &ControlProposalAck,
+    ack: &ControlProposalAck,
     decisions: &[ControlProposalDecision],
     decision: &ControlProposalDecision,
     policy: ControlProposalDecisionPolicy,
 ) -> StoreResult<()> {
     decision
-        .validate_chain(receipt, decisions, policy)
+        .validate_chain(ack, decisions, policy)
         .map_err(|error| StoreError::Conflict(error.to_string()))
 }
 
@@ -267,10 +267,9 @@ async fn mark_control_event_sealed_in_transaction(
         .into());
     }
     let mut overdue = false;
-    if let Some(receipt) = row.control_proposal_ack {
-        let receipt =
-            serde_json::from_value::<ControlProposalAck>(receipt).map_err(serde_to_store)?;
-        let mut previous_due_at = receipt.decision_due_at;
+    if let Some(ack) = row.control_proposal_ack {
+        let ack = serde_json::from_value::<ControlProposalAck>(ack).map_err(serde_to_store)?;
+        let mut previous_due_at = ack.decision_due_at;
         for decision in &decisions {
             overdue |= !decision.satisfied_current_deadline(previous_due_at);
             previous_due_at = decision.decision_due_at();
@@ -520,7 +519,7 @@ fn seal_predecessor_refs_json(seal: &Seal) -> Value {
 }
 
 impl ControlEventStore for PgControlEventStore {
-    fn put_pending_with_receipt(
+    fn put_pending_with_ack(
         &self,
         event: &Event,
         control_proposal_ack: Option<&ControlProposalAck>,
@@ -534,16 +533,15 @@ impl ControlEventStore for PgControlEventStore {
             .as_str()
             .to_owned();
         let realm_id = event.realm_id.as_str().to_owned();
-        if let Some(receipt) = control_proposal_ack
-            && (receipt.proposal_digest.as_str() != digest || receipt.realm_id != event.realm_id)
+        if let Some(ack) = control_proposal_ack
+            && (ack.proposal_digest.as_str() != digest || ack.realm_id != event.realm_id)
         {
             return Err(StoreError::Conflict(
                 "Control Proposal Ack does not bind the pending Control Move".to_owned(),
             ));
         }
-        if let Some(receipt) = control_proposal_ack {
-            receipt
-                .validate_protocol_bounds()
+        if let Some(ack) = control_proposal_ack {
+            ack.validate_protocol_bounds()
                 .map_err(|error| StoreError::Conflict(error.to_string()))?;
         }
         let control_proposal_ack = control_proposal_ack
@@ -575,7 +573,7 @@ impl ControlEventStore for PgControlEventStore {
             .map_err(diesel_to_store)?;
             if affected == 0 {
                 return Err(StoreError::Conflict(
-                    "pending Control Move already has different canonical bytes or receipt"
+                    "pending Control Move already has different canonical bytes or Control Proposal Ack"
                         .to_owned(),
                 ));
             }
@@ -668,7 +666,7 @@ impl ControlEventStore for PgControlEventStore {
                     ))
                     .into());
                 }
-                let receipt = row
+                let ack = row
                     .control_proposal_ack
                     .ok_or_else(|| {
                         StoreError::Conflict(format!(
@@ -676,8 +674,7 @@ impl ControlEventStore for PgControlEventStore {
                         ))
                     })
                     .and_then(|value| {
-                        serde_json::from_value::<ControlProposalAck>(value)
-                            .map_err(serde_to_store)
+                        serde_json::from_value::<ControlProposalAck>(value).map_err(serde_to_store)
                     })?;
                 let mut decisions =
                     serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
@@ -691,7 +688,7 @@ impl ControlEventStore for PgControlEventStore {
                     ))
                     .into());
                 }
-                validate_proposal_decision_append(&receipt, &decisions, &decision, policy)?;
+                validate_proposal_decision_append(&ack, &decisions, &decision, policy)?;
                 decisions.push(decision);
                 let decisions = serde_json::to_value(decisions).map_err(serde_to_store)?;
                 sql_query(
@@ -1747,9 +1744,9 @@ impl CellStore for PgCellStore {
 #[cfg(test)]
 mod proposal_decision_tests {
     use arkret_wire::{
-        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalAck,
-        ControlProposalAckKind, ControlProposalRejectReason, PayloadSignature,
-        ControlProposalAuthorityAck,
+        ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
+        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalRejectReason,
+        PayloadSignature,
     };
     use chrono::{DateTime, TimeZone, Utc};
 
@@ -1776,7 +1773,7 @@ mod proposal_decision_tests {
         }
     }
 
-    fn receipt() -> ControlProposalAck {
+    fn ack() -> ControlProposalAck {
         let mut member = ControlProposalAuthorityAck {
             realm_id: RealmId::new("ak:realm:01999999-0000-8000-8000-00000000cba1").unwrap(),
             proposal_digest: hash('a'),
@@ -1800,17 +1797,17 @@ mod proposal_decision_tests {
         }
     }
 
-    fn signed_reject(receipt: &ControlProposalAck) -> ControlProposalDecision {
+    fn signed_reject(ack: &ControlProposalAck) -> ControlProposalDecision {
         let mut decision = ControlProposalDecision::SignedReject {
-            realm_id: receipt.realm_id.clone(),
-            proposal_digest: receipt.proposal_digest.clone(),
-            proposal_ack_digest: receipt.proposal_ack_digest().unwrap(),
+            realm_id: ack.realm_id.clone(),
+            proposal_digest: ack.proposal_digest.clone(),
+            proposal_ack_digest: ack.proposal_ack_digest().unwrap(),
             decided_at: at(20),
-            decision_due_at: receipt.decision_due_at,
-            absolute_due_at: receipt.absolute_due_at,
+            decision_due_at: ack.decision_due_at,
+            absolute_due_at: ack.absolute_due_at,
             defer_count: 0,
             reason_code: ControlProposalRejectReason::PolicyDenied,
-            authority_set_ref: receipt.authority_set_ref.clone(),
+            authority_set_ref: ack.authority_set_ref.clone(),
             proofs: vec![signature(hash('0'), at(20))],
         };
         let decision_digest = decision.decision_digest().unwrap();
@@ -1823,12 +1820,12 @@ mod proposal_decision_tests {
 
     #[test]
     fn postgres_append_validation_uses_the_effective_realm_policy() {
-        let receipt = receipt();
-        let decision = signed_reject(&receipt);
+        let ack = ack();
+        let decision = signed_reject(&ack);
 
         assert!(
             validate_proposal_decision_append(
-                &receipt,
+                &ack,
                 &[],
                 &decision,
                 ControlProposalDecisionPolicy::protocol_maximum(),
@@ -1836,7 +1833,7 @@ mod proposal_decision_tests {
             .is_err()
         );
         validate_proposal_decision_append(
-            &receipt,
+            &ack,
             &[],
             &decision,
             ControlProposalDecisionPolicy::default(),

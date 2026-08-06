@@ -1192,9 +1192,7 @@ impl EventQueryService {
         &self,
         event_id: &str,
     ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>> {
-        self.events
-            .control_proposal_ack_for_event(event_id)
-            .await
+        self.events.control_proposal_ack_for_event(event_id).await
     }
     pub async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.canonical_events().await

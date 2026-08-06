@@ -398,7 +398,7 @@ pub(crate) async fn admin_reconfigure_notary(
     })?;
     let proposal_digest = arkret_identifiers::Hash::new(move_id.clone())
         .map_err(|error| app_error!(InternalError, "event digest is invalid: {error}"))?;
-    let receipt = crate::control_proposal::mint_control_proposal_ack(
+    let ack = crate::control_proposal::mint_control_proposal_ack(
         state,
         realm.clone(),
         proposal_digest,
@@ -415,7 +415,7 @@ pub(crate) async fn admin_reconfigure_notary(
 
     state
         .projections()
-        .put_pending_control_event_with_receipt(&event, &receipt)
+        .put_pending_control_event_with_ack(&event, &ack)
         .map_err(|e| app_error!(InternalError, "control_event_store.put_pending failed: {e}"))?;
     state.wake_control_seal_coordinator();
 

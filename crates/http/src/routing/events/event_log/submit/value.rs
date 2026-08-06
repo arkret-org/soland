@@ -480,7 +480,7 @@ async fn stored_control_proposal_ack(
     digest: &Hash,
     submitted: Option<&arkret_wire::ControlProposalAck>,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
-    if let Some(receipt) = state
+    if let Some(ack) = state
         .projections()
         .control_proposal_ack(digest)
         .map_err(|error| {
@@ -491,10 +491,10 @@ async fn stored_control_proposal_ack(
             )
         })?
     {
-        return Ok(receipt);
+        return Ok(ack);
     }
 
-    let durable_receipt = state
+    let durable_ack = state
         .event_queries()
         .control_proposal_ack_for_event(&existing.event_id)
         .await
@@ -505,14 +505,14 @@ async fn stored_control_proposal_ack(
                 format!("durable Control Proposal Ack unavailable: {error}"),
             )
         })?;
-    if let Some(receipt) = durable_receipt {
-        return Ok(receipt);
+    if let Some(ack) = durable_ack {
+        return Ok(ack);
     }
 
     // Migration repair for an exact, still-unsealed Event accepted by an
     // older build before closed managed-PCR anchors participated in the
     // proposal protocol. A byte-identical retry may attach the first valid
-    // receipt and rebuild the pending index; it may never replace one.
+    // Control Proposal Ack and rebuild the pending index; it may never replace one.
     let submitted = submitted.ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -575,7 +575,7 @@ async fn stored_control_proposal_ack(
         })?;
     state
         .projections()
-        .put_pending_control_event_with_receipt(&event, submitted)
+        .put_pending_control_event_with_ack(&event, submitted)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -801,14 +801,14 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let receipt = stored_control_proposal_ack(
+                let ack = stored_control_proposal_ack(
                     state,
                     &existing,
                     &digest,
                     submitted_control_proposal_ack,
                 )
                 .await?;
-                response.outcome.control_proposal_acks.push(receipt);
+                response.outcome.control_proposal_acks.push(ack);
             }
             return Ok(response);
         }
@@ -1540,7 +1540,7 @@ pub(super) async fn submit_event_value_with_context(
                 format!("Control Proposal policy is unavailable: {error}"),
             )
         })?;
-        if let Some(receipt) = submitted_control_proposal_ack {
+        if let Some(ack) = submitted_control_proposal_ack {
             let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
             let (_, authority_set_ref) = worker
                 .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
@@ -1558,9 +1558,9 @@ pub(super) async fn submit_event_value_with_context(
                         "current proposal authority profile is unavailable",
                     )
                 })?;
-            if receipt.realm_id != realm_id
-                || receipt.proposal_digest != proposal_digest
-                || receipt.authority_set_ref != authority_set_ref
+            if ack.realm_id != realm_id
+                || ack.proposal_digest != proposal_digest
+                || ack.authority_set_ref != authority_set_ref
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -1568,7 +1568,7 @@ pub(super) async fn submit_event_value_with_context(
                     "submitted Control Proposal Ack does not bind the Event basis authority",
                 ));
             }
-            crate::control_proposal::verify_control_proposal_ack(state, event, receipt, policy)
+            crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1577,7 +1577,7 @@ pub(super) async fn submit_event_value_with_context(
                         format!("submitted Control Proposal Ack is invalid: {error}"),
                     )
                 })?;
-            Some(receipt.clone())
+            Some(ack.clone())
         } else if event.seal_basis.is_none() {
             let bootstrap_authority = authorization_lease
                 .map(|lease| &lease.authority_set_ref)
@@ -1757,11 +1757,11 @@ pub(super) async fn submit_event_value_with_context(
         .await,
         ingress_receipt.as_ref(),
     );
-    if let Some(receipt) = control_proposal_ack.as_ref() {
+    if let Some(ack) = control_proposal_ack.as_ref() {
         accepted_response
             .outcome
             .control_proposal_acks
-            .push(receipt.clone());
+            .push(ack.clone());
     }
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
@@ -1914,14 +1914,14 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let receipt = stored_control_proposal_ack(
+                        let ack = stored_control_proposal_ack(
                             state,
                             &existing,
                             &digest,
                             submitted_control_proposal_ack,
                         )
                         .await?;
-                        response.outcome.control_proposal_acks.push(receipt);
+                        response.outcome.control_proposal_acks.push(ack);
                     }
                     return Ok(response);
                 }
@@ -1942,11 +1942,11 @@ pub(super) async fn submit_event_value_with_context(
     if let Some(control_event) = control_event_for_proposal.as_ref() {
         state
             .projections()
-            .put_pending_control_event_with_receipt(
+            .put_pending_control_event_with_ack(
                 control_event,
                 control_proposal_ack
                     .as_ref()
-                    .expect("Control Move receipt was minted before commit"),
+                    .expect("Control Proposal Ack was minted before commit"),
             )
             .map_err(|error| {
                 SubmitOneError::new(

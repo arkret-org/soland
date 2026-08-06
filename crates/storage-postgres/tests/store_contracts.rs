@@ -1,18 +1,18 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
+    assert_control_proposal_authority_ack_store_contract,
     assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
-    assert_control_proposal_authority_ack_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
-    PgIdempotencyStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore, PgControlProposalAuthorityAckStore,
+    Db, PgAccountDataStore, PgControlProposalAuthorityAckStore, PgEventCommitUnitOfWork,
+    PgEventStore, PgFederationOutboxStore, PgIdempotencyStore, PgMlsKeyPackageStore,
+    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -141,7 +141,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
             extra: Default::default(),
         },
     };
-    let receipt = arkret_wire::ControlProposalAck::from_authority_acks(
+    let ack = arkret_wire::ControlProposalAck::from_authority_acks(
         vec![member],
         arkret_wire::ControlProposalDecisionPolicy::default(),
     )
@@ -162,13 +162,13 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 envelope,
                 received_at: now,
             },
-            control_proposal_ack: Some(receipt),
+            control_proposal_ack: Some(ack),
             projections: Vec::new(),
             idempotency: None,
             outbox: Vec::new(),
         })
         .await
-        .expect("commit basis-free Control anchor with its receipt");
+        .expect("commit basis-free Control anchor with its Control Proposal Ack");
 
     let mut conn = pool.get().await.unwrap();
     let count =

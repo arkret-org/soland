@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, RealmId};
 use arkret_wire::{
-    AuthoritySetRef, ControlProposalDecision, ControlProposalDecisionPolicy,
-    ControlProposalDeferReason, ControlProposalAck, ControlProposalAckKind,
-    ControlProposalRejectReason, Event, PayloadSignature, ControlProposalAuthorityAck,
+    AuthoritySetRef, ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
+    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalDeferReason,
+    ControlProposalRejectReason, Event, PayloadSignature,
 };
 use chrono::Duration;
 use serde::Deserialize;
@@ -37,7 +37,7 @@ fn policy_from_realm_create(
     }
     // A Control Proposal Ack acknowledges ingress before semantic admission. Read
     // only the create-locked decision-policy fields here; full Realm schema
-    // validation belongs to admission and must not turn a receipt request into
+    // validation belongs to admission and must not turn a Control Proposal Ack request into
     // a quorum failure because the payload carries an unrelated extension.
     let payload: RealmCreateProposalPolicyPayload = serde_json::from_value(
         serde_json::Value::Object(event.payload.clone().into_iter().collect()),
@@ -146,7 +146,7 @@ pub(crate) fn mint_control_proposal_ack(
     authority_ack.signature.jws =
         arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
             .map_err(|error| error.to_string())?;
-    let receipt = ControlProposalAck {
+    let ack = ControlProposalAck {
         kind: ControlProposalAckKind::SignedAck,
         realm_id,
         proposal_digest,
@@ -157,10 +157,9 @@ pub(crate) fn mint_control_proposal_ack(
         authority_set_ref,
         authority_acks: vec![authority_ack],
     };
-    receipt
-        .validate_structural(policy)
+    ack.validate_structural(policy)
         .map_err(|error| error.to_string())?;
-    Ok(receipt)
+    Ok(ack)
 }
 
 pub(crate) async fn mint_control_proposal_acks(
@@ -204,25 +203,24 @@ pub(crate) async fn mint_control_proposal_acks(
 pub(crate) async fn verify_control_proposal_ack(
     state: &AppState,
     event: &Event,
-    receipt: &ControlProposalAck,
+    ack: &ControlProposalAck,
     policy: ControlProposalDecisionPolicy,
 ) -> Result<(), String> {
-    receipt
-        .validate_structural(policy)
+    ack.validate_structural(policy)
         .map_err(|error| error.to_string())?;
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
     let Some((profile, authority_set_ref)) = worker
-        .current_notary_profile_for_events(state, &receipt.realm_id, std::slice::from_ref(event))
+        .current_notary_profile_for_events(state, &ack.realm_id, std::slice::from_ref(event))
         .map_err(|error| error.to_string())?
     else {
         return Err("current proposal authority profile is unavailable".to_owned());
     };
-    if receipt.authority_set_ref != authority_set_ref {
+    if ack.authority_set_ref != authority_set_ref {
         return Err("Control Proposal Ack does not bind the current authority profile".to_owned());
     }
 
     let mut signers = BTreeSet::new();
-    for member in &receipt.authority_acks {
+    for member in &ack.authority_acks {
         let signer =
             arkret_identity::verification_method_did(&member.signature.verification_method)
                 .map_err(|error| error.to_string())?;
@@ -292,7 +290,9 @@ pub(crate) async fn verify_control_proposal_ack(
             false
         };
         if !delegated_quorum {
-            return Err("Control Proposal Ack does not satisfy the current notary quorum".to_owned());
+            return Err(
+                "Control Proposal Ack does not satisfy the current notary quorum".to_owned(),
+            );
         }
     }
     Ok(())
@@ -325,7 +325,7 @@ mod control_proposal_ack_quorum_tests {
     }
 
     #[test]
-    fn open_set_receipt_is_one_signer_slot_not_a_cross_leaf_quorum() {
+    fn open_set_ack_is_one_signer_slot_not_a_cross_leaf_quorum() {
         let profile = NotaryValue::OpenSet {
             members: vec![did("a"), did("b")],
         };
@@ -368,13 +368,13 @@ fn select_control_proposal_ack_authority(
 
 pub(crate) fn sign_control_proposal_reject(
     state: &AppState,
-    receipt: &ControlProposalAck,
+    ack: &ControlProposalAck,
     previous_defers: &[ControlProposalDecision],
     notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalRejectReason,
     decided_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ControlProposalDecision, String> {
-    let first_member = receipt
+    let first_member = ack
         .authority_acks
         .first()
         .ok_or_else(|| "Control Proposal Ack has no authority Ack".to_owned())?;
@@ -387,20 +387,20 @@ pub(crate) fn sign_control_proposal_reject(
     let current_due_at = previous_defers
         .last()
         .map(ControlProposalDecision::decision_due_at)
-        .unwrap_or(receipt.decision_due_at);
+        .unwrap_or(ack.decision_due_at);
     let mut decision = ControlProposalDecision::SignedReject {
-        realm_id: receipt.realm_id.clone(),
-        proposal_digest: receipt.proposal_digest.clone(),
-        proposal_ack_digest: receipt
+        realm_id: ack.realm_id.clone(),
+        proposal_digest: ack.proposal_digest.clone(),
+        proposal_ack_digest: ack
             .proposal_ack_digest()
             .map_err(|error| error.to_string())?,
         decided_at,
         decision_due_at: current_due_at,
-        absolute_due_at: receipt.absolute_due_at,
+        absolute_due_at: ack.absolute_due_at,
         defer_count: u8::try_from(previous_defers.len())
             .map_err(|_| "proposal defer count overflow".to_owned())?,
         reason_code,
-        authority_set_ref: receipt.authority_set_ref.clone(),
+        authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
             verification_method: arkret_wire::DidUrl::new(format!(
@@ -427,14 +427,14 @@ pub(crate) fn sign_control_proposal_reject(
                 .map_err(|error| error.to_string())?;
     }
     decision
-        .validate_chain_for_notary(receipt, previous_defers, validation_policy, notary)
+        .validate_chain_for_notary(ack, previous_defers, validation_policy, notary)
         .map_err(|error| error.to_string())?;
     Ok(decision)
 }
 
 pub(crate) fn sign_control_proposal_defer(
     state: &AppState,
-    receipt: &ControlProposalAck,
+    ack: &ControlProposalAck,
     previous_defers: &[ControlProposalDecision],
     notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalDeferReason,
@@ -448,17 +448,17 @@ pub(crate) fn sign_control_proposal_defer(
         .checked_add(1)
         .ok_or_else(|| "proposal defer count overflow".to_owned())?;
     let mut decision = ControlProposalDecision::SignedDefer {
-        realm_id: receipt.realm_id.clone(),
-        proposal_digest: receipt.proposal_digest.clone(),
-        proposal_ack_digest: receipt
+        realm_id: ack.realm_id.clone(),
+        proposal_digest: ack.proposal_digest.clone(),
+        proposal_ack_digest: ack
             .proposal_ack_digest()
             .map_err(|error| error.to_string())?,
         decided_at,
         decision_due_at: next_due_at,
-        absolute_due_at: receipt.absolute_due_at,
+        absolute_due_at: ack.absolute_due_at,
         defer_count,
         reason_code,
-        authority_set_ref: receipt.authority_set_ref.clone(),
+        authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
             verification_method: arkret_wire::DidUrl::new(format!(
@@ -485,7 +485,7 @@ pub(crate) fn sign_control_proposal_defer(
                 .map_err(|error| error.to_string())?;
     }
     decision
-        .validate_chain_for_notary(receipt, previous_defers, policy, notary)
+        .validate_chain_for_notary(ack, previous_defers, policy, notary)
         .map_err(|error| error.to_string())?;
     Ok(decision)
 }

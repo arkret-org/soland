@@ -225,16 +225,13 @@ async fn federation_submissions(
                         event.event_id
                     )
                 })?;
-            if let Some(receipt) = current_control_proposal_ack
-                .filter(|receipt| receipt.proposal_digest == proposal_digest)
+            if let Some(ack) =
+                current_control_proposal_ack.filter(|ack| ack.proposal_digest == proposal_digest)
             {
-                Some(receipt.clone())
+                Some(ack.clone())
             } else {
-                match state
-                    .projections()
-                    .control_proposal_ack(&proposal_digest)
-                {
-                    Ok(Some(receipt)) => Some(receipt),
+                match state.projections().control_proposal_ack(&proposal_digest) {
+                    Ok(Some(ack)) => Some(ack),
                     Ok(None) => {
                         return Err(format!(
                             "Control Move {} has no stored Control Proposal Ack and cannot be federated",

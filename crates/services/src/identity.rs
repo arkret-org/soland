@@ -3037,8 +3037,7 @@ mod tests {
         record.pairing_request_id = Some(pairing_request_id.clone());
         record.paired_pairing_request_id = Some(pairing_request_id);
         record.authorized_event_ref = Some(ACTIVE_BINDING_EVENT_ID.to_owned());
-        record.authorized_verification_method =
-            Some(ACTIVE_BINDING_VERIFICATION_METHOD.to_owned());
+        record.authorized_verification_method = Some(ACTIVE_BINDING_VERIFICATION_METHOD.to_owned());
         record.authorized_public_key_digest = Some(authorized_public_key_digest);
         record.authorized_signing_key_binding = Some(binding);
         record

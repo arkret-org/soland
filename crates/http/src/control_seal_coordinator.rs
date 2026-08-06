@@ -177,7 +177,7 @@ fn defer_due_proposals_after_failed_signing(
         .pending_control_records(realm_id, MAX_CONTROL_MOVES_PER_REALM)
         .map_err(|error| error.to_string())?;
     for record in records {
-        let Some(receipt) = record.control_proposal_ack.as_ref() else {
+        let Some(ack) = record.control_proposal_ack.as_ref() else {
             return Err(format!(
                 "pending Control Move {} has no Control Proposal Ack",
                 record
@@ -190,17 +190,15 @@ fn defer_due_proposals_after_failed_signing(
             .decisions
             .last()
             .map(arkret_wire::ControlProposalDecision::decision_due_at)
-            .unwrap_or(receipt.decision_due_at);
+            .unwrap_or(ack.decision_due_at);
         if current_due_at > now + decision_guard
             || record.decisions.len() >= usize::from(policy.max_defers)
-            || current_due_at >= receipt.absolute_due_at
+            || current_due_at >= ack.absolute_due_at
         {
             continue;
         }
-        let next_due_at = std::cmp::min(
-            current_due_at + policy.decision_window,
-            receipt.absolute_due_at,
-        );
+        let next_due_at =
+            std::cmp::min(current_due_at + policy.decision_window, ack.absolute_due_at);
         if next_due_at <= current_due_at {
             continue;
         }
@@ -210,7 +208,7 @@ fn defer_due_proposals_after_failed_signing(
             .ok_or_else(|| "current proposal notary profile is unavailable".to_owned())?;
         let decision = crate::control_proposal::sign_control_proposal_defer(
             state,
-            receipt,
+            ack,
             &record.decisions,
             &notary,
             arkret_wire::ControlProposalDeferReason::TemporarilyUnavailable,
