@@ -94,7 +94,11 @@ async fn seed_realm(
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
 
-    let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
+    let mut entry = RealmDirectoryEntry::new(
+        typed_realm_id,
+        title,
+        soland_services::events::DirectoryProvenance::LocalOnly,
+    );
     entry.description = Some("history visibility fixture".to_owned());
     entry.public = true;
     entry.members.insert(owner_did);

@@ -659,7 +659,11 @@ pub(crate) async fn seed_test_realm(
     )
     .unwrap();
 
-    let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
+    let mut entry = RealmDirectoryEntry::new(
+        typed_realm_id,
+        title,
+        soland_services::events::DirectoryProvenance::LocalOnly,
+    );
     entry.description = summary.map(ToOwned::to_owned);
     entry.public = discoverability == "public";
     entry.members.insert(owner_did);

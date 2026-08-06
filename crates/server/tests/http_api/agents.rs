@@ -337,7 +337,11 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
     let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let mut entry =
-        soland_http::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
+        soland_http::state::RealmDirectoryEntry::new(
+            typed_realm_id,
+            "Principal Control",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
     entry
         .members
         .insert(arkret_identifiers::Did::new(controller.to_owned()).unwrap());

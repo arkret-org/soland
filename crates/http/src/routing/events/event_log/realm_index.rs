@@ -302,7 +302,19 @@ pub(super) async fn bootstrap_realm_member_index(
     let plaintext_visible_service_classes = std::collections::BTreeMap::new();
     let minimal_metadata_realm = payload_object
         .is_some_and(soland_services::operation_semantics::payload_declares_minimal_metadata_realm);
-    let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
+    // `object` is the accepted Event envelope, so the provenance this entry needs
+    // is right here. It used to inherit the constructor's minted placeholder: a
+    // directory entry for a real Realm advertising an Event id that resolves to
+    // nothing, with the real id one field away.
+    let provenance = match event_string_field(object, &["event_id"]) {
+        Some(event_id) => soland_services::events::DirectoryProvenance::AcceptedEvent(event_id),
+        None => {
+            tracing::warn!(%realm_id, "bootstrap_realm_member_index: envelope carries no event_id");
+            soland_services::events::DirectoryProvenance::LocalOnly
+        }
+    };
+    let mut entry =
+        crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title, provenance);
     entry.description = summary.clone();
     entry.realm_class = payload_object
         .and_then(|object| object.get("realm_class"))

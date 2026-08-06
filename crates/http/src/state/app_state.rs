@@ -253,6 +253,8 @@ pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
         let mut demo = RealmDirectoryEntry::new(
             RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
             "Arkret Demo Realm",
+            // Seeded locally, not projected from an Event.
+            soland_services::events::DirectoryProvenance::LocalOnly,
         );
         demo.description = Some("Shared demo Realm served by soland".to_owned());
         demo.public = true;

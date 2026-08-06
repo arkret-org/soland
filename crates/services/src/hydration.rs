@@ -9,7 +9,7 @@ use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
 
-use crate::events::{RealmDirectoryEntry, RealmDirectoryIndex};
+use crate::events::{DirectoryProvenance, RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::identity::CrossSigningRegistry;
 
 /// The Realm's effective digest suite as the already-hydrated projection sees
@@ -1234,14 +1234,17 @@ pub async fn hydrate_realm_create_event(
     let minimal_metadata_realm =
         payload_object.is_some_and(soland_domain::kinds::payload_declares_minimal_metadata_realm);
 
-    let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
+    let mut entry = RealmDirectoryEntry::new(
+        realm_id.clone(),
+        title,
+        DirectoryProvenance::AcceptedEvent(record.event_id.clone()),
+    );
     entry.description = summary.clone();
     entry.realm_class = realm_class;
     entry.default_join_rule = default_join_rule;
     entry.public = discoverability == "public";
     entry.members.insert(actor);
     entry.as_of = record.received_at;
-    entry.source_refs = vec![record.event_id.clone()];
     entry.policy_revision = preview_policy_digest
         .clone()
         .unwrap_or_else(|| record.canonical_digest.clone());

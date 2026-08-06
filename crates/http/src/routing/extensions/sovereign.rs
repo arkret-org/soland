@@ -545,7 +545,15 @@ async fn realm_create(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
+    // A Realm id is `retype(create.event_id)` (`common-fields.md` §6.0), so there is
+    // no id to fall back to: minting one here named a Realm whose create Event does
+    // not exist and never would. Requiring the caller to state it fails closed
+    // instead, and the id it states is the one its signed create Event derives.
+    let realm_id = body.realm_id.ok_or_else(|| {
+        AppError::invalid_param(
+            "realm_id is required: it is derived from the Realm's create Event, not minted by the service",
+        )
+    })?;
     let now = chrono::Utc::now();
     let mut guard = state.federation().sovereign_state();
     if !guard.trusted_enclaves.contains_key(&body.hosted_on)

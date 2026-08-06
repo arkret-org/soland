@@ -43,7 +43,15 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 .unwrap_or(false)
         } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
-            let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);
+            // `accept_local_operations` never builds a wire Event, so this entry has
+            // no provenance to offer. Saying so beats minting an id for an Event
+            // nobody authored; it becomes `AcceptedEvent` once this surface takes a
+            // caller-signed create Event.
+            let mut entry = RealmDirectoryEntry::new(
+                realm_id.clone(),
+                title,
+                soland_services::events::DirectoryProvenance::LocalOnly,
+            );
             entry.description = operation_realm_summary(operation).map(ToOwned::to_owned);
             entry.realm_class = operation_realm_class(operation).map(ToOwned::to_owned);
             entry.default_join_rule =

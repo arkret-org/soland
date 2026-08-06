@@ -768,7 +768,11 @@ async fn ensure_organization_placeholder(
         organization_did: organization_id.to_owned(),
         handle: None,
         display_name: display_name_from_organization_id(organization_id),
-        source_refs: vec![ids::generate_event_id()],
+        // A placeholder record for an organization this server only knows locally:
+        // there is no Event to point at, and `directory-operations.schema.json`
+        // takes an omitted `source_refs` over a minted id for an Event nobody
+        // authored. `policy_revision: "local"` is what marks the entry.
+        source_refs: Vec::new(),
         policy_revision: "local".to_owned(),
         verified: false,
         members: BTreeSet::new(),

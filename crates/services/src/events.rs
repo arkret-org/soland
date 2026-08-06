@@ -140,8 +140,42 @@ pub struct RealmDirectoryEntry {
     pub policy_revision: String,
 }
 
+/// Where a directory entry's `source_refs` comes from.
+///
+/// `source_refs` exists so a consumer can go back to the truth source and verify
+/// the entry itself (`discovery-directory.md` §7.3 invariant 3). The constructor
+/// used to default it to a freshly minted `ak:event:` uuid, which made that
+/// impossible in the exact way the field was meant to prevent: the id resolves to
+/// nothing, and it *looks* verifiable, so a consumer spends a lookup finding out.
+/// Worse, every caller that had a real Event id available inherited the forged one
+/// unless it remembered to overwrite the field — and only one of eleven did.
+///
+/// Two constructors would have let a caller pick the convenient one. An enum makes
+/// "this entry has no Event behind it" a thing you have to say out loud.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectoryProvenance {
+    /// Derived from an accepted Event; carries that Event's id.
+    AcceptedEvent(String),
+    /// Server-local synthesis with no Event behind it. `source_refs` is omitted
+    /// on the wire; `policy_revision = "local"` marks the entry.
+    LocalOnly,
+}
+
+impl DirectoryProvenance {
+    fn source_refs(self) -> Vec<String> {
+        match self {
+            Self::AcceptedEvent(event_id) => vec![event_id],
+            Self::LocalOnly => Vec::new(),
+        }
+    }
+}
+
 impl RealmDirectoryEntry {
-    pub fn new(realm_id: RealmId, title: impl Into<String>) -> Self {
+    pub fn new(
+        realm_id: RealmId,
+        title: impl Into<String>,
+        provenance: DirectoryProvenance,
+    ) -> Self {
         Self {
             realm_id,
             title: title.into(),
@@ -154,7 +188,7 @@ impl RealmDirectoryEntry {
             default_join_rule: None,
             as_of: DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
                 .expect("current time is representable at millisecond precision"),
-            source_refs: vec![format!("ak:event:{}", uuid::Uuid::now_v7())],
+            source_refs: provenance.source_refs(),
             policy_revision: "local".to_owned(),
         }
     }

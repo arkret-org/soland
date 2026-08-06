@@ -104,7 +104,11 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
 
-    let mut entry = RealmDirectoryEntry::new(typed_realm_id, title);
+    let mut entry = RealmDirectoryEntry::new(
+        typed_realm_id,
+        title,
+        soland_services::events::DirectoryProvenance::LocalOnly,
+    );
     entry.description = Some("G3.S6 account-private sync fixture".to_owned());
     entry.members.insert(owner.clone());
     state.test_realms().lock().upsert(entry);
