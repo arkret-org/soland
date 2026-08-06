@@ -4,15 +4,13 @@ use salvo::oapi::endpoint;
 use super::*;
 
 const DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES: &[&str] = &["did:peer:", "did:key:"];
-const DIRECT_BINDING_PENDING_POLL_ATTEMPTS: usize = 100;
-const DIRECT_BINDING_PENDING_POLL_DELAY_MS: u64 = 25;
 
 pub(crate) mod direct;
 
 pub(crate) use direct::{
-    active_direct_binding, direct_authorization_basis_from_contact,
-    direct_binding_matches_projection, direct_pair_key, project_canonical_direct_binding,
-    retire_direct_bindings_for_operation, validate_direct_binding_operation,
+    active_direct_binding, direct_binding_matches_projection, direct_pair_key,
+    project_canonical_direct_binding, retire_direct_bindings_for_operation,
+    validate_direct_binding_operation,
 };
 
 mod contact_write;
@@ -479,14 +477,6 @@ fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
             .granted_to_requester_scopes
             .iter()
             .any(|candidate| contact_scope_wire(candidate) == scope)
-}
-
-fn primary_contact_scope(contact: &ContactRecord) -> &str {
-    contact
-        .granted_to_target_scopes
-        .first()
-        .map(String::as_str)
-        .unwrap_or("direct_message")
 }
 
 fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {

@@ -1,5 +1,5 @@
 use arkret_models_collaboration::governance::agent_participation::{
-    ParticipationBits, ParticipationScope, effective_participation,
+    ParticipationBits, effective_participation,
 };
 use serde_json::Value;
 
@@ -84,26 +84,6 @@ pub(crate) fn scope_keys_for_message(
     Some(keys)
 }
 
-pub(crate) fn scope_keys_for_scope(
-    state: &AppState,
-    scope: &ParticipationScope,
-) -> Option<Vec<String>> {
-    match scope {
-        ParticipationScope::Realm { realm_id } => Some(vec![realm_scope_key(realm_id.as_str())]),
-        ParticipationScope::Circle {
-            realm_id,
-            circle_id,
-        } => Some(vec![
-            realm_scope_key(realm_id.as_str()),
-            circle_scope_key(realm_id.as_str(), circle_id.as_str()),
-        ]),
-        ParticipationScope::Strand {
-            realm_id,
-            strand_id,
-        } => scope_keys_for_message(state, realm_id.as_str(), Some(strand_id.as_str())),
-    }
-}
-
 pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     state: &AppState,
     scope_keys: &[String],
@@ -114,16 +94,6 @@ pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     rows.iter()
         .map(participation_from_value)
         .fold(ParticipationBits::ALL, |acc, row| acc.intersect(row))
-}
-
-pub(crate) async fn resolve_effective_ceiling(
-    state: &AppState,
-    scope: &ParticipationScope,
-) -> ParticipationBits {
-    let Some(scope_keys) = scope_keys_for_scope(state, scope) else {
-        return ParticipationBits::NONE;
-    };
-    resolve_effective_ceiling_for_scope_keys(state, &scope_keys).await
 }
 
 fn selection_for_scope_keys<'a>(

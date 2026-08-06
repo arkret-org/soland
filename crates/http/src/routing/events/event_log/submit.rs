@@ -237,7 +237,6 @@ pub(in crate::routing) struct InternalEventAdmission {
 pub(in crate::routing) struct VerifiedFederatedAgentSignerEvidence {
     agent_id: arkret_identifiers::Did,
     verification_method: arkret_wire::DidUrl,
-    authorization_event_id: arkret_identifiers::EventId,
     public_key: [u8; 32],
 }
 
@@ -265,10 +264,6 @@ enum InternalEventBinding {
     },
     SidecarEnsure {
         event_id: String,
-    },
-    PeerDirectBinding {
-        subject_id: String,
-        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     },
     PeerFederatedEvent {
         event_id: String,
@@ -333,27 +328,6 @@ impl InternalEventAdmission {
             binding: InternalEventBinding::ModerationReport {
                 reporter: reporter.into(),
                 target_ref: target_ref.into(),
-            },
-        }
-    }
-
-    pub(in crate::routing) fn peer_direct_binding(
-        realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        device_id: impl Into<String>,
-        subject_id: impl Into<String>,
-        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
-    ) -> Self {
-        let actor_id = actor_id.into();
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
-            actor_id,
-            kind: arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::PeerDirectBinding {
-                subject_id: subject_id.into(),
-                signer_key_evidence,
             },
         }
     }
@@ -459,15 +433,6 @@ impl InternalEventAdmission {
                 | InternalEventBinding::SidecarEnsure { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
-                InternalEventBinding::PeerDirectBinding { subject_id, .. } => object
-                    .get("payload")
-                    .and_then(|payload| payload.get("participants_unordered"))
-                    .and_then(Value::as_array)
-                    .is_some_and(|participants| {
-                        participants
-                            .iter()
-                            .any(|participant| participant.as_str() == Some(subject_id.as_str()))
-                    }),
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
@@ -484,11 +449,7 @@ impl InternalEventAdmission {
             return None;
         }
         let evidence = match &self.binding {
-            InternalEventBinding::PeerDirectBinding {
-                signer_key_evidence,
-                ..
-            }
-            | InternalEventBinding::PeerFederatedEvent {
+            InternalEventBinding::PeerFederatedEvent {
                 signer_key_evidence,
                 ..
             } => signer_key_evidence,
@@ -1516,7 +1477,6 @@ pub(crate) async fn submit_federation_events(
             verified_agent_signer_evidence.push(VerifiedFederatedAgentSignerEvidence {
                 agent_id: binding.agent_id.clone(),
                 verification_method: binding.verification_method.clone(),
-                authorization_event_id: binding.agent_key_authorize_event_id.clone(),
                 public_key,
             });
         }

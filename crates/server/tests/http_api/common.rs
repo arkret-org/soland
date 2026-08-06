@@ -2509,7 +2509,9 @@ pub(crate) fn signed_relation_event(
 }
 
 fn typed_relation_create_payload(payload: Value) -> Value {
-    let relation_id = relation_payload_str(&payload, &["relation_id", "id"])
+    // The typed DTO mints its own relation id; this only asserts the caller
+    // supplied one, so the binding is intentionally discarded.
+    let _relation_id = relation_payload_str(&payload, &["relation_id", "id"])
         .expect("relation create payload requires relation_id");
     let kind = relation_payload_str(&payload, &["relation_kind", "kind"])
         .expect("relation create payload requires kind");

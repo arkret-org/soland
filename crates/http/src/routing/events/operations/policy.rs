@@ -29,33 +29,6 @@ use message_rules::*;
 pub(crate) use message_rules::{message_window_permits, realm_ids_match};
 use realm_circle::*;
 
-pub(crate) async fn validate_trusted_sidecar_circle_operation(
-    state: &AppState,
-    operation: &Operation,
-    controller: &str,
-    sidecar_id: &arkret_identifiers::SidecarId,
-) -> Result<(), &'static str> {
-    if !sidecar_circle_object_shape_is_constrained(operation, controller, sidecar_id.as_str()) {
-        return Err("sidecar_create_denied");
-    }
-    // Reconstruct the trusted aggregate context only for the policy check.
-    // It must never enter the closed `ak.circle.create` wire payload.
-    let mut policy_operation = operation.clone();
-    let payload = policy_operation
-        .payload
-        .as_object_mut()
-        .ok_or("sidecar_create_denied")?;
-    payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
-    payload.insert(
-        "trusted_sidecar_id".to_owned(),
-        Value::String(sidecar_id.to_string()),
-    );
-    // Run the same complete policy chain as every other accepted operation.
-    // Keeping a sidecar-only subset here would silently bypass any policy
-    // added to the standard chain later (including Realm lifecycle gates).
-    validate_operation_policy(state, std::slice::from_ref(&policy_operation)).await
-}
-
 pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,

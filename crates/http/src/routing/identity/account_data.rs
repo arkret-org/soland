@@ -10,12 +10,11 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
-use arkret_identifiers::{Did, EventId, Hlc, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_identity::account::{
     AccountDataDeleteOutcome, AccountDataDeleteRequestBody, AccountDataList,
     AccountDataReplaceRequestBody, AccountDataRow,
 };
-use arkret_wire::Event;
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -24,7 +23,7 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::{AccountDataState, FindAgentControllerQuery, IdentityService};
 
-use super::{AuthArgs, now};
+use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

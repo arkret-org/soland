@@ -216,46 +216,6 @@ async fn accept_local_operations_with_policy_context(
     Ok(())
 }
 
-pub async fn accept_trusted_sidecar_circle_operation(
-    state: &AppState,
-    controller: &str,
-    sidecar_id: &arkret_identifiers::SidecarId,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(
-        std::slice::from_ref(operation),
-    )
-    .await;
-    validate_operation_semantics(state, std::slice::from_ref(operation))?;
-    validate_content_encryption_floor(state, std::slice::from_ref(operation)).await?;
-    crate::routing::events::operations::validate_trusted_sidecar_circle_operation(
-        state, operation, controller, sidecar_id,
-    )
-    .await?;
-    project_accepted_operations(state, controller, std::slice::from_ref(operation)).await;
-    Ok(())
-}
-
-pub async fn accept_trusted_sidecar_create_operation(
-    state: &AppState,
-    controller: &str,
-    backing_circle_id: &arkret_identifiers::CircleId,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(
-        std::slice::from_ref(operation),
-    )
-    .await;
-    validate_operation_semantics(state, std::slice::from_ref(operation))?;
-    crate::routing::events::operations::validate_trusted_sidecar_create_operation(
-        operation,
-        controller,
-        backing_circle_id,
-    )?;
-    project_accepted_operations(state, controller, std::slice::from_ref(operation)).await;
-    Ok(())
-}
-
 pub async fn accept_trusted_sidecar_member_operation(
     state: &AppState,
     controller: &str,

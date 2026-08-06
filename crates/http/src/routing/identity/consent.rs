@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::{ConsentId, Did, EventId};
+use arkret_identifiers::{ConsentId, Did};
 use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestRequestBody,
     ConsentRevokeRequestBody, ConsentState,
@@ -668,34 +668,6 @@ pub(crate) fn event_ref_for_dot(dot: &str) -> Option<&str> {
         .map(|_| candidate)
 }
 
-/// Spec invite-addressing.md §2 / contact-operations.schema.json — resolve
-/// the event ref of an **active** `invite`/`any` consent grant the `holder`
-/// gave the `peer`. Used by the contact-list projection to populate
-/// `invite_consent_grant_ref`: the holder hands this ref to `peer` as
-/// `consent_grant` introduction evidence so the peer's server can verify it
-/// via [`has_active_consent_grant_evidence`] without a locator URL.
-///
-/// Returns the first active dot (deterministic `BTreeMap` order) whose dot
-/// string carries a resolvable `ak:event:<uuid>` event ref; dots minted in
-/// the non-event `{actor}#{seq}` / `{consent_id}#{op}` forms are skipped.
-pub(crate) fn active_invite_consent_grant_ref(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    at: DateTime<Utc>,
-) -> Option<String> {
-    for scope in ["invite", "any"] {
-        if let Some(cell) = state.consents().cell(holder, peer, scope) {
-            for dot in active_grant_dots(&cell, at) {
-                if let Some(event_ref) = event_ref_for_dot(&dot) {
-                    return Some(event_ref.to_owned());
-                }
-            }
-        }
-    }
-    None
-}
-
 /// Spec `contact-and-direct-conversation.md` §3 — a contact accept (and the
 /// requester-side grant a contact request opens) MUST write a real
 /// target/requester-controlled `ak.consent.grant` whose **event ref** is
@@ -735,169 +707,9 @@ pub(crate) fn grant_contact_managed_consent(
     (event_id, updated)
 }
 
-pub(crate) fn project_contact_managed_consent_ref(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    grant_event_ref: &str,
-    granted_at: DateTime<Utc>,
-) -> Result<ConsentCellRecord, AppError> {
-    let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
-    let event_ref = EventId::new(grant_event_ref.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("invalid consent_grant_ref: {error}")))?;
-    let dot = format!("{}:0", event_ref.as_str());
-    Ok(grant_cell_with_dot(
-        state, holder, peer, &scope, dot, None, None, granted_at,
-    ))
-}
-
 pub(crate) struct ConsentCellMutation {
     pub previous: Option<ConsentCellRecord>,
     pub updated: ConsentCellRecord,
-}
-
-/// Spec contact-and-direct-conversation.md §3 — `ak.self.contact.command.tombstone`
-/// MUST enumerate and revoke the holder's contact-managed active grant
-/// dots toward `peer`. When `scopes` is empty, default to every scope the
-/// holder currently grants `peer` (the recommended `revoke_scopes` default).
-///
-/// Returns `(revoked_dot_refs, complete)`. `complete` is `false` when a
-/// cell carried no enumerable active dots yet was non-empty — the caller
-/// MUST then report a partial / fail-closed tombstone rather than a full
-/// one. Revoking contact-managed dots only; non-contact-managed consent
-/// (e.g. standalone org invite grants) is left untouched unless the caller
-/// performs a separate full peer revoke.
-/// Returns `(revoked_dot_refs, complete, mutated_cells)`. The caller MUST
-/// write every cell in `mutated_cells` through to durable storage at its async
-/// boundary via [`persist_consent_cell`].
-pub(crate) fn revoke_contact_managed_consent(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    scopes: &[String],
-    revoked_at: DateTime<Utc>,
-) -> (Vec<String>, bool, Vec<ConsentCellMutation>) {
-    // Resolve the target scope set: explicit `revoke_scopes` (normalized)
-    // or every scope the holder currently has a cell for toward `peer`.
-    let target_scopes: Vec<String> = if scopes.is_empty() {
-        state
-            .consents()
-            .cells_for_pair(holder, peer)
-            .iter()
-            .map(|cell| cell.scope.clone())
-            .collect()
-    } else {
-        let mut normalized = Vec::new();
-        for scope in scopes {
-            if let Ok(scope) = normalize_scope(Some(scope))
-                && !normalized.contains(&scope)
-            {
-                normalized.push(scope);
-            }
-        }
-        normalized
-    };
-
-    let mut revoked_refs = Vec::new();
-    let mut complete = true;
-    let mut mutated = Vec::new();
-    for scope in target_scopes {
-        let active_before = state
-            .consents()
-            .cell(holder, peer, &scope)
-            .map(|cell| active_grant_dots(&cell, revoked_at))
-            .unwrap_or_default();
-        if active_before.is_empty() {
-            continue;
-        }
-        let previous = consent_cell_snapshot(state, holder, peer, &scope);
-        let updated = revoke_cell(state, holder, peer, &scope, revoked_at);
-        // Confirm every previously-active dot is now revoked; otherwise the
-        // enumeration was incomplete and we MUST flag partial.
-        for dot in &active_before {
-            if updated.revoked_dots.contains(dot) {
-                revoked_refs.push(dot.clone());
-            } else {
-                complete = false;
-            }
-        }
-        mutated.push(ConsentCellMutation { previous, updated });
-    }
-    (revoked_refs, complete, mutated)
-}
-
-pub(super) async fn auto_revoke_requester_side_contact_consent(
-    state: &AppState,
-    requester: &str,
-    target: &str,
-    scopes: &[String],
-    revoked_at: DateTime<Utc>,
-    reason: &str,
-    contact_event_ref: Option<&str>,
-) -> Result<(Vec<String>, bool), AppError> {
-    let requester_exists = state
-        .identities()
-        .find_account_by_actor(FindAccountByActorQuery {
-            actor_id: requester.to_owned(),
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some();
-    if !requester_exists {
-        return Ok((Vec::new(), true));
-    }
-
-    let normalized_scopes = scopes
-        .iter()
-        .filter_map(|scope| normalize_scope(Some(scope)).ok())
-        .collect::<Vec<_>>();
-    let revoke_scopes = if normalized_scopes.is_empty() {
-        scopes.to_vec()
-    } else {
-        normalized_scopes.clone()
-    };
-    let (revoked_dots, complete, mutated_cells) =
-        revoke_contact_managed_consent(state, requester, target, &revoke_scopes, revoked_at);
-    for mutation in &mutated_cells {
-        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
-    }
-    if !mutated_cells.is_empty() {
-        let invalidation_scope = if revoke_scopes.len() == 1 {
-            revoke_scopes[0].as_str()
-        } else {
-            "any"
-        };
-        emit_consent_revoke_invalidation(
-            state,
-            requester,
-            target,
-            invalidation_scope,
-            revoked_at,
-            &mutated_cells,
-        )
-        .await;
-    }
-    if !revoked_dots.is_empty() || !complete {
-        append_audit_log(
-            state,
-            Some(requester),
-            "consent.requester_side.auto_revoke",
-            json!({
-                "requester": requester,
-                "target": target,
-                "scopes": revoke_scopes,
-                "reason": reason,
-                "contact_event_ref": contact_event_ref,
-                "revoked_dots": revoked_dots.clone(),
-                "partial_revoke": !complete,
-                "revoked_at": revoked_at,
-            }),
-            if complete { "accepted" } else { "partial" },
-        )
-        .await;
-    }
-    Ok((revoked_dots, complete))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1781,13 +1593,12 @@ mod tests {
         }
     }
 
-    /// Spec contact-and-direct-conversation.md §3 / invite-addressing.md §2 —
-    /// the contact-managed grant minted by `grant_contact_managed_consent`
-    /// MUST carry a resolvable `ak:event:<uuid>` ref so the holder's contact
-    /// row surfaces it (`active_invite_consent_grant_ref`) AND the peer's
-    /// server accepts it back as `consent_grant` evidence
-    /// (`has_active_consent_grant_evidence`). This pins both directions to the
-    /// same `{event_id}:{seq}` dot form.
+    /// Spec invite-addressing.md §2 — the contact-managed grant minted by
+    /// `grant_contact_managed_consent` MUST carry a resolvable
+    /// `ak:event:<uuid>` ref so the peer's server accepts it back as
+    /// `consent_grant` evidence (`has_active_consent_grant_evidence`). This
+    /// pins the mint and the verify side to the same `{event_id}:{seq}` dot
+    /// form.
     #[test]
     fn contact_managed_invite_grant_round_trips_as_consent_evidence() {
         let state = AppState::new(test_config(), Db { pool: None });
@@ -1801,11 +1612,6 @@ mod tests {
             grant_ref.starts_with("ak:event:"),
             "grant ref is a canonical event id: {grant_ref}"
         );
-
-        // The contact-list projection (holder=bob, peer=alice) surfaces it.
-        let surfaced = active_invite_consent_grant_ref(&state, bob, alice, now)
-            .expect("active invite grant ref is surfaced");
-        assert_eq!(surfaced, grant_ref);
 
         // The dot helpers agree with the new `{event_id}:{seq}` form.
         let dot = format!("{grant_ref}:0");

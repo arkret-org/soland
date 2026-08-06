@@ -34,7 +34,6 @@ use arkret_models_collaboration::governance::peer_contact::{
 use arkret_wire::{Base64UrlString, DidUrl, Event, ProtocolSignature};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::Duration;
 use ed25519_dalek::Signer as _;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -65,6 +64,16 @@ pub(crate) fn peer_router() -> Router {
 /// Event scoped to the issuer's Principal Control Realm so it is a
 /// real signed contact fact the recipient can project as the original
 /// envelope (spec §2).
+///
+/// UNWIRED: the contact write path was rebuilt around holder-signed Events in
+/// `social/contact_write.rs`, and that rewrite never reconnected the sender
+/// half of `ak.peer.contacts.command.submit`. `contact_write` stores every new
+/// contact with `peer_service_id: None`, so no cross-Principal-Server contact
+/// fact is federated today even though the receiver ([`peer_contacts_submit`])
+/// is routed and the operation is in the spec. Kept as the only implementation
+/// of that half rather than deleted, so reconnecting it is a wiring change and
+/// not a rewrite.
+#[allow(dead_code, reason = "spec-required; see UNWIRED note above")]
 pub(crate) async fn enqueue_peer_contact_carrier(
     state: &AppState,
     recipient_service_id: &str,
@@ -764,177 +773,14 @@ fn sign_contact_control_receipt(
     })
 }
 
-async fn accept_delivered_direct_binding(
-    state: &AppState,
-    event: &Event,
-    subject_id: &str,
-    source_service_id: Option<&str>,
-    signer_key_evidence: &[arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence],
-) -> Result<&'static str, AppError> {
-    for evidence in signer_key_evidence {
-        crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
-            state, evidence,
-        )
-        .await
-        .map_err(|error| {
-            super::super::events::peer::schema_violation(format!(
-                "invalid direct binding signer authorization evidence: {error}"
-            ))
-        })?;
-    }
-    let payload: arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload =
-        serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
-            AppError::internal(format!("direct binding payload encode failed: {error}"))
-        })?)
-        .map_err(|_| {
-            super::super::events::peer::schema_violation(
-                "invalid ak.direct_conversation.bound payload",
-            )
-        })?;
-    let issuer = event.actor_id.as_str();
-    if issuer == subject_id
-        || !payload
-            .participants_unordered
-            .iter()
-            .any(|participant| participant.as_str() == issuer)
-        || !payload
-            .participants_unordered
-            .iter()
-            .any(|participant| participant.as_str() == subject_id)
-    {
-        return Err(super::super::events::peer::schema_violation(
-            "direct binding issuer and contact subject must be its two participants",
-        ));
-    }
-    let contact = state
-        .contacts()
-        .contact_any(issuer, subject_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            super::super::events::peer::schema_violation(
-                "direct binding references no accepted local contact",
-            )
-        })?;
-    if contact.status != "accepted"
-        || source_service_id.is_none()
-        || contact.peer_service_id.as_deref() != source_service_id
-    {
-        return Err(super::super::events::peer::schema_violation(
-            "direct binding source service does not match the accepted contact",
-        ));
-    }
-
-    // Realm Events and the principal-scoped binding travel on independent
-    // durable federation rails. A binding may legitimately arrive first; make
-    // that condition retryable instead of permanently dead-lettering a valid
-    // signed fact as a schema error.
-    // The slim binding endorses coordinates plus the first exact-pair MLS generation; the founding
-    // unit itself is verified from the Realm projection, not from refs carried in the payload.
-    let referenced_events = std::iter::once(&payload.initial_exact_pair_generation_ref);
-    for event_ref in referenced_events {
-        let available = state
-            .event_queries()
-            .canonical_event(event_ref.as_str())
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .is_some();
-        if !available {
-            tracing::warn!(
-                target: "soland_http::error",
-                realm_id = %payload.realm_id,
-                event_ref = %event_ref,
-                "direct binding dependency is not canonical yet"
-            );
-            return Err(AppError::new(
-                soland_http::error::ErrorCode::TemporarilyUnavailable,
-                "direct binding dependencies have not arrived yet",
-            )
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
-            .with_wire_code("direct_binding_dependencies_pending"));
-        }
-    }
-
-    let created_at = now();
-    let federation_device_id = "federation:contact-binding";
-    let session = soland_services::identity::SessionIdentityState {
-        token_hash: format!("peer-contact-binding:{}", event.event_id),
-        actor: issuer.to_owned(),
-        device_id: federation_device_id.to_owned(),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        expires_at: created_at + Duration::minutes(5),
-        created_at,
-        revoked_at: None,
-    };
-    let envelope = serde_json::to_value(event)
-        .map_err(|error| AppError::internal(format!("direct binding encode failed: {error}")))?;
-    let admission = crate::routing::events::event_log::InternalEventAdmission::peer_direct_binding(
-        event.realm_id.to_string(),
-        issuer,
-        federation_device_id,
-        subject_id,
-        signer_key_evidence.to_vec(),
-    );
-    let parsed = crate::routing::events::event_log::validate_event_envelope_with_context(
-        state,
-        &session,
-        &envelope,
-        &[],
-        Some(&admission),
-    )
-    .await
-    .map_err(|error| {
-        super::super::events::peer::schema_violation(format!(
-            "direct binding Event rejected: {} ({})",
-            error.message, error.code
-        ))
-    })?;
-    let operation =
-        crate::routing::events::event_log::projection_operation_from_event(&parsed, &envelope)
-            .ok_or_else(|| {
-                super::super::events::peer::schema_violation(
-                    "direct binding Event cannot be projected",
-                )
-            })?;
-    super::account::validate_direct_binding_operation(state, &operation)
-        .await
-        .map_err(super::super::events::peer::schema_violation)?;
-
-    if let Some(existing) = state
-        .event_queries()
-        .canonical_event(&parsed.event_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        if existing.canonical_digest != parsed.canonical_digest {
-            return Err(super::super::events::peer::schema_violation(
-                "direct binding Event id collides with different canonical bytes",
-            ));
-        }
-        return Ok("duplicate");
-    }
-    state
-        .event_queries()
-        .store_canonical_event(soland_services::events::CanonicalEventRecord {
-            event_id: parsed.event_id,
-            actor_id: parsed.actor_id,
-            actor_seq: parsed.actor_seq,
-            realm_id: Some(parsed.realm_id),
-            kind: parsed.kind,
-            schema_id: parsed.schema_id,
-            canonical_digest: parsed.canonical_digest,
-            canonical_bytes: parsed.canonical_bytes,
-            envelope,
-            received_at: created_at,
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    super::account::project_canonical_direct_binding(state, &operation).await;
-    Ok("accepted")
-}
-
+/// UNWIRED: `contact_requested_payload.introduction_evidence_digest` is
+/// `required` in the spec property-presence manifest, but no caller binds the
+/// delivered evidence to that digest any more — the check was orphaned when
+/// the peer-contact receiver was rebuilt. Until it is called again, a peer can
+/// deliver a contact request whose `introduction_evidence` does not hash to the
+/// digest the signed payload commits to. Kept rather than deleted because this
+/// is the only implementation of that binding.
+#[allow(dead_code, reason = "spec-required; see UNWIRED note above")]
 fn validate_contact_introduction_evidence_digest(
     payload: &Value,
     evidence: &ContactIntroductionEvidence,

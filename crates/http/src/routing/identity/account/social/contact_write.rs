@@ -54,16 +54,6 @@ enum ContactReservationBranch {
 }
 
 impl ContactReservationBranch {
-    fn result_kind(&self) -> ContactResultKind {
-        match self {
-            Self::Request { .. } => ContactResultKind::Request,
-            Self::Response { .. } => ContactResultKind::Response,
-            Self::Reject { .. } => ContactResultKind::Reject,
-            Self::ScopeUpdate { .. } => ContactResultKind::ScopeUpdate,
-            Self::Tombstone { .. } => ContactResultKind::Tombstone,
-        }
-    }
-
     fn peer(&self) -> &ContactPeer {
         match self {
             Self::Request { peer, .. }

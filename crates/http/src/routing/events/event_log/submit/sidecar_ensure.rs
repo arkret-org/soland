@@ -7,8 +7,6 @@ struct PreparedSidecarEvent {
     operation: arkret_event_draft::Operation,
     projected_event: soland_services::events::ProjectedEvent,
     cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
-    actor_id: String,
-    device_id: String,
 }
 
 async fn validate_and_prepare(
@@ -174,8 +172,6 @@ async fn validate_and_prepare(
         operation,
         projected_event,
         cell_writes,
-        actor_id: parsed.actor_id,
-        device_id: parsed.device_id,
     })
 }
 

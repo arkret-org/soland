@@ -26,7 +26,7 @@ use soland_services::governance::{
 
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::{JsonResult, ids, json_ok};
+use crate::{JsonResult, json_ok};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct UpsertOrganizationRequestBody {

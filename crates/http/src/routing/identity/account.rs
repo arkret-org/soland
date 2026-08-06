@@ -11,9 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{
-    ActorProfileId, BlobRef, DeviceId, Did, EventId, Hash, RealmId, StrandId,
-};
+use arkret_identifiers::{BlobRef, DeviceId, Did, EventId, Hash, RealmId, StrandId};
 use arkret_models_collaboration::account_lifecycle::{
     AccountRegisterOutcome, AccountRegisterRequestBody, AccountUpdateProfileRequestBody,
     AccountView,

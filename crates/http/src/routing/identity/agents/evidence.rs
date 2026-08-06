@@ -8,7 +8,7 @@
 use arkret_models_collaboration::agent_signer_evidence::{
     AgentSignerEvidence, AgentSignerEvidenceBundle, AgentSignerEvidenceQueryFailure,
     AgentSignerEvidenceQueryFailureReason, AgentSignerEvidenceQueryOutcome,
-    AgentSignerEvidenceQueryRequestBodyBody, AgentSignerEvidenceQuerySelector,
+    AgentSignerEvidenceQueryRequestBodyBody,
 };
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -40,13 +40,6 @@ pub(super) async fn query_agent_signer_evidence(
         evidence: Vec::new(),
         failures: (!failures.is_empty()).then_some(failures),
     })
-}
-
-pub(crate) async fn build_evidence(
-    _state: &AppState,
-    _selector: &AgentSignerEvidenceQuerySelector,
-) -> Result<Option<AgentSignerEvidence>, AppError> {
-    Ok(None)
 }
 
 pub(crate) async fn signer_evidence_bundle_for_events(

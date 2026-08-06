@@ -11,8 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{Did, OperationId, RealmId, SpaceId};
+use arkret_identifiers::{Did, RealmId, SpaceId};
 use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
@@ -29,16 +28,15 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 
-use super::{AuthArgs, accept_local_operations};
-use crate::routing::events::operations::operation_policy_reason_code;
+use super::AuthArgs;
 use crate::routing::{is_valid_discoverability, organizations};
 use crate::state::{AppState, RealmDirectoryEntry};
 use crate::wire::now;
-use crate::{JsonResult, ids, json_ok};
+use crate::{JsonResult, json_ok};
 
 /// Spec `realm_read` operation group (`ak.self.realm.*`): Realm lifecycle read,
 /// full export, and Realm moderation-policy effective/set. Canonical path
@@ -129,20 +127,6 @@ async fn get_realm(
     realm_lifecycle_response(state, &realm_id)
         .await
         .map(salvo::prelude::Json)
-}
-
-fn operation_reject_to_app_error(reason: &'static str) -> AppError {
-    let (status, wire_code) = operation_policy_reason_code(reason);
-    let error = AppError::new(ErrorCode::FailedPrecondition, reason.to_owned())
-        .with_status(status)
-        .with_wire_code(wire_code);
-    if reason == arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
-        error.with_reason_code(reason)
-    } else if wire_code == "failed_precondition" && reason != wire_code {
-        error.with_top_level_reason(reason)
-    } else {
-        error
-    }
 }
 
 /// Submit a caller-signed Realm lifecycle Move through ordinary Event admission.
@@ -1267,16 +1251,5 @@ mod tests {
             ),
         )
         .expect_err("the submitted Event must be authored by the authenticated caller");
-    }
-
-    #[test]
-    fn operation_rejection_keeps_organization_approval_as_reason_code() {
-        let reason = arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL;
-        let error = operation_reject_to_app_error(reason);
-
-        assert_eq!(error.http_status(), salvo::http::StatusCode::CONFLICT);
-        assert_eq!(error.wire_code(), "failed_precondition");
-        assert_eq!(error.reason_code.as_deref(), Some(reason));
-        assert_eq!(error.top_level_reason, None);
     }
 }
