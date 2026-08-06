@@ -4,12 +4,13 @@
 //! - `GET /_arkret/self/realms/{realm_id}/links?direction=outbound|inbound|both&link_kind_allow=...
 //!   ` — list the typed cross-Realm links projected from `ak.realm.link` events. Powered by
 //!   [`soland_domain::reducer::ProjectionState::realm_links_query`].
-//! - `POST /_arkret/self/realms/{realm_id}/links` — write a `ak.realm.link` Move from `realm_id →
-//!   target_realm_id`. The reducer runs the canonical Realm Link FSM validators; a rejected payload
-//!   comes back as HTTP 422 with the spec reason code.
-//! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — write a tombstoning
-//!   `ak.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id, link_kind)`
-//!   triple. `link_kind` defaults to `governed_by`; callers may override via query param.
+//! - `POST /_arkret/self/realms/{realm_id}/links` — submit the caller-signed `ak.realm.link` Move
+//!   from `realm_id → target_realm_id`. The reducer runs the canonical Realm Link FSM validators;
+//!   a rejected payload comes back as HTTP 422 with the spec reason code.
+//! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — submit the caller-signed
+//!   tombstoning `ak.realm.link` Move (status = `tombstoned`) for the
+//!   `(realm_id, target_realm_id, link_kind)` triple. The Move arrives in a request body, so
+//!   `link_kind` is named in the signed payload rather than a query param.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
 //!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
 //!   `ak.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
@@ -17,8 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{OperationId, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::realm_governance::{
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_EFFECTIVE_RULES as FIELD_EFFECTIVE_RULES,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_FANOUT as FIELD_FANOUT,
@@ -28,22 +28,24 @@ use arkret_models_collaboration::governance::realm_governance::{
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY as FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL as FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_POLICY_MERGE_STRATEGY as FIELD_POLICY_MERGE_STRATEGY,
-    RealmEffectivePolicyOutcome, RealmLinkCreateRequestBody, RealmLinkDirection, RealmLinkEntry,
-    RealmLinkKind, RealmLinkList, RealmLinkMutationOutcome, RealmLinkStatus,
+    RealmEffectivePolicyOutcome, RealmLinkCreateRequestBody, RealmLinkDeleteRequestBody,
+    RealmLinkDirection, RealmLinkEntry, RealmLinkKind, RealmLinkList, RealmLinkMutationOutcome,
+    RealmLinkPayload, RealmLinkStatus,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::projection::{
     RealmLinkReadModel as RealmLinkState, check_realm_link_admissible, effective_policy_for_realm,
 };
 
-use super::{AuthArgs, accept_local_operations};
-use crate::ids;
+use soland_services::identity::SessionIdentityState as SessionRecord;
+
+use super::AuthArgs;
 use crate::routing::organizations;
 use crate::state::AppState;
 
@@ -175,10 +177,13 @@ async fn list_realm_links_impl(
     })
 }
 
-/// G3.S5 — POST a new `ak.realm.link` Move. Builds an `Operation` for
-/// `arkret_wire::EventKind::REALM_LINK` and routes through the standard
-/// `accept_local_operations` pipeline so reducer-level validators
-/// (FSM, kind validation, self-reference rejection) all run.
+/// G3.S5 — POST the caller-signed `ak.realm.link` Move.
+///
+/// The service submits those exact bytes through ordinary Event admission: this
+/// operation declares a durable `event_log` effect, and only the caller can
+/// produce the signature that effect requires (spec
+/// `zh/extensions/capabilities.md` sections 118/361,
+/// `zh/security/key-management.md` section 411).
 #[endpoint(
     operation_id = "ak.self.realm_link.command.create",
     summary = "Create a cross-Realm link",
@@ -194,52 +199,113 @@ async fn post_realm_link(
 ) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_scope = RealmId::new(realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let body = body.into_inner();
-    // G3.S5 — preflight check. The projection pipeline silently drops
-    // `ProjectionEffect::Rejected` (see `project_accepted_operations`),
-    // so the HTTP route must enforce admission itself by running the
-    // same validators against a read-only snapshot of projection state.
+    let realm_id = realm_id.into_inner();
+    let submission = body.into_inner().link_event;
+    let edge = caller_signed_realm_link_edge(&session.actor, &realm_id, None, &submission.event)?;
+    submit_caller_signed_realm_link(state, &session, &edge, submission).await?;
+    json_ok(edge.outcome())
+}
+
+/// The edge a caller-signed `ak.realm.link` Event says it is writing.
+#[derive(Debug)]
+struct RealmLinkEdge {
+    realm_id: RealmId,
+    payload: RealmLinkPayload,
+}
+
+impl RealmLinkEdge {
+    fn outcome(self) -> RealmLinkMutationOutcome {
+        RealmLinkMutationOutcome {
+            realm_id: self.realm_id,
+            target_realm_id: self.payload.target_realm_id,
+            link_kind: self.payload.link_kind,
+            status: self.payload.status,
+        }
+    }
+}
+
+/// Check what the request wrapper alone can decide about a caller-signed
+/// `ak.realm.link`, and report the edge it names.
+///
+/// The signature, envelope shape and reducer admission are the ordinary Event
+/// admission path's job. This covers only the bindings between the authenticated
+/// session, the request path and the Event that was submitted. The source Realm
+/// is single-sourced by `event.realm_id`, so that is what the path is checked
+/// against; `expected_target` is the path `target_realm_id` on the DELETE route,
+/// where the URL names the edge too.
+fn caller_signed_realm_link_edge(
+    actor: &str,
+    realm_id: &str,
+    expected_target: Option<&str>,
+    event: &arkret_wire::Event,
+) -> Result<RealmLinkEdge, AppError> {
+    if event.kind != arkret_wire::EventKind::REALM_LINK {
+        return Err(AppError::invalid_param(
+            "link_event.event.kind must be ak.realm.link",
+        ));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "link_event.event.actor_id must be the authenticated caller",
+        ));
+    }
+    if event.realm_id.as_str() != realm_id {
+        return Err(AppError::invalid_param(
+            "link_event.event.realm_id must equal the path realm_id",
+        ));
+    }
+    let payload: RealmLinkPayload =
+        serde_json::from_value(Value::Object(event.payload.clone().into_iter().collect()))
+            .map_err(|e| AppError::invalid_param(format!("link_event payload: {e}")))?;
+    if let Some(expected_target) = expected_target
+        && payload.target_realm_id.as_str() != expected_target
+    {
+        return Err(AppError::invalid_param(
+            "link_event payload.target_realm_id must equal the path target_realm_id",
+        ));
+    }
+    Ok(RealmLinkEdge {
+        realm_id: RealmId::new(realm_id.to_owned())
+            .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?,
+        payload,
+    })
+}
+
+/// Preflight the FSM, then submit the caller's exact Event bytes.
+///
+/// The preflight stays because it is a read, not a decision imposed on the
+/// signed bytes: it reports the operation's documented reason codes
+/// (`realm_link_self_reference` as `schema_violation`, an illegal transition as
+/// `failed_precondition`) before the Event reaches admission. No Event is built
+/// here and none is co-signed.
+async fn submit_caller_signed_realm_link(
+    state: &AppState,
+    session: &SessionRecord,
+    edge: &RealmLinkEdge,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<(), AppError> {
     {
         let projection = state.projections().snapshot();
         check_realm_link_admissible(
             &projection,
-            realm_scope.as_str(),
-            body.target_realm_id.as_str(),
-            body.link_kind.as_str(),
-            body.status.as_str(),
+            edge.realm_id.as_str(),
+            edge.payload.target_realm_id.as_str(),
+            edge.payload.link_kind.as_str(),
+            edge.payload.status.as_str(),
         )
         .map_err(reducer_reject_to_app_error)?;
     }
-    let mut payload = json!({
-        "target_realm_id": body.target_realm_id,
-        "link_kind": body.link_kind,
-        "status": body.status,
-    });
-    if let Some(label) = body.label.as_ref() {
-        payload["label"] = json!(label);
-    }
-    if let Some(commitment) = body.commitment.as_ref() {
-        payload["commitment"] = json!(commitment);
-    }
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope.clone(),
-        arkret_wire::EventKind::REALM_LINK,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
+    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
         .await
-        .map_err(reducer_reject_to_app_error)?;
-    json_ok(RealmLinkMutationOutcome {
-        realm_id: realm_scope,
-        target_realm_id: body.target_realm_id,
-        link_kind: body.link_kind,
-        status: body.status,
-    })
+        .map(|_| ())
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                "ak.realm.link submit failed",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })
 }
 
 /// Map a reducer rejection reason code into the protocol error family.
@@ -254,14 +320,16 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
         .with_reason_code(reason)
 }
 
-/// G3.S5 — DELETE a `ak.realm.link`. Writes a `tombstoned`-status
-/// Move for the `(realm_id, target_realm_id, link_kind)` triple. The
-/// underlying cell is an FSM keyed on the triple, so the tombstone
+/// G3.S5 — DELETE a `ak.realm.link` by submitting the caller-signed
+/// `tombstoned`-status Move for the `(realm_id, target_realm_id, link_kind)`
+/// triple. The underlying cell is an FSM keyed on the triple, so the tombstone
 /// flip replaces the previous status in place (spec §4).
 ///
-/// `link_kind` is sourced from the `link_kind` query param; defaults
-/// to `governed_by` (the most common case — admin tooling cleaning up
-/// a governance link).
+/// The DELETE carries a request body, the way
+/// `ak.self.keys.backups.resource.delete` already does: removing an edge is as
+/// durable as creating one, and no signature fits in a bodyless request. That
+/// also retires the `link_kind` query parameter — a query parameter is outside
+/// the bytes the caller signs, so the kind travels in the signed payload.
 #[endpoint(
     operation_id = "ak.self.realm_link.resource.delete",
     summary = "Tombstone a cross-Realm link",
@@ -272,62 +340,28 @@ async fn delete_realm_link(
     aa: AuthArgs,
     realm_id: PathParam<String>,
     target_realm_id: PathParam<String>,
-    link_kind: QueryParam<String, false>,
+    body: JsonBody<RealmLinkDeleteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_id = RealmId::new(realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let target_realm_id = RealmId::new(target_realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("target_realm_id: {e}")))?;
-    let link_kind = link_kind
-        .into_inner()
-        .map(|value| {
-            RealmLinkKind::parse(&value).ok_or_else(|| {
-                AppError::invalid_param(format!(
-                    "link_kind '{value}' is not a canonical RealmLinkKind"
-                ))
-            })
-        })
-        .transpose()?
-        .unwrap_or(RealmLinkKind::GovernedBy);
-    let status = RealmLinkStatus::Tombstoned;
-    // Preflight (same reasoning as POST). Kind and FSM validation still apply.
-    {
-        let projection = state.projections().snapshot();
-        check_realm_link_admissible(
-            &projection,
-            realm_id.as_str(),
-            target_realm_id.as_str(),
-            link_kind.as_str(),
-            status.as_str(),
-        )
-        .map_err(reducer_reject_to_app_error)?;
+    let realm_id = realm_id.into_inner();
+    let target_realm_id = target_realm_id.into_inner();
+    let submission = body.into_inner().link_event;
+    let edge = caller_signed_realm_link_edge(
+        &session.actor,
+        &realm_id,
+        Some(&target_realm_id),
+        &submission.event,
+    )?;
+    if edge.payload.status != RealmLinkStatus::Tombstoned {
+        return Err(AppError::invalid_param(
+            "link_event payload.status must be tombstoned on this operation",
+        ));
     }
-    let payload = json!({
-        "target_realm_id": target_realm_id,
-        "link_kind": link_kind,
-        "status": status,
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_id.clone(),
-        arkret_wire::EventKind::REALM_LINK,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
-    json_ok(RealmLinkMutationOutcome {
-        realm_id,
-        target_realm_id,
-        link_kind,
-        status,
-    })
+    submit_caller_signed_realm_link(state, &session, &edge, submission).await?;
+    json_ok(edge.outcome())
 }
 
 /// G3.S5 — return the merged effective policy for `realm_id`.
@@ -409,5 +443,99 @@ fn merge_organization_effective_policy(
         if let Some(value) = map.remove(source) {
             effective_policy.insert(target.to_owned(), value);
         }
+    }
+}
+
+#[cfg(test)]
+mod caller_signed_link_tests {
+    use super::*;
+    use serde_json::json;
+
+    const ACTOR: &str = "did:web:alice.example";
+    const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const TARGET: &str = "ak:realm:01964137-0000-8000-8000-000000000031";
+
+    fn link_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
+        serde_json::from_value(json!({
+            "event_id": "ak:event:01964137-0000-8000-8000-000000000041",
+            "kind": arkret_wire::EventKind::REALM_LINK,
+            "realm_id": realm_id,
+            "scope_ref": { "kind": "realm", "realm_id": realm_id },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": payload,
+            "proofs": [],
+        }))
+        .expect("realm link envelope")
+    }
+
+    fn active_edge() -> Value {
+        json!({
+            "target_realm_id": TARGET,
+            "link_kind": "governed_by",
+            "status": "active",
+        })
+    }
+
+    #[test]
+    fn the_edge_is_read_off_the_signed_payload() {
+        let edge =
+            caller_signed_realm_link_edge(ACTOR, REALM, None, &link_event(ACTOR, REALM, active_edge()))
+                .unwrap();
+        let outcome = edge.outcome();
+        assert_eq!(outcome.realm_id.as_str(), REALM);
+        assert_eq!(outcome.target_realm_id.as_str(), TARGET);
+        assert_eq!(outcome.link_kind, RealmLinkKind::GovernedBy);
+        assert_eq!(outcome.status, RealmLinkStatus::Active);
+    }
+
+    #[test]
+    fn an_event_signed_by_someone_else_is_rejected() {
+        caller_signed_realm_link_edge(
+            "did:web:bob.example",
+            REALM,
+            None,
+            &link_event(ACTOR, REALM, active_edge()),
+        )
+        .expect_err("the submitted Event must be authored by the authenticated caller");
+    }
+
+    #[test]
+    fn a_body_naming_another_source_realm_is_rejected() {
+        // The source Realm is single-sourced by `event.realm_id`; without this
+        // check a caller could act on a Realm the URL never named.
+        caller_signed_realm_link_edge(ACTOR, TARGET, None, &link_event(ACTOR, REALM, active_edge()))
+            .expect_err("event.realm_id must equal the path realm_id");
+    }
+
+    #[test]
+    fn the_delete_path_target_must_match_the_signed_target() {
+        caller_signed_realm_link_edge(
+            ACTOR,
+            REALM,
+            Some("ak:realm:01964137-0000-8000-8000-0000000000ff"),
+            &link_event(ACTOR, REALM, active_edge()),
+        )
+        .expect_err("payload.target_realm_id must equal the path target_realm_id");
+    }
+
+    #[test]
+    fn a_payload_missing_status_is_rejected_rather_than_defaulted() {
+        // The request body used to default `status` to `active`. Nothing may
+        // fill it in now: it is inside the bytes the caller signed.
+        caller_signed_realm_link_edge(
+            ACTOR,
+            REALM,
+            None,
+            &link_event(
+                ACTOR,
+                REALM,
+                json!({ "target_realm_id": TARGET, "link_kind": "governed_by" }),
+            ),
+        )
+        .expect_err("payload.status is required");
     }
 }

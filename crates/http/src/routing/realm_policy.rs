@@ -4,18 +4,23 @@
 //! - `GET /_arkret/self/realms/{realm_id}/policy-server` — fetch the currently-projected
 //!   `ak.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /_arkret/self/realms/{realm_id}/policy-server` — submit a `ak.realm.policy_server`
-//!   declaration. Routes through the standard `accept_local_operations` pipeline so the reducer's
-//!   validators (URL scheme, on_timeout enum) run.
-//! - `DELETE /_arkret/self/realms/{realm_id}/policy-server` — submit the durable
-//!   `{"tombstone":true}` value to the same CAS-register cell.
+//! - `PUT /_arkret/self/realms/{realm_id}/policy-server` — submit the caller-signed
+//!   `ak.realm.policy_server` declaration through ordinary Event admission, so the reducer's
+//!   validators (URL scheme, on_timeout enum) and the `ak.policy.manage` capability run.
+//! - `DELETE /_arkret/self/realms/{realm_id}/policy-server` — submit the caller-signed durable
+//!   `{"tombstone":true}` value to the same CAS-register cell. It takes a request body, the way
+//!   `ak.self.keys.backups.resource.delete` already does: the removal is a signed Event.
+//!
+//! Both writes used to be authored here and signed with the service notary key under the caller's
+//! `actor_id`. That is the substitution `zh/security/key-management.md` section 411 forbids, and it
+//! is why `head_eq` moved to the caller too: a precondition is inside the signed bytes.
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use arkret_identifiers::{Did, RealmId};
 use arkret_models_collaboration::governance::realm_governance::{
-    RealmPolicyServerOnTimeout, RealmPolicyServerPayload, RealmPolicyServerReplaceRequestBody,
-    RealmPolicyServerTombstonePayload, RealmPolicyServerView,
+    RealmPolicyServerDeleteRequestBody, RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
+    RealmPolicyServerReplaceRequestBody, RealmPolicyServerView,
 };
 use arkret_state::lattice::CellState;
 use salvo::oapi::endpoint;
@@ -23,9 +28,14 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::AuthArgs;
 use crate::state::AppState;
+
+/// The one cell every `ak.realm.policy_server` write moves: a per-Realm
+/// CAS register holding either the declaration or the value tombstone.
+const POLICY_SERVER_CELL: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
 
 pub(crate) fn router() -> Router {
     Router::with_path("realms").push(
@@ -75,24 +85,34 @@ async fn put_realm_policy_server(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let body = body.into_inner();
+    let submission = body.into_inner().policy_server_event;
 
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
-    validate_https_policy_server_url(&body.policy_server_url)?;
-    if body.timeout_ms == Some(0) {
+    let payload = caller_signed_policy_server_payload(
+        "policy_server_event",
+        &session.actor,
+        &realm_id,
+        &submission.event,
+    )?;
+    let RealmPolicyServerPayload::Declaration(declaration) = payload else {
+        return Err(AppError::invalid_param(
+            "policy_server_event payload must be a declaration; the value tombstone goes through \
+             DELETE",
+        ));
+    };
+    validate_https_policy_server_url(&declaration.policy_server_url)?;
+    if declaration.timeout_ms == Some(0) {
         return Err(AppError::invalid_param(
             "policy server timeout_ms must be greater than zero",
         ));
     }
-    let mut payload = serde_json::to_value(&body)
-        .map_err(|error| AppError::internal(format!("policy server payload: {error}")))?;
     let cell_key = policy_server_cell_key(&realm_id);
-    if let Some(prior) = direct_policy_server_cell_value(state, &cell_key)? {
-        attach_head_eq_precondition(&mut payload, prior)?;
+    if direct_policy_server_cell_value(state, &cell_key)?.is_some() {
+        require_head_eq_precondition("policy_server_event", &submission.event)?;
     }
-    persist_canonical_policy_server_move(state, &session.actor, realm_scope, payload).await?;
+    submit_caller_signed_policy_server_event(state, &session, &realm_scope, submission).await?;
 
     let view = state
         .projections()
@@ -116,33 +136,48 @@ async fn put_realm_policy_server(
 async fn delete_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
+    body: JsonBody<RealmPolicyServerDeleteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> EmptyResult {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
+    let submission = body.into_inner().policy_server_event;
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
 
     let cell_key = policy_server_cell_key(&realm_id);
-    let prior = match direct_policy_server_cell_value(state, &cell_key)? {
+    match direct_policy_server_cell_value(state, &cell_key)? {
+        // A settled tombstone is an idempotent empty success, and the submitted
+        // Event is deliberately not admitted: writing it again would change the
+        // cell's history for a request that promises not to.
         Some(value) if is_policy_server_tombstone(&value) => {
             return empty_ok();
         }
-        Some(value) => value,
+        Some(_) => {}
         None => {
             return Err(AppError::not_found(
                 "no direct ak.realm.policy_server declaration to tombstone for this realm",
             ));
         }
-    };
+    }
 
-    let mut payload = serde_json::to_value(RealmPolicyServerTombstonePayload::VALUE)
-        .map_err(|error| AppError::internal(format!("policy server tombstone payload: {error}")))?;
-    attach_head_eq_precondition(&mut payload, prior)?;
-    persist_canonical_policy_server_move(state, &session.actor, realm_scope, payload).await?;
+    let payload = caller_signed_policy_server_payload(
+        "policy_server_event",
+        &session.actor,
+        &realm_id,
+        &submission.event,
+    )?;
+    if !matches!(payload, RealmPolicyServerPayload::Tombstone(tombstone) if tombstone.validate().is_ok())
+    {
+        return Err(AppError::invalid_param(
+            "policy_server_event payload must be exactly {\"tombstone\":true} on this operation",
+        ));
+    }
+    require_head_eq_precondition("policy_server_event", &submission.event)?;
+    submit_caller_signed_policy_server_event(state, &session, &realm_scope, submission).await?;
 
     match state
         .projections()
@@ -158,149 +193,100 @@ async fn delete_realm_policy_server(
     }
 }
 
-async fn persist_canonical_policy_server_move(
+/// What a caller-signed `ak.realm.policy_server` Event says it is writing.
+///
+/// The signature, envelope shape and reducer admission are the ordinary Event
+/// admission path's job; this covers only the bindings between the authenticated
+/// session, the request path and the submitted Event. The Realm is
+/// single-sourced by `event.realm_id`, so that is what the path is checked
+/// against.
+fn caller_signed_policy_server_payload(
+    field: &str,
+    actor: &str,
+    realm_id: &str,
+    event: &arkret_wire::Event,
+) -> Result<RealmPolicyServerPayload, AppError> {
+    if event.kind != arkret_wire::EventKind::REALM_POLICY_SERVER {
+        return Err(AppError::invalid_param(format!(
+            "{field}.event.kind must be ak.realm.policy_server"
+        )));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(format!(
+            "{field}.event.actor_id must be the authenticated caller"
+        )));
+    }
+    if event.realm_id.as_str() != realm_id {
+        return Err(AppError::invalid_param(format!(
+            "{field}.event.realm_id must equal the path realm_id"
+        )));
+    }
+    serde_json::from_value(serde_json::Value::Object(
+        event.payload.clone().into_iter().collect(),
+    ))
+    .map_err(|error| AppError::invalid_param(format!("{field} payload: {error}")))
+}
+
+/// Require the caller's own `head_eq` guard on the policy-server cell.
+///
+/// The service used to attach this precondition after reading the settled value.
+/// It cannot any more: preconditions are inside the bytes the caller signs, so
+/// attaching one would be rewriting the Event. What the service can still do is
+/// refuse an unguarded write against a settled cell, which is what the operation
+/// requires. Whether the guarded value actually matches is admission's check.
+fn require_head_eq_precondition(field: &str, event: &arkret_wire::Event) -> Result<(), AppError> {
+    let guarded = event.preconditions.iter().any(|precondition| {
+        precondition.cell.as_str() == POLICY_SERVER_CELL
+            && precondition.predicate.op == arkret_wire::PredicateOp::HeadEq
+    });
+    if guarded {
+        return Ok(());
+    }
+    Err(AppError::new(
+        soland_http::error::ErrorCode::FailedPrecondition,
+        format!(
+            "{field} MUST carry a head_eq precondition on {POLICY_SERVER_CELL} naming the settled              value it replaces"
+        ),
+    )
+    .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+    .with_wire_code("failed_precondition"))
+}
+
+/// Submit the caller's exact Event bytes through ordinary Event admission.
+///
+/// No Event is built here and none is co-signed. This replaced a helper that
+/// authored the Move under the caller's `actor_id` and signed it with the
+/// service notary key -- the substitution `key-management.md` section 411
+/// forbids outright. The local signing pass stays: sealing is the notary's own
+/// job, and it is what lets this response observe the resulting Seal.
+async fn submit_caller_signed_policy_server_event(
     state: &AppState,
-    requested_by: &str,
-    realm_id: RealmId,
-    mut operation_payload: serde_json::Value,
-) -> Result<String, AppError> {
-    let payload_object = operation_payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("policy server payload must be an object"))?;
-    let preconditions = payload_object
-        .remove("preconditions")
-        .map(serde_json::from_value::<Vec<arkret_wire::Precondition>>)
-        .transpose()
+    session: &SessionRecord,
+    realm_id: &RealmId,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<(), AppError> {
+    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
+        .await
+        .map(|_| ())
         .map_err(|error| {
-            AppError::invalid_param(format!("policy server preconditions are invalid: {error}"))
-        })?
-        .unwrap_or_default();
-    let requested_by_did = Did::new(requested_by.to_owned()).map_err(|error| {
-        AppError::invalid_param(format!("request actor DID is invalid: {error}"))
-    })?;
-
-    let authoring_lock = crate::routing::events::event_log::service_event_authoring_lock();
-    let _authoring_guard = authoring_lock.lock().await;
-    let service_did = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
-    let frontier = crate::routing::events::event_log::endpoints::load_realm_actor_frontier(
-        state,
-        realm_id.clone(),
-        requested_by_did.clone(),
-    )
-    .await?;
-    let mut event = arkret_wire::Event::new(
-        arkret_wire::EventKind::REALM_POLICY_SERVER,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        requested_by_did,
-        frontier.next_actor_seq,
-        arkret_identifiers::Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("policy server HLC failed: {error}")))?,
-        operation_payload.clone(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!("policy server Control Move build failed: {error}"))
-    })?;
-    event.executed_by = Some(service_did.clone());
-    event.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(format!(
-            "{}#realm-policy-server-service",
-            state.service_id()
-        ))
-        .map_err(|error| {
-            AppError::internal(format!(
-                "policy server authorization reference is invalid: {error}"
-            ))
-        })?,
-    );
-    event.prev_refs = frontier.frontier_event_ids;
-    event.preconditions = preconditions;
-    event.seal_basis = Some(crate::routing::admin::pick_admin_seal_basis(
-        state, &realm_id,
-    )?);
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "service notary verification method is invalid: {error}"
-                ))
-            },
-        )?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        service_did,
-        verification_method.clone(),
-    );
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(event.realm_id.as_str());
-    arkret_signatures::sign_event_with_digest_suite(
-        &mut event,
-        &signer,
-        &verification_method,
-        digest_suite,
-        arkret_signatures::SignEventOptions::new(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "policy server Control Move signing failed: {error}"
-        ))
-    })?;
-    let event_id = event.event_id.to_string();
-    let created_at = event.created_at;
-    let session = soland_services::identity::SessionIdentityState {
-        token_hash: "realm-policy-server-service".to_owned(),
-        actor: state.service_id().clone(),
-        device_id: "realm-policy-server-service".to_owned(),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        expires_at: created_at + chrono::Duration::minutes(5),
-        created_at,
-        revoked_at: None,
-    };
-    let envelope = serde_json::to_value(event).map_err(|error| {
-        AppError::internal(format!("policy server Event encode failed: {error}"))
-    })?;
-    crate::routing::events::event_log::submit_realm_policy_server_event_value(
-        state,
-        &session,
-        envelope,
-        realm_id.as_str(),
-        requested_by,
-        operation_payload,
-    )
-    .await
-    .map_err(|error| {
-        AppError::new(
-            soland_http::error::ErrorCode::InvalidParam,
-            format!(
-                "policy server Control Move admission failed: {}",
-                error.message
-            ),
-        )
-        .with_status(error.status)
-        .with_wire_code(error.code)
-    })?;
-
-    // The normal Event pipeline has already committed the canonical Event,
-    // Control Proposal Ack, federation outbox, and pending-control index. Prompt a
-    // local notary round so the self-management response normally observes the
-    // resulting Seal without inventing a separate projection-only fast path.
-    match crate::notary::run_one_signing_pass(state, &realm_id, 1024).await {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                "ak.realm.policy_server submit failed",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
+    match crate::notary::run_one_signing_pass(state, realm_id, 1024).await {
         Ok(_) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {}
         Err(error) => {
             tracing::warn!(
                 %error,
-                %event_id,
                 realm_id = %realm_id,
                 "policy server Control Move remains pending after local signing pass"
             );
         }
     }
-    Ok(event_id)
+    Ok(())
 }
 
 fn policy_server_view(
@@ -354,10 +340,7 @@ fn validate_https_policy_server_url(raw_url: &str) -> Result<(), AppError> {
 }
 
 fn policy_server_cell_key(realm_id: &str) -> (String, String) {
-    (
-        realm_id.to_owned(),
-        "ak:cell:ak.component.realm.policy_server.v1:null".to_owned(),
-    )
+    (realm_id.to_owned(), POLICY_SERVER_CELL.to_owned())
 }
 
 fn direct_policy_server_cell_value(
@@ -395,25 +378,6 @@ fn is_policy_server_tombstone(value: &serde_json::Value) -> bool {
     )
 }
 
-fn attach_head_eq_precondition(
-    payload: &mut serde_json::Value,
-    expected: serde_json::Value,
-) -> Result<(), AppError> {
-    let object = payload
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("policy server payload must be an object"))?;
-    object.insert(
-        "preconditions".to_owned(),
-        serde_json::json!([{
-            "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
-            "predicate": {
-                "op": "head_eq",
-                "value": expected,
-            }
-        }]),
-    );
-    Ok(())
-}
 
 async fn require_policy_manage(
     state: &AppState,
@@ -463,4 +427,109 @@ fn policy_server_resolution_error(reason: &'static str) -> AppError {
     )
     .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
     .with_wire_code("failed_precondition")
+}
+
+#[cfg(test)]
+mod caller_signed_policy_server_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    const ACTOR: &str = "did:web:alice.example";
+    const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+
+    fn policy_server_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
+        serde_json::from_value(json!({
+            "event_id": "ak:event:01964137-0000-8000-8000-000000000042",
+            "kind": arkret_wire::EventKind::REALM_POLICY_SERVER,
+            "realm_id": realm_id,
+            "scope_ref": { "kind": "realm", "realm_id": realm_id },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": payload,
+            "proofs": [],
+        }))
+        .expect("policy server envelope")
+    }
+
+    fn declaration() -> Value {
+        json!({
+            "policy_server_did": "did:web:policy.example",
+            "policy_server_url": "https://policy.example/_arkret/self/policy/check",
+        })
+    }
+
+    fn with_head_eq(mut event: arkret_wire::Event, value: Value) -> arkret_wire::Event {
+        event.preconditions = serde_json::from_value(json!([{
+            "cell": POLICY_SERVER_CELL,
+            "predicate": { "op": "head_eq", "value": value },
+        }]))
+        .expect("head_eq precondition");
+        event
+    }
+
+    #[test]
+    fn the_declaration_is_read_off_the_signed_payload() {
+        let payload = caller_signed_policy_server_payload(
+            "policy_server_event",
+            ACTOR,
+            REALM,
+            &policy_server_event(ACTOR, REALM, declaration()),
+        )
+        .unwrap();
+        let RealmPolicyServerPayload::Declaration(declaration) = payload else {
+            panic!("a declaration payload must not parse as the value tombstone");
+        };
+        assert_eq!(declaration.policy_server_did.as_str(), "did:web:policy.example");
+    }
+
+    #[test]
+    fn an_event_signed_by_someone_else_is_rejected() {
+        caller_signed_policy_server_payload(
+            "policy_server_event",
+            "did:web:mallory.example",
+            REALM,
+            &policy_server_event(ACTOR, REALM, declaration()),
+        )
+        .expect_err("the submitted Event must be authored by the authenticated caller");
+    }
+
+    #[test]
+    fn a_body_naming_another_realm_is_rejected() {
+        caller_signed_policy_server_payload(
+            "policy_server_event",
+            ACTOR,
+            "ak:realm:01964137-0000-8000-8000-0000000000ff",
+            &policy_server_event(ACTOR, REALM, declaration()),
+        )
+        .expect_err("event.realm_id must equal the path realm_id");
+    }
+
+    #[test]
+    fn an_unguarded_write_against_a_settled_cell_is_refused() {
+        // The service used to attach `head_eq` itself after reading the settled
+        // value. It cannot now — a precondition is inside the signed bytes — so
+        // all it can do is refuse the unguarded write.
+        let event = policy_server_event(ACTOR, REALM, declaration());
+        let error = require_head_eq_precondition("policy_server_event", &event)
+            .expect_err("a settled cell needs the caller's own head_eq");
+        assert_eq!(error.code, soland_http::error::ErrorCode::FailedPrecondition);
+
+        require_head_eq_precondition("policy_server_event", &with_head_eq(event, declaration()))
+            .expect("a caller-attached head_eq satisfies the guard");
+    }
+
+    #[test]
+    fn the_tombstone_payload_is_recognized_as_the_value_tombstone() {
+        let payload = caller_signed_policy_server_payload(
+            "policy_server_event",
+            ACTOR,
+            REALM,
+            &policy_server_event(ACTOR, REALM, json!({ "tombstone": true })),
+        )
+        .unwrap();
+        assert!(matches!(payload, RealmPolicyServerPayload::Tombstone(_)));
+    }
 }
