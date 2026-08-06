@@ -591,7 +591,10 @@ async fn prepare(
     let created_at = now();
     let event = new_unsigned_contact_event(
         &holder,
-        EventId::new(crate::ids::generate_event_id()).expect("generated Contact Event id"),
+        // Placeholder: `new_unsigned_contact_event` needs an id up front; the
+        // real one is derived from the finished envelope below.
+        EventId::new("ak:event:00000000-0000-8000-8000-000000000000")
+            .expect("placeholder Event id is canonical"),
         event_kind,
         realm_id,
         frontier.next_actor_seq,
@@ -600,6 +603,12 @@ async fn prepare(
         created_at,
         payload,
     )?;
+    // Stamped last: the id is a function of the finished envelope.
+    let mut event = event;
+    event.event_id = event
+        .derive_event_id()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let event = event;
     let reservation = ContactReservation {
         operation_id,
         idempotency_key: idempotency_key.clone(),

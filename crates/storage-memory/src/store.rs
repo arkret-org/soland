@@ -243,7 +243,7 @@ impl SolandMemoryPersistenceStore {
             created_at: now,
         });
         store.realm_meta.seed(
-            "ak:realm:0196419b-0000-7000-8000-000000000000",
+            "ak:realm:0196419b-0000-8000-8000-000000000000",
             RealmMetaRecord {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,

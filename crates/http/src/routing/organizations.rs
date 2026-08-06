@@ -276,7 +276,8 @@ async fn upsert_organization(
         organization_did: body.organization_did,
         handle: body.handle,
         display_name,
-        source_refs: vec![ids::generate_event_id()],
+        // No source Event stands behind a locally registered organization.
+        source_refs: Vec::new(),
         policy_revision: "local".to_owned(),
         verified: body.verified.unwrap_or(true),
         members,

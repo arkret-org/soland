@@ -461,7 +461,7 @@ mod tests {
             event_id: event_id.to_owned(),
             actor_id: "did:web:founder.example".to_owned(),
             actor_seq: 1,
-            realm_id: Some("ak:realm:019f9000-0000-7000-8000-000000000001".to_owned()),
+            realm_id: Some("ak:realm:019f9000-0000-8000-8000-000000000001".to_owned()),
             kind: "ak.realm.join_rule".to_owned(),
             schema_id: "arkret://events/realm/join-rule/v1".to_owned(),
             canonical_digest: format!("sha256:{}", "0".repeat(64)),

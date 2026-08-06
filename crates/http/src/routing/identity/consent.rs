@@ -640,7 +640,7 @@ pub(crate) fn grant_contact_managed_consent(
     granted_at: DateTime<Utc>,
 ) -> (String, ConsentCellRecord) {
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
-    let event_id = ids::generate_event_id();
+    let event_id = ids::generate_local_ref();
     // actor_seq is a per-actor monotonic counter on the originating event;
     // contact-managed grants are minted server-side without a real event log
     // seq, so we pin seq=0. `event_ref_for_dot` strips the trailing numeric
@@ -1347,7 +1347,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
     let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
-            event_id: ids::generate_event_id(),
+            event_id: ids::generate_local_ref(),
             realm_id: soland_services::identity::principal_control_realm_for_did(holder),
             event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
             operation_kind: "consent_revoke_cache_invalidation".to_owned(),

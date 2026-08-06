@@ -1146,17 +1146,9 @@ async fn range_completeness_for_query(
             ))
         })?;
     let observed_at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
-    let event_id = EventId::new(ids::generate_event_id())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let attestation_id = event_id
-        .as_str()
-        .strip_prefix("ak:event:")
-        .map(|suffix| format!("ak:attestation:{suffix}"))
-        .ok_or_else(|| {
-            soland_http::error::AppError::internal(
-                "generated completeness Event id has no ak:event prefix",
-            )
-        })?;
+    // The attestation is a service-signed object, not an Event: it gets its own
+    // minted id rather than one retyped from a fabricated `ak:event:` value.
+    let attestation_id = ids::generate("attestation");
     let signer = Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         issuer.clone(),
@@ -1240,7 +1232,9 @@ async fn range_completeness_for_query(
         .max()
         .map_or(0, |sequence| sequence.saturating_add(1));
     let mut attestation_event = Event {
-        event_id: event_id.clone(),
+        // Placeholder: stamped from the finished envelope below.
+        event_id: EventId::new("ak:event:00000000-0000-8000-8000-000000000000")
+            .expect("placeholder Event id is canonical"),
         kind: EventKind::AttestationRangeCompleteness,
         realm_id: realm_id.clone(),
         scope_ref: ScopeRef::Realm {
@@ -1268,6 +1262,12 @@ async fn range_completeness_for_query(
         proofs: Vec::new(),
         requirements: EventRequirements::default(),
     };
+    // Stamped before signing: the id is a function of the content the signature
+    // covers, so deriving it afterwards would sign a different Event.
+    attestation_event.event_id = attestation_event
+        .derive_event_id_with_digest_suite(digest_suite)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let event_id = attestation_event.event_id.clone();
     sign_event_with_digest_suite(
         &mut attestation_event,
         &signer,
@@ -1417,7 +1417,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000aa01";
+    const TEST_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000aa01";
     const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_MESSAGE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa11";
     const TEST_REVISE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa12";

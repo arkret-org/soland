@@ -327,7 +327,7 @@ pub(crate) async fn seed_cross_signing(
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
     let create_event_id = seed_realm_create_proposal_policy(state, &realm, principal_id).await;
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let envelope = serde_json::json!({
         "event_id": event_id,
         "actor_id": principal_id,
@@ -399,7 +399,7 @@ pub(crate) fn fixture_recovery_publication_authority_context(
         scope_ref: scope_ref.clone(),
         source: arkret_wire::AuthoritySetPolicySource {
             source_kind: arkret_wire::AuthoritySetSourceKind::CrossSigningPublish,
-            source_ref: new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:"),
+            source_ref: soland_test_support::fixture_content_bound_id("ak:event:"),
             source_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             generation_ref: "1".to_owned(),
         },

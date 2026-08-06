@@ -1320,12 +1320,12 @@ fn actor_profile_from_account(
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
     }
-    let id = ActorProfileId::new(arkret_identifiers::new_prefixed_uuid7("ak:actor_profile:"))
-        .map_err(|error| {
-            AppError::internal(format!("actor profile id construction failed: {error}"))
-        })?;
     Ok(ActorProfile {
-        id,
+        // This view is synthesised from the account record; no
+        // `ak.profile.create` stands behind it, so there is no id to report.
+        // Minting one produced a different value on every request — an id that
+        // nothing could resolve and no receiver could re-derive.
+        id: None,
         schema: SchemaId::ACTOR_PROFILE_V1.to_owned(),
         realm_id: None,
         principal_id: principal_id.clone(),
@@ -1577,7 +1577,7 @@ mod tests {
         let mut record = AgentPairingState::new(
             "did:web:agents.example:assistant".to_owned(),
             "did:web:alice.example".to_owned(),
-            "ak:realm:019f0000-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:019f0000-0000-8000-8000-000000000001".to_owned(),
             arkret_wire::DidUrl::new("did:web:agents.example:assistant#managed-controller")
                 .unwrap(),
             AgentLifecycleState::Active,

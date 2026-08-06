@@ -447,7 +447,7 @@ mod tests {
         }
 
         let err = validate_encrypted_account_data_value(
-            "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
+            "ak.contacts.realm.ak:realm:0196419b-0000-8000-8000-000000000000",
             &json!({"local_name": "Acme"}),
         )
         .unwrap_err();
@@ -506,7 +506,7 @@ mod tests {
         for key in [
             "ak.views.private",
             "ak.views.private.",
-            "ak.views.private.ak:realm:0196419b-0000-7000-8000-000000000001",
+            "ak.views.private.ak:realm:0196419b-0000-8000-8000-000000000001",
             "ak.views.private.quarterly-plan",
             "ak.notifications.inbox",
             "ak.notifications.inbox.",
@@ -540,7 +540,7 @@ mod tests {
         for key in [
             "ak.agent.sidecar_projection.v1",
             "ak.agent.sidecar_projection.v1:did:web:alice.example",
-            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:0196419b-0000-7000-8000-000000000000:ak:strand:0196419b-0000-8000-8000-000000000001",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:0196419b-0000-8000-8000-000000000000:ak:strand:0196419b-0000-8000-8000-000000000001",
         ] {
             assert!(is_retired_encrypted_account_data_key(key));
             assert_eq!(
@@ -665,7 +665,7 @@ mod tests {
         let err = validate_encrypted_account_data_value(
             key,
             &json!({
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "shards": [{
                     "shard_key": "term-derived-key",
                     "blob_ref": "ak:blob:sha256:1111111111111111111111111111111111111111111111111111111111111111",

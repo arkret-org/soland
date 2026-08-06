@@ -31,7 +31,7 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
+const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 
 fn test_config() -> AppConfig {
@@ -446,10 +446,6 @@ fn signed_ghost_provision_body(
         },
     });
     let profile = arkret_event_draft::GhostActorProfileRequest::new(
-        arkret_identifiers::ActorProfileId::new(arkret_identifiers::new_prefixed_uuid7(
-            "ak:actor_profile:",
-        ))
-        .unwrap(),
         ghost_actor_id.clone(),
         display_name.unwrap_or(external_user_id),
         applet_id.clone(),

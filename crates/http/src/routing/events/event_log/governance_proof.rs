@@ -1600,7 +1600,7 @@ mod tests {
 
     #[test]
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
-        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000a11c").unwrap();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000a11c").unwrap();
         let notary = "did:web:notary.example";
         let mut joined = BTreeMap::new();
         joined.insert(
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn governance_join_preserves_exposed_bottom_without_poisoning_the_realm() {
         let state = test_state();
-        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000b077").unwrap();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000b077").unwrap();
         let selector_cell = CellRef::new(
             "ak:cell:ak.component.agent.selector_claim.v1:conflicted-selector".to_owned(),
         )
@@ -1652,7 +1652,7 @@ mod tests {
     #[test]
     fn governance_join_still_fails_closed_for_rejected_bottom() {
         let state = test_state();
-        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000b078").unwrap();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000b078").unwrap();
         let accountability_cell = CellRef::new(
             "ak:cell:ak.component.identity.accountability.v1:did:web:agent.example".to_owned(),
         )
@@ -1688,7 +1688,7 @@ mod tests {
     }
 
     fn managed_agent_pcr_create() -> Event {
-        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000cafe").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
         Event::new(
             arkret_wire::EventKind::REALM_CREATE,
@@ -1766,7 +1766,7 @@ mod tests {
     #[test]
     fn governance_materializer_uses_the_frozen_invite_accept_membership() {
         let state = test_state();
-        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000fade").unwrap();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000fade").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
         let event = Event::new(
             arkret_wire::EventKind::INVITE_ACCEPT,

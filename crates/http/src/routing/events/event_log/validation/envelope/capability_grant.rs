@@ -52,19 +52,19 @@ mod tests {
                 "grant": {
                     "id": "ak:grant:01904100-0000-7000-8000-000000000013",
                     "schema": "ak.schema.capability.v1",
-                    "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                    "realm_id": "ak:realm:01904100-0000-8000-8000-000000000012",
                     "issuer": actor,
                     "subject": actor,
                     "actions": ["ak.realm.configure"],
                     "resources": [{
                         "kind": "realm",
-                        "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                        "realm_id": "ak:realm:01904100-0000-8000-8000-000000000012",
                         "match_scope": "realm_wide"
                     }],
                     "issued_at": "2026-07-21T08:00:00.000Z",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
-                        "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                        "realm_id": "ak:realm:01904100-0000-8000-8000-000000000012",
                         "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0

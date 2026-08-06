@@ -679,7 +679,7 @@ mod tests {
 
     fn realm_config(url: &str) -> RealmPolicyServerConfig {
         RealmPolicyServerConfig {
-            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
             policy_server_did: "did:web:policy.example.com".to_owned(),
             policy_server_url: url.to_owned(),
             cache_ttl_seconds: 60,
@@ -700,7 +700,7 @@ mod tests {
     fn sample_input(bypass_cache: bool) -> PolicyCheckRequestInput {
         PolicyCheckRequestInput {
             request_id: "req-1".to_owned(),
-            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001").unwrap(),
             actor_id: Did::new("did:web:alice.example").unwrap(),
             action: "ak.message.create".to_owned(),
             source_service_id: Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
@@ -720,7 +720,7 @@ mod tests {
             request_id: "req-1".to_owned(),
             decision: AuthzDecision::Allow,
             bound_to: PolicyCheckBoundTo {
-                realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+                realm_id: RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001").unwrap(),
                 actor_id: Did::new("did:web:alice.example").unwrap(),
                 action: "ak.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),

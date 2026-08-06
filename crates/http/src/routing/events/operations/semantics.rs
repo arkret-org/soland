@@ -1158,7 +1158,7 @@ pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static 
 mod tests {
     use super::*;
 
-    const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    const REALM_ID: &str = "ak:realm:01904100-0000-8000-8000-cfc039892036";
 
     fn operation(kind: &str, payload: Value) -> Operation {
         Operation::create(
@@ -1192,7 +1192,7 @@ mod tests {
         let wrong_realm = operation(
             arkret_wire::EventKind::REALM_NOTARY,
             serde_json::json!({
-                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000099",
+                "realm_id": "ak:realm:01904100-0000-8000-8000-000000000099",
                 "notary": {"kind": "single_did", "did": "did:web:notary.example"}
             }),
         );

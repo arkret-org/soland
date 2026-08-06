@@ -490,11 +490,9 @@ fn organization_source_refs(organization: &Value) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if refs.is_empty() {
-        vec![ids::generate_event_id()]
-    } else {
-        refs
-    }
+    // No fabricated ref when there is none: an Event id names an Event, and
+    // inventing one here produced a value nothing could resolve.
+    refs
 }
 
 pub(super) fn organization_preview_with_spaces(

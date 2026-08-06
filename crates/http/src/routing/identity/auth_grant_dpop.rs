@@ -923,7 +923,7 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned())
+                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000003".to_owned())
                         .unwrap(),
                 ],
                 ..Default::default()
@@ -942,7 +942,7 @@ mod tests {
         );
         assert_eq!(
             agent_session.scope_details["realm_ids"][0],
-            "ak:realm:0196419b-0000-7000-8000-000000000003"
+            "ak:realm:0196419b-0000-8000-8000-000000000003"
         );
     }
 
@@ -956,7 +956,7 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned())
+                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000003".to_owned())
                         .unwrap(),
                 ],
                 ..Default::default()
@@ -1048,7 +1048,7 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000004".to_owned())
+                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000004".to_owned())
                         .unwrap(),
                 ],
                 ..Default::default()

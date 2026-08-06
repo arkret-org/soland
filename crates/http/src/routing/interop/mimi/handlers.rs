@@ -166,7 +166,7 @@ pub(super) async fn mimi_notify(
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
-    let event_id = ids::generate_event_id();
+    let event_id = ids::generate_local_ref();
     let notify_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
@@ -243,7 +243,7 @@ pub(super) async fn mimi_room_message(
         return Err(AppError::invalid_param("unsupported MIMI content type"));
     }
     let operation_id = ids::generate_operation_id();
-    let event_id = ids::generate_event_id();
+    let event_id = ids::generate_local_ref();
     let mimi_message_id = message
         .get("mimi_message_id")
         .and_then(|value| value.as_str())

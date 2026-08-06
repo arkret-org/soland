@@ -1056,7 +1056,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     .await;
     let recovery_session_id =
         seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1116,7 +1116,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     .await;
     let recovery_session_id =
         seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1193,7 +1193,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1293,7 +1293,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             .unwrap();
     }
 
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1353,7 +1353,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         Some(1)
     );
 
-    let replay_event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let replay_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut replay_payload = base_reset_payload(
         &principal_id,
         &replay_event_id,

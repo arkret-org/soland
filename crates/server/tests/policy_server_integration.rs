@@ -39,7 +39,7 @@ use soland_http::authz::policy_client::{
 use soland_http::authz::{MergedAuthzDecision, SolandAuthzEngine, check_with_policy_server};
 use soland_services::authorization::{AuthorizationService, RealmPolicyServerConfig};
 
-const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
+const REALM_ID: &str = "ak:realm:01904100-0000-8000-8000-000000000001";
 const POLICY_SERVER_DID: &str = "did:web:policy.example.com";
 
 fn config_for(url: &str, timeout_ms: u64) -> RealmPolicyServerConfig {
@@ -205,7 +205,7 @@ fn engine_granting_event_read() -> AuthorizationService {
         REALM_ID.to_owned(),
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
-        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
         vec!["ak.event.read".to_owned()],
         Vec::new(),
     );
@@ -261,7 +261,7 @@ async fn policy_server_integration_hits_mock() {
         &engine,
         "did:web:alice.example",
         "ak.event.read",
-        "ak:realm:01904100-0000-7000-8000-000000000001",
+        "ak:realm:01904100-0000-8000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),
         &[],
@@ -321,7 +321,7 @@ async fn policy_server_integration_timeout_fails_closed() {
         &engine,
         "did:web:alice.example",
         "ak.event.read",
-        "ak:realm:01904100-0000-7000-8000-000000000001",
+        "ak:realm:01904100-0000-8000-8000-000000000001",
         REALM_ID,
         Some("did:web:alice.example"),
         &[],

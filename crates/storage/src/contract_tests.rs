@@ -1637,7 +1637,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
 ) {
     let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort");
     keypackage.last_resort = true;
-    let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-000000000001";
     keypackage.last_resort_realm_id = Some(realm_id.to_owned());
     store
         .put(&keypackage)

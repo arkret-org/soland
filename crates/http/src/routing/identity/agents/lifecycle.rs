@@ -1588,7 +1588,7 @@ mod deactivation_tests {
     fn revocation_coverage_rejects_missing_unrevoked_grant() {
         let location = (
             "ak:grant:019f9700-0000-7000-8000-000000000001".to_owned(),
-            "ak:realm:019f9700-0000-7000-8000-000000000002".to_owned(),
+            "ak:realm:019f9700-0000-8000-8000-000000000002".to_owned(),
         );
         let error = require_deactivation_revocation_coverage(
             &BTreeSet::new(),
@@ -1608,7 +1608,7 @@ mod deactivation_tests {
             BTreeSet::from(["runtime-key-1".to_owned(), "already-revoked-key".to_owned()]);
         let active_grants = BTreeSet::from([(
             "ak:grant:019f9700-0000-7000-8000-000000000001".to_owned(),
-            "ak:realm:019f9700-0000-7000-8000-000000000002".to_owned(),
+            "ak:realm:019f9700-0000-8000-8000-000000000002".to_owned(),
         )]);
         let supplied_grants = active_grants.clone();
 

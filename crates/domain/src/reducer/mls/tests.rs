@@ -13,7 +13,7 @@ fn op_at(secs: i64, object_kind: &str, payload: serde_json::Value) -> Operation 
     let mut op = Operation::create(
         OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000001")
             .expect("op id parses"),
-        RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
+        RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000000").expect("realm id parses"),
         object_kind,
         payload,
     );
@@ -28,14 +28,14 @@ fn b64(bytes: &[u8]) -> String {
 fn realm_scope() -> Value {
     json!({
         "kind": "realm",
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
+        "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000"
     })
 }
 
 fn circle_scope(circle_id: &str) -> Value {
     json!({
         "kind": "circle",
-        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+        "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
         "circle_id": circle_id
     })
 }
@@ -45,7 +45,7 @@ fn governance_binding_for_scope(
     group_id: &str,
     effective_scope: Value,
 ) -> Value {
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
     let mut binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -98,7 +98,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "claim_envelope": {
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": keypackage_digest,
-            "intended_realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+            "intended_realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
             "claim_id": "claim-01",
             "requester_did": "did:web:alice.example",
             "ssk_generation": 7,
@@ -116,7 +116,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
 }
 
 fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
     let mut binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -803,7 +803,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     let revoke_event = "ak:event:0196419b-0000-8000-8000-00000000d102";
     let proposal_ref = "ak:event:0196419b-0000-8000-8000-00000000d103";
     state.pending_mls_removals.push(MlsRemoveObligation {
-        realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+        realm_id: "ak:realm:0196419b-0000-8000-8000-000000000000".to_owned(),
         circle_id: None,
         mls_group_ref: Some("ak:mls_group:abc".to_owned()),
         actor_id: "did:web:alice.example".to_owned(),
@@ -876,7 +876,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
     ];
     for (target, proposal_ref) in targets {
         state.pending_mls_removals.push(MlsRemoveObligation {
-            realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
+            realm_id: "ak:realm:0196419b-0000-8000-8000-000000000000".to_owned(),
             circle_id: None,
             mls_group_ref: Some("ak:mls_group:abc".to_owned()),
             actor_id: target.to_owned(),

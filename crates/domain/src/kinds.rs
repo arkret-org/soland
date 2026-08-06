@@ -396,10 +396,10 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
@@ -422,10 +422,10 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
+                    "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 6,
@@ -447,10 +447,10 @@ mod tests {
             "governance_binding": {
                 "binding_version": 1,
                 "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000999"
+                    "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000999"
                 },
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,

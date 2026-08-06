@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000001";
+const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000001";
 const INVITE: &str = "ak:invite:0196419b-0000-7000-8000-000000000101";
 const INVITER: &str = "did:web:alice.example";
 const SUBJECT: &str = "did:web:bob.example";

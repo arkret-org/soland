@@ -125,7 +125,7 @@ mod tests {
         let baseline = arkret_canonical::canonical_sha256(&transcript(
             "revoke",
             "did:web:coauth.example",
-            "ak:realm:01970000-0000-7000-8000-000000000003",
+            "ak:realm:01970000-0000-8000-8000-000000000003",
         ))
         .unwrap();
 
@@ -133,17 +133,17 @@ mod tests {
             transcript(
                 "grant",
                 "did:web:coauth.example",
-                "ak:realm:01970000-0000-7000-8000-000000000003",
+                "ak:realm:01970000-0000-8000-8000-000000000003",
             ),
             transcript(
                 "revoke",
                 "did:web:other.example",
-                "ak:realm:01970000-0000-7000-8000-000000000003",
+                "ak:realm:01970000-0000-8000-8000-000000000003",
             ),
             transcript(
                 "revoke",
                 "did:web:coauth.example",
-                "ak:realm:01970000-0000-7000-8000-000000000004",
+                "ak:realm:01970000-0000-8000-8000-000000000004",
             ),
         ] {
             assert_ne!(

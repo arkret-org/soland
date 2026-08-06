@@ -128,7 +128,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             ),
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
-            event_id: arkret_wire::EventId::new(new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:")).unwrap(),
+            event_id: arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id("ak:event:")).unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
@@ -840,7 +840,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             idempotency_key: arkret_wire::IdempotencyKey::new("unallocated-commit-001").unwrap(),
             agent_id: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-7000-8000-000000000001",
+                "ak:realm:01904100-0000-8000-8000-000000000001",
             )
             .unwrap(),
             allocation_handle: arkret_wire::ProtocolOpaqueId::new("unallocated.fixture.signature")

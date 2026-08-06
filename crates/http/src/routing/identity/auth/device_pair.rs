@@ -157,6 +157,9 @@ async fn authorize_account_device_pair(
             .with_wire_code("schema_violation"));
         }
     }
+    // KNOWN DEFECT: this names an Event that was never authored. It stays a
+    // minted `ak:event:` value only because the field is validated as one; the
+    // fix is to author the authorization Event and use its derived id.
     let authorized_event_ref = ids::generate_event_id();
     let display_name = body
         .display_name

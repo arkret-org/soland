@@ -693,7 +693,7 @@ mod tests {
         let mut record = soland_services::identity::AgentPairingState::new(
             agent.to_owned(),
             controller.to_owned(),
-            "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
+            "ak:realm:01964137-0000-8000-8000-000000000010".to_owned(),
             arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
             arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
             chrono::Utc::now(),
@@ -1043,7 +1043,7 @@ mod tests {
     #[tokio::test]
     async fn plain_message_does_not_notify_unmentioned_members_by_default() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009970";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009970";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         let carol = "did:web:carol.example";
@@ -1061,7 +1061,7 @@ mod tests {
     #[tokio::test]
     async fn plain_message_notifies_all_watchers_only() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009951";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009951";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009952";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1095,7 +1095,7 @@ mod tests {
     #[tokio::test]
     async fn plain_message_all_watcher_falls_back_to_realm_access_when_strand_missing() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009954";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009954";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009955";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1114,7 +1114,7 @@ mod tests {
     #[tokio::test]
     async fn member_mention_is_single_mention_notification() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009972";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009972";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
@@ -1135,7 +1135,7 @@ mod tests {
     #[tokio::test]
     async fn assignment_relation_create_notifies_new_assignee() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009992";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009992";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009993";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1163,7 +1163,7 @@ mod tests {
     #[tokio::test]
     async fn schedule_update_notifies_assignees_and_all_watchers() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009995";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009995";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009996";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1197,7 +1197,7 @@ mod tests {
     #[tokio::test]
     async fn calendar_schedule_fanout_fails_closed_without_private_policy_projection() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009930";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009930";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009931";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1240,7 +1240,7 @@ mod tests {
     #[tokio::test]
     async fn rsvp_change_never_emits_a_schedule_notification() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009946";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009946";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009947";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
@@ -1256,7 +1256,7 @@ mod tests {
     #[tokio::test]
     async fn unregistered_mention_sidecar_is_never_compared_to_member_ids() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009974";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009974";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         let carol = "did:web:carol.example";
@@ -1273,7 +1273,7 @@ mod tests {
     #[tokio::test]
     async fn agent_third_party_mention_gate_is_non_retroactive() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009981";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009981";
         let controller = "did:web:alice.example";
         let third_party = "did:web:bob.example";
         let agent = "did:web:agents.example:alice-summary";
@@ -1323,7 +1323,7 @@ mod tests {
     #[tokio::test]
     async fn strand_mention_uses_circle_effective_participation() {
         let state = test_state();
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009987";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000009987";
         let circle_id = "ak:circle:01904100-0000-8000-8000-000000009988";
         let strand_id = "ak:strand:01904100-0000-8000-8000-000000009989";
         let controller = "did:web:alice.example";

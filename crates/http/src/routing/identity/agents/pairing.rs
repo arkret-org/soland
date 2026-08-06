@@ -1908,7 +1908,7 @@ mod requested_scope_tests {
         let mut record = AgentPrincipalRecord::new(
             "did:webvh:agent.example:agents:test".to_owned(),
             "did:webvh:controller.example:users:test".to_owned(),
-            "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:019f6000-0000-8000-8000-000000000001".to_owned(),
             arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
             AgentLifecycleState::Active,
             chrono::Utc::now(),

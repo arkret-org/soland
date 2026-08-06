@@ -399,8 +399,8 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
     assert_eq!(body["status"], "active", "governed_by link: {body}");
 }
 
-const CHILD_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000c001";
-const ORG_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000c002";
+const CHILD_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000c001";
+const ORG_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000c002";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
@@ -509,7 +509,7 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
 
     // 5. A Realm that never declared anything, and has no governed_by chain, answers not_found as
     //    well.
-    let never_declared = "ak:realm:01904100-0000-7000-8000-00000000c003";
+    let never_declared = "ak:realm:01904100-0000-8000-8000-00000000c003";
     bootstrap_realm(&state, &token, never_declared, 3, 0).await;
     let (status, body) = delete_policy_server(&state, &token, never_declared).await;
     assert_eq!(

@@ -1707,7 +1707,7 @@ mod tests {
             .with_nanosecond(987_654_321)
             .unwrap();
         let realm_id =
-            RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030".to_owned()).unwrap();
+            RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030".to_owned()).unwrap();
         let sidecar = AgentSidecar {
             id: SidecarId::new("ak:sidecar:01964137-0000-7000-8000-000000000031".to_owned())
                 .unwrap(),
@@ -1754,7 +1754,7 @@ mod tests {
         let strand_id =
             StrandId::new("ak:strand:01964137-0000-8000-8000-000000000031".to_owned()).unwrap();
         let realm_id =
-            RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030".to_owned()).unwrap();
+            RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030".to_owned()).unwrap();
         let circle_id =
             CircleId::new("ak:circle:01964137-0000-8000-8000-000000000032".to_owned()).unwrap();
         let tracks = json!({
@@ -1832,11 +1832,11 @@ mod tests {
         let governance_binding = json!({
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
-            "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
+            "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
             "circle_id": "ak:circle:01964137-0000-8000-8000-000000000032",
             "effective_scope": {
                 "kind": "circle",
-                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
+                "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
                 "circle_id": "ak:circle:01964137-0000-8000-8000-000000000032"
             },
             "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",

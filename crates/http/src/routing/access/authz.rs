@@ -288,15 +288,15 @@ mod tests {
     fn realm_selector_uses_realm_id_as_resource() {
         let parsed = parse_authz_resource(&json!({
             "kind": "realm",
-            "realm_id": "ak:realm:01970000-0000-7000-8000-000000000001"
+            "realm_id": "ak:realm:01970000-0000-8000-8000-000000000001"
         }));
         assert_eq!(
             parsed.realm_id,
-            "ak:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-8000-8000-000000000001"
         );
         assert_eq!(
             parsed.resource,
-            "ak:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-8000-8000-000000000001"
         );
     }
 
@@ -304,12 +304,12 @@ mod tests {
     fn object_selector_uses_kind_specific_typed_id() {
         let parsed = parse_authz_resource(&json!({
             "kind": "strand",
-            "realm_id": "ak:realm:01970000-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01970000-0000-8000-8000-000000000001",
             "strand_id": "ak:strand:01970000-0000-8000-8000-000000000002"
         }));
         assert_eq!(
             parsed.realm_id,
-            "ak:realm:01970000-0000-7000-8000-000000000001"
+            "ak:realm:01970000-0000-8000-8000-000000000001"
         );
         assert_eq!(
             parsed.resource,
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn persisted_resource_is_reencoded_with_closed_selector_fields() {
-        const REALM: &str = "ak:realm:01970000-0000-7000-8000-000000000001";
+        const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000001";
         const CIRCLE: &str = "ak:circle:01970000-0000-8000-8000-000000000002";
         const STRAND: &str = "ak:strand:01970000-0000-8000-8000-000000000003";
 

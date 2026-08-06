@@ -34,7 +34,7 @@ async fn sync_and_directory_share_demo_realm() {
         sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key("ak:realm:0196419b-0000-7000-8000-000000000000")
+            .contains_key("ak:realm:0196419b-0000-8000-8000-000000000000")
     );
 
     let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
@@ -487,7 +487,7 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
     let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
-    let strand_id = new_prefixed_uuid7("ak:strand:");
+    let strand_id = soland_test_support::fixture_content_bound_id("ak:strand:");
     let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
         "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
@@ -545,7 +545,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .unwrap();
 
     let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
-    let strand_id = new_prefixed_uuid7("ak:strand:");
+    let strand_id = soland_test_support::fixture_content_bound_id("ak:strand:");
     let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
         "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
@@ -671,7 +671,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
     let backfill: Value = TestClient::get(
-        "http://server/_arkret/self/events?realms=ak:realm:0196419b-0000-7000-8000-000000000000",
+        "http://server/_arkret/self/events?realms=ak:realm:0196419b-0000-8000-8000-000000000000",
     )
     .send(&app())
     .await

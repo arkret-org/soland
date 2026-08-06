@@ -2397,7 +2397,7 @@ mod fsm_registry_tests {
             soland_domain::reducer::lattice_kinds::CANONICAL_SHARED_FSM_FAMILY_COUNT
         );
         let realm =
-            RealmId::new("ak:realm:01900000-0000-7000-8000-000000000001".to_owned()).unwrap();
+            RealmId::new("ak:realm:01900000-0000-8000-8000-000000000001".to_owned()).unwrap();
         for contract in contracts {
             let cell =
                 CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();

@@ -1,5 +1,5 @@
 use super::*;
-const REALM: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+const REALM: &str = "ak:realm:01904100-0000-8000-8000-cfc039892036";
 const AGENT: &str = "did:web:agent.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 

@@ -1613,7 +1613,7 @@ mod seal_delta_tests {
             arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
         let mut seal = Seal {
             id: placeholder_id,
-            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned())
+            realm_id: RealmId::new("ak:realm:01904100-0000-8000-8000-a11ce0000001".to_owned())
                 .unwrap(),
             predecessor_refs: Vec::new(),
             delta: Vec::new(),
@@ -1718,7 +1718,7 @@ mod seal_delta_tests {
         );
         let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
         let realm_id =
-            RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned()).unwrap();
+            RealmId::new("ak:realm:01904100-0000-8000-8000-a11ce0000001".to_owned()).unwrap();
         let issued_at = chrono::Utc::now();
         let mut event = Event::new_with_id_at(
             arkret_wire::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap(),

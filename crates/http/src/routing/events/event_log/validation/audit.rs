@@ -384,7 +384,7 @@ mod tests {
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
-            realm_id: "ak:realm:01904100-0000-7000-8000-000000000003".to_owned(),
+            realm_id: "ak:realm:01904100-0000-8000-8000-000000000003".to_owned(),
             kind: kind.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             prev_refs: Vec::new(),

@@ -332,7 +332,7 @@ pub(super) async fn emit_mimi_room_binding_event(
     room_id: &str,
     binding: &Value,
 ) -> Result<Option<String>, AppError> {
-    let event_id = ids::generate_event_id();
+    let event_id = ids::generate_local_ref();
     let realm_id = binding
         .get("binding_scope")
         .and_then(|s| s.get("realm_id"))

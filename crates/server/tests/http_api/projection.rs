@@ -12,7 +12,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
     let container_space_id = "ak:space:01904100-0000-8000-8000-f10dc0000001";
 
     // ── auth required ──────────────────────────────────────────────────
@@ -851,7 +851,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
     let container_space_id = "ak:space:01904100-0000-8000-8000-c15d70000001";
     let strand_id = "ak:strand:01904100-0000-8000-8000-c15d70000002";
 
@@ -1037,7 +1037,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         serde_json::json!({
             "object": {
                 "id": container_space_id,
-                "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "kind": "list",
                 "title": "Persistent Space",
                 "created_by": "did:web:alice.example",

@@ -335,8 +335,8 @@ mod tests {
     use super::*;
     use crate::reducer::RealmLinkState;
 
-    const REALM_CHILD: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
-    const REALM_ORG: &str = "ak:realm:01904100-0000-7000-8000-000000000000";
+    const REALM_CHILD: &str = "ak:realm:01904100-0000-8000-8000-cccccccccccc";
+    const REALM_ORG: &str = "ak:realm:01904100-0000-8000-8000-000000000000";
 
     fn op(realm_id: &str, payload: Value) -> Operation {
         Operation::create(

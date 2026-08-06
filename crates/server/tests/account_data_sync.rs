@@ -99,7 +99,7 @@ async fn put_account_data(
 }
 
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = arkret_identifiers::new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
+    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -795,7 +795,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "wakeup_kind": "message",
                 "timing_profile_hint": "default",
                 "event_id": "ak:event:01904100-0000-8000-8000-0000000000ee",
-                "realm_id": "ak:realm:0190419b-0000-7000-8000-0000000000ee",
+                "realm_id": "ak:realm:0190419b-0000-8000-8000-0000000000ee",
                 "sender_actor_id": "did:web:bob.example",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
             }

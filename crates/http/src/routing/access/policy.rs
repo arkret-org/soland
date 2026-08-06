@@ -794,7 +794,7 @@ mod tests {
     ) -> PolicyCheckRequestBody {
         PolicyCheckRequestBody {
             request_id: "ak:policy_request:test".to_owned(),
-            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001").unwrap(),
             actor_id: Did::new(actor.to_owned()).unwrap(),
             device_id: None,
             action: "ak.message.create".to_owned(),

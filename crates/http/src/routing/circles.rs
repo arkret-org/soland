@@ -1025,7 +1025,7 @@ mod tests {
         let payload = circle_create_payload_from_request(
             CircleId::new("ak:circle:01964137-0000-8000-8000-000000000041").unwrap(),
             CircleCreateRequestBody {
-                realm_id: RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
+                realm_id: RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030").unwrap(),
                 title: "S8 restore circle 1783309323913".to_owned(),
                 summary: None,
                 directory_visibility: None,
