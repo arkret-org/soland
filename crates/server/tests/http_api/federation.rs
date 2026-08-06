@@ -107,12 +107,12 @@ async fn peer_events_describe_advertises_formal_surface() {
     assert!(
         operations
             .iter()
-            .any(|op| op == "ak.peer.events.query.scan")
+            .any(|op| op == "ak.peer.events.read.scan")
     );
     assert!(
         operations
             .iter()
-            .any(|op| op == "ak.peer.events.query.frontier")
+            .any(|op| op == "ak.peer.events.read.frontier")
     );
     // `ak.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint

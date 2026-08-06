@@ -44,7 +44,7 @@ mod tests {
             agent_session: Some(AgentSessionRecord {
                 granted_scope: vec![
                     "ak.self.events.stream.subscribe".to_owned(),
-                    "ak.self.events.query.scan".to_owned(),
+                    "ak.self.events.read.scan".to_owned(),
                 ],
                 scope_details: serde_json::json!({
                     "agent_id": "did:web:agent.example",
@@ -65,7 +65,7 @@ mod tests {
             restored.granted_scope,
             vec![
                 "ak.self.events.stream.subscribe".to_owned(),
-                "ak.self.events.query.scan".to_owned()
+                "ak.self.events.read.scan".to_owned()
             ]
         );
         assert_eq!(

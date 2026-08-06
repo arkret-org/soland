@@ -122,8 +122,8 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.service_id().clone())
@@ -133,12 +133,12 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
         protocol_version: "1.0".to_owned(),
         primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
-            "ak.peer.events.query.describe".to_owned(),
+            "ak.peer.events.read.describe".to_owned(),
             "ak.peer.events.command.submit".to_owned(),
-            "ak.peer.events.query.scan".to_owned(),
-            "ak.peer.events.query.scan_body".to_owned(),
-            "ak.peer.events.query.resolve".to_owned(),
-            "ak.peer.events.query.frontier".to_owned(),
+            "ak.peer.events.read.scan".to_owned(),
+            "ak.peer.events.read.scan_body".to_owned(),
+            "ak.peer.events.read.resolve".to_owned(),
+            "ak.peer.events.read.frontier".to_owned(),
             "ak.peer.invites.command.submit".to_owned(),
             "ak.peer.signal.command.relay".to_owned(),
         ],
@@ -195,8 +195,8 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.scan", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, false).await?;
@@ -205,8 +205,8 @@ async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<E
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.scan_body", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan_body"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan_body", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan_body"))]
 async fn peer_events_query_post(
     depot: &mut Depot,
     req: &mut Request,
@@ -215,7 +215,7 @@ async fn peer_events_query_post(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
-        "invalid ak.peer.events.query.scan request body",
+        "invalid ak.peer.events.read.scan request body",
     )
     .await?;
     let source_service_id = source_service_id_from_request(req)?;
@@ -223,8 +223,8 @@ async fn peer_events_query_post(
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
@@ -233,7 +233,7 @@ async fn peer_events_resolve(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<PeerEventsResolveRequestBody>(
         req,
-        "invalid ak.peer.events.query.resolve request body",
+        "invalid ak.peer.events.read.resolve request body",
     )
     .await?;
     request
@@ -380,8 +380,8 @@ fn peer_cba_bundle_for_seal(
     }))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
@@ -608,7 +608,7 @@ impl PeerEventsQueryParts {
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
             return Err(AppError::missing_param(
-                "ak.peer.events.query.scan requires at least one of realms[] / actors[]",
+                "ak.peer.events.read.scan requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
@@ -1445,7 +1445,7 @@ fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQue
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.peer.events.query.scan",
+        "operation_id": "ak.peer.events.read.scan",
         "source_service_id": source_service_id,
         "realms": realms,
         "actors": actors,

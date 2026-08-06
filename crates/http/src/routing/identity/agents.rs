@@ -221,7 +221,7 @@ mod tests {
         json!({
             "actions": [
                 "ak.self.events.stream.subscribe",
-                "ak.self.events.query.scan",
+                "ak.self.events.read.scan",
                 "ak.self.events.command.submit",
                 "ak.event.read",
                 "ak.message.create"

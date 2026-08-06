@@ -1,5 +1,5 @@
 //! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe`),
-//! projection-aware events query (`ak.self.events.query.scan` + body form),
+//! projection-aware events query (`ak.self.events.read.scan` + body form),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 
@@ -612,7 +612,7 @@ fn events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.self.events.query.scan",
+        "operation_id": "ak.self.events.read.scan",
         "realms": realms,
         "actors": actors,
         "filters": filters.cloned().unwrap_or_else(|| json!({})),
@@ -699,7 +699,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `ak.self.events.query.scan` at `GET /_arkret/self/events`.
+/// `ak.self.events.read.scan` at `GET /_arkret/self/events`.
 /// Reads from the projection layer so callers writing through
 /// `POST /_arkret/self/events` see their messages here.
 ///
@@ -711,8 +711,8 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
-#[endpoint(operation_id = "ak.self.events.query.scan")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan"))]
+#[endpoint(operation_id = "ak.self.events.read.scan")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan"))]
 pub(crate) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -743,8 +743,8 @@ pub(crate) async fn events_query(
     events_query_impl(state, req, parts).await
 }
 
-#[endpoint(operation_id = "ak.self.events.query.scan_body")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
+#[endpoint(operation_id = "ak.self.events.read.scan_body")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan_body"))]
 pub(crate) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
@@ -828,7 +828,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
         )?;
     }
     let filter_digest =

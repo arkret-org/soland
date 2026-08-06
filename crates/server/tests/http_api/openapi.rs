@@ -85,7 +85,7 @@ fn assert_required_migrated_operations(root: &Value) {
     for expected in [
         "org.arkret.soland.system.health",
         "ak.server.query.describe",
-        "ak.self.events.query.scan",
+        "ak.self.events.read.scan",
         "ak.self.snapshot.query.manifest_head",
         "ak.self.blob.command.presign",
         "mimi_protocol_directory",

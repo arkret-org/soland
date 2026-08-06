@@ -521,8 +521,8 @@ async fn get_event(
     event_view_for_state(state, &record).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.query.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -613,8 +613,8 @@ async fn resolve_events(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.query.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,

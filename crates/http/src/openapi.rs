@@ -49,7 +49,7 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
         "x-operation-aliases".to_owned(),
         json!({
             "events.submit": "ak.self.events.command.submit",
-            "events.query": "ak.self.events.query.scan",
+            "events.query": "ak.self.events.read.scan",
             "events.subscribe": "ak.self.events.stream.subscribe",
             "account.subscribe": "ak.self.account.stream.subscribe",
         }),

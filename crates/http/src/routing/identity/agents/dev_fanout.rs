@@ -448,7 +448,7 @@ mod tests {
         let registry = soland_services::protocol_artifacts::operation_ids();
         for action in [
             ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
-            ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            ServiceOperationId::SELF_EVENTS_READ_SCAN,
             ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
         ] {
             assert!(

@@ -565,13 +565,13 @@ fn agent_scope_requires_resource_selector(scopes: &[String]) -> bool {
 fn agent_account_service_scope(scope: &str) -> bool {
     matches!(
         scope,
-        "ak.self.events.query.describe"
+        "ak.self.events.read.describe"
             | "ak.self.events.command.submit"
             | "ak.self.events.resource.get"
-            | "ak.self.events.query.resolve"
-            | "ak.self.events.query.scan"
+            | "ak.self.events.read.resolve"
+            | "ak.self.events.read.scan"
             | "ak.self.events.stream.subscribe"
-            | "ak.self.events.query.frontier"
+            | "ak.self.events.read.frontier"
             | "ak.self.authorization_leases.command.issue"
             | "ak.self.keys.keypackages.upload.create"
             | "ak.self.keys.keypackages.command.consume"
@@ -988,7 +988,7 @@ mod tests {
     fn agent_account_event_service_scope_allows_empty_resource_details() {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
-        grant.scopes = vec!["ak.self.events.query.scan".to_owned()];
+        grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
@@ -999,7 +999,7 @@ mod tests {
 
         assert_eq!(
             agent_session.unwrap().granted_scope,
-            vec!["ak.self.events.query.scan"]
+            vec!["ak.self.events.read.scan"]
         );
     }
 

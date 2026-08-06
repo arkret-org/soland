@@ -595,7 +595,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         serde_json::json!({
                 "actions": [
                     "ak.self.events.stream.subscribe",
-                    "ak.self.events.query.scan",
+                    "ak.self.events.read.scan",
                     "ak.self.events.command.submit",
                     "ak.event.read",
                     "ak.message.create"
@@ -696,7 +696,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         let requested_scope = serde_json::json!({
             "actions": [
                 "ak.self.events.stream.subscribe",
-                "ak.self.events.query.scan",
+                "ak.self.events.read.scan",
                 "ak.self.events.command.submit",
                 "ak.event.read",
                 "ak.message.create"
@@ -902,7 +902,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let requested_scope = serde_json::json!({
         "actions": [
             "ak.self.events.stream.subscribe",
-            "ak.self.events.query.scan",
+            "ak.self.events.read.scan",
             "ak.self.events.command.submit"
         ],
         "resources": [
@@ -912,7 +912,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
             },
             {
                 "kind": "operation",
-                "operation": "ak.self.events.query.scan"
+                "operation": "ak.self.events.read.scan"
             },
             {
                 "kind": "operation",
