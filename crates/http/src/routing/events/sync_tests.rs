@@ -566,6 +566,7 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     let mut entry = RealmDirectoryEntry::new(
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         "Roster evidence",
+        soland_services::events::DirectoryProvenance::LocalOnly,
     );
     entry.public = public;
     entry

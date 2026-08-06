@@ -680,7 +680,11 @@ mod tests {
 
     fn seed_realm_members(state: &AppState, realm_id: &str, members: &[&str]) {
         let realm_id_typed = RealmId::new(realm_id.to_owned()).expect("valid realm id");
-        let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed, "Notify test");
+        let mut entry = crate::state::RealmDirectoryEntry::new(
+            realm_id_typed,
+            "Notify test",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
         for member in members {
             entry.members.insert(
                 arkret_identifiers::Did::new((*member).to_owned()).expect("valid member did"),

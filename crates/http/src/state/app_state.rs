@@ -1881,7 +1881,11 @@ mod membership_hydration_tests {
 
     fn directory_with_creator(realm_id: &RealmId, creator: &Did) -> RealmDirectoryIndex {
         let mut realms = RealmDirectoryIndex::new();
-        let mut entry = RealmDirectoryEntry::new(realm_id.clone(), "Hydration Test Realm");
+        let mut entry = RealmDirectoryEntry::new(
+            realm_id.clone(),
+            "Hydration Test Realm",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
         entry.members.insert(creator.clone());
         realms.upsert(entry);
         realms
