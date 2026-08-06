@@ -1,6 +1,6 @@
 //! In-memory implementation of [`PersistenceStore`].
 
-use soland_storage::ProposalMemberReceiptStore;
+use soland_storage::ControlProposalAuthorityAckStore;
 
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
@@ -42,7 +42,7 @@ use super::{
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
-use crate::MemoryProposalMemberReceiptStore;
+use crate::MemoryControlProposalAuthorityAckStore;
 
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
@@ -110,7 +110,7 @@ pub struct SolandMemoryPersistenceStore {
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
-    proposal_member_receipts: MemoryProposalMemberReceiptStore,
+    control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore,
     websocket_auth: MemoryWebsocketAuthStore,
 }
 
@@ -225,7 +225,7 @@ impl SolandMemoryPersistenceStore {
                     MemoryIdempotencyStore::new()
                 }
             },
-            proposal_member_receipts: MemoryProposalMemberReceiptStore::new(),
+            control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore::new(),
             websocket_auth: MemoryWebsocketAuthStore::new(),
         }
     }
@@ -568,8 +568,8 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
         &self.idempotency_keys
     }
 
-    fn proposal_member_receipts(&self) -> &dyn ProposalMemberReceiptStore {
-        &self.proposal_member_receipts
+    fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore {
+        &self.control_proposal_authority_acks
     }
 
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore {

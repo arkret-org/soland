@@ -244,7 +244,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let bootstrap_realm_id = RealmId::new(unit.realm_id.clone()).map_err(|error| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
     })?;
-    let proposal_receipts = crate::control_proposal::mint_control_proposal_receipts(
+    let control_proposal_acks = crate::control_proposal::mint_control_proposal_acks(
         state,
         &bootstrap_realm_id,
         &typed_events,
@@ -259,7 +259,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         SubmitOneError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "quorum_unreachable",
-            format!("Realm bootstrap proposal receipts unavailable: {error}"),
+            format!("Realm bootstrap Control Proposal Acks unavailable: {error}"),
         )
     })?;
     let records = validated
@@ -286,7 +286,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     };
     state
         .event_queries()
-        .store_realm_bootstrap_batch(records, proposal_receipts.clone(), deliveries)
+        .store_realm_bootstrap_batch(records, control_proposal_acks.clone(), deliveries)
         .await
         .map_err(|error| {
             if error.is_realm_already_exists() {
@@ -305,7 +305,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             }
         })?;
-    for (event, receipt) in typed_events.iter().zip(&proposal_receipts) {
+    for (event, receipt) in typed_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
             .put_pending_control_event_with_receipt(event, receipt)
@@ -383,7 +383,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         cursor,
     );
     outcome.ingress_receipts = ingress_receipts;
-    outcome.control_proposal_receipts = proposal_receipts;
+    outcome.control_proposal_acks = control_proposal_acks;
     Ok(outcome)
 }
 

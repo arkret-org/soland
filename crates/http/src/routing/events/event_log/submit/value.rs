@@ -280,7 +280,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         event,
         authorization_lease,
         cba_proof_bundles: _,
-        control_proposal_receipt,
+        control_proposal_ack,
         membership_compensation_evidence,
     } = submission;
     let envelope = typed_event_to_canonical_value(event)?;
@@ -312,7 +312,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         None,
         None,
         authorization_lease.as_ref(),
-        control_proposal_receipt.as_ref(),
+        control_proposal_ack.as_ref(),
         membership_compensation_evidence.as_ref(),
     )
     .await
@@ -474,20 +474,20 @@ fn with_ingress_receipt(
     response
 }
 
-async fn stored_control_proposal_receipt(
+async fn stored_control_proposal_ack(
     state: &AppState,
     existing: &soland_services::events::CanonicalEventRecord,
     digest: &Hash,
-    submitted: Option<&arkret_wire::ControlProposalReceipt>,
-) -> Result<arkret_wire::ControlProposalReceipt, SubmitOneError> {
+    submitted: Option<&arkret_wire::ControlProposalAck>,
+) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
     if let Some(receipt) = state
         .projections()
-        .control_proposal_receipt(digest)
+        .control_proposal_ack(digest)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("stored Control Proposal receipt unavailable: {error}"),
+                format!("stored Control Proposal Ack unavailable: {error}"),
             )
         })?
     {
@@ -496,13 +496,13 @@ async fn stored_control_proposal_receipt(
 
     let durable_receipt = state
         .event_queries()
-        .control_proposal_receipt_for_event(&existing.event_id)
+        .control_proposal_ack_for_event(&existing.event_id)
         .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("durable Control Proposal receipt unavailable: {error}"),
+                format!("durable Control Proposal Ack unavailable: {error}"),
             )
         })?;
     if let Some(receipt) = durable_receipt {
@@ -517,7 +517,7 @@ async fn stored_control_proposal_receipt(
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            "accepted Control Move is missing its proposal receipt",
+            "accepted Control Move is missing its Control Proposal Ack",
         )
     })?;
     let event: Event = serde_json::from_value(existing.envelope.clone()).map_err(|error| {
@@ -548,7 +548,7 @@ async fn stored_control_proposal_receipt(
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            "durable Control Proposal receipt does not bind the accepted Control Move",
+            "durable Control Proposal Ack does not bind the accepted Control Move",
         ));
     }
     let policy = crate::control_proposal::control_proposal_policy(
@@ -564,13 +564,13 @@ async fn stored_control_proposal_receipt(
             format!("Control Proposal policy is unavailable: {error}"),
         )
     })?;
-    crate::control_proposal::verify_control_proposal_receipt(state, &event, submitted, policy)
+    crate::control_proposal::verify_control_proposal_ack(state, &event, submitted, policy)
         .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 "failed_precondition",
-                format!("submitted Control Proposal receipt is invalid: {error}"),
+                format!("submitted Control Proposal Ack is invalid: {error}"),
             )
         })?;
     state
@@ -595,18 +595,18 @@ pub(super) async fn submit_event_value_with_context(
     commit_idempotency: Option<EventCommitIdempotency>,
     internal_admission: Option<&InternalEventAdmission>,
     authorization_lease: Option<&arkret_wire::AuthorizationLease>,
-    submitted_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+    submitted_control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let managed_agent_pcr_genesis =
         batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope));
-    if managed_agent_pcr_genesis && submitted_control_proposal_receipt.is_none() {
+    if managed_agent_pcr_genesis && submitted_control_proposal_ack.is_none() {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
-            "managed Agent PCR genesis requires a delegated-controller proposal receipt",
+            "managed Agent PCR genesis requires a delegated-controller Control Proposal Ack",
         ));
     }
     let managed_bootstrap_contexts = if managed_agent_pcr_genesis {
@@ -801,14 +801,14 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let receipt = stored_control_proposal_receipt(
+                let receipt = stored_control_proposal_ack(
                     state,
                     &existing,
                     &digest,
-                    submitted_control_proposal_receipt,
+                    submitted_control_proposal_ack,
                 )
                 .await?;
-                response.outcome.control_proposal_receipts.push(receipt);
+                response.outcome.control_proposal_acks.push(receipt);
             }
             return Ok(response);
         }
@@ -1494,7 +1494,7 @@ pub(super) async fn submit_event_value_with_context(
                     && event.seal_ref.is_none()
                     && event.auth_context.is_none()
             });
-    let control_proposal_receipt = if let Some(event) = control_event_for_proposal.as_ref() {
+    let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1522,7 +1522,7 @@ pub(super) async fn submit_event_value_with_context(
                 format!("Control Proposal policy is unavailable: {error}"),
             )
         })?;
-        if let Some(receipt) = submitted_control_proposal_receipt {
+        if let Some(receipt) = submitted_control_proposal_ack {
             let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
             let (_, authority_set_ref) = worker
                 .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
@@ -1547,16 +1547,16 @@ pub(super) async fn submit_event_value_with_context(
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     "failed_precondition",
-                    "submitted Control Proposal receipt does not bind the Event basis authority",
+                    "submitted Control Proposal Ack does not bind the Event basis authority",
                 ));
             }
-            crate::control_proposal::verify_control_proposal_receipt(state, event, receipt, policy)
+            crate::control_proposal::verify_control_proposal_ack(state, event, receipt, policy)
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::PRECONDITION_FAILED,
                         "failed_precondition",
-                        format!("submitted Control Proposal receipt is invalid: {error}"),
+                        format!("submitted Control Proposal Ack is invalid: {error}"),
                     )
                 })?;
             Some(receipt.clone())
@@ -1570,7 +1570,7 @@ pub(super) async fn submit_event_value_with_context(
                         "basis-less Control Move requires an anchor-unit authorization lease",
                     )
                 })?;
-            crate::control_proposal::mint_control_proposal_receipts(
+            crate::control_proposal::mint_control_proposal_acks(
                 state,
                 &realm_id,
                 std::slice::from_ref(event),
@@ -1582,7 +1582,7 @@ pub(super) async fn submit_event_value_with_context(
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "quorum_unreachable",
-                    format!("Control Proposal receipt signing failed: {error}"),
+                    format!("Control Proposal Ack signing failed: {error}"),
                 )
             })?
             .into_iter()
@@ -1618,11 +1618,11 @@ pub(super) async fn submit_event_value_with_context(
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "quorum_unreachable",
-                        "this service cannot issue the current authority set's proposal receipt",
+                        "this service cannot issue the current authority set's Control Proposal Ack",
                     )
                 })?;
             Some(
-                crate::control_proposal::mint_control_proposal_receipt(
+                crate::control_proposal::mint_control_proposal_ack(
                     state,
                     realm_id,
                     proposal_digest,
@@ -1634,7 +1634,7 @@ pub(super) async fn submit_event_value_with_context(
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",
-                        format!("Control Proposal receipt signing failed: {error}"),
+                        format!("Control Proposal Ack signing failed: {error}"),
                     )
                 })?,
             )
@@ -1658,7 +1658,7 @@ pub(super) async fn submit_event_value_with_context(
             state,
             &parsed,
             &envelope_for_bootstrap,
-            control_proposal_receipt.as_ref(),
+            control_proposal_ack.as_ref(),
             // This path stores its ingress receipt up front
             // (`mint_and_store_ingress_receipt`), so nothing is pending.
             &[],
@@ -1739,10 +1739,10 @@ pub(super) async fn submit_event_value_with_context(
         .await,
         ingress_receipt.as_ref(),
     );
-    if let Some(receipt) = control_proposal_receipt.as_ref() {
+    if let Some(receipt) = control_proposal_ack.as_ref() {
         accepted_response
             .outcome
-            .control_proposal_receipts
+            .control_proposal_acks
             .push(receipt.clone());
     }
     let command = soland_services::events::CommitAcceptedEventCommand {
@@ -1758,7 +1758,7 @@ pub(super) async fn submit_event_value_with_context(
             envelope,
             received_at,
         },
-        control_proposal_receipt: control_proposal_receipt.clone(),
+        control_proposal_ack: control_proposal_ack.clone(),
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
@@ -1896,14 +1896,14 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let receipt = stored_control_proposal_receipt(
+                        let receipt = stored_control_proposal_ack(
                             state,
                             &existing,
                             &digest,
-                            submitted_control_proposal_receipt,
+                            submitted_control_proposal_ack,
                         )
                         .await?;
-                        response.outcome.control_proposal_receipts.push(receipt);
+                        response.outcome.control_proposal_acks.push(receipt);
                     }
                     return Ok(response);
                 }
@@ -1926,7 +1926,7 @@ pub(super) async fn submit_event_value_with_context(
             .projections()
             .put_pending_control_event_with_receipt(
                 control_event,
-                control_proposal_receipt
+                control_proposal_ack
                     .as_ref()
                     .expect("Control Move receipt was minted before commit"),
             )

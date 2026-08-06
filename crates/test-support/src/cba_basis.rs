@@ -95,7 +95,7 @@ pub fn realm_basis_seal(realm_id: &str, subject: &str, data_plane_actions: &[&st
 
 /// The service DID every fixture Realm designates as its notary.
 ///
-/// A Control Move submitted to this service has its proposal receipt minted
+/// A Control Move submitted to this service has its Control Proposal Ack minted
 /// here, and `NotaryWorker::authority_set_ref_for_events` only issues one when
 /// the Realm's notary profile names the service.
 fn fixture_notary_did() -> String {

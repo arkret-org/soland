@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{Hash, RealmId};
 use arkret_wire::{
     AuthoritySetRef, ControlProposalDecision, ControlProposalDecisionPolicy,
-    ControlProposalDeferReason, ControlProposalReceipt, ControlProposalReceiptKind,
-    ControlProposalRejectReason, Event, PayloadSignature, ProposalMemberReceipt,
+    ControlProposalDeferReason, ControlProposalAck, ControlProposalAckKind,
+    ControlProposalRejectReason, Event, PayloadSignature, ControlProposalAuthorityAck,
 };
 use chrono::Duration;
 use serde::Deserialize;
@@ -19,7 +19,7 @@ struct RealmCreateProposalPolicyPayload {
 #[derive(Deserialize)]
 struct RealmCreateProposalPolicy {
     #[serde(default)]
-    receipt_sla_ms: Option<u64>,
+    proposal_intake_sla_ms: Option<u64>,
     #[serde(default)]
     proposal_decision_window_ms: Option<u64>,
     #[serde(default)]
@@ -35,7 +35,7 @@ fn policy_from_realm_create(
     if event.kind != arkret_wire::EventKind::REALM_CREATE {
         return Ok(None);
     }
-    // A proposal receipt acknowledges ingress before semantic admission. Read
+    // A Control Proposal Ack acknowledges ingress before semantic admission. Read
     // only the create-locked decision-policy fields here; full Realm schema
     // validation belongs to admission and must not turn a receipt request into
     // a quorum failure because the payload carries an unrelated extension.
@@ -56,9 +56,9 @@ fn policy_from_realm_create(
             .map_err(|_| format!("{field} exceeds the signed duration range"))
     };
     let policy = ControlProposalDecisionPolicy {
-        receipt_sla: duration_from_ms(
-            payload.object.receipt_sla_ms.unwrap_or(86_400_000),
-            "receipt_sla_ms",
+        proposal_intake_sla: duration_from_ms(
+            payload.object.proposal_intake_sla_ms.unwrap_or(86_400_000),
+            "proposal_intake_sla_ms",
         )?,
         decision_window: duration_from_ms(
             payload.object.proposal_decision_window_ms.unwrap_or(30_000),
@@ -107,17 +107,17 @@ pub(crate) async fn control_proposal_policy(
     resolved.ok_or_else(|| "Realm has no canonical proposal decision policy".to_owned())
 }
 
-pub(crate) fn mint_control_proposal_receipt(
+pub(crate) fn mint_control_proposal_ack(
     state: &AppState,
     realm_id: RealmId,
     proposal_digest: Hash,
     authority_set_ref: Hash,
     received_at: chrono::DateTime<chrono::Utc>,
     policy: ControlProposalDecisionPolicy,
-) -> Result<ControlProposalReceipt, String> {
+) -> Result<ControlProposalAck, String> {
     policy.validate().map_err(|error| error.to_string())?;
     let received_at = arkret_canonical::canonical::normalize_timestamp_canonical(received_at);
-    let mut member_receipt = ProposalMemberReceipt {
+    let mut authority_ack = ControlProposalAuthorityAck {
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),
         received_at,
@@ -137,17 +137,17 @@ pub(crate) fn mint_control_proposal_receipt(
             jws: String::new(),
         },
     };
-    let bytes = member_receipt
+    let bytes = authority_ack
         .canonical_bytes_for_signature()
         .map_err(|error| error.to_string())?;
-    member_receipt.signature.payload_digest = member_receipt
-        .member_receipt_digest()
+    authority_ack.signature.payload_digest = authority_ack
+        .authority_ack_digest()
         .map_err(|error| error.to_string())?;
-    member_receipt.signature.jws =
+    authority_ack.signature.jws =
         arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
             .map_err(|error| error.to_string())?;
-    let receipt = ControlProposalReceipt {
-        kind: ControlProposalReceiptKind::ProposalReceipt,
+    let receipt = ControlProposalAck {
+        kind: ControlProposalAckKind::SignedAck,
         realm_id,
         proposal_digest,
         received_at,
@@ -155,7 +155,7 @@ pub(crate) fn mint_control_proposal_receipt(
         absolute_due_at: received_at + policy.absolute_horizon,
         defer_count: 0,
         authority_set_ref,
-        member_receipts: vec![member_receipt],
+        authority_acks: vec![authority_ack],
     };
     receipt
         .validate_structural(policy)
@@ -163,13 +163,13 @@ pub(crate) fn mint_control_proposal_receipt(
     Ok(receipt)
 }
 
-pub(crate) async fn mint_control_proposal_receipts(
+pub(crate) async fn mint_control_proposal_acks(
     state: &AppState,
     realm_id: &RealmId,
     events: &[Event],
     received_at: chrono::DateTime<chrono::Utc>,
     bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
-) -> Result<Vec<ControlProposalReceipt>, String> {
+) -> Result<Vec<ControlProposalAck>, String> {
     let policy = control_proposal_policy(state, realm_id, events).await?;
     let notary_authority_set_ref =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
@@ -178,7 +178,7 @@ pub(crate) async fn mint_control_proposal_receipts(
     let is_closed_genesis = events
         .first()
         .is_some_and(|event| event.kind == arkret_wire::EventKind::REALM_CREATE);
-    let authority_set_ref = select_proposal_receipt_authority(
+    let authority_set_ref = select_control_proposal_ack_authority(
         notary_authority_set_ref,
         bootstrap_ingress_authority_set_ref,
         is_closed_genesis,
@@ -189,7 +189,7 @@ pub(crate) async fn mint_control_proposal_receipts(
             let proposal_digest =
                 Hash::new(event.event_digest().map_err(|error| error.to_string())?)
                     .map_err(|error| error.to_string())?;
-            mint_control_proposal_receipt(
+            mint_control_proposal_ack(
                 state,
                 realm_id.clone(),
                 proposal_digest,
@@ -201,10 +201,10 @@ pub(crate) async fn mint_control_proposal_receipts(
         .collect()
 }
 
-pub(crate) async fn verify_control_proposal_receipt(
+pub(crate) async fn verify_control_proposal_ack(
     state: &AppState,
     event: &Event,
-    receipt: &ControlProposalReceipt,
+    receipt: &ControlProposalAck,
     policy: ControlProposalDecisionPolicy,
 ) -> Result<(), String> {
     receipt
@@ -218,16 +218,16 @@ pub(crate) async fn verify_control_proposal_receipt(
         return Err("current proposal authority profile is unavailable".to_owned());
     };
     if receipt.authority_set_ref != authority_set_ref {
-        return Err("proposal receipt does not bind the current authority profile".to_owned());
+        return Err("Control Proposal Ack does not bind the current authority profile".to_owned());
     }
 
     let mut signers = BTreeSet::new();
-    for member in &receipt.member_receipts {
+    for member in &receipt.authority_acks {
         let signer =
             arkret_identity::verification_method_did(&member.signature.verification_method)
                 .map_err(|error| error.to_string())?;
         if !signers.insert(signer.clone()) {
-            return Err("proposal receipt repeats an authority member".to_owned());
+            return Err("Control Proposal Ack repeats an authority member".to_owned());
         }
         let bytes = member
             .canonical_bytes_for_signature()
@@ -292,14 +292,14 @@ pub(crate) async fn verify_control_proposal_receipt(
             false
         };
         if !delegated_quorum {
-            return Err("proposal receipt does not satisfy the current notary quorum".to_owned());
+            return Err("Control Proposal Ack does not satisfy the current notary quorum".to_owned());
         }
     }
     Ok(())
 }
 
 #[cfg(test)]
-mod proposal_receipt_quorum_tests {
+mod control_proposal_ack_quorum_tests {
     use arkret_wire::notary::{ForensicAttribution, NotaryValue};
 
     use super::*;
@@ -347,7 +347,7 @@ mod proposal_receipt_quorum_tests {
     }
 }
 
-fn select_proposal_receipt_authority(
+fn select_control_proposal_ack_authority(
     notary_authority_set_ref: Option<Hash>,
     bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
     is_closed_genesis: bool,
@@ -362,24 +362,24 @@ fn select_proposal_receipt_authority(
                 .flatten()
         })
         .ok_or_else(|| {
-            "this service cannot issue the current authority set's proposal receipt".to_owned()
+            "this service cannot issue the current authority set's Control Proposal Ack".to_owned()
         })
 }
 
 pub(crate) fn sign_control_proposal_reject(
     state: &AppState,
-    receipt: &ControlProposalReceipt,
+    receipt: &ControlProposalAck,
     previous_defers: &[ControlProposalDecision],
     notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalRejectReason,
     decided_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ControlProposalDecision, String> {
     let first_member = receipt
-        .member_receipts
+        .authority_acks
         .first()
-        .ok_or_else(|| "proposal receipt has no member receipt".to_owned())?;
+        .ok_or_else(|| "Control Proposal Ack has no authority Ack".to_owned())?;
     let validation_policy = ControlProposalDecisionPolicy {
-        receipt_sla: arkret_wire::MAX_PROPOSAL_RECEIPT_SLA,
+        proposal_intake_sla: arkret_wire::MAX_PROPOSAL_INTAKE_SLA,
         decision_window: first_member.decision_due_at - first_member.received_at,
         absolute_horizon: first_member.absolute_due_at - first_member.received_at,
         max_defers: arkret_wire::MAX_PROPOSAL_DEFERS,
@@ -391,8 +391,8 @@ pub(crate) fn sign_control_proposal_reject(
     let mut decision = ControlProposalDecision::SignedReject {
         realm_id: receipt.realm_id.clone(),
         proposal_digest: receipt.proposal_digest.clone(),
-        receipt_digest: receipt
-            .receipt_digest()
+        proposal_ack_digest: receipt
+            .proposal_ack_digest()
             .map_err(|error| error.to_string())?,
         decided_at,
         decision_due_at: current_due_at,
@@ -434,7 +434,7 @@ pub(crate) fn sign_control_proposal_reject(
 
 pub(crate) fn sign_control_proposal_defer(
     state: &AppState,
-    receipt: &ControlProposalReceipt,
+    receipt: &ControlProposalAck,
     previous_defers: &[ControlProposalDecision],
     notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalDeferReason,
@@ -450,8 +450,8 @@ pub(crate) fn sign_control_proposal_defer(
     let mut decision = ControlProposalDecision::SignedDefer {
         realm_id: receipt.realm_id.clone(),
         proposal_digest: receipt.proposal_digest.clone(),
-        receipt_digest: receipt
-            .receipt_digest()
+        proposal_ack_digest: receipt
+            .proposal_ack_digest()
             .map_err(|error| error.to_string())?,
         decided_at,
         decision_due_at: next_due_at,
@@ -495,7 +495,7 @@ mod tests {
     use arkret_identifiers::Hash;
     use arkret_wire::AuthoritySetRef;
 
-    use super::select_proposal_receipt_authority;
+    use super::select_control_proposal_ack_authority;
 
     fn authority(byte: &str) -> AuthoritySetRef {
         AuthoritySetRef {
@@ -509,7 +509,7 @@ mod tests {
     fn closed_genesis_can_use_lease_ingress_authority_before_notary_exists() {
         let lease_authority = authority("a");
         assert_eq!(
-            select_proposal_receipt_authority(None, Some(&lease_authority), true).unwrap(),
+            select_control_proposal_ack_authority(None, Some(&lease_authority), true).unwrap(),
             lease_authority.authority_set_digest
         );
     }
@@ -518,7 +518,7 @@ mod tests {
     fn ordinary_control_move_cannot_use_genesis_ingress_authority() {
         let lease_authority = authority("b");
         assert!(
-            select_proposal_receipt_authority(None, Some(&lease_authority), false).is_err(),
+            select_control_proposal_ack_authority(None, Some(&lease_authority), false).is_err(),
             "non-genesis proposals must fail closed without the effective notary authority"
         );
     }
@@ -528,7 +528,7 @@ mod tests {
         let notary_authority = authority("c");
         let lease_authority = authority("d");
         assert_eq!(
-            select_proposal_receipt_authority(
+            select_control_proposal_ack_authority(
                 Some(notary_authority.authority_set_digest.clone()),
                 Some(&lease_authority),
                 true,

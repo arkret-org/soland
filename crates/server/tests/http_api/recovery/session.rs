@@ -351,10 +351,10 @@ async fn recovery_session_derives_enrollment_authority_model() {
             received_at: now,
         });
     }
-    let proposal_receipts = bootstrap_records
+    let control_proposal_acks = bootstrap_records
         .iter()
-        .map(|record| arkret_wire::ControlProposalReceipt {
-            kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+        .map(|record| arkret_wire::ControlProposalAck {
+            kind: arkret_wire::ControlProposalAckKind::SignedAck,
             realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             proposal_digest: arkret_wire::Hash::new(record.canonical_digest.clone()).unwrap(),
             received_at: now,
@@ -363,7 +363,7 @@ async fn recovery_session_derives_enrollment_authority_model() {
             defer_count: 0,
             authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
                 .unwrap(),
-            member_receipts: Vec::new(),
+            authority_acks: Vec::new(),
         })
         .collect();
     state
@@ -371,7 +371,7 @@ async fn recovery_session_derives_enrollment_authority_model() {
         .events()
         .put_identity_anchor_batch_atomic(
             bootstrap_records,
-            proposal_receipts,
+            control_proposal_acks,
             None,
             None,
             None,

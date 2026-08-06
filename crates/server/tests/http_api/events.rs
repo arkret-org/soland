@@ -1671,7 +1671,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .expect("managed Agent PCR candidate genesis authority");
     let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
     let proposal_digest = arkret_wire::Hash::new(create.event_digest().unwrap()).unwrap();
-    let proposal_member = arkret_wire::ProposalMemberReceipt::issue_with_signer(
+    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
         create.realm_id.clone(),
         proposal_digest,
         genesis_authority.authority_set_ref().clone(),
@@ -1679,17 +1679,17 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         proposal_policy,
         &signer,
     )
-    .expect("delegated-controller genesis proposal member receipt");
-    let proposal_receipt = arkret_wire::ControlProposalReceipt::from_member_receipts(
+    .expect("delegated-controller genesis proposal authority Ack");
+    let control_proposal_ack = arkret_wire::ControlProposalAck::from_authority_acks(
         vec![proposal_member],
         proposal_policy,
     )
-    .expect("managed Agent PCR genesis proposal receipt");
+    .expect("managed Agent PCR genesis Control Proposal Ack");
     let create_submission = arkret_wire::EventInitialSubmission {
         event: create.clone(),
         authorization_lease: None,
         cba_proof_bundles: Vec::new(),
-        control_proposal_receipt: Some(proposal_receipt),
+        control_proposal_ack: Some(control_proposal_ack),
         membership_compensation_evidence: None,
     };
     create_submission
@@ -1699,7 +1699,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .expect("canonical managed Agent PCR genesis submission");
     // Inkson publishes the managed genesis as a one-Event bootstrap batch,
     // then replays the accepted Event as a single submission before the first
-    // Seal so the stored proposal receipt can be recovered. The second request
+    // Seal so the stored Control Proposal Ack can be recovered. The second request
     // must be an idempotent duplicate, never `realm_already_exists`.
     let create_batch_submission_body = arkret_canonical::canonical_json_bytes(
         &serde_json::json!({ "events": [create_submission.clone()] }),
@@ -1754,9 +1754,9 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     assert_eq!(replay_body["status"], "duplicate");
     assert_eq!(replay_body["duplicate"][0], create.event_id.as_str());
     assert_eq!(
-        replay_body["control_proposal_receipts"][0]["proposal_digest"],
+        replay_body["control_proposal_acks"][0]["proposal_digest"],
         create.event_digest().unwrap(),
-        "managed Agent PCR replay must recover the stored proposal receipt"
+        "managed Agent PCR replay must recover the stored Control Proposal Ack"
     );
 
     let records = state

@@ -1,32 +1,32 @@
-//! Durable authority-member receipt issuance for signed Control Moves.
+//! Durable authority-authority Ack issuance for signed Control Moves.
 
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.control_proposal_receipts.command.issue",
+    operation_id = "ak.self.control_proposal_acks.command.issue",
     tags("events")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.control_proposal_receipts.command.issue")
+    fields(op = "ak.self.control_proposal_acks.command.issue")
 )]
-pub(super) async fn issue_control_proposal_receipt(
+pub(super) async fn issue_control_proposal_ack(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<arkret_wire::ProposalReceiptIssueRequest>,
-) -> JsonResult<arkret_wire::ProposalReceiptIssueOutcome> {
+    body: JsonBody<arkret_wire::ControlProposalAckIssueRequest>,
+) -> JsonResult<arkret_wire::ControlProposalAckIssueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(
         &session,
-        "ak.self.control_proposal_receipts.command.issue",
+        "ak.self.control_proposal_acks.command.issue",
     )?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {
         AppError::new(
             ErrorCode::SchemaViolation,
-            format!("invalid proposal receipt request: {error}"),
+            format!("invalid Control Proposal Ack request: {error}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -76,20 +76,20 @@ pub(super) async fn issue_control_proposal_receipt(
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     let verification_method = format!("{}#notary-key", state.service_id());
-    let receipt_key = format!(
-        "proposal-receipt:{}:{}:{}",
+    let ack_key = format!(
+        "control-proposal-ack:{}:{}:{}",
         proposal_digest.as_str(),
         authority_set_ref.as_str(),
         verification_method
     );
     if let Some(record) = state
         .jobs()
-        .proposal_member_receipt(&receipt_key)
+        .control_proposal_authority_ack(&ack_key)
         .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
-                format!("proposal receipt replay lookup failed: {error}"),
+                format!("Control Proposal Ack replay lookup failed: {error}"),
             )
         })?
     {
@@ -101,7 +101,7 @@ pub(super) async fn issue_control_proposal_receipt(
         let outcome = serde_json::from_value(record.response_body).map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
-                format!("stored proposal receipt outcome is invalid: {error}"),
+                format!("stored Control Proposal Ack outcome is invalid: {error}"),
             )
         })?;
         return json_ok(outcome);
@@ -110,7 +110,7 @@ pub(super) async fn issue_control_proposal_receipt(
     let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
         AppError::new(
             ErrorCode::SchemaViolation,
-            format!("proposal receipt request cannot be canonicalized: {error}"),
+            format!("Control Proposal Ack request cannot be canonicalized: {error}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
@@ -123,7 +123,7 @@ pub(super) async fn issue_control_proposal_receipt(
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    let receipt = crate::control_proposal::mint_control_proposal_receipt(
+    let receipt = crate::control_proposal::mint_control_proposal_ack(
         state,
         realm_id,
         proposal_digest,
@@ -134,26 +134,26 @@ pub(super) async fn issue_control_proposal_receipt(
     .map_err(|error| {
         AppError::new(
             ErrorCode::InternalError,
-            format!("proposal member receipt issuance failed: {error}"),
+            format!("proposal authority Ack issuance failed: {error}"),
         )
     })?;
-    let member_receipt = receipt
-        .member_receipts
+    let authority_ack = receipt
+        .authority_acks
         .into_iter()
         .next()
-        .expect("single-authority mint produces one member receipt");
-    let outcome = arkret_wire::ProposalReceiptIssueOutcome { member_receipt };
+        .expect("single-authority mint produces one authority Ack");
+    let outcome = arkret_wire::ControlProposalAckIssueOutcome { authority_ack };
     let response_body = serde_json::to_value(&outcome).map_err(|error| {
         AppError::new(
             ErrorCode::InternalError,
-            format!("proposal receipt outcome cannot be encoded: {error}"),
+            format!("Control Proposal Ack outcome cannot be encoded: {error}"),
         )
     })?;
     let created_at = now();
     state
         .jobs()
-        .store_proposal_member_receipt(soland_services::jobs::ProposalMemberReceiptState {
-            receipt_key: receipt_key.clone(),
+        .store_control_proposal_authority_ack(soland_services::jobs::ControlProposalAuthorityAckState {
+            ack_key: ack_key.clone(),
             request_hash: request_hash.clone(),
             response_body,
             created_at,
@@ -162,24 +162,24 @@ pub(super) async fn issue_control_proposal_receipt(
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
-                format!("proposal receipt replay persist failed: {error}"),
+                format!("Control Proposal Ack replay persist failed: {error}"),
             )
         })?;
     let accepted = state
         .jobs()
-        .proposal_member_receipt(&receipt_key)
+        .control_proposal_authority_ack(&ack_key)
         .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
-                format!("proposal receipt replay verification failed: {error}"),
+                format!("Control Proposal Ack replay verification failed: {error}"),
             )
         })?
-        .ok_or_else(|| AppError::internal("proposal receipt first outcome was not persisted"))?;
+        .ok_or_else(|| AppError::internal("Control Proposal Ack first outcome was not persisted"))?;
     json_ok(
         serde_json::from_value(accepted.response_body).map_err(|error| {
             AppError::internal(format!(
-                "stored proposal receipt outcome is invalid: {error}"
+                "stored Control Proposal Ack outcome is invalid: {error}"
             ))
         })?,
     )

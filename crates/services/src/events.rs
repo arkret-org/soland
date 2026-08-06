@@ -738,7 +738,7 @@ pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
-    pub control_proposal_receipt: Option<arkret_wire::ControlProposalReceipt>,
+    pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
@@ -808,7 +808,7 @@ pub trait EventReadPort: Send + Sync {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()>;
     /// Commit the closed identity-anchor unit together with its federation
@@ -817,7 +817,7 @@ pub trait EventReadPort: Send + Sync {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
@@ -841,10 +841,10 @@ pub trait EventReadPort: Send + Sync {
         &self,
         event_id: &str,
     ) -> ServiceResult<Vec<EventBatchReceipt>>;
-    async fn control_proposal_receipt_for_event(
+    async fn control_proposal_ack_for_event(
         &self,
         event_id: &str,
-    ) -> ServiceResult<Option<arkret_wire::ControlProposalReceipt>>;
+    ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
     async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn peer_events_query_page(
@@ -1113,18 +1113,18 @@ impl EventQueryService {
     pub async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()> {
         self.events
-            .store_realm_bootstrap_batch(records, proposal_receipts, deliveries)
+            .store_realm_bootstrap_batch(records, control_proposal_acks, deliveries)
             .await
     }
     #[allow(clippy::too_many_arguments)]
     pub async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
@@ -1135,7 +1135,7 @@ impl EventQueryService {
         self.events
             .store_identity_anchor_batch(
                 records,
-                proposal_receipts,
+                control_proposal_acks,
                 receipt,
                 device,
                 frontier_cas,
@@ -1154,12 +1154,12 @@ impl EventQueryService {
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
     }
-    pub async fn control_proposal_receipt_for_event(
+    pub async fn control_proposal_ack_for_event(
         &self,
         event_id: &str,
-    ) -> ServiceResult<Option<arkret_wire::ControlProposalReceipt>> {
+    ) -> ServiceResult<Option<arkret_wire::ControlProposalAck>> {
         self.events
-            .control_proposal_receipt_for_event(event_id)
+            .control_proposal_ack_for_event(event_id)
             .await
     }
     pub async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
@@ -2214,7 +2214,7 @@ mod tests {
                     envelope: serde_json::json!({}),
                     received_at: now,
                 },
-                control_proposal_receipt: None,
+                control_proposal_ack: None,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,

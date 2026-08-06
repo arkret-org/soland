@@ -123,48 +123,48 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     )
                     .into());
                 }
-                let proposal_receipt = request
-                    .control_proposal_receipt
+                let control_proposal_ack = request
+                    .control_proposal_ack
                     .as_ref()
                     .map(|receipt| {
                         if receipt.proposal_digest.as_str() != event_digest
                             || receipt.realm_id != typed_event.realm_id
                         {
                             return Err(PersistenceError::Conflict(
-                                "schema_violation: proposal receipt does not bind Control Move"
+                                "schema_violation: Control Proposal Ack does not bind Control Move"
                                     .to_owned(),
                             ));
                         }
                         serde_json::to_value(receipt).map_err(|error| {
                             PersistenceError::Internal(format!(
-                                "proposal receipt encoding failed: {error}"
+                                "Control Proposal Ack encoding failed: {error}"
                             ))
                         })
                     })
                     .transpose()?
                     .ok_or_else(|| {
                         PersistenceError::Conflict(
-                            "schema_violation: accepted Control Move is missing proposal receipt"
+                            "schema_violation: accepted Control Move is missing Control Proposal Ack"
                                 .to_owned(),
                         )
                     })?;
                 sql_query(
                     "INSERT INTO state_control_events \
-                     (event_digest, realm_id, event_json, proposal_receipt) \
+                     (event_digest, realm_id, event_json, control_proposal_ack) \
                      VALUES ($1, $2, $3, $4) \
                      ON CONFLICT (event_digest) DO UPDATE SET \
-                       proposal_receipt = COALESCE( \
-                         state_control_events.proposal_receipt, EXCLUDED.proposal_receipt \
+                       control_proposal_ack = COALESCE( \
+                         state_control_events.control_proposal_ack, EXCLUDED.control_proposal_ack \
                        ) \
                      WHERE state_control_events.realm_id = EXCLUDED.realm_id \
                        AND state_control_events.event_json = EXCLUDED.event_json \
-                       AND (state_control_events.proposal_receipt IS NULL \
-                         OR state_control_events.proposal_receipt = EXCLUDED.proposal_receipt)",
+                       AND (state_control_events.control_proposal_ack IS NULL \
+                         OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
                 )
                 .bind::<Text, _>(&event_digest)
                 .bind::<Text, _>(typed_event.realm_id.as_str())
                 .bind::<Jsonb, _>(&request.event.envelope)
-                .bind::<Jsonb, _>(&proposal_receipt)
+                .bind::<Jsonb, _>(&control_proposal_ack)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)
@@ -178,9 +178,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
-            } else if request.control_proposal_receipt.is_some() {
+            } else if request.control_proposal_ack.is_some() {
                 return Err(PersistenceError::Conflict(
-                    "schema_violation: non-Control Event cannot carry a proposal receipt"
+                    "schema_violation: non-Control Event cannot carry a Control Proposal Ack"
                         .to_owned(),
                 )
                 .into());

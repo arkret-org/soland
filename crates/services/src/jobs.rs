@@ -15,13 +15,13 @@ pub trait MaintenancePort: Send + Sync {
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>>;
     async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
-    async fn proposal_member_receipt(
+    async fn control_proposal_authority_ack(
         &self,
-        receipt_key: &str,
-    ) -> ServiceResult<Option<ProposalMemberReceiptState>>;
-    async fn store_proposal_member_receipt(
+        ack_key: &str,
+    ) -> ServiceResult<Option<ControlProposalAuthorityAckState>>;
+    async fn store_control_proposal_authority_ack(
         &self,
-        record: ProposalMemberReceiptState,
+        record: ControlProposalAuthorityAckState,
     ) -> ServiceResult<()>;
 }
 
@@ -47,8 +47,8 @@ pub struct IdempotencyState {
 }
 
 #[derive(Clone, Debug)]
-pub struct ProposalMemberReceiptState {
-    pub receipt_key: String,
+pub struct ControlProposalAuthorityAckState {
+    pub ack_key: String,
     pub request_hash: String,
     pub response_body: Value,
     pub created_at: DateTime<Utc>,
@@ -106,18 +106,18 @@ impl JobsService {
         self.maintenance.store_idempotency_record(record).await
     }
 
-    pub async fn proposal_member_receipt(
+    pub async fn control_proposal_authority_ack(
         &self,
-        receipt_key: &str,
-    ) -> ServiceResult<Option<ProposalMemberReceiptState>> {
-        self.maintenance.proposal_member_receipt(receipt_key).await
+        ack_key: &str,
+    ) -> ServiceResult<Option<ControlProposalAuthorityAckState>> {
+        self.maintenance.control_proposal_authority_ack(ack_key).await
     }
 
-    pub async fn store_proposal_member_receipt(
+    pub async fn store_control_proposal_authority_ack(
         &self,
-        record: ProposalMemberReceiptState,
+        record: ControlProposalAuthorityAckState,
     ) -> ServiceResult<()> {
-        self.maintenance.store_proposal_member_receipt(record).await
+        self.maintenance.store_control_proposal_authority_ack(record).await
     }
 }
 
@@ -168,16 +168,16 @@ mod tests {
             Ok(())
         }
 
-        async fn proposal_member_receipt(
+        async fn control_proposal_authority_ack(
             &self,
-            _receipt_key: &str,
-        ) -> ServiceResult<Option<ProposalMemberReceiptState>> {
+            _ack_key: &str,
+        ) -> ServiceResult<Option<ControlProposalAuthorityAckState>> {
             Ok(None)
         }
 
-        async fn store_proposal_member_receipt(
+        async fn store_control_proposal_authority_ack(
             &self,
-            _record: ProposalMemberReceiptState,
+            _record: ControlProposalAuthorityAckState,
         ) -> ServiceResult<()> {
             Ok(())
         }

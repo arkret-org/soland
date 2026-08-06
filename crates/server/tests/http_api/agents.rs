@@ -854,7 +854,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
                 event: provision_event,
                 authorization_lease: None,
                 cba_proof_bundles: Vec::new(),
-                control_proposal_receipt: None,
+                control_proposal_ack: None,
                 membership_compensation_evidence: None,
             }),
             pairing_ttl_ms: None,

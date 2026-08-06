@@ -586,8 +586,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    proposal_member_receipts (receipt_key) {
-        receipt_key -> Text,
+    control_proposal_authority_acks (ack_key) {
+        ack_key -> Text,
         request_hash -> Text,
         response_body -> Jsonb,
         created_at -> Timestamptz,
@@ -1302,7 +1302,7 @@ diesel::table! {
         event_digest -> Text,
         realm_id -> Text,
         event_json -> Jsonb,
-        proposal_receipt -> Nullable<Jsonb>,
+        control_proposal_ack -> Nullable<Jsonb>,
         proposal_decisions -> Jsonb,
         decision_overdue -> Bool,
         sealed_by -> Nullable<Text>,

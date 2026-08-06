@@ -16,7 +16,7 @@ use super::{
     OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
     OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
-    ProjectionEventStore, ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
+    ProjectionEventStore, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
 };
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {
@@ -647,42 +647,42 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
     );
 }
 
-pub async fn assert_proposal_member_receipt_store_contract(
-    store: &dyn ProposalMemberReceiptStore,
+pub async fn assert_control_proposal_authority_ack_store_contract(
+    store: &dyn ControlProposalAuthorityAckStore,
     namespace: &str,
 ) {
-    let first = ProposalMemberReceiptRecord {
-        receipt_key: format!("proposal-member-receipt:{namespace}"),
+    let first = ControlProposalAuthorityAckRecord {
+        ack_key: format!("control-proposal-authority-ack:{namespace}"),
         request_hash: "sha256:first".to_owned(),
-        response_body: serde_json::json!({"member_receipt": "first"}),
+        response_body: serde_json::json!({"authority_ack": "first"}),
         created_at: database_timestamp_now(),
     };
     store
         .record(&first)
         .await
-        .expect("record first member receipt");
+        .expect("record first authority Ack");
     assert_eq!(
         store
-            .get(&first.receipt_key)
+            .get(&first.ack_key)
             .await
-            .expect("read first member receipt"),
+            .expect("read first authority Ack"),
         Some(first.clone())
     );
 
     let mut competing = first.clone();
     competing.request_hash = "sha256:competing".to_owned();
-    competing.response_body = serde_json::json!({"member_receipt": "competing"});
+    competing.response_body = serde_json::json!({"authority_ack": "competing"});
     store
         .record(&competing)
         .await
-        .expect("record competing member receipt");
+        .expect("record competing authority Ack");
     assert_eq!(
         store
-            .get(&first.receipt_key)
+            .get(&first.ack_key)
             .await
-            .expect("read winning member receipt"),
+            .expect("read winning authority Ack"),
         Some(first),
-        "proposal member receipts are permanent first-writer-wins evidence"
+        "proposal authority Acks are permanent first-writer-wins evidence"
     );
 }
 
@@ -751,7 +751,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let request = EventCommitRequest {
         event: canonical_wire_event_record(&event_id, &principal_id, &realm_id, 0, now),
-        control_proposal_receipt: None,
+        control_proposal_ack: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -838,7 +838,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
     let failed = EventCommitRequest {
         event: canonical_wire_event_record(&rollback_event_id, &principal_id, &realm_id, 1, now),
-        control_proposal_receipt: None,
+        control_proposal_ack: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),
@@ -1335,12 +1335,12 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     let now = database_timestamp_now();
     let principal_id = format!("did:web:{namespace}.example");
     let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
-    // The Realm genesis unit requires one proposal receipt per Event. Supplying
+    // The Realm genesis unit requires one Control Proposal Ack per Event. Supplying
     // them is what makes this test actually about the outbox: without them the
     // batch would abort on receipt cardinality and never reach the outbox
     // insert, so the rollback assertion below would pass for the wrong reason.
-    let proposal_receipt = |record: &CanonicalEventRecord| arkret_wire::ControlProposalReceipt {
-        kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+    let control_proposal_ack = |record: &CanonicalEventRecord| arkret_wire::ControlProposalAck {
+        kind: arkret_wire::ControlProposalAckKind::SignedAck,
         realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("typed realm id"),
         proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
         received_at: now,
@@ -1349,7 +1349,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         defer_count: 0,
         authority_set_ref: Hash::new(format!("sha256:{}", "a".repeat(64)))
             .expect("typed authority set ref"),
-        member_receipts: Vec::new(),
+        authority_acks: Vec::new(),
     };
     let colliding_id = format!("outbox:{namespace}:collision");
     // Two intents sharing one primary key: the first inserts, the second must
@@ -1384,7 +1384,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         events
             .put_realm_bootstrap_batch_atomic(
                 vec![bootstrap_record.clone()],
-                vec![proposal_receipt(&bootstrap_record)],
+                vec![control_proposal_ack(&bootstrap_record)],
                 colliding_outbox("bootstrap"),
             )
             .await
@@ -1414,7 +1414,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         events
             .put_identity_anchor_batch_atomic(
                 vec![anchor_record.clone()],
-                vec![proposal_receipt(&anchor_record)],
+                vec![control_proposal_ack(&anchor_record)],
                 None,
                 None,
                 None,
@@ -1449,7 +1449,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     events
         .put_realm_bootstrap_batch_atomic(
             vec![committed_record.clone()],
-            vec![proposal_receipt(&committed_record)],
+            vec![control_proposal_ack(&committed_record)],
             vec![FederationOutboxRecord::pending(
                 committed_outbox_id.clone(),
                 format!("did:web:peer-{namespace}.example"),

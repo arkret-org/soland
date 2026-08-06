@@ -17,7 +17,7 @@ use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
 use arkret_wire::{
-    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalReceipt, Seal,
+    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalAck, Seal,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -476,20 +476,20 @@ impl ProjectionService {
     pub fn put_pending_control_event_with_receipt(
         &self,
         event: &Event,
-        receipt: &ControlProposalReceipt,
+        receipt: &ControlProposalAck,
     ) -> StoreResult<()> {
         self.put_pending_control_event(event, Some(receipt))
     }
 
     /// Record an accepted Control Move before a Seal may cover it.
     ///
-    /// Closed genesis units carry ingress-authority proposal receipts even
+    /// Closed genesis units carry ingress-authority Control Proposal Acks even
     /// though their Events have no predecessor `seal_basis`; the founding
     /// Seal still supplies finality later.
     pub fn put_pending_control_event(
         &self,
         event: &Event,
-        receipt: Option<&ControlProposalReceipt>,
+        receipt: Option<&ControlProposalAck>,
     ) -> StoreResult<()> {
         self.control_event_store()
             .put_pending_with_receipt(event, receipt)
@@ -501,11 +501,11 @@ impl ProjectionService {
         self.control_event_store().get(event_digest)
     }
 
-    pub fn control_proposal_receipt(
+    pub fn control_proposal_ack(
         &self,
         event_digest: &Hash,
-    ) -> StoreResult<Option<ControlProposalReceipt>> {
-        self.control_event_store().proposal_receipt(event_digest)
+    ) -> StoreResult<Option<ControlProposalAck>> {
+        self.control_event_store().control_proposal_ack(event_digest)
     }
 
     pub fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
@@ -549,14 +549,14 @@ impl ProjectionService {
         let mut pending_proposals = Vec::with_capacity(records.len());
         for record in records {
             let digest = arkret_state::state::control_event_digest(&record.event)?;
-            let receipt = record.proposal_receipt.ok_or_else(|| {
+            let receipt = record.control_proposal_ack.ok_or_else(|| {
                 arkret_state::state::StoreError::Conflict(format!(
-                    "pending Control Move {digest} is missing its proposal receipt"
+                    "pending Control Move {digest} is missing its Control Proposal Ack"
                 ))
             })?;
             receipt.validate_structural(policy).map_err(|error| {
                 arkret_state::state::StoreError::Conflict(format!(
-                    "pending Control Move {digest} has an invalid proposal receipt \
+                    "pending Control Move {digest} has an invalid Control Proposal Ack \
                      (received_at={}, decision_due_at={}, absolute_due_at={}, \
                      expected_decision_window_ms={}, expected_absolute_horizon_ms={}): {error}",
                     receipt.received_at,
@@ -604,9 +604,9 @@ impl ProjectionService {
         )?;
         let mut retained_faults = Vec::new();
         for record in sealed {
-            let Some(receipt) = record.proposal_receipt else {
+            let Some(receipt) = record.control_proposal_ack else {
                 return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "sealed Control Move {} is missing its proposal receipt",
+                    "sealed Control Move {} is missing its Control Proposal Ack",
                     arkret_state::state::control_event_digest(&record.event)?
                 )));
             };

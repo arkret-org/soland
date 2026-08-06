@@ -180,7 +180,7 @@ fn federation_cba_proof_bundles(
 async fn federation_submissions(
     state: &AppState,
     events: &[Event],
-    current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+    current_control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
     pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
@@ -217,7 +217,7 @@ async fn federation_submissions(
         let is_control_move = event.kind.is_reducer_input()
             && event.seal_ref.is_none()
             && event.auth_context.is_none();
-        let control_proposal_receipt = if is_control_move {
+        let control_proposal_ack = if is_control_move {
             let proposal_digest =
                 arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
                     format!(
@@ -225,25 +225,25 @@ async fn federation_submissions(
                         event.event_id
                     )
                 })?;
-            if let Some(receipt) = current_control_proposal_receipt
+            if let Some(receipt) = current_control_proposal_ack
                 .filter(|receipt| receipt.proposal_digest == proposal_digest)
             {
                 Some(receipt.clone())
             } else {
                 match state
                     .projections()
-                    .control_proposal_receipt(&proposal_digest)
+                    .control_proposal_ack(&proposal_digest)
                 {
                     Ok(Some(receipt)) => Some(receipt),
                     Ok(None) => {
                         return Err(format!(
-                            "Control Move {} has no stored proposal receipt and cannot be federated",
+                            "Control Move {} has no stored Control Proposal Ack and cannot be federated",
                             event.event_id
                         ));
                     }
                     Err(error) => {
                         return Err(format!(
-                            "failed to read Control Move {} proposal receipt for federation: {error}",
+                            "failed to read Control Move {} Control Proposal Ack for federation: {error}",
                             event.event_id
                         ));
                     }
@@ -258,7 +258,7 @@ async fn federation_submissions(
             ingress_receipts: record
                 .map(|record| vec![record.ingress_receipt.clone()])
                 .unwrap_or_default(),
-            control_proposal_receipt,
+            control_proposal_ack,
             membership_compensation_evidence: membership_compensation_evidence.cloned(),
         });
     }
@@ -446,7 +446,7 @@ pub(super) async fn peer_event_fanout_records(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
-    current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+    current_control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
     pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
@@ -578,7 +578,7 @@ pub(super) async fn peer_event_fanout_records(
         let submissions = federation_submissions(
             state,
             &peer_events,
-            current_control_proposal_receipt,
+            current_control_proposal_ack,
             pending_evidence,
             membership_compensation_evidence,
         )
