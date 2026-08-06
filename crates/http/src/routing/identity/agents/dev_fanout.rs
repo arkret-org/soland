@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::SessionRecord;
-use crate::routing::events::event_log::submit_initial_event_submission;
+use crate::routing::events::event_log::{
+    submit_initial_event_submission, submit_one_error_to_app_error,
+};
 use crate::state::AppState;
 
 /// Build a server-authored envelope for `session.actor` and submit it via the
@@ -38,27 +40,15 @@ fn agent_fanout_submit_error(
     wire_code: String,
     detail: String,
 ) -> AppError {
-    let message = format!("agent fan-out submit failed for {kind}: {detail}");
-    if let Some(code) = ErrorCode::from_wire(&wire_code) {
-        return AppError::new(code, message).with_status(status);
-    }
-
-    // Reducer rejection reasons (for example
-    // `grant_exceeds_issuer_authority`) are stable reason codes, not
-    // top-level error codes. Preserve the semantic HTTP class and expose the
-    // reducer discriminator in details instead of turning an expected
-    // failed-precondition into a misleading 500 internal_error.
-    let code = match status {
-        salvo::http::StatusCode::PRECONDITION_FAILED => ErrorCode::FailedPrecondition,
-        salvo::http::StatusCode::CONFLICT => ErrorCode::Conflict,
-        salvo::http::StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
-        salvo::http::StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
-        salvo::http::StatusCode::BAD_REQUEST => ErrorCode::InvalidParam,
-        _ => ErrorCode::InternalError,
-    };
-    AppError::new(code, message)
-        .with_status(status)
-        .with_reason_code(wire_code)
+    // One shared mapping for every surface that submits a caller-signed Event:
+    // see `event_log::submit_one_error_to_app_error` for why an unregistered
+    // reducer reason keeps its HTTP class instead of becoming a 500.
+    submit_one_error_to_app_error(
+        &format!("agent fan-out submit failed for {kind}"),
+        status,
+        wire_code,
+        &detail,
+    )
 }
 
 /// Resolve the authenticated controller's own Principal Control Realm. Agent

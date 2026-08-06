@@ -650,6 +650,39 @@ impl SubmitOneError {
     }
 }
 
+/// Map a rejected Event submission onto the HTTP error family without losing the
+/// wire discriminator.
+///
+/// A caller-signed Event that ordinary admission rejects has a real reason, and
+/// `context` names the surface that submitted it. Reducer rejection reasons (for
+/// example `circle_realm_mismatch` or `grant_exceeds_issuer_authority`) are
+/// stable *reason* codes, not top-level error codes: one that is not a registered
+/// error code keeps its semantic HTTP class and travels in `reason_code`, rather
+/// than being flattened into a misleading 500 internal_error.
+pub(in crate::routing) fn submit_one_error_to_app_error(
+    context: &str,
+    status: StatusCode,
+    code: String,
+    detail: &str,
+) -> AppError {
+    let message = format!("{context}: {detail}");
+    if let Some(mapped) = ErrorCode::from_wire(&code) {
+        return AppError::new(mapped, message).with_status(status);
+    }
+    let mapped = match status {
+        StatusCode::PRECONDITION_FAILED => ErrorCode::FailedPrecondition,
+        StatusCode::CONFLICT => ErrorCode::Conflict,
+        StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
+        StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
+        StatusCode::BAD_REQUEST => ErrorCode::InvalidParam,
+        StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
+        _ => ErrorCode::InternalError,
+    };
+    AppError::new(mapped, message)
+        .with_status(status)
+        .with_reason_code(code)
+}
+
 fn realm_already_exists_error() -> SubmitOneError {
     SubmitOneError::new(
         StatusCode::CONFLICT,
@@ -2221,6 +2254,8 @@ pub(in crate::routing) use value::{
     submit_mimi_event_value, submit_moderation_report_event_value,
     submit_realm_policy_server_event_value,
 };
+// `submit_one_error_to_app_error` is defined in this module, so it needs no
+// re-export here; `event_log.rs` names it directly.
 
 #[cfg(test)]
 mod received_at_stamp_tests {
