@@ -1364,7 +1364,7 @@ mod tests {
             "actions": ["ak.event.read"],
             "resources": [{
                 "kind": "operation",
-                "operation": "ak.self.events.query.scan"
+                "operation": "ak.self.events.read.scan"
             }]
         })
     }

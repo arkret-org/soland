@@ -153,7 +153,7 @@ mod tests {
         assert!(
             require_agent_session_scope(
                 &session_with_agent_scopes(&[
-                    arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                    arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN
                 ]),
                 arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
             )
@@ -177,16 +177,16 @@ mod tests {
                 &session_with_agent_scopes(&[
                     arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE
                 ]),
-                arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
             )
             .is_err()
         );
         assert!(
             require_agent_session_scope(
                 &session_with_agent_scopes(&[
-                    arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                    arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN
                 ]),
-                arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
             )
             .is_ok()
         );
@@ -197,7 +197,7 @@ mod tests {
         assert!(
             require_agent_session_scope(
                 &session_with_agent_scopes(&[
-                    arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN
+                    arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN
                 ]),
                 arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
             )

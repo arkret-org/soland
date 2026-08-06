@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{Did, EventId, RealmId};
-use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+use arkret_models_collaboration::event_query::{
+    EventsQueryPostRequestBody, PeerEventsDescribeRequestBody, PeerEventsFrontierRequestBody,
+};
 use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
 };
@@ -28,7 +30,7 @@ use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
-const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
+const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -54,15 +56,28 @@ struct PeerSnapshotHeadOutcome {}
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(Router::with_path("events/describe").get(peer_events_describe))
+        .push(
+            Router::with_path("events/describe")
+                .query(peer_events_describe)
+                .get(peer_events_describe),
+        )
         .push(
             Router::with_path("events")
                 .post(peer_events_submit)
+                .query(peer_events_read_body)
                 .get(peer_events_query),
         )
-        .push(Router::with_path("events/query").post(peer_events_query_post))
-        .push(Router::with_path("events/resolve").post(peer_events_resolve))
-        .push(Router::with_path("events/frontier").get(peer_events_frontier))
+        .push(Router::with_path("events/query").post(peer_events_read_body))
+        .push(
+            Router::with_path("events/resolve")
+                .query(peer_events_resolve)
+                .post(peer_events_resolve),
+        )
+        .push(
+            Router::with_path("events/frontier")
+                .query(peer_events_frontier)
+                .get(peer_events_frontier),
+        )
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
@@ -122,9 +137,19 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
-async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe"))]
+async fn peer_events_describe(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerEventsDescribeOutcome> {
+    if req.method().as_str() == "QUERY" {
+        parse_json_body::<PeerEventsDescribeRequestBody>(
+            req,
+            "invalid ak.peer.events.read.describe request body",
+        )
+        .await?;
+    }
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.service_id().clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
@@ -133,12 +158,11 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
         protocol_version: "1.0".to_owned(),
         primary_write_path: "/_arkret/peer/events".to_owned(),
         supported_operations: vec![
-            "ak.peer.events.query.describe".to_owned(),
+            "ak.peer.events.read.describe".to_owned(),
             "ak.peer.events.command.submit".to_owned(),
-            "ak.peer.events.query.scan".to_owned(),
-            "ak.peer.events.query.scan_body".to_owned(),
-            "ak.peer.events.query.resolve".to_owned(),
-            "ak.peer.events.query.frontier".to_owned(),
+            "ak.peer.events.read.scan".to_owned(),
+            "ak.peer.events.read.resolve".to_owned(),
+            "ak.peer.events.read.frontier".to_owned(),
             "ak.peer.invites.command.submit".to_owned(),
             "ak.peer.signal.command.relay".to_owned(),
         ],
@@ -155,7 +179,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
         ],
         limits: PeerEventsDescribeLimits {
             max_batch_item_count: MAX_FEDERATED_EVENTS,
-            max_query_limit: MAX_PEER_EVENTS_QUERY_LIMIT,
+            max_query_limit: MAX_PEER_EVENTS_READ_LIMIT,
             max_resolve: MAX_PEER_EVENTS_RESOLVE,
         },
     })
@@ -195,8 +219,8 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.scan", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, false).await?;
@@ -205,9 +229,9 @@ async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<E
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.scan_body", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan_body"))]
-async fn peer_events_query_post(
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan"))]
+async fn peer_events_read_body(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsQueryOutcome> {
@@ -215,7 +239,7 @@ async fn peer_events_query_post(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
         req,
-        "invalid ak.peer.events.query.scan request body",
+        "invalid ak.peer.events.read.scan request body",
     )
     .await?;
     let source_service_id = source_service_id_from_request(req)?;
@@ -223,8 +247,8 @@ async fn peer_events_query_post(
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.resolve", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.resolve"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
@@ -233,7 +257,7 @@ async fn peer_events_resolve(
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<PeerEventsResolveRequestBody>(
         req,
-        "invalid ak.peer.events.query.resolve request body",
+        "invalid ak.peer.events.read.resolve request body",
     )
     .await?;
     request
@@ -380,17 +404,28 @@ fn peer_cba_bundle_for_seal(
     }))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.frontier"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<EventsFrontierFederationPeerState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, false).await?;
+    let has_body = req.method().as_str() == "QUERY";
+    validate_peer_request(state, req, has_body).await?;
     let source_service_id = source_service_id_from_request(req)?;
-    let realm_id = query_param(req, "realm_id")
-        .ok_or_else(|| AppError::missing_param("realm_id is required"))?;
+    let realm_id = if has_body {
+        parse_json_body::<PeerEventsFrontierRequestBody>(
+            req,
+            "invalid ak.peer.events.read.frontier request body",
+        )
+        .await?
+        .realm_id
+        .into_string()
+    } else {
+        query_param(req, "realm_id")
+            .ok_or_else(|| AppError::missing_param("realm_id is required"))?
+    };
     let realm_id =
         RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     if is_realm_deleted(state, realm_id.as_str()).await {
@@ -566,8 +601,8 @@ impl PeerEventsQueryParts {
             order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
             limit: query_param(req, "limit")
                 .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(MAX_PEER_EVENTS_QUERY_LIMIT)
-                .clamp(1, MAX_PEER_EVENTS_QUERY_LIMIT),
+                .unwrap_or(MAX_PEER_EVENTS_READ_LIMIT)
+                .clamp(1, MAX_PEER_EVENTS_READ_LIMIT),
             kind_filter,
         };
         parts.validate()?;
@@ -597,8 +632,8 @@ impl PeerEventsQueryParts {
             limit: body
                 .limit
                 .map(|limit| limit as usize)
-                .unwrap_or(MAX_PEER_EVENTS_QUERY_LIMIT)
-                .clamp(1, MAX_PEER_EVENTS_QUERY_LIMIT),
+                .unwrap_or(MAX_PEER_EVENTS_READ_LIMIT)
+                .clamp(1, MAX_PEER_EVENTS_READ_LIMIT),
             kind_filter,
         };
         parts.validate()?;
@@ -608,7 +643,7 @@ impl PeerEventsQueryParts {
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
             return Err(AppError::missing_param(
-                "ak.peer.events.query.scan requires at least one of realms[] / actors[]",
+                "ak.peer.events.read.scan requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
@@ -1426,7 +1461,7 @@ async fn peer_events_query_response(
 fn peer_events_candidate_limit(page_limit: usize) -> usize {
     page_limit
         .saturating_mul(4)
-        .clamp(MAX_PEER_EVENTS_QUERY_LIMIT, MAX_PEER_EVENTS_QUERY_LIMIT * 5)
+        .clamp(MAX_PEER_EVENTS_READ_LIMIT, MAX_PEER_EVENTS_READ_LIMIT * 5)
 }
 
 fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQueryParts) -> String {
@@ -1445,7 +1480,7 @@ fn peer_events_query_scope_digest(source_service_id: &str, parts: &PeerEventsQue
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.peer.events.query.scan",
+        "operation_id": "ak.peer.events.read.scan",
         "source_service_id": source_service_id,
         "realms": realms,
         "actors": actors,

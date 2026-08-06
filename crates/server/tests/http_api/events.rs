@@ -265,7 +265,7 @@ async fn account_subscribe_first_frame_with_status(
 async fn agent_session_without_stream_scope_cannot_subscribe_events() {
     let state = soland_test_support::app_state(test_config());
     let token = "agent-local-session-stream";
-    seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
+    seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
 
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/events/subscribe?realms={DEMO_REALM_ID}&catchup=false&max_duration_ms=100",
@@ -294,14 +294,14 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
-    assert_agent_scope_denied(&body, "ak.self.events.query.scan");
+    assert_agent_scope_denied(&body, "ak.self.events.read.scan");
 }
 
 #[tokio::test]
 async fn agent_session_without_submit_scope_cannot_submit_events() {
     let state = soland_test_support::app_state(test_config());
     let token = "agent-local-session-submit";
-    seed_agent_session_with_scopes(&state, token, &["ak.self.events.query.scan"]).await;
+    seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
     let event = signed_event_envelope(
         "ak:event:01904100-0000-8000-8000-5c0fedead001",
         0,
@@ -1511,7 +1511,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         serde_json::json!({
             "actions": [
                 "ak.self.events.stream.subscribe",
-                "ak.self.events.query.scan",
+                "ak.self.events.read.scan",
                 "ak.self.events.command.submit"
             ],
             "resources": [
@@ -1521,7 +1521,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 },
                 {
                     "kind": "operation",
-                    "operation": "ak.self.events.query.scan"
+                    "operation": "ak.self.events.read.scan"
                 },
                 {
                     "kind": "operation",
@@ -2164,6 +2164,24 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         assert!(sent["operation_id"].as_str().is_some());
     }
 
+    let read_body = serde_json::json!({"limit": 1, "realms": [realm_id]});
+    let query_page: Value = TestClient::query("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&read_body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let post_page: Value = TestClient::post("http://server/_arkret/self/events/query")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&read_body)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
     let first_page: Value = TestClient::get(format!(
         "http://server/_arkret/self/events?realms={realm_id}&limit=1"
     ))
@@ -2173,6 +2191,14 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     .take_json()
     .await
     .unwrap();
+    assert_eq!(
+        query_page, first_page,
+        "QUERY and GET must share read semantics"
+    );
+    assert_eq!(
+        post_page, first_page,
+        "POST and GET must share read semantics"
+    );
     assert_eq!(first_page["events"].as_array().unwrap().len(), 1);
     assert_eq!(first_page["has_more"], true);
     assert!(first_page["prev_cursor"].is_null());

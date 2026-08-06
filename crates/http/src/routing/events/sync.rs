@@ -11,7 +11,7 @@
 //!   Extension receive rail; verbatim envelope NDJSON)
 //! - `GET  /_arkret/self/events/subscribe`        — `ak.self.events.stream.subscribe`. Multi-Realm
 //!   / multi-actor stream; frame `kind` field replaces `type`.
-//! - `GET  /_arkret/self/events`                  — `ak.self.events.query.scan` (replaces
+//! - `QUERY /_arkret/self/events`                — `ak.self.events.read.scan` (canonical;
 //!   `ak.events.list` + `ak.sync.backfill` via `direction=forward|backward`).
 //! - `GET  /_arkret/self/snapshot/head`
 //!

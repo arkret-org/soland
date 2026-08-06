@@ -1,5 +1,5 @@
 //! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe`),
-//! projection-aware events query (`ak.self.events.query.scan` + body form),
+//! projection-aware events read (`ak.self.events.read.scan` + compatibility forms),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 
@@ -176,7 +176,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 }
             }
             // Unlike account initial sync, a cursorless Realm subscribe is a
-            // live tail. Durable history bootstrap uses events.query.scan.
+            // live tail. Durable history bootstrap uses events.read.scan.
             None => None,
         }
     } else {
@@ -612,7 +612,7 @@ fn events_query_scope_digest(
         .into_iter()
         .collect::<Vec<_>>();
     let binding = json!({
-        "operation_id": "ak.self.events.query.scan",
+        "operation_id": "ak.self.events.read.scan",
         "realms": realms,
         "actors": actors,
         "filters": filters.cloned().unwrap_or_else(|| json!({})),
@@ -699,7 +699,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
     events
 }
 
-/// `ak.self.events.query.scan` at `GET /_arkret/self/events`.
+/// GET compatibility binding for canonical `ak.self.events.read.scan`.
 /// Reads from the projection layer so callers writing through
 /// `POST /_arkret/self/events` see their messages here.
 ///
@@ -711,8 +711,8 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
-#[endpoint(operation_id = "ak.self.events.query.scan")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan"))]
+#[endpoint(operation_id = "ak.self.events.read.scan")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan"))]
 pub(crate) async fn events_query(
     depot: &mut Depot,
     req: &mut Request,
@@ -743,9 +743,9 @@ pub(crate) async fn events_query(
     events_query_impl(state, req, parts).await
 }
 
-#[endpoint(operation_id = "ak.self.events.query.scan_body")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
-pub(crate) async fn events_query_post(
+#[endpoint(operation_id = "ak.self.events.read.scan")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan"))]
+pub(crate) async fn events_read_body(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
@@ -788,7 +788,7 @@ async fn events_query_impl(
     reject_events_query_filter_digest_pseudo_fields(parts.filters.as_ref())?;
     if parts.realms.is_empty() && parts.actors.is_empty() {
         return Err(soland_http::error::AppError::missing_param(
-            "events.query requires at least one of realms[] / actors[]",
+            "events.read requires at least one of realms[] / actors[]",
         ));
     }
     let realms = normalize_scope_selectors(parts.realms.clone())?;
@@ -828,7 +828,7 @@ async fn events_query_impl(
     if let Some(session) = session.as_ref() {
         super::super::require_agent_session_scope(
             session,
-            arkret_wire::ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN,
         )?;
     }
     let filter_digest =
@@ -1284,7 +1284,7 @@ async fn range_completeness_for_query(
     ))
 }
 
-/// Per-event visibility for `events.query`. For ordinary (member) realm access
+/// Per-event visibility for `events.read`. For ordinary (member) realm access
 /// this delegates to [`projection_record_visible_to_session`]. For a realm the
 /// caller reached ONLY via the recovery-recipient gate
 /// (`recovery_only == true`, encryption-and-audit.md §2.10.8), visibility is
@@ -1320,7 +1320,7 @@ async fn events_query_event_visible(
 
 /// Enrich visible projection rows to full spec `Event` envelopes by fetching
 /// each event's canonical record from the durable Event store, so the
-/// Realm-scoped `ak.self.events.query` path returns the spec
+/// Realm-scoped `ak.self.events.read` path returns the spec
 /// `EventsQueryOutcome { events: Vec<Event> }` shape uniformly with the
 /// actor-scoped durable reader (SOL-05-003). Rows whose canonical record is
 /// absent (e.g. fully redacted / tombstoned) are dropped. Visibility and

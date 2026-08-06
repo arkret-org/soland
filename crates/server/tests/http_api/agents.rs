@@ -128,7 +128,10 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             ),
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
-            event_id: arkret_wire::EventId::new(new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:")).unwrap(),
+            event_id: arkret_wire::EventId::new(
+                new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:"),
+            )
+            .unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
@@ -595,7 +598,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         serde_json::json!({
                 "actions": [
                     "ak.self.events.stream.subscribe",
-                    "ak.self.events.query.scan",
+                    "ak.self.events.read.scan",
                     "ak.self.events.command.submit",
                     "ak.event.read",
                     "ak.message.create"
@@ -696,7 +699,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         let requested_scope = serde_json::json!({
             "actions": [
                 "ak.self.events.stream.subscribe",
-                "ak.self.events.query.scan",
+                "ak.self.events.read.scan",
                 "ak.self.events.command.submit",
                 "ak.event.read",
                 "ak.message.create"
@@ -902,7 +905,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let requested_scope = serde_json::json!({
         "actions": [
             "ak.self.events.stream.subscribe",
-            "ak.self.events.query.scan",
+            "ak.self.events.read.scan",
             "ak.self.events.command.submit"
         ],
         "resources": [
@@ -912,7 +915,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
             },
             {
                 "kind": "operation",
-                "operation": "ak.self.events.query.scan"
+                "operation": "ak.self.events.read.scan"
             },
             {
                 "kind": "operation",

@@ -1522,7 +1522,7 @@ fn websocket_account_filter(
 /// same cursor / visibility / replay helpers the canonical NDJSON surface
 /// composes (§6.1 — the catch-up, `dropped` and filter-digest rules are the
 /// HTTP binding's rules). A cursorless `catchup=true` stays a live tail on both
-/// bindings: durable history bootstrap is `events.query.scan`.
+/// bindings: durable history bootstrap is `events.read.scan`.
 async fn run_events_channel(
     state: AppState,
     session: SessionRecord,
@@ -1861,7 +1861,7 @@ async fn retire_events_realm(
 }
 
 /// Terminal channel-level `resync_required`: the client reopens from its last
-/// durable cursor, or bootstraps through `events.query.scan`.
+/// durable cursor, or bootstraps through `events.read.scan`.
 async fn events_resync(sender: &ChannelSender, channel_id: &str) -> WebSocketClosedReason {
     let payload = WebSocketChannelControlPayload::Events(Box::new(events_resync_required_frame()));
     if let Ok(frame) = WebSocketServerFrame::channel_control(channel_id.to_owned(), &payload) {

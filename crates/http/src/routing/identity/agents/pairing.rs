@@ -1983,7 +1983,7 @@ mod requested_scope_tests {
                 "actions": ["ak.self.events.command.submit"],
                 "resources": [{
                     "kind": "operation",
-                    "operation": "ak.self.events.query.scan"
+                    "operation": "ak.self.events.read.scan"
                 }],
                 "constraints": ceiling["constraints"].clone()
             }

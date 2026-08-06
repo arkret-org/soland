@@ -45,6 +45,11 @@ fn pattern_rejects_segment_mismatch() {
 }
 
 #[test]
+fn openapi_32_query_method_is_preserved_for_allow_headers() {
+    assert_eq!(method_name_to_method("query"), Some(Method::QUERY));
+}
+
+#[test]
 fn known_routes_map_resolves_known_path() {
     // Seed the known-routes table with the protocol surface we'd
     // expect the catch-all to disambiguate against. We don't go

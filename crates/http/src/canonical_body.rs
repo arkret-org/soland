@@ -178,6 +178,25 @@ mod tests {
     }
 
     #[test]
+    fn query_operation_uses_general_non_streaming_json_limit() {
+        let descriptor = SERVICE_OPERATION_DESCRIPTORS
+            .iter()
+            .find(|descriptor| {
+                descriptor.http_method == "QUERY" && descriptor.http_path == "/_arkret/self/events"
+            })
+            .expect("the canonical events read QUERY operation is registered");
+        assert_eq!(descriptor.body_class, Some("non_streaming_json"));
+
+        let class = WireBodyClass::NonStreamingJsonOperation {
+            max_canonical_body_bytes: operation_canonical_body_limit(
+                descriptor.http_method,
+                descriptor.http_path,
+            ),
+        };
+        assert_eq!(class.canonical_byte_limit(), 8_388_608);
+    }
+
+    #[test]
     fn path_matcher_supports_registered_parameters_without_prefix_matches() {
         assert!(http_path_matches(
             "/_arkret/self/events/{event_id}",

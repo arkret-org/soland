@@ -334,6 +334,25 @@ pub(crate) fn signed_federation_push_headers(
     })
 }
 
+pub(crate) fn signed_federation_query_headers(
+    origin: &str,
+    destination: &str,
+    destination_trust_domain: &str,
+    target_uri: &str,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
+    signed_federation_request_headers(SignedFederationRequest {
+        method: "QUERY",
+        origin,
+        destination,
+        destination_trust_domain,
+        target_uri,
+        body,
+        source_trust_domain_override: None,
+        idempotency_key: None,
+    })
+}
+
 pub(crate) fn signed_federation_push_headers_with_idempotency(
     origin: &str,
     destination: &str,

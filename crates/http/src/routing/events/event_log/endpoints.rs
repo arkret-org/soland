@@ -12,19 +12,33 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("control-proposal-receipts")
                 .post(super::proposal_receipt_issue::issue_control_proposal_receipt),
         )
-        .push(Router::with_path("events/describe").get(events_describe))
+        .push(
+            Router::with_path("events/describe")
+                .query(events_describe)
+                .get(events_describe),
+        )
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(
             Router::with_path("events")
                 .post(submit_event)
+                .query(super::super::sync::events_read_body)
                 .get(super::super::sync::events_query),
         )
-        .push(Router::with_path("events/query").post(super::super::sync::events_query_post))
-        .push(Router::with_path("events/resolve").post(resolve_events))
-        .push(Router::with_path("events/frontier").get(events_frontier))
+        .push(Router::with_path("events/query").post(super::super::sync::events_read_body))
+        .push(
+            Router::with_path("events/resolve")
+                .query(resolve_events)
+                .post(resolve_events),
+        )
+        .push(
+            Router::with_path("events/frontier")
+                .query(events_frontier)
+                .get(events_frontier),
+        )
         .push(Router::with_path("events/seals").post(submit_event_seal))
         .push(
             Router::with_path("events/mls-governance-proof")
+                .query(super::governance_proof::mls_governance_proof)
                 .post(super::governance_proof::mls_governance_proof),
         )
         .push(Router::with_path("events/{event_id}").get(get_event))
@@ -94,11 +108,17 @@ async fn submit_event_seal(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "events_describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "events_describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.describe", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.describe"))]
 async fn events_describe(
     depot: &mut Depot,
+    req: &mut Request,
 ) -> JsonResult<arkret_models_discovery::ServiceDescribe> {
+    if req.method().as_str() == "QUERY" {
+        req.parse_json::<arkret_models_collaboration::event_query::EventsDescribeRequestBody>()
+            .await
+            .map_err(|_| AppError::bad_json("invalid ak.self.events.read.describe request body"))?;
+    }
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         state.service_id(),
@@ -521,8 +541,8 @@ async fn get_event(
     event_view_for_state(state, &record).await
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.query.resolve", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve"))]
 async fn resolve_events(
     aa: AuthArgs,
     body: JsonBody<EventsResolveRequestBody>,
@@ -613,8 +633,8 @@ async fn resolve_events(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.events.query.frontier", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.query.frontier"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.events.read.frontier", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.frontier"))]
 async fn events_frontier(
     aa: crate::routing::system::extract::AuthArgs,
     depot: &mut Depot,
@@ -622,8 +642,28 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierAccountClientState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let actor_id = query_param(req, "actor_id").or_else(|| query_param(req, "actor"));
-    let realm_selector = query_param(req, "realm_id");
+    let query_body = if req.method().as_str() == "QUERY" {
+        Some(
+            req.parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
+                .await
+                .map_err(|_| {
+                    AppError::bad_json("invalid ak.self.events.read.frontier request body")
+                })?,
+        )
+    } else {
+        None
+    };
+    let actor_id = query_body
+        .as_ref()
+        .and_then(|body| body.actor_id.as_ref())
+        .map(|actor_id| actor_id.as_str().to_owned())
+        .or_else(|| query_param(req, "actor_id"))
+        .or_else(|| query_param(req, "actor"));
+    let realm_selector = query_body
+        .as_ref()
+        .and_then(|body| body.realm_id.as_ref())
+        .map(|realm_id| realm_id.as_str().to_owned())
+        .or_else(|| query_param(req, "realm_id"));
     if actor_id.is_none() && realm_selector.is_none() {
         return Err(AppError::invalid_param(
             "events.frontier requires at least one of realm_id or actor_id",

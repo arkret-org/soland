@@ -917,7 +917,7 @@ pub async fn realm_id_accessible_for_id(
 ///
 /// - A session whose `actor` equals a current
 ///   `durability_policy.recovery_recipients[].principal_id` is granted realm *scan admission* (so
-///   `events.query` does not `not_found` it), but
+///   `events.read` does not `not_found` it), but
 /// - the per-event recovery filter ([`realm_recovery_event_visible`]) restricts such a session to
 ///   ONLY `ak.realm_key.share` events whose `recipient_principal_id` is that same recovery
 ///   recipient. The recovery org never sees the general timeline, message bodies, membership, or
@@ -957,7 +957,7 @@ pub async fn realm_recovery_recipient_principal(
 /// encryption-and-audit.md §2.10.8 — per-event recovery visibility. For a
 /// recovery-recipient (non-member) session, an event is visible ONLY when it is
 /// a `ak.realm_key.share` addressed to that recipient's `principal_id`. Used by
-/// the `events.query` per-event filter to keep the recovery face narrow.
+/// the `events.read` per-event filter to keep the recovery face narrow.
 pub fn realm_recovery_event_visible(
     event_kind: &str,
     recipient_principal_id: Option<&str>,

@@ -78,8 +78,8 @@ proptest = "1.6.0"
 rand = "0.10.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["form"] }
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "std"] }
-salvo = { version = "0.95", default-features = false }
-salvo-oapi = { version = "0.95", default-features = false }
+salvo = { version = "=0.95.2", default-features = false }
+salvo-oapi = { version = "=0.95.2", default-features = false }
 serde = "1.0.228"
 serde_json = "1.0.150"
 serde-saphyr = "0.0.29"

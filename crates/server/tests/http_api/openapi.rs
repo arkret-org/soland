@@ -14,12 +14,7 @@ async fn served_openapi_is_generated_from_the_router() {
         .await
         .unwrap();
 
-    assert!(
-        spec["openapi"]
-            .as_str()
-            .is_some_and(|version| version.starts_with("3.")),
-        "generated document must declare an OpenAPI 3.x version"
-    );
+    assert_eq!(spec["openapi"], "3.2.0");
     assert_eq!(spec["info"]["title"], "Arkret Service API");
     assert_eq!(
         spec["x-arkret-artifacts"]["openapi_source"],
@@ -34,6 +29,7 @@ async fn served_openapi_is_generated_from_the_router() {
         "generated document must expose a paths object"
     );
     assert_required_migrated_operations(&spec);
+    assert_event_read_query_bindings(&spec);
     assert_operation_ids_are_unique(&spec);
     assert_component_refs_resolve(&spec, &spec);
 }
@@ -85,7 +81,7 @@ fn assert_required_migrated_operations(root: &Value) {
     for expected in [
         "org.arkret.soland.system.health",
         "ak.server.query.describe",
-        "ak.self.events.query.scan",
+        "ak.self.events.read.scan",
         "ak.self.snapshot.query.manifest_head",
         "ak.self.blob.command.presign",
         "mimi_protocol_directory",
@@ -95,6 +91,74 @@ fn assert_required_migrated_operations(root: &Value) {
             operation_ids.contains(&expected),
             "migrated operation is absent from generated OpenAPI: {expected}"
         );
+    }
+}
+
+fn assert_event_read_query_bindings(root: &Value) {
+    for (path, operation_id) in [
+        (
+            "/_arkret/self/events/describe",
+            "ak.self.events.read.describe",
+        ),
+        (
+            "/_arkret/self/events/frontier",
+            "ak.self.events.read.frontier",
+        ),
+        ("/_arkret/self/events", "ak.self.events.read.scan"),
+        (
+            "/_arkret/self/events/resolve",
+            "ak.self.events.read.resolve",
+        ),
+        (
+            "/_arkret/self/events/mls-governance-proof",
+            "ak.self.events.read.mls_governance_proof",
+        ),
+        (
+            "/_arkret/peer/events/describe",
+            "ak.peer.events.read.describe",
+        ),
+        (
+            "/_arkret/peer/events/frontier",
+            "ak.peer.events.read.frontier",
+        ),
+        ("/_arkret/peer/events", "ak.peer.events.read.scan"),
+        (
+            "/_arkret/peer/events/resolve",
+            "ak.peer.events.read.resolve",
+        ),
+    ] {
+        let query = &root["paths"][path]["query"];
+        assert_eq!(query["operationId"], operation_id);
+        assert!(
+            query["requestBody"]["content"]["application/json"].is_object(),
+            "canonical QUERY binding {operation_id} must expose JSON content"
+        );
+    }
+
+    for (_path, operation_id, compatibility) in [
+        (
+            "/_arkret/self/events",
+            "ak.self.events.read.scan",
+            vec![
+                ("/_arkret/self/events", "get"),
+                ("/_arkret/self/events/query", "post"),
+            ],
+        ),
+        (
+            "/_arkret/peer/events",
+            "ak.peer.events.read.scan",
+            vec![
+                ("/_arkret/peer/events", "get"),
+                ("/_arkret/peer/events/query", "post"),
+            ],
+        ),
+    ] {
+        for (compat_path, method) in compatibility {
+            let compat = &root["paths"][compat_path][method];
+            assert!(compat.get("operationId").is_none());
+            assert_eq!(compat["deprecated"], true);
+            assert_eq!(compat["x-arkret-compatibility-binding-of"], operation_id);
+        }
     }
 }
 
@@ -110,7 +174,7 @@ fn assert_operation_ids_are_unique(root: &Value) {
 
 fn operation_ids(root: &Value) -> Vec<&str> {
     const METHODS: &[&str] = &[
-        "get", "head", "post", "put", "patch", "delete", "options", "trace",
+        "get", "head", "post", "put", "patch", "delete", "options", "query", "trace",
     ];
     root["paths"]
         .as_object()

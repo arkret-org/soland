@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::CanonicalEventRecord;
 use soland_services::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
 
@@ -121,26 +121,57 @@ impl FrontierExchangeWorker {
         peer_did: &str,
         realm_id: &str,
     ) -> Result<String, String> {
-        let target = format!(
-            "{}/_arkret/peer/events/frontier?realm_id={}",
-            peer_url.trim_end_matches('/'),
-            realm_id
+        let canonical_target = format!(
+            "{}/_arkret/peer/events/frontier",
+            peer_url.trim_end_matches('/')
         );
+        let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .map_err(|error| format!("invalid_realm_id:{error}"))?,
+        };
+        let body = arkret_canonical::canonical_json_bytes(&request)
+            .map_err(|error| format!("canonical_json:{error}"))?;
         let (parsed_url, client) =
             crate::security::validate_http_url_for_egress_with_pinned_client(
-                &target,
+                &canonical_target,
                 "federation frontier exchange",
                 self.state.config().development_mode,
                 REQUEST_TIMEOUT,
             )
             .map_err(|error| format!("egress_policy_denied:{error}"))?;
-        let headers = signed_get_headers(&self.state, peer_did, &target);
-        let response = client
-            .get(parsed_url)
+        let headers = signed_query_headers(&self.state, peer_did, &canonical_target, &body);
+        let query_method = reqwest::Method::from_bytes(b"QUERY")
+            .map_err(|error| format!("invalid_query_method:{error}"))?;
+        let mut response = client
+            .request(query_method, parsed_url)
             .headers(headers)
+            .body(body)
             .send()
             .await
             .map_err(|error| format!("network_error:{error}"))?;
+        if matches!(response.status().as_u16(), 405 | 501) {
+            let mut fallback_url = reqwest::Url::parse(&canonical_target)
+                .map_err(|error| format!("invalid_peer_url:{error}"))?;
+            fallback_url
+                .query_pairs_mut()
+                .append_pair("realm_id", realm_id);
+            let fallback_target = fallback_url.as_str().to_owned();
+            let (parsed_url, fallback_client) =
+                crate::security::validate_http_url_for_egress_with_pinned_client(
+                    &fallback_target,
+                    "federation frontier exchange compatibility GET",
+                    self.state.config().development_mode,
+                    REQUEST_TIMEOUT,
+                )
+                .map_err(|error| format!("egress_policy_denied:{error}"))?;
+            let headers = signed_get_headers(&self.state, peer_did, &fallback_target);
+            response = fallback_client
+                .get(parsed_url)
+                .headers(headers)
+                .send()
+                .await
+                .map_err(|error| format!("network_error:{error}"))?;
+        }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -187,6 +218,34 @@ impl FrontierExchangeWorker {
         }
         Ok(())
     }
+}
+
+fn signed_query_headers(
+    state: &AppState,
+    peer_did: &str,
+    target_url: &str,
+    body: &[u8],
+) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    super::outbox::insert_header_if_valid(
+        &mut headers,
+        "content-digest",
+        &super::outbox::content_digest_header_value(body),
+    );
+    super::outbox::insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
+    super::outbox::insert_header_if_valid(&mut headers, "destination-service-id", peer_did);
+    super::outbox::insert_header_if_valid(
+        &mut headers,
+        "source-trust-domain",
+        &state.config().trust_domain,
+    );
+    super::outbox::insert_header_if_valid(
+        &mut headers,
+        "destination-trust-domain",
+        &super::federation::trust_domain_from_service_id(peer_did),
+    );
+    super::outbox::rfc9421_sign(state, headers, "QUERY", target_url)
 }
 
 fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> HeaderMap {

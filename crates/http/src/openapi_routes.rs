@@ -104,6 +104,7 @@ fn method_name_to_method(method: &str) -> Option<Method> {
         "patch" => Method::PATCH,
         "head" => Method::HEAD,
         "options" => Method::OPTIONS,
+        "query" => Method::QUERY,
         // TRACE is not part of the Arkret HTTP binding; exclude it so it
         // doesn't pollute the `Allow` header.
         "trace" => return None,
@@ -153,6 +154,7 @@ fn allow_methods_for_path(path: &str) -> Option<Vec<Method>> {
 /// the spec example uses (`Allow: POST, GET, ...`) so produced headers
 /// are stable across runs and easy to diff in tests.
 const METHOD_HEADER_ORDER: &[Method] = &[
+    Method::QUERY,
     Method::GET,
     Method::HEAD,
     Method::POST,

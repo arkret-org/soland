@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::bail;
-use salvo::oapi::OpenApi;
+use salvo::oapi::{OpenApi, OpenApiVersion};
 use salvo::prelude::*;
 use salvo::routing::FilterInfo;
 use serde_json::{Value, json};
@@ -35,8 +35,9 @@ pub fn cached_arkret_openapi_doc(router: &Router, artifact_registry_summary: Val
 }
 
 fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Value {
-    let generated =
-        OpenApi::new("Arkret Service API", env!("CARGO_PKG_VERSION")).merge_router(router);
+    let generated = OpenApi::new("Arkret Service API", env!("CARGO_PKG_VERSION"))
+        .openapi_version(OpenApiVersion::Version3_2)
+        .merge_router(router);
     let mut doc = serde_json::to_value(&generated)
         .unwrap_or_else(|error| panic!("failed to serialize generated OpenAPI: {error:#}"));
     let root = doc
@@ -49,7 +50,7 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
         "x-operation-aliases".to_owned(),
         json!({
             "events.submit": "ak.self.events.command.submit",
-            "events.query": "ak.self.events.query.scan",
+            "events.read": "ak.self.events.read.scan",
             "events.subscribe": "ak.self.events.stream.subscribe",
             "account.subscribe": "ak.self.account.stream.subscribe",
         }),
@@ -65,12 +66,159 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
             "authz_constraint_kinds": ["allowed_object_facets"],
         }),
     );
+    install_event_read_query_bindings(&mut doc);
     doc
 }
 
 const OPENAPI_METHODS: &[&str] = &[
-    "get", "head", "post", "put", "patch", "delete", "options", "trace",
+    "get", "head", "post", "put", "patch", "delete", "options", "query", "trace",
 ];
+
+/// salvo-oapi 0.95.2 can emit an OpenAPI 3.2 document, while its typed
+/// `PathItemType` still predates the 3.2 `query` member. Runtime routing comes
+/// from Salvo's native `Router::query`; this explicit generation step copies
+/// the live typed handler operation into the canonical 3.2 slot and marks the
+/// registered GET/POST routes as compatibility bindings without independent
+/// operation IDs.
+fn install_event_read_query_bindings(doc: &mut Value) {
+    let dto_schema = |name: &str| {
+        json!({
+            "$ref": format!(
+                "../schemas/service-operation-dtos.schema.json#/$defs/{name}"
+            )
+        })
+    };
+    let component_schema = |name: &str| json!({"$ref": format!("#/components/schemas/{name}")});
+
+    install_query_binding(
+        doc,
+        "/_arkret/self/events/describe",
+        "/_arkret/self/events/describe",
+        "get",
+        "ak.self.events.read.describe",
+        Some(dto_schema("EventsDescribeRequestBody")),
+        &[("/_arkret/self/events/describe", "get")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/self/events/frontier",
+        "/_arkret/self/events/frontier",
+        "get",
+        "ak.self.events.read.frontier",
+        Some(dto_schema("EventsFrontierRequestBody")),
+        &[("/_arkret/self/events/frontier", "get")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/self/events",
+        "/_arkret/self/events/query",
+        "post",
+        "ak.self.events.read.scan",
+        Some(dto_schema("EventsQueryPostRequestBody")),
+        &[
+            ("/_arkret/self/events", "get"),
+            ("/_arkret/self/events/query", "post"),
+        ],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/self/events/resolve",
+        "/_arkret/self/events/resolve",
+        "post",
+        "ak.self.events.read.resolve",
+        Some(component_schema("EventsResolveRequestBody")),
+        &[("/_arkret/self/events/resolve", "post")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/self/events/mls-governance-proof",
+        "/_arkret/self/events/mls-governance-proof",
+        "post",
+        "ak.self.events.read.mls_governance_proof",
+        Some(component_schema("MlsGovernanceProofRequestBodyBody")),
+        &[("/_arkret/self/events/mls-governance-proof", "post")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/peer/events/describe",
+        "/_arkret/peer/events/describe",
+        "get",
+        "ak.peer.events.read.describe",
+        Some(dto_schema("PeerEventsDescribeRequestBody")),
+        &[("/_arkret/peer/events/describe", "get")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/peer/events/frontier",
+        "/_arkret/peer/events/frontier",
+        "get",
+        "ak.peer.events.read.frontier",
+        Some(dto_schema("PeerEventsFrontierRequestBody")),
+        &[("/_arkret/peer/events/frontier", "get")],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/peer/events",
+        "/_arkret/peer/events/query",
+        "post",
+        "ak.peer.events.read.scan",
+        Some(dto_schema("EventsQueryPostRequestBody")),
+        &[
+            ("/_arkret/peer/events", "get"),
+            ("/_arkret/peer/events/query", "post"),
+        ],
+    );
+    install_query_binding(
+        doc,
+        "/_arkret/peer/events/resolve",
+        "/_arkret/peer/events/resolve",
+        "post",
+        "ak.peer.events.read.resolve",
+        Some(dto_schema("PeerEventsResolveRequestBody")),
+        &[("/_arkret/peer/events/resolve", "post")],
+    );
+}
+
+fn install_query_binding(
+    doc: &mut Value,
+    canonical_path: &str,
+    source_path: &str,
+    source_method: &str,
+    operation_id: &str,
+    request_schema: Option<Value>,
+    compatibility_bindings: &[(&str, &str)],
+) {
+    let mut operation = doc["paths"][source_path][source_method].clone();
+    let operation_object = operation.as_object_mut().unwrap_or_else(|| {
+        panic!("missing OpenAPI source operation {source_method} {source_path}")
+    });
+    operation_object.insert("operationId".to_owned(), json!(operation_id));
+    operation_object.remove("deprecated");
+    operation_object.remove("x-arkret-compatibility-binding-of");
+    operation_object.remove("parameters");
+    if let Some(schema) = request_schema {
+        operation_object.insert(
+            "requestBody".to_owned(),
+            json!({
+                "required": true,
+                "content": {"application/json": {"schema": schema}},
+            }),
+        );
+    }
+    doc["paths"][canonical_path]["query"] = operation;
+
+    for (path, method) in compatibility_bindings {
+        let compatibility = doc["paths"][path][method]
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("missing compatibility binding {method} {path}"));
+        compatibility.remove("operationId");
+        compatibility.insert("deprecated".to_owned(), Value::Bool(true));
+        compatibility.insert(
+            "x-arkret-compatibility-binding-of".to_owned(),
+            json!(operation_id),
+        );
+    }
+}
 
 type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;
 

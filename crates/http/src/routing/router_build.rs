@@ -375,6 +375,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     let base = Cors::new()
         .allow_methods(vec![
             Method::GET,
+            Method::QUERY,
             Method::POST,
             Method::PUT,
             Method::PATCH,

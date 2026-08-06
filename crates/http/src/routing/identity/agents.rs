@@ -48,10 +48,8 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
-    AgentParticipationEntry, AgentParticipationOutcome,
-};
-use arkret_models_collaboration::governance::agent_participation::{
-    ParticipationBits, ParticipationReplaceRequestBody, ParticipationScope,
+    AgentParticipationEntry, AgentParticipationOutcome, ParticipationBits,
+    ParticipationReplaceRequestBody, ParticipationScope,
 };
 use arkret_models_identity::validate_agent_slug;
 use base64::Engine as _;
@@ -221,7 +219,7 @@ mod tests {
         json!({
             "actions": [
                 "ak.self.events.stream.subscribe",
-                "ak.self.events.query.scan",
+                "ak.self.events.read.scan",
                 "ak.self.events.command.submit",
                 "ak.event.read",
                 "ak.message.create"

@@ -1300,7 +1300,7 @@ pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
 static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Current accepted Seal head for a Realm — the server side of the
-/// registered account-client seal-view sourcing (`ak.self.events.query.frontier`
+/// registered account-client seal-view sourcing (`ak.self.events.read.frontier`
 /// realm shape `{realm_id, seal_id, control_event_set_root, state_root,
 /// hlc?}`, see arkret-spec service-http-binding). Clients mint single-leaf
 /// Control Move `seal_basis` (`leaves=[seal_id]`) and DataEvent `seal_ref`

@@ -104,15 +104,11 @@ async fn peer_events_describe_advertises_formal_surface() {
             .iter()
             .any(|op| op == "ak.peer.events.command.submit")
     );
+    assert!(operations.iter().any(|op| op == "ak.peer.events.read.scan"));
     assert!(
         operations
             .iter()
-            .any(|op| op == "ak.peer.events.query.scan")
-    );
-    assert!(
-        operations
-            .iter()
-            .any(|op| op == "ak.peer.events.query.frontier")
+            .any(|op| op == "ak.peer.events.read.frontier")
     );
     // `ak.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
@@ -168,6 +164,32 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         "{page:?}"
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
+
+    let read_body = serde_json::json!({
+        "filters": {"kind": "ak.message.create"},
+        "realms": [TEST_REALM_ID]
+    });
+    let query_target = "http://server/_arkret/peer/events";
+    let mut canonical_query = TestClient::query(query_target).json(&read_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        query_target,
+        &read_body,
+    ) {
+        canonical_query = canonical_query.add_header(name, value, true);
+    }
+    let canonical_page: Value = canonical_query
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        canonical_page, page,
+        "peer QUERY and GET must share semantics"
+    );
 
     let frontier_target =
         format!("http://server/_arkret/peer/events/frontier?realm_id={TEST_REALM_ID}");
