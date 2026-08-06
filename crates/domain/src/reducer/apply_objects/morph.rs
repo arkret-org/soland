@@ -16,13 +16,9 @@ impl ProjectionState {
                 reason: "morph_create_missing_object".to_owned(),
             };
         };
-        let Some(morph_id) = object
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
+        let Some(morph_id) = event_derived_object_id(operation, "ak:morph:") else {
             return ProjectionEffect::Rejected {
-                reason: "morph_create_missing_id".to_owned(),
+                reason: "morph_create_missing_event_id".to_owned(),
             };
         };
         // AKP-0007 — when the Morph carries a `scope_circle_id`, the

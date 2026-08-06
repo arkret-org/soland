@@ -22,16 +22,12 @@ impl ProjectionState {
                 reason: "circle_create_missing_object".to_owned(),
             };
         };
-        let Some(circle_id) = object.get("id").and_then(Value::as_str) else {
+        let Some(circle_id) = event_derived_object_id(operation, "ak:circle:") else {
             return ProjectionEffect::Rejected {
-                reason: "circle_create_missing_id".to_owned(),
+                reason: "circle_create_missing_event_id".to_owned(),
             };
         };
-        if !circle_id.starts_with("ak:circle:") {
-            return ProjectionEffect::Rejected {
-                reason: "circle_create_invalid_id_prefix".to_owned(),
-            };
-        }
+        let circle_id = circle_id.as_str();
         // Spec invariant: Circle.realm_id MUST match the surrounding
         // operation's realm scope; the wire validator already binds
         // `operation.realm_id` to the envelope `realm_id`, so a mismatch

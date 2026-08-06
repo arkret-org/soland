@@ -9,6 +9,23 @@ use serde_json::Value;
 
 use super::PollOptionState;
 
+/// The id of an object created by this Event, for the create kinds whose
+/// registry `id_form` is `event_derived`.
+///
+/// `common-fields.md` section 6.0 makes the id `retype(event_id)`: the create
+/// payload MUST omit it, and `event-payload.schema.json` enforces that with a
+/// `not: {required: ["id"]}` on every such create. A reducer that reads
+/// `object.id` therefore rejects every conforming create, so the id has to come
+/// from the Event the projection already carries.
+pub(crate) fn event_derived_object_id(operation: &Operation, kind_prefix: &str) -> Option<String> {
+    operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .and_then(|event_id| event_id.strip_prefix("ak:event:"))
+        .map(|suffix| format!("{kind_prefix}{suffix}"))
+}
+
 pub(crate) fn message_event_id_from_ref(value: &str) -> String {
     value
         .strip_prefix("ak:message:")

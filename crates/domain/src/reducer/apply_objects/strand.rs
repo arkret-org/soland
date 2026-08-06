@@ -20,13 +20,9 @@ impl ProjectionState {
                 reason: "strand_create_missing_object".to_owned(),
             };
         };
-        let Some(strand_id) = object
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
+        let Some(strand_id) = event_derived_object_id(operation, "ak:strand:") else {
             return ProjectionEffect::Rejected {
-                reason: "strand_create_missing_id".to_owned(),
+                reason: "strand_create_missing_event_id".to_owned(),
             };
         };
         let metadata = object.get("metadata").and_then(Value::as_object);
