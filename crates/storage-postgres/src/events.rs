@@ -216,7 +216,7 @@ async fn insert_pending_control_event(
     .and_then(|affected| {
         if affected == 0 {
             Err(PersistenceError::Conflict(
-                "duplicate_conflict: pending Control Move has different canonical bytes or receipt"
+                "duplicate_conflict: pending Control Move has different canonical bytes or Control Proposal Ack"
                     .to_owned(),
             ))
         } else {
@@ -383,10 +383,10 @@ impl EventStore for PgEventStore {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
-        let mut receipts = BTreeMap::new();
-        for receipt in control_proposal_acks {
-            if receipts
-                .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
+        let mut acks = BTreeMap::new();
+        for ack in control_proposal_acks {
+            if acks
+                .insert(ack.proposal_digest.as_str().to_owned(), ack)
                 .is_some()
             {
                 return Err(PersistenceError::Conflict(
@@ -394,9 +394,10 @@ impl EventStore for PgEventStore {
                 ));
             }
         }
-        if receipts.len() != records.len() {
+        if acks.len() != records.len() {
             return Err(PersistenceError::Conflict(
-                "schema_violation: Realm bootstrap receipt cardinality mismatch".to_owned(),
+                "schema_violation: Realm bootstrap Control Proposal Ack cardinality mismatch"
+                    .to_owned(),
             ));
         }
         let mut conn = pg_conn(&self.pool)
@@ -405,7 +406,7 @@ impl EventStore for PgEventStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             for record in records {
                 insert_canonical_event(conn, &record).await?;
-                let control_proposal_ack = receipts.get(&record.canonical_digest).ok_or_else(|| {
+                let control_proposal_ack = acks.get(&record.canonical_digest).ok_or_else(|| {
                     PersistenceError::Conflict(
                         "schema_violation: Realm bootstrap Event is missing Control Proposal Ack"
                             .to_owned(),

@@ -12,7 +12,6 @@ use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-
 pub(crate) mod bootstrap;
 pub(crate) mod object_storage;
 pub(crate) mod otel;
@@ -494,7 +493,7 @@ async fn wait_for_service_identity<A>(
     acceptor: A,
     config: AppConfig,
     bootstrap: crate::bootstrap::ServiceIdentityBootstrap,
-    ) -> anyhow::Result<crate::bootstrap::ServiceIdentityBootstrap>
+) -> anyhow::Result<crate::bootstrap::ServiceIdentityBootstrap>
 where
     A: Acceptor + Send + 'static,
 {

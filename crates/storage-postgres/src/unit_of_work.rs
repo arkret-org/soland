@@ -126,16 +126,16 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 let control_proposal_ack = request
                     .control_proposal_ack
                     .as_ref()
-                    .map(|receipt| {
-                        if receipt.proposal_digest.as_str() != event_digest
-                            || receipt.realm_id != typed_event.realm_id
+                    .map(|ack| {
+                        if ack.proposal_digest.as_str() != event_digest
+                            || ack.realm_id != typed_event.realm_id
                         {
                             return Err(PersistenceError::Conflict(
                                 "schema_violation: Control Proposal Ack does not bind Control Move"
                                     .to_owned(),
                             ));
                         }
-                        serde_json::to_value(receipt).map_err(|error| {
+                        serde_json::to_value(ack).map_err(|error| {
                             PersistenceError::Internal(format!(
                                 "Control Proposal Ack encoding failed: {error}"
                             ))
@@ -171,7 +171,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .and_then(|affected| {
                     if affected == 0 {
                         Err(PersistenceError::Conflict(
-                            "duplicate_conflict: pending Control Move has different canonical bytes or receipt"
+                            "duplicate_conflict: pending Control Move has different canonical bytes or Control Proposal Ack"
                                 .to_owned(),
                         ))
                     } else {

@@ -110,14 +110,18 @@ impl JobsService {
         &self,
         ack_key: &str,
     ) -> ServiceResult<Option<ControlProposalAuthorityAckState>> {
-        self.maintenance.control_proposal_authority_ack(ack_key).await
+        self.maintenance
+            .control_proposal_authority_ack(ack_key)
+            .await
     }
 
     pub async fn store_control_proposal_authority_ack(
         &self,
         record: ControlProposalAuthorityAckState,
     ) -> ServiceResult<()> {
-        self.maintenance.store_control_proposal_authority_ack(record).await
+        self.maintenance
+            .store_control_proposal_authority_ack(record)
+            .await
     }
 }
 

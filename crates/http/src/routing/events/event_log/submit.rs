@@ -879,7 +879,7 @@ async fn submit_event_batch_outcome_with_leases(
             "initial publication batch lease cardinality mismatch",
         ));
     }
-    if control_proposal_acks.is_some_and(|receipts| receipts.len() != envelopes.len()) {
+    if control_proposal_acks.is_some_and(|acks| acks.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -972,7 +972,7 @@ async fn submit_event_batch_outcome_with_leases(
                 .and_then(|leases| leases.get(index))
                 .and_then(Option::as_ref),
             control_proposal_acks
-                .and_then(|receipts| receipts.get(index))
+                .and_then(|acks| acks.get(index))
                 .and_then(Option::as_ref),
             membership_compensation_evidence
                 .and_then(|evidence| evidence.get(index))

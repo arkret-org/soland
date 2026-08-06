@@ -17,7 +17,7 @@ use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
 use arkret_wire::{
-    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalAck, Seal,
+    ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Seal,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -473,12 +473,12 @@ impl ProjectionService {
         self.event_seal_committer.as_ref()
     }
 
-    pub fn put_pending_control_event_with_receipt(
+    pub fn put_pending_control_event_with_ack(
         &self,
         event: &Event,
-        receipt: &ControlProposalAck,
+        ack: &ControlProposalAck,
     ) -> StoreResult<()> {
-        self.put_pending_control_event(event, Some(receipt))
+        self.put_pending_control_event(event, Some(ack))
     }
 
     /// Record an accepted Control Move before a Seal may cover it.
@@ -489,10 +489,9 @@ impl ProjectionService {
     pub fn put_pending_control_event(
         &self,
         event: &Event,
-        receipt: Option<&ControlProposalAck>,
+        ack: Option<&ControlProposalAck>,
     ) -> StoreResult<()> {
-        self.control_event_store()
-            .put_pending_with_receipt(event, receipt)
+        self.control_event_store().put_pending_with_ack(event, ack)
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
@@ -505,7 +504,8 @@ impl ProjectionService {
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<ControlProposalAck>> {
-        self.control_event_store().control_proposal_ack(event_digest)
+        self.control_event_store()
+            .control_proposal_ack(event_digest)
     }
 
     pub fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
@@ -549,19 +549,19 @@ impl ProjectionService {
         let mut pending_proposals = Vec::with_capacity(records.len());
         for record in records {
             let digest = arkret_state::state::control_event_digest(&record.event)?;
-            let receipt = record.control_proposal_ack.ok_or_else(|| {
+            let ack = record.control_proposal_ack.ok_or_else(|| {
                 arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} is missing its Control Proposal Ack"
                 ))
             })?;
-            receipt.validate_structural(policy).map_err(|error| {
+            ack.validate_structural(policy).map_err(|error| {
                 arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} has an invalid Control Proposal Ack \
                      (received_at={}, decision_due_at={}, absolute_due_at={}, \
                      expected_decision_window_ms={}, expected_absolute_horizon_ms={}): {error}",
-                    receipt.received_at,
-                    receipt.decision_due_at,
-                    receipt.absolute_due_at,
+                    ack.received_at,
+                    ack.decision_due_at,
+                    ack.absolute_due_at,
                     policy.decision_window.num_milliseconds(),
                     policy.absolute_horizon.num_milliseconds(),
                 ))
@@ -570,11 +570,11 @@ impl ProjectionService {
                 .decisions
                 .last()
                 .map(ControlProposalDecision::decision_due_at)
-                .unwrap_or(receipt.decision_due_at);
+                .unwrap_or(ack.decision_due_at);
             let overdue = observed_at >= current_due_at;
             pending_proposals.push(PendingControlProposal {
                 proposal_digest: digest,
-                absolute_due_at: receipt.absolute_due_at,
+                absolute_due_at: ack.absolute_due_at,
                 defer_count: u8::try_from(record.decisions.len()).map_err(|_| {
                     arkret_state::state::StoreError::Conflict(
                         "control proposal decision count overflow".to_owned(),
@@ -590,7 +590,7 @@ impl ProjectionService {
                 fault_reason: overdue
                     .then_some(ControlProposalFaultReason::ControlProposalDecisionOverdue),
                 current_decision_due_at: current_due_at,
-                receipt,
+                control_proposal_ack: ack,
                 decisions: record.decisions,
             });
         }
@@ -604,7 +604,7 @@ impl ProjectionService {
         )?;
         let mut retained_faults = Vec::new();
         for record in sealed {
-            let Some(receipt) = record.control_proposal_ack else {
+            let Some(ack) = record.control_proposal_ack else {
                 return Err(arkret_state::state::StoreError::Conflict(format!(
                     "sealed Control Move {} is missing its Control Proposal Ack",
                     arkret_state::state::control_event_digest(&record.event)?
@@ -625,7 +625,7 @@ impl ProjectionService {
                     record.seal
                 ))
             })?;
-            let mut previous_due_at = receipt.decision_due_at;
+            let mut previous_due_at = ack.decision_due_at;
             let mut missed_deadline = false;
             for decision in &record.decisions {
                 missed_deadline |= !decision.satisfied_current_deadline(previous_due_at);
@@ -634,8 +634,8 @@ impl ProjectionService {
             missed_deadline |= seal.sealed_at > previous_due_at;
             if missed_deadline {
                 retained_faults.push(RetainedControlProposalFault {
-                    proposal_digest: receipt.proposal_digest.clone(),
-                    receipt,
+                    proposal_digest: ack.proposal_digest.clone(),
+                    control_proposal_ack: ack,
                     decisions: record.decisions,
                     accepted_seal_id: seal.id,
                     accepted_at: seal.sealed_at,

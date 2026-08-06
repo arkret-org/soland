@@ -305,10 +305,10 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             }
         })?;
-    for (event, receipt) in typed_events.iter().zip(&control_proposal_acks) {
+    for (event, ack) in typed_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
-            .put_pending_control_event_with_receipt(event, receipt)
+            .put_pending_control_event_with_ack(event, ack)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,

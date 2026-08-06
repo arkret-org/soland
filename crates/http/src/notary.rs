@@ -405,7 +405,7 @@ impl NotaryWorker {
         let mut staged_anchor_state = pre_state.clone();
         let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
         for (digest, event) in ordered {
-            let receipt = state
+            let ack = state
                 .projections()
                 .control_proposal_ack(&digest)?
                 .ok_or_else(|| {
@@ -413,12 +413,12 @@ impl NotaryWorker {
                         "locally signed Control Move {digest} has no immutable Control Proposal Ack"
                     ))
                 })?;
-            if receipt.proposal_digest != digest || receipt.realm_id != *realm_id {
+            if ack.proposal_digest != digest || ack.realm_id != *realm_id {
                 return Err(NotaryError::Store(format!(
                     "Control Proposal Ack for Control Move {digest} has inconsistent binding"
                 )));
             }
-            receipt.validate_protocol_bounds().map_err(|error| {
+            ack.validate_protocol_bounds().map_err(|error| {
                 NotaryError::Store(format!(
                     "Control Proposal Ack for Control Move {digest} is invalid: {error}"
                 ))
@@ -987,7 +987,7 @@ impl NotaryWorker {
                     "rejected Control Move {digest} has no pending record"
                 )));
             };
-            let Some(receipt) = record.control_proposal_ack.as_ref() else {
+            let Some(ack) = record.control_proposal_ack.as_ref() else {
                 return Err(NotaryError::Store(format!(
                     "rejected Control Move {digest} has no Control Proposal Ack"
                 )));
@@ -1013,7 +1013,7 @@ impl NotaryWorker {
                 })?;
             let decision = crate::control_proposal::sign_control_proposal_reject(
                 state,
-                receipt,
+                ack,
                 &record.decisions,
                 &notary,
                 reason_code,

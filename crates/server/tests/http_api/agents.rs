@@ -128,9 +128,9 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             ),
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
-            event_id: arkret_wire::EventId::new(
-                soland_test_support::fixture_content_bound_id("ak:event:"),
-            )
+            event_id: arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id(
+                "ak:event:",
+            ))
             .unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
@@ -336,12 +336,11 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
 
     let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
-    let mut entry =
-        soland_http::state::RealmDirectoryEntry::new(
-            typed_realm_id,
-            "Principal Control",
-            soland_services::events::DirectoryProvenance::LocalOnly,
-        );
+    let mut entry = soland_http::state::RealmDirectoryEntry::new(
+        typed_realm_id,
+        "Principal Control",
+        soland_services::events::DirectoryProvenance::LocalOnly,
+    );
     entry
         .members
         .insert(arkret_identifiers::Did::new(controller.to_owned()).unwrap());

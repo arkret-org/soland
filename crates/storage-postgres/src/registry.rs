@@ -135,7 +135,9 @@ impl PgPersistenceStore {
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
             idempotency_keys: PgIdempotencyStore { pool: pool.clone() },
             websocket_auth: PgWebsocketAuthStore { pool: pool.clone() },
-            control_proposal_authority_acks: PgControlProposalAuthorityAckStore { pool: pool.clone() },
+            control_proposal_authority_acks: PgControlProposalAuthorityAckStore {
+                pool: pool.clone(),
+            },
             notifications: PgNotificationStore { pool },
             fallback,
         }

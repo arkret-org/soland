@@ -21,13 +21,14 @@ fn stage_control_proposal_ack(
     // Control/Data routing is defined by the typed Event plane. In particular,
     // a closed genesis anchor is a basis-free Control Move, while a DataEvent
     // carries the data-plane seal/auth context. Do not infer the plane from
-    // `seal_basis` or from the presence of a receipt.
+    // `seal_basis` or from the presence of a Control Proposal Ack.
     let is_control_move =
         event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
     if !is_control_move {
         if request.control_proposal_ack.is_some() {
             return Err(PersistenceError::Conflict(
-                "schema_violation: non-Control Event cannot carry a Control Proposal Ack".to_owned(),
+                "schema_violation: non-Control Event cannot carry a Control Proposal Ack"
+                    .to_owned(),
             ));
         }
         return Ok(());
@@ -42,29 +43,29 @@ fn stage_control_proposal_ack(
             "schema_violation: canonical digest differs from Control Move digest".to_owned(),
         ));
     }
-    let receipt = request.control_proposal_ack.as_ref().ok_or_else(|| {
+    let ack = request.control_proposal_ack.as_ref().ok_or_else(|| {
         PersistenceError::Conflict(
             "schema_violation: accepted Control Move is missing Control Proposal Ack".to_owned(),
         )
     })?;
-    receipt.validate_protocol_bounds().map_err(|error| {
+    ack.validate_protocol_bounds().map_err(|error| {
         PersistenceError::Conflict(format!(
             "schema_violation: invalid Control Proposal Ack: {error}"
         ))
     })?;
-    if receipt.proposal_digest.as_str() != event_digest || receipt.realm_id != event.realm_id {
+    if ack.proposal_digest.as_str() != event_digest || ack.realm_id != event.realm_id {
         return Err(PersistenceError::Conflict(
             "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
         ));
     }
     if let Some(existing) = staged.get(&request.event.event_id)
-        && existing != receipt
+        && existing != ack
     {
         return Err(PersistenceError::Conflict(
             "duplicate_conflict: Control Move has a different Control Proposal Ack".to_owned(),
         ));
     }
-    staged.insert(request.event.event_id.clone(), receipt.clone());
+    staged.insert(request.event.event_id.clone(), ack.clone());
     Ok(())
 }
 

@@ -40,7 +40,7 @@ pub(super) async fn submit_identity_anchor_batch(
             "identity anchor publication lease cardinality mismatch",
         ));
     }
-    if submitted_control_proposal_acks.is_some_and(|receipts| receipts.len() != envelopes.len()) {
+    if submitted_control_proposal_acks.is_some_and(|acks| acks.len() != envelopes.len()) {
         return Err(unit_error(
             "identity anchor control-proposal-ack cardinality mismatch",
         ));
@@ -216,10 +216,9 @@ pub(super) async fn submit_identity_anchor_batch(
         // unit is committed. The Principal Server that performed lease
         // pre-admission acknowledges ingress; only the later client-signed
         // Seal provides control-plane finality.
-        if submitted_control_proposal_acks.is_some_and(|receipts| receipts.iter().any(Option::is_some))
-        {
+        if submitted_control_proposal_acks.is_some_and(|acks| acks.iter().any(Option::is_some)) {
             return Err(unit_error(
-                "self-principal bootstrap receipts are issued after complete lease pre-admission",
+                "self-principal bootstrap Control Proposal Acks are issued after complete lease pre-admission",
             ));
         }
         let bootstrap_ingress_authority_set_ref = authorization_leases
@@ -250,7 +249,7 @@ pub(super) async fn submit_identity_anchor_batch(
         })?
     } else {
         let submitted = submitted_control_proposal_acks
-            .and_then(|receipts| receipts.iter().cloned().collect::<Option<Vec<_>>>())
+            .and_then(|acks| acks.iter().cloned().collect::<Option<Vec<_>>>())
             .ok_or_else(|| {
                 unit_error("reanchor requires a Control Proposal Ack for each Control Move")
             })?;
@@ -270,8 +269,8 @@ pub(super) async fn submit_identity_anchor_batch(
                 format!("identity anchor proposal policy unavailable: {error}"),
             )
         })?;
-        for (event, receipt) in typed_control_events.iter().zip(&submitted) {
-            crate::control_proposal::verify_control_proposal_ack(state, event, receipt, policy)
+        for (event, ack) in typed_control_events.iter().zip(&submitted) {
+            crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -450,12 +449,12 @@ pub(super) async fn submit_identity_anchor_batch(
                     format!("accepted identity anchor digest failed: {error}"),
                 )
             })?;
-            let receipt = control_proposal_acks
+            let ack = control_proposal_acks
                 .iter()
-                .find(|receipt| receipt.proposal_digest.as_str() == digest);
+                .find(|ack| ack.proposal_digest.as_str() == digest);
             state
                 .projections()
-                .put_pending_control_event(event, receipt)
+                .put_pending_control_event(event, ack)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -640,21 +639,16 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             format!("cross-signing proposal policy unavailable: {error}"),
         )
     })?;
-    for (event, receipt) in typed_control_events.iter().zip(&control_proposal_acks) {
-        crate::control_proposal::verify_control_proposal_ack(
-            state,
-            event,
-            receipt,
-            proposal_policy,
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "failed_precondition",
-                format!("cross-signing Control Proposal Ack is invalid: {error}"),
-            )
-        })?;
+    for (event, ack) in typed_control_events.iter().zip(&control_proposal_acks) {
+        crate::control_proposal::verify_control_proposal_ack(state, event, ack, proposal_policy)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    format!("cross-signing Control Proposal Ack is invalid: {error}"),
+                )
+            })?;
     }
     let authorize_payload = envelopes[0]
         .get("payload")
@@ -781,10 +775,10 @@ pub(super) async fn submit_cross_signing_recovery_batch(
                 format!("atomic cross-signing recovery commit failed: {error}"),
             )
         })?;
-    for (event, receipt) in typed_control_events.iter().zip(&control_proposal_acks) {
+    for (event, ack) in typed_control_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
-            .put_pending_control_event_with_receipt(event, receipt)
+            .put_pending_control_event_with_ack(event, ack)
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -856,7 +850,7 @@ async fn identity_anchor_fanout_records(
     for (parsed, envelope) in unit {
         let control_proposal_ack = control_proposal_acks
             .iter()
-            .find(|receipt| receipt.proposal_digest.as_str() == parsed.canonical_digest);
+            .find(|ack| ack.proposal_digest.as_str() == parsed.canonical_digest);
         deliveries.extend(
             // This unit's ingress receipts are minted but not yet durable —
             // they commit alongside these very outbox rows.
@@ -980,17 +974,18 @@ pub(super) async fn identical_historical_retry(
                     format!("stored anchor Event digest is invalid: {error}"),
                 )
             })?;
-            let indexed_receipt = state
-                .projections()
-                .control_proposal_ack(&digest)
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("stored Control Proposal Ack unavailable: {error}"),
-                    )
-                })?;
-            let durable_receipt = if indexed_receipt.is_none() {
+            let indexed_ack =
+                state
+                    .projections()
+                    .control_proposal_ack(&digest)
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("stored Control Proposal Ack unavailable: {error}"),
+                        )
+                    })?;
+            let durable_ack = if indexed_ack.is_none() {
                 state
                     .event_queries()
                     .control_proposal_ack_for_event(&record.event_id)
@@ -1005,7 +1000,7 @@ pub(super) async fn identical_historical_retry(
             } else {
                 None
             };
-            let receipt = indexed_receipt.or(durable_receipt);
+            let ack = indexed_ack.or(durable_ack);
             let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1016,7 +1011,7 @@ pub(super) async fn identical_historical_retry(
                 })?;
             state
                 .projections()
-                .put_pending_control_event(&event, receipt.as_ref())
+                .put_pending_control_event(&event, ack.as_ref())
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1024,8 +1019,8 @@ pub(super) async fn identical_historical_retry(
                         format!("accepted identity anchor pending index recovery failed: {error}"),
                     )
                 })?;
-            if let Some(receipt) = receipt {
-                outcome.control_proposal_acks.push(receipt);
+            if let Some(ack) = ack {
+                outcome.control_proposal_acks.push(ack);
             }
         }
         state.wake_control_seal_coordinator();
@@ -2326,7 +2321,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identical_retry_restores_receipt_free_pending_anchor_index() {
+    async fn identical_retry_restores_ack_free_pending_anchor_index() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },

@@ -1,6 +1,6 @@
 use super::{
-    Arc, BTreeMap, Mutex, PersistenceResult, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, async_trait,
+    Arc, BTreeMap, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, Mutex,
+    PersistenceResult, async_trait,
 };
 
 pub(crate) struct MemoryControlProposalAuthorityAckStore {

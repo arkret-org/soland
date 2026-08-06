@@ -37,7 +37,13 @@ fn rust_sources(root: &Path, out: &mut Vec<PathBuf>) {
 fn no_soland_source_hand_rolls_the_event_digest_preimage() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut sources = Vec::new();
-    for tree in ["../http/src", "../domain/src", "../services/src", "../server", "src"] {
+    for tree in [
+        "../http/src",
+        "../domain/src",
+        "../services/src",
+        "../server",
+        "src",
+    ] {
         rust_sources(&manifest.join(tree), &mut sources);
     }
     assert!(!sources.is_empty(), "found no Rust sources to scan");

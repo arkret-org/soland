@@ -6,10 +6,7 @@ use super::*;
     operation_id = "ak.self.control_proposal_acks.command.issue",
     tags("events")
 )]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "ak.self.control_proposal_acks.command.issue")
-)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.control_proposal_acks.command.issue"))]
 pub(super) async fn issue_control_proposal_ack(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -97,7 +94,7 @@ pub(super) async fn issue_control_proposal_ack(
         // authority set, not the complete publication-proof bytes. A
         // durable client may refresh an expired AuthorizationLease while
         // retrying the same signed Event; after the request has passed
-        // current admission above, return the immutable original receipt.
+        // current admission above, return the immutable original Ack.
         let outcome = serde_json::from_value(record.response_body).map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -123,7 +120,7 @@ pub(super) async fn issue_control_proposal_ack(
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    let receipt = crate::control_proposal::mint_control_proposal_ack(
+    let ack = crate::control_proposal::mint_control_proposal_ack(
         state,
         realm_id,
         proposal_digest,
@@ -137,7 +134,7 @@ pub(super) async fn issue_control_proposal_ack(
             format!("proposal authority Ack issuance failed: {error}"),
         )
     })?;
-    let authority_ack = receipt
+    let authority_ack = ack
         .authority_acks
         .into_iter()
         .next()
@@ -152,12 +149,14 @@ pub(super) async fn issue_control_proposal_ack(
     let created_at = now();
     state
         .jobs()
-        .store_control_proposal_authority_ack(soland_services::jobs::ControlProposalAuthorityAckState {
-            ack_key: ack_key.clone(),
-            request_hash: request_hash.clone(),
-            response_body,
-            created_at,
-        })
+        .store_control_proposal_authority_ack(
+            soland_services::jobs::ControlProposalAuthorityAckState {
+                ack_key: ack_key.clone(),
+                request_hash: request_hash.clone(),
+                response_body,
+                created_at,
+            },
+        )
         .await
         .map_err(|error| {
             AppError::new(
@@ -175,7 +174,9 @@ pub(super) async fn issue_control_proposal_ack(
                 format!("Control Proposal Ack replay verification failed: {error}"),
             )
         })?
-        .ok_or_else(|| AppError::internal("Control Proposal Ack first outcome was not persisted"))?;
+        .ok_or_else(|| {
+            AppError::internal("Control Proposal Ack first outcome was not persisted")
+        })?;
     json_ok(
         serde_json::from_value(accepted.response_body).map_err(|error| {
             AppError::internal(format!(

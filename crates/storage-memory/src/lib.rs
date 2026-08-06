@@ -15,7 +15,8 @@ pub(crate) use soland_storage::{
     AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
     AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
     BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
-    ContactKey, ContactRecord, ContactStore, CursorRevocation, DeviceInventoryRecord,
+    ContactKey, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
@@ -40,13 +41,12 @@ pub(crate) use soland_storage::{
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
     PendingAgentPairingCommitIntent, PersistenceError, PersistenceResult, PersistenceStore,
     PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
-    ProjectionEventStore, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
-    PublicationEvidenceRecord, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
-    RealmEventStats, RealmInviteRecord, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
-    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
-    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
+    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
+    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
+    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
     ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
@@ -73,6 +73,7 @@ mod applets;
 mod audit;
 mod blobs;
 mod contacts;
+mod control_proposal_acks;
 mod device_pairings;
 mod devices;
 mod events;
@@ -91,7 +92,6 @@ mod notifications;
 mod organization_registration;
 mod policy;
 mod projection;
-mod control_proposal_acks;
 mod publication_evidence;
 mod push;
 mod realm_invites;
@@ -118,6 +118,7 @@ pub(crate) use contacts::{
     MemoryConsentCellStore, MemoryContactStore, MemoryDirectConversationBindingStore,
     MemoryInviteReceivePolicyStore,
 };
+pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use device_pairings::MemoryDevicePairingStore;
 pub(crate) use devices::{
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
@@ -149,7 +150,6 @@ pub(crate) use projection::{
     MemoryMorphProjectionStore, MemoryProjectionEventStore, MemoryRealmMetaStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
 };
-pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use publication_evidence::MemoryPublicationEvidenceStore;
 pub(crate) use push::{MemoryPushBridgeCacheStore, MemoryPushDeviceStore};
 pub(crate) use realm_invites::MemoryRealmInviteStore;

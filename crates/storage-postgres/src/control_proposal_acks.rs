@@ -1,7 +1,7 @@
 use super::{
-    Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, QueryableByName, RunQueryDsl, Text,
-    Timestamptz, Utc, Value, async_trait, pg_conn, sql_query,
+    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, Jsonb, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Utc, Value, async_trait, pg_conn, sql_query,
 };
 
 pub struct PgControlProposalAuthorityAckStore {

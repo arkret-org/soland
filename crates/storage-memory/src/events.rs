@@ -72,8 +72,7 @@ impl MessageStore for MemoryMessageStore {
 }
 pub(crate) struct MemoryEventStore {
     pub(crate) data: Mutex<BTreeMap<String, CanonicalEventRecord>>,
-    pub(crate) control_proposal_acks:
-        Mutex<BTreeMap<String, arkret_wire::ControlProposalAck>>,
+    pub(crate) control_proposal_acks: Mutex<BTreeMap<String, arkret_wire::ControlProposalAck>>,
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
     publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
@@ -127,9 +126,9 @@ fn stage_control_proposal_acks(
     staged: &mut BTreeMap<String, arkret_wire::ControlProposalAck>,
     records: &[CanonicalEventRecord],
     control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
-    receipts_required: bool,
+    acks_required: bool,
 ) -> PersistenceResult<()> {
-    if control_proposal_acks.is_empty() && !receipts_required {
+    if control_proposal_acks.is_empty() && !acks_required {
         return Ok(());
     }
     if control_proposal_acks.len() != records.len() {
@@ -138,14 +137,14 @@ fn stage_control_proposal_acks(
         ));
     }
     let mut by_digest = BTreeMap::new();
-    for receipt in control_proposal_acks {
-        receipt.validate_protocol_bounds().map_err(|error| {
+    for ack in control_proposal_acks {
+        ack.validate_protocol_bounds().map_err(|error| {
             PersistenceError::Conflict(format!(
                 "schema_violation: invalid Control Proposal Ack: {error}"
             ))
         })?;
         if by_digest
-            .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
+            .insert(ack.proposal_digest.as_str().to_owned(), ack)
             .is_some()
         {
             return Err(PersistenceError::Conflict(
@@ -154,24 +153,25 @@ fn stage_control_proposal_acks(
         }
     }
     for record in records {
-        let receipt = by_digest.get(&record.canonical_digest).ok_or_else(|| {
+        let ack = by_digest.get(&record.canonical_digest).ok_or_else(|| {
             PersistenceError::Conflict(
-                "schema_violation: accepted Control Move is missing Control Proposal Ack".to_owned(),
+                "schema_violation: accepted Control Move is missing Control Proposal Ack"
+                    .to_owned(),
             )
         })?;
-        if record.realm_id.as_deref() != Some(receipt.realm_id.as_str()) {
+        if record.realm_id.as_deref() != Some(ack.realm_id.as_str()) {
             return Err(PersistenceError::Conflict(
                 "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
             ));
         }
         if let Some(existing) = staged.get(&record.event_id)
-            && existing != receipt
+            && existing != ack
         {
             return Err(PersistenceError::Conflict(
                 "duplicate_conflict: Control Move has a different Control Proposal Ack".to_owned(),
             ));
         }
-        staged.insert(record.event_id.clone(), receipt.clone());
+        staged.insert(record.event_id.clone(), ack.clone());
     }
     Ok(())
 }
@@ -244,14 +244,9 @@ impl EventStore for MemoryEventStore {
         let mut staged_receipts = receipts.clone();
         let mut staged_evidence = evidence.clone();
         let mut staged_outbox = federation_outbox.clone();
-        let reanchor_conflict = reanchor_slot
-            .as_ref()
-            .is_some_and(|slot| {
-                identity_anchor_slot_conflicts(
-                    &staged_events.values().collect::<Vec<_>>(),
-                    slot,
-                )
-            });
+        let reanchor_conflict = reanchor_slot.as_ref().is_some_and(|slot| {
+            identity_anchor_slot_conflicts(&staged_events.values().collect::<Vec<_>>(), slot)
+        });
         if reanchor_conflict {
             if !control_proposal_acks.is_empty() {
                 return Err(PersistenceError::Conflict(

@@ -1053,12 +1053,11 @@ pub(crate) async fn post_recovery_policy(
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
         cba_proof_bundles: Vec::new(),
     };
-    let mut receipt_response =
-        TestClient::post("http://server/_arkret/self/control-proposal-acks")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&receipt_request)
-            .send(&app_from_state(state.clone()))
-            .await;
+    let mut receipt_response = TestClient::post("http://server/_arkret/self/control-proposal-acks")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&receipt_request)
+        .send(&app_from_state(state.clone()))
+        .await;
     let receipt_status = receipt_response.status_code.unwrap();
     let receipt_body: Value = receipt_response.take_json().await.unwrap();
     if receipt_status != StatusCode::OK {

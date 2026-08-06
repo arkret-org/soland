@@ -20,18 +20,19 @@ pub(crate) use soland_storage::{
     AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
     AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
     BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
-    ContactRecord, ContactStore, CursorRevocation, DeviceInventoryRecord, DeviceInventoryStore,
-    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
-    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore, DevicePairingRecord,
-    DevicePairingStore, DirectConversationBindingRecord, DirectConversationBindingStore,
-    DriftResult, EventStore, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord,
-    IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DevicePairingRecord, DevicePairingStore, DirectConversationBindingRecord,
+    DirectConversationBindingStore, DriftResult, EventStore, FederationFrontierExchangeRecord,
+    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
+    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome,
+    InviteLocatorRecord, InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
     JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
     JoinApplicationRecord, JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
     MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore,
@@ -43,13 +44,13 @@ pub(crate) use soland_storage::{
     PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
     PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
-    ProjectionEventStore, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
-    PublicationEvidenceRecord, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
-    RealmEventStats, RealmInviteRecord, RealmInviteStore, RealmModerationPolicyRecord,
-    RealmModerationPolicyStore, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord,
-    RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord,
-    RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID, SecurityTransactionRecord,
+    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
+    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
+    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
+    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID, SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
     SecurityTransactionStore, ServiceIdentityStore, ServiceRegistrationCommitOutcome,
     SessionRecord, SessionStore, SidecarStore, SignalRelayRecord, SignalRelayStore,
@@ -86,6 +87,7 @@ mod applets;
 mod audit;
 mod blobs;
 mod contacts;
+mod control_proposal_acks;
 mod device_pairing_row;
 mod device_pairings;
 mod devices;
@@ -103,7 +105,6 @@ mod notifications;
 mod organization_registration;
 mod policy;
 mod projection;
-mod control_proposal_acks;
 mod publication_evidence;
 mod push;
 mod realm_invites;
@@ -128,6 +129,7 @@ pub use applets::*;
 pub use audit::*;
 pub use blobs::*;
 pub use contacts::*;
+pub use control_proposal_acks::*;
 pub(crate) use device_pairing_row::DevicePairingRow;
 pub use device_pairings::*;
 pub use devices::*;
@@ -145,7 +147,6 @@ pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
 pub use projection::*;
-pub use control_proposal_acks::*;
 pub use publication_evidence::*;
 pub use push::*;
 pub use realm_invites::*;
