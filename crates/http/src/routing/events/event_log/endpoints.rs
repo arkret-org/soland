@@ -101,9 +101,15 @@ async fn submit_event_seal(
     } else {
         crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?
     };
+    // The wire field is a set (byte-wise ascending, unique), the same
+    // normalization `Seal.delta` carries. `SealEffect` holds reducer apply order
+    // — causal, then digest-descending — which a client cannot reproduce.
+    // Serving it raw made this response disagree with the short-circuit paths in
+    // `move_seal`, which return `seal.delta`.
+    let accepted_event_digests = effect.wire_accepted_event_digests();
     json_ok(EventSealSubmitOutcome {
         seal_id: effect.seal,
-        accepted_event_digests: effect.accepted_event_digests,
+        accepted_event_digests,
         post_state_root: effect.post_state_root,
     })
 }

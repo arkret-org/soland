@@ -52,7 +52,10 @@ use crate::state::AppState;
 #[derive(Clone, Debug)]
 pub struct NotaryOutcome {
     pub seal_id: SealId,
-    /// Canonical `event_digest`s of the Control Moves this Seal accepted.
+    /// Canonical `event_digest`s of the Control Moves this Seal accepted, in the
+    /// wire order: byte-wise ascending and unique, as `Seal.delta` and
+    /// `EventSealSubmitOutcome` both define it. Not reducer apply order — that is
+    /// causal-then-digest-descending and no client can reproduce it.
     pub accepted_event_digests: Vec<Hash>,
     pub rejected_events: Vec<(Hash, String)>,
     pub post_state_root: Hash,
@@ -655,9 +658,10 @@ impl NotaryWorker {
             }
         }
 
+        let accepted_event_digests = effect.wire_accepted_event_digests();
         Ok(Some(NotaryOutcome {
             seal_id: effect.seal,
-            accepted_event_digests: effect.accepted_event_digests,
+            accepted_event_digests,
             rejected_events: rejected.into_iter().chain(effect.rejected_events).collect(),
             post_state_root: effect.post_state_root,
         }))

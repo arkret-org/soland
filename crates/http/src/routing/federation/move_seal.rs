@@ -444,12 +444,7 @@ async fn try_apply_device_generation_event_seal(
                 "Seal id already exists with different signature material",
             ));
         }
-        return Ok(Some(SealEffect {
-            seal: seal.id.clone(),
-            accepted_event_digests: seal.delta.clone(),
-            rejected_events: Vec::new(),
-            post_state_root: seal.state_root.clone(),
-        }));
+        return Ok(Some(committed_seal_effect(seal)));
     }
     let Some(mut context) = device_generation_event_seal_context(state, &seal.realm_id).await?
     else {
@@ -898,12 +893,7 @@ async fn try_apply_device_generation_event_seal(
             ));
         }
     }
-    Ok(Some(SealEffect {
-        seal: seal.id.clone(),
-        accepted_event_digests: seal.delta.clone(),
-        rejected_events: Vec::new(),
-        post_state_root: seal.state_root.clone(),
-    }))
+    Ok(Some(committed_seal_effect(seal)))
 }
 
 pub(crate) async fn apply_managed_agent_event_seal(
@@ -958,12 +948,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
                 "managed Agent PCR Seal id already exists with different signature material",
             ));
         }
-        return Ok(SealEffect {
-            seal: seal.id.clone(),
-            accepted_event_digests: seal.delta.clone(),
-            rejected_events: Vec::new(),
-            post_state_root: seal.state_root.clone(),
-        });
+        return Ok(committed_seal_effect(seal));
     }
 
     let mut leaves = state
@@ -1193,12 +1178,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
             ));
         }
     }
-    Ok(SealEffect {
-        seal: seal.id.clone(),
-        accepted_event_digests: seal.delta.clone(),
-        rejected_events: Vec::new(),
-        post_state_root: seal.state_root.clone(),
-    })
+    Ok(committed_seal_effect(seal))
 }
 
 pub(crate) async fn apply_inbound_seal(
@@ -1501,6 +1481,26 @@ async fn admin_sign_seal(
         .with_status(StatusCode::FORBIDDEN)),
         Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
             .with_status(StatusCode::CONFLICT)),
+    }
+}
+
+/// The effect of a Seal that is already committed — an idempotent re-submit, or
+/// a Seal this process just wrote.
+///
+/// `Seal.delta` *is* the accepted set here, and it is already the wire order:
+/// `Seal::validate_structural` requires it byte-wise ascending and unique, which
+/// is exactly what
+/// `service-operation-dtos.schema.json#/$defs/EventSealSubmitOutcome` defines
+/// `accepted_event_digests` to be. Four call sites spelled this literal out; one
+/// function keeps them from drifting into reducer apply order, which is a
+/// different sequence (causal, then digest-descending) that no client can
+/// reproduce.
+fn committed_seal_effect(seal: &Seal) -> SealEffect {
+    SealEffect {
+        seal: seal.id.clone(),
+        accepted_event_digests: seal.delta.clone(),
+        rejected_events: Vec::new(),
+        post_state_root: seal.state_root.clone(),
     }
 }
 
