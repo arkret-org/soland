@@ -2163,7 +2163,7 @@ mod tests {
             envelope["kind"].as_str().unwrap(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(
-                    "ak:realm:01904100-0000-7000-8000-000000000010",
+                    "ak:realm:01904100-0000-8000-8000-000000000010",
                 )
                 .unwrap(),
             },
@@ -2214,7 +2214,7 @@ mod tests {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
             actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
             actor_seq,
-            realm_id: Some("ak:realm:01904100-0000-7000-8000-000000000010".to_owned()),
+            realm_id: Some("ak:realm:01904100-0000-8000-8000-000000000010".to_owned()),
             kind: envelope["kind"].as_str().unwrap().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: format!(
@@ -2301,7 +2301,7 @@ mod tests {
         let (max_seq, heads) = preserved_actor_frontier(
             &records,
             "did:webvh:z6mkfixture:alice.example",
-            "ak:realm:01904100-0000-7000-8000-000000000010",
+            "ak:realm:01904100-0000-8000-8000-000000000010",
             &covered,
         )
         .unwrap();

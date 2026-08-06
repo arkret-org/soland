@@ -266,7 +266,7 @@ async fn policy_request_for_operation(
         ))
     })?;
     let mut request = PolicyCheckRequestInput {
-        request_id: format!("ak:policy_request:{}", ids::generate_event_id()),
+        request_id: ids::generate("policy_request"),
         realm_id,
         actor_id,
         action: action.to_owned(),

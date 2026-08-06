@@ -24,7 +24,7 @@ const SERVICE_ID_OTHER: &str = "did:web:principal.rogue.example";
 // For control-stream actor-private use the convention is the actor's
 // principal control Realm, but a placeholder is fine for reducer-level
 // tests because the dispatcher reads everything it needs from payload.
-const PLACEHOLDER_REALM: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const PLACEHOLDER_REALM: &str = "ak:realm:01904100-0000-8000-8000-aaaaaaaaaaaa";
 const PRINCIPAL_A: &str = "did:web:alice.example";
 const PRINCIPAL_B: &str = "did:web:bob.example";
 const DEVICE_A: &str = "device-a";

@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn corrupt_record_is_skipped_without_hiding_valid_snapshot_entries() {
         let subject = MemberIdentitySubjectKey {
-            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
             actor_id: "did:web:alice.example".to_owned(),
             segment: "member_identity".to_owned(),
         };

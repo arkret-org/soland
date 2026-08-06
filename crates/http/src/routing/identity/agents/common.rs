@@ -326,7 +326,7 @@ mod requested_scope_tests {
         let mut record = AgentPrincipalRecord::new(
             "did:webvh:agent.example:agents:test".to_owned(),
             "did:webvh:controller.example:users:test".to_owned(),
-            "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:019f6000-0000-8000-8000-000000000001".to_owned(),
             arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
             AgentLifecycleState::Active,
             chrono::Utc::now(),
@@ -361,7 +361,7 @@ mod requested_scope_tests {
             "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "realm",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001"
             }]
         }));
         assert!(agent_grant_within_requested_scope(
@@ -369,7 +369,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
                 "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
@@ -379,7 +379,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "realm",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099"
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000099"
             }))],
             &[]
         ));
@@ -388,7 +388,7 @@ mod requested_scope_tests {
             "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "strand",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001"
             }]
         }));
         assert!(agent_grant_within_requested_scope(
@@ -396,7 +396,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
                 "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
@@ -411,7 +411,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000099",
                 "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
@@ -421,7 +421,7 @@ mod requested_scope_tests {
             "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "circle",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
                 "resource_ref": "ak:circle:019f6000-0000-8000-8000-000000000003"
             }]
         }));
@@ -430,7 +430,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "circle",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
                 "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000003"
             }))],
             &[]
@@ -440,7 +440,7 @@ mod requested_scope_tests {
             &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "circle",
-                "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
                 "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000004"
             }))],
             &[]
@@ -466,7 +466,7 @@ mod requested_scope_tests {
         }));
         let resources = [resource(json!({
             "kind": "strand",
-            "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:019f6000-0000-8000-8000-000000000001",
             "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
         }))];
 

@@ -1050,7 +1050,7 @@ async fn admin_realm_media_service_renders_projected_cell() {
     );
 
     // A Realm with no committed epoch renders an empty (but well-typed) view.
-    let other_realm = "ak:realm:0196419b-0000-7000-8000-0000000000ff";
+    let other_realm = "ak:realm:0196419b-0000-8000-8000-0000000000ff";
     let empty: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{other_realm}/media-service"
     ))

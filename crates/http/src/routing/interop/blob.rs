@@ -1667,7 +1667,7 @@ mod tests {
             storage_key: "sha256/test".to_owned(),
             media_type: media_type.to_owned(),
             filename: filename.map(ToOwned::to_owned),
-            realm_id: Some("ak:realm:0196419b-0000-7000-8000-000000000000".to_owned()),
+            realm_id: Some("ak:realm:0196419b-0000-8000-8000-000000000000".to_owned()),
             encryption: None,
             legal_hold: false,
             redacted: false,

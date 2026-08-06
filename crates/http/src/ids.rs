@@ -22,10 +22,29 @@ use uuid::Uuid;
 /// Format: `ak:<kind>:<uuid-v7-36-char-lowercase-hex>`. Delegates to the SDK
 /// [`arkret_identifiers::new_prefixed_uuid7`] so the canonical lowercase UUIDv7 wire
 /// form is produced by the single shared primitive.
+/// Generators exist only for producer-allocated kinds. The event-derived kinds
+/// (`realm`, `space`, `event`, `relation`, `circle`, `strand`, `message`,
+/// `morph`, `view`, `actor_profile`) have no generator at all: their ids come
+/// from the create Event, so a server that minted one would be naming an object
+/// no receiver can agree with (spec `zh/models/common-fields.md` section 6.0).
 pub fn generate(kind: &str) -> String {
     arkret_identifiers::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
+/// Generators for kinds whose ids the server must NOT mint.
+///
+/// These five kinds are `id_source: event_derived`: their ids come from the
+/// create Event, so a UUIDv7 minted here is rejected by the typed-id
+/// constructor and, if it got through, would name an object no receiver can
+/// agree with.
+///
+/// They are still here because five call sites author a whole object graph and
+/// wire the ids between its members before any envelope exists — converting
+/// them means reordering each into build-then-derive, which is real work per
+/// site rather than a rename. Every remaining caller is a known defect; see
+/// `arkret-work/work/active/2026-08-05-event-derived-object-id.md`.
+///
+/// Do not add callers.
 pub fn generate_space_id() -> String {
     generate("space")
 }
@@ -38,19 +57,26 @@ pub fn generate_event_id() -> String {
     generate("event")
 }
 
-pub fn generate_operation_id() -> String {
-    generate("operation")
-}
-
 pub fn generate_relation_id() -> String {
     generate("relation")
 }
 
-/// AKP-0007 (spec b7d35be) — generate a new `ak:circle:<uuid7>` identifier
-/// for the Circle primitive. Used by `POST /_arkret/self/circles` to mint the new
-/// Circle's typed wire id before submitting `ak.circle.create`.
 pub fn generate_circle_id() -> String {
     generate("circle")
+}
+
+/// A locally-minted correlation token for a server-side record that stands
+/// behind no Event.
+///
+/// It is deliberately its own kind rather than a fabricated `ak:event:` id:
+/// an Event id is content-bound, so minting one would claim an Event that was
+/// never authored and that no receiver could resolve.
+pub fn generate_local_ref() -> String {
+    generate("local_ref")
+}
+
+pub fn generate_operation_id() -> String {
+    generate("operation")
 }
 
 pub fn generate_grant_id() -> String {

@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn plaintext_ephemeral_input_is_rejected_with_the_registered_reason() {
         let error = parse_signal_envelope(serde_json::json!({
-            "realm_id": "ak:realm:01904100-0000-7000-8000-65c7feb295d7",
+            "realm_id": "ak:realm:01904100-0000-8000-8000-65c7feb295d7",
             "kind": "ak.typing",
             "actor_id": "did:webvh:z6mkfixture:alice.example",
             "content": {"typing": true}

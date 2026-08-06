@@ -356,7 +356,7 @@ mod tests {
         let mut record = AgentPrincipalRecord::new(
             "did:web:agent.example".to_owned(),
             "did:web:controller.example".to_owned(),
-            "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
             DidUrl::new("did:web:agent.example#controller").unwrap(),
             AgentLifecycleState::Active,
             now,

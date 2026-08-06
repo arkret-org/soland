@@ -1,6 +1,6 @@
 use super::*;
 
-const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+const REALM_ID: &str = "ak:realm:01904100-0000-8000-8000-cfc039892036";
 const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-0000000000f1";
 
 /// `purpose` of the exporter-derived content AEAD domain
@@ -280,7 +280,7 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
         .schema_refs
         .push("ak.schema.calendar_event.v1".to_owned());
     state.strands.get_mut(STRAND_ID).expect("strand").realm_id =
-        "ak:realm:01904100-0000-7000-8000-000000000099".to_owned();
+        "ak:realm:01904100-0000-8000-8000-000000000099".to_owned();
     assert!(matches!(
         state.apply(&operation, &hlc),
         ProjectionEffect::Rejected { ref reason } if reason == "rsvp_event_cross_realm"

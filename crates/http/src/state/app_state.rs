@@ -249,7 +249,7 @@ pub struct AppStateRuntime {
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
-        let demo_realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+        let demo_realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
         let mut demo = RealmDirectoryEntry::new(
             RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
             "Arkret Demo Realm",
@@ -1836,7 +1836,7 @@ mod membership_hydration_tests {
                         "did:web:alice.example".to_owned(),
                         "did:web:bob.example".to_owned(),
                     ],
-                    realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+                    realm_id: "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
                     main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000002".to_owned(),
                     binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000003".to_owned(),
                     state: "active".to_owned(),
@@ -1891,7 +1891,7 @@ mod membership_hydration_tests {
     // invitee is stuck "waiting for a Welcome" after every restart.
     #[test]
     fn joined_member_survives_directory_hydration() {
-        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1916,7 +1916,7 @@ mod membership_hydration_tests {
 
     #[test]
     fn left_member_is_dropped_on_directory_hydration() {
-        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1941,7 +1941,7 @@ mod membership_hydration_tests {
     // member during hydration.
     #[test]
     fn invite_state_does_not_add_directory_member() {
-        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc".to_owned())
+        let realm_id = RealmId::new("ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc".to_owned())
             .expect("realm id");
         let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
         let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
@@ -1963,7 +1963,7 @@ mod membership_hydration_tests {
     // `ak.circle.member.state` rejected the same agent as a non-member.
     #[tokio::test]
     async fn joined_member_survives_reducer_projection_hydration() {
-        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let realm_id = "ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc";
         let member = "did:web:bob.example";
         let store = SolandMemoryPersistenceStore::new();
         store
@@ -2041,7 +2041,7 @@ mod membership_hydration_tests {
     async fn mls_projections_rehydrate_from_durable_stores() {
         use soland_storage::MlsKeyPackageRow;
 
-        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let realm_id = "ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc";
         let group_id = "ak:mls_group:019f0dd3-aaaa";
         let store = SolandMemoryPersistenceStore::new();
 
@@ -2201,7 +2201,7 @@ mod membership_hydration_tests {
 
         let store = SolandMemoryPersistenceStore::new();
         let actor = "did:web:alice.example";
-        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let realm_id = "ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc";
         let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
         let now = chrono::Utc::now();
         let appended = store
@@ -2323,7 +2323,7 @@ mod membership_hydration_tests {
         let store = SolandMemoryPersistenceStore::new();
         let agent_id =
             "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
-        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e775902";
+        let realm_id = "ak:realm:019f0dd3-081c-8f03-b388-e0399e775902";
         let event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775903";
         let key_id = format!("{agent_id}#runtime-1");
         let replacement_event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775907";
@@ -2404,7 +2404,7 @@ mod membership_hydration_tests {
     async fn realm_owner_metadata_rehydrates_without_implying_capability() {
         use soland_storage_memory::SolandMemoryPersistenceStore;
 
-        let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
+        let realm_id = "ak:realm:019f0dd3-081c-8f03-b388-e0399e7759fc";
         let owner = "did:webvh:z6mkfixture:example.test:users:alice";
         let now = chrono::Utc::now();
         let store = SolandMemoryPersistenceStore::new();

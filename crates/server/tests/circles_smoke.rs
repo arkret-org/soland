@@ -25,8 +25,8 @@ use soland_domain::reducer::{
     CircleLifecycleState, ProjectionEffect, ProjectionState, SolandMembershipState,
 };
 
-const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const REALM_A: &str = "ak:realm:01904100-0000-8000-8000-aaaaaaaaaaaa";
+const REALM_B: &str = "ak:realm:01904100-0000-8000-8000-bbbbbbbbbbbb";
 const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-c11111111111";
 const CIRCLE_B: &str = "ak:circle:01904100-0000-8000-8000-c22222222222";
 const STRAND_X: &str = "ak:strand:01904100-0000-8000-8000-f11111111111";

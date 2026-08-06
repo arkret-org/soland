@@ -1,6 +1,6 @@
 use super::*;
 
-const REALM: &str = "ak:realm:01990000-0000-7000-8000-000000000001";
+const REALM: &str = "ak:realm:01990000-0000-8000-8000-000000000001";
 const OWNER: &str = "did:web:owner.example";
 const SUCCESSOR: &str = "did:web:successor.example";
 

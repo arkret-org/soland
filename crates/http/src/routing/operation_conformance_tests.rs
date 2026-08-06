@@ -33,7 +33,7 @@ fn operation(index: usize, kind: &str, payload: Value) -> Operation {
     // Build a deterministic UUIDv7 from the index (last 12 hex pad as hex of the index).
     let payload_part = format!("{:012x}", index);
     let op_id = format!("ak:operation:01904100-0000-7000-8000-{payload_part}");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001".to_owned();
+    let realm_id = "ak:realm:01904100-0000-8000-8000-000000000001".to_owned();
     Operation::create(
         OperationId::new(op_id).unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
@@ -149,7 +149,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // membership_payload: membership=join additionally requires realm_id, actor_id,
             // delivery_status; delivery_status=routable would further require
             // delivery_binding, so use unroutable to stay minimal.
-            payload: json!({"realm_id": "ak:realm:01904100-0000-7000-8000-000000000001", "actor_id": "did:web:alice.example", "membership": "join", "delivery_status": "unroutable"}),
+            payload: json!({"realm_id": "ak:realm:01904100-0000-8000-8000-000000000001", "actor_id": "did:web:alice.example", "membership": "join", "delivery_status": "unroutable"}),
             valid: true,
         },
         OperationVector {
@@ -197,7 +197,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "space create",
             kind: arkret_wire::EventKind::REALM_CREATE,
             payload: json!({"object": {
-                "id": "ak:realm:0196419b-0000-7000-8000-000000000000",
+                "id": "ak:realm:0196419b-0000-8000-8000-000000000000",
                 "schema": "ak.schema.realm.v1",
                 "title": "Launch",
                 "trust_domain": "ak:trust_domain:local",
@@ -227,7 +227,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "space update",
             kind: arkret_wire::EventKind::REALM_UPDATE,
             payload: json!({
-                "target_ref": "ak:realm:01904100-0000-7000-8000-000000000001",
+                "target_ref": "ak:realm:01904100-0000-8000-8000-000000000001",
                 "patch": {
                     "title": "Launch 2"
                 }
@@ -275,7 +275,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({"object": {
                 "id": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
                 "schema": "ak.schema.strand.v1",
-                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
                 "tracks": {"discussion": {}},
                 "created_by": "did:web:alice.example",
                 "created_at": "2026-05-20T00:00:00.000Z",
@@ -351,7 +351,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({"object": {
                 "id": "ak:morph:01904100-0000-8000-8000-7191ddd787e5",
                 "schema": "ak.schema.morph.v1",
-                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
                 "schema_refs": ["ak.schema.morph.v1"],
                 "morph_kind": "task",
                 "stage": "draft",
@@ -457,7 +457,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // error_class, error_code, retriable, visibility_scope}; additionalProperties=false.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
                 "failed_transaction_ref": "ak:event:01904100-0000-8000-8000-79a90338768b",
                 "error_class": "external_network",
                 "error_code": "bridge_unavailable",

@@ -1254,8 +1254,8 @@ mod tests {
         )
     }
 
-    const TEST_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000f001";
-    const OTHER_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000f002";
+    const TEST_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000f001";
+    const OTHER_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000f002";
 
     /// `history_visibility=restricted` on an ordinary Realm MUST be backed by an
     /// `ak.realm.history_sharing_policy`. It cannot come from the closed Realm

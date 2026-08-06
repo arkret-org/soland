@@ -64,7 +64,7 @@ mod reaction_and_window_policy_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-668e2181b41d")
+            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
                 .unwrap(),
             kind,
             payload,
@@ -124,7 +124,7 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn realm_id_alias_forms_match() {
         assert!(!realm_ids_match(
-            "ak:realm:01904100-0000-7000-8000-668e2181b41d",
+            "ak:realm:01904100-0000-8000-8000-668e2181b41d",
             "ak:space:01904100-0000-8000-8000-668e2181b41d",
         ));
         assert!(realm_ids_match("ak:realm:abc", "ak:realm:abc"));

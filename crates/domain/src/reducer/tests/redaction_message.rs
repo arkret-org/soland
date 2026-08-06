@@ -20,7 +20,7 @@ fn message_create_and_query() {
     let hlc = ServerHlc::new("test");
     let op = make_operation(
         arkret_wire::EventKind::MESSAGE_CREATE,
-        "ak:realm:01904100-0000-7000-8000-cfc039892036",
+        "ak:realm:01904100-0000-8000-8000-cfc039892036",
         serde_json::json!({
             "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
             "sender": "did:web:alice",
@@ -31,7 +31,7 @@ fn message_create_and_query() {
     let effect = state.apply(&op, &hlc);
     assert!(matches!(effect, ProjectionEffect::MessageCreated(_)));
 
-    let msgs = state.messages_for_realm("ak:realm:01904100-0000-7000-8000-cfc039892036");
+    let msgs = state.messages_for_realm("ak:realm:01904100-0000-8000-8000-cfc039892036");
     assert_eq!(msgs.len(), 1);
     assert_eq!(
         msgs[0].event_id,
@@ -47,7 +47,7 @@ fn redaction_hides_message() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
@@ -60,7 +60,7 @@ fn redaction_hides_message() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "by": "did:web:alice",
@@ -72,7 +72,7 @@ fn redaction_hides_message() {
 
     assert!(
         state
-            .messages_for_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
+            .messages_for_realm("ak:realm:01904100-0000-8000-8000-cfc039892036")
             .is_empty()
     );
     assert!(
@@ -103,7 +103,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": event_id,
                 "sender": "did:web:alice",
@@ -124,7 +124,7 @@ fn mal14_tombstone_visible_to_author() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
                 "by": "did:web:alice",
@@ -152,7 +152,7 @@ fn mal14_tombstone_hidden_from_members() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
                 "by": "did:web:alice",
@@ -175,7 +175,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
                 "by": "did:web:alice",
@@ -188,7 +188,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
                 "redaction_value": serde_json::Value::Null,
@@ -223,7 +223,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "target_event_id": event_id,
                 "by": "did:web:alice",
@@ -254,7 +254,7 @@ fn reaction_or_set_convergence() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::REACTION_ADD,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "actor": "did:web:alice",
@@ -273,7 +273,7 @@ fn reaction_or_set_convergence() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::REACTION_REMOVE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "actor": "did:web:alice",
@@ -294,7 +294,7 @@ fn reaction_or_set_convergence() {
 fn membership_join_leave() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     state
         .realm_join_rules
         .insert(realm_id.to_owned(), "public".to_owned());
@@ -342,7 +342,7 @@ fn message_revise_creates_chain() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
@@ -355,7 +355,7 @@ fn message_revise_creates_chain() {
 
     let revise = make_operation(
         arkret_wire::EventKind::MESSAGE_REVISE,
-        "ak:realm:01904100-0000-7000-8000-cfc039892036",
+        "ak:realm:01904100-0000-8000-8000-cfc039892036",
         serde_json::json!({
             "target_ref": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
             "content": {"kind": "ak.content.text", "body": "revised"}
@@ -364,7 +364,7 @@ fn message_revise_creates_chain() {
     let revision_id = revise.operation_id.to_string();
     state.apply(&revise, &hlc);
 
-    let msgs = state.messages_for_realm("ak:realm:01904100-0000-7000-8000-cfc039892036");
+    let msgs = state.messages_for_realm("ak:realm:01904100-0000-8000-8000-cfc039892036");
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].event_id, revision_id);
     assert_eq!(msgs[0].content["body"], "revised");
@@ -387,7 +387,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
@@ -402,7 +402,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
     let effect = state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REVISE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": revision_event_id,
                 "target_ref": message_id,
@@ -417,7 +417,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
         ProjectionEffect::MessageRevised { ref original_id, ref revision }
             if original_id == event_id && revision.event_id == revision_event_id
     ));
-    let msgs = state.messages_for_realm("ak:realm:01904100-0000-7000-8000-cfc039892036");
+    let msgs = state.messages_for_realm("ak:realm:01904100-0000-8000-8000-cfc039892036");
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].event_id, revision_event_id);
     assert_eq!(msgs[0].message_id, message_id);
@@ -436,7 +436,7 @@ fn redaction_accepts_schema_message_id_target() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
@@ -450,7 +450,7 @@ fn redaction_accepts_schema_message_id_target() {
     let effect = state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": redaction_event_id,
                 "message_id": message_id,
@@ -487,7 +487,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
@@ -501,7 +501,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REVISE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": revision_event_id,
                 "target_ref": message_id,
@@ -513,7 +513,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_REDACT,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            "ak:realm:01904100-0000-8000-8000-cfc039892036",
             serde_json::json!({
                 "event_id": "ak:event:01904100-0003-8000-8000-caaa6a15bce3",
                 "message_id": message_id,
@@ -526,7 +526,7 @@ fn redaction_by_message_id_hides_latest_revision() {
 
     assert!(
         state
-            .messages_for_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
+            .messages_for_realm("ak:realm:01904100-0000-8000-8000-cfc039892036")
             .is_empty()
     );
     assert!(

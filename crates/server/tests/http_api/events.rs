@@ -487,7 +487,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         fetched["visibility"]["realm_id"],
-        "ak:realm:0196419b-0000-7000-8000-000000000000"
+        "ak:realm:0196419b-0000-8000-8000-000000000000"
     );
 
     let second = signed_event_envelope(
@@ -691,7 +691,7 @@ async fn events_describe_and_single_event_submit_work() {
 
     // Inaccessible realm must read as not_found (no existence leak).
     let mut hidden = TestClient::get(
-        "http://server/_arkret/self/events/frontier?realm_id=ak:realm:0196419b-0000-7000-8000-00000000dead",
+        "http://server/_arkret/self/events/frontier?realm_id=ak:realm:0196419b-0000-8000-8000-00000000dead",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -730,7 +730,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         "Realm Founder",
     )
     .await;
-    let realm_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
+    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
     let created_at = "2026-05-17T00:00:00.000Z";
     let payload = serde_json::json!({
         "object": {
@@ -1226,8 +1226,8 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let actor = test_event_signer_did().to_owned();
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let token = dev_token_for_device(state.clone(), &actor, device_id, "Governance Founder").await;
-    let realm_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
-    let create_event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
+    let create_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut create = signed_canonical_event(
         &create_event_id,
         arkret_wire::EventKind::REALM_CREATE,
@@ -1303,7 +1303,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         tokio::time::sleep(Duration::from_millis(25)).await;
     };
 
-    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
+    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut envelope = signed_canonical_event(
         &event_id,
         arkret_wire::EventKind::MEMBER_STATE,
@@ -1558,15 +1558,16 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     .with_timezone(&chrono::Utc);
     let mut create = arkret_wire::Event::new(
         arkret_wire::EventKind::REALM_CREATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(realm_id.clone()).unwrap(),
-        },
+        // A genesis carries the closed `realm_genesis` scope and no id: the
+        // Realm id is derived from the Event (this one is a Principal Control
+        // Realm, so the derivation is subject-derived from the Agent DID and
+        // lands back on `realm_id`).
+        arkret_wire::ScopeRef::RealmGenesis,
         Did::new(agent_id.clone()).unwrap(),
         0,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::json!({
             "object": {
-                "id": realm_id,
                 "schema": "ak.schema.realm.v1",
                 "title": "Managed Agent Principal Control Realm",
                 "summary": "Controller-managed E2EE continuity for a Native Personal Agent",

@@ -640,6 +640,9 @@ pub(crate) fn grant_contact_managed_consent(
     granted_at: DateTime<Utc>,
 ) -> (String, ConsentCellRecord) {
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
+    // KNOWN DEFECT: this names an Event that was never authored. It stays a
+    // minted `ak:event:` value only because the consuming field is validated as
+    // one; the fix is to author the Event and use its derived id.
     let event_id = ids::generate_event_id();
     // actor_seq is a per-actor monotonic counter on the originating event;
     // contact-managed grants are minted server-side without a real event log
@@ -1347,7 +1350,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
     let _ = crate::routing::events::projection::append_projection_event(
         state,
         ProjectionEventRecord {
-            event_id: ids::generate_event_id(),
+            event_id: ids::generate_local_ref(),
             realm_id: soland_services::identity::principal_control_realm_for_did(holder),
             event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
             operation_kind: "consent_revoke_cache_invalidation".to_owned(),

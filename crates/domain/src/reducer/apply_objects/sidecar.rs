@@ -254,13 +254,13 @@ mod tests {
                 "ak:operation:01964137-0000-7000-8000-000000000040",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
+            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030")
                 .unwrap(),
             arkret_wire::EventKind::SIDECAR_CREATE,
             serde_json::json!({"object": {
                 "id": sidecar_id,
                 "schema": "ak.schema.agent_sidecar.v1",
-                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
+                "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
                 "controller_id": "did:web:example.com:users:alice",
                 "backing_circle_id": "ak:circle:01964137-0000-8000-8000-000000000041",
                 "encryption_profile": "mls_rfc9420",
@@ -299,7 +299,7 @@ mod tests {
                 "ak:operation:01964137-0000-7000-8000-000000000050",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
+            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030")
                 .unwrap(),
             arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
             serde_json::json!({
@@ -321,7 +321,7 @@ mod tests {
             private_strand.to_owned(),
             crate::reducer::projections::StrandProjection {
                 strand_id: private_strand.to_owned(),
-                realm_id: "ak:realm:01964137-0000-7000-8000-000000000030".to_owned(),
+                realm_id: "ak:realm:01964137-0000-8000-8000-000000000030".to_owned(),
                 tracks: BTreeMap::new(),
                 title: String::new(),
                 summary: None,

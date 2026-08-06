@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_PARENT: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-const REALM_CHILD: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+const REALM_PARENT: &str = "ak:realm:01904100-0000-8000-8000-aaaaaaaaaaaa";
+const REALM_CHILD: &str = "ak:realm:01904100-0000-8000-8000-bbbbbbbbbbbb";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(

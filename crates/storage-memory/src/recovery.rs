@@ -473,7 +473,7 @@ mod tests {
 
     fn erase_authorization_lease() -> AuthorizationLease {
         let scope_ref = ScopeRef::Realm {
-            realm_id: RealmId::new("ak:realm:019a7360-0000-7000-8000-000000000100").unwrap(),
+            realm_id: RealmId::new("ak:realm:019a7360-0000-8000-8000-000000000100").unwrap(),
         };
         let authority_set_policy = AuthoritySetPolicy {
             schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),

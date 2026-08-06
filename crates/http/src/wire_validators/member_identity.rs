@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn accepts_clean_payload() {
         let payload = json!({
-            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "segment": "member_identity",
             "identity_payload": {

@@ -1435,7 +1435,7 @@ mod tests {
         // of asserting placeholders: the retry rebuilder has to carry the whole
         // submission through, and it must never re-stamp a receipt.
         let realm_id =
-            arkret_identifiers::RealmId::new("ak:realm:019f0000-0000-7000-8000-000000000000")
+            arkret_identifiers::RealmId::new("ak:realm:019f0000-0000-8000-8000-000000000000")
                 .unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
         let scope_ref = arkret_wire::ScopeRef::Realm {

@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn shared_builder_honors_fixture_identity_inputs_and_fails_closed() {
-        let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000010";
+        let realm_id = "ak:realm:019fa9d5-0000-8000-8000-000000000010";
         let subject = "did:web:fixture.example";
         let actions = vec!["ak.strand.create".to_owned()];
         let build = |domain: &str, notary: Option<&str>| {
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn content_grant_is_visible_to_the_capability_engine() {
         let grant_id = "ak:grant:019fa9d5-0000-7000-8000-000000000001";
-        let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000002";
+        let realm_id = "ak:realm:019fa9d5-0000-8000-8000-000000000002";
         let subject = "did:web:soland.example";
         let action = "ak.message.create".to_owned();
         let body = grant_body(grant_id, realm_id, subject, std::slice::from_ref(&action))

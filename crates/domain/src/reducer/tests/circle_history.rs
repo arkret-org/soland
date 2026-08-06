@@ -2,7 +2,7 @@ use chrono::{Duration, TimeZone, Utc};
 
 use super::*;
 
-const REALM: &str = "ak:realm:01904100-0000-7000-8000-c1c1c1c1c1c1";
+const REALM: &str = "ak:realm:01904100-0000-8000-8000-c1c1c1c1c1c1";
 const CIRCLE: &str = "ak:circle:01904100-0000-8000-8000-aaaaaaaaaaaa";
 const ALICE: &str = "did:web:alice";
 const BOB: &str = "did:web:bob";

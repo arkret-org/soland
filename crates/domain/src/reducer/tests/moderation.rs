@@ -6,7 +6,7 @@ use super::*;
 // fsm submitted -> under_review -> decided; separation-of-duties +
 // overturn-missing-lift rejections.
 
-const MOD_REALM: &str = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
+const MOD_REALM: &str = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d0d0";
 const MOD_DECISION_ID: &str = "ak:event:01904100-0000-8000-8000-0d0d0d0d0d01";
 const MOD_APPEAL_ID: &str = "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
 const MOD_TARGET_REF: &str = "ak:message:01904100-0000-8000-8000-000000000777";

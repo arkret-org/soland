@@ -5,7 +5,7 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
         arkret_wire::EventKind::MESSAGE_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+                "ak:realm:01904100-0000-8000-8000-a11ce0000001",
             )
             .unwrap(),
         },
@@ -506,7 +506,7 @@ fn test_state() -> AppState {
     AppState::new(test_config(), soland_storage_postgres::Db { pool: None })
 }
 
-const ROSTER_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000a001";
+const ROSTER_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000a001";
 const ROSTER_ACTOR: &str = "did:web:alice.example";
 const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
 const ROSTER_CALLER: &str = "did:web:bob.example";

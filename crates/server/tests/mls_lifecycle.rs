@@ -352,7 +352,7 @@ async fn mls_lifecycle_end_to_end() {
         .await
         .unwrap();
     seed_cross_signing_generation(&state, alice_did, 3);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-00000000e2ee";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-00000000e2ee";
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
     let keypackage_id = "ak:mls_keypackage:t-01";

@@ -43,10 +43,10 @@ async fn dev_token(svc: &salvo::Service) -> String {
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaa1";
-const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbb2";
-const REALM_C: &str = "ak:realm:01904100-0000-7000-8000-ccccccccccc3";
-const REALM_D: &str = "ak:realm:01904100-0000-7000-8000-ddddddddddd4";
+const REALM_A: &str = "ak:realm:01904100-0000-8000-8000-aaaaaaaaaaa1";
+const REALM_B: &str = "ak:realm:01904100-0000-8000-8000-bbbbbbbbbbb2";
+const REALM_C: &str = "ak:realm:01904100-0000-8000-8000-ccccccccccc3";
+const REALM_D: &str = "ak:realm:01904100-0000-8000-8000-ddddddddddd4";
 
 /// Submit a `ak.realm.inheritance_policy` event directly through the
 /// reducer (the dedicated HTTP route is the standard `/_arkret/self/events`

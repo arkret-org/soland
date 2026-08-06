@@ -1356,7 +1356,7 @@ mod tests {
 
     const AGENT: &str = "did:web:agent.example";
     const CONTROLLER: &str = "did:web:controller.example";
-    const PCR: &str = "ak:realm:01999999-0000-7000-8000-00000000feed";
+    const PCR: &str = "ak:realm:01999999-0000-8000-8000-00000000feed";
     const AUTHORIZATION: &str = "did:web:agent.example#managed-controller";
 
     fn requested_scope() -> Value {
@@ -1445,7 +1445,7 @@ mod tests {
 
         let mut wrong_pcr = did_document();
         wrong_pcr["service"][0]["serviceEndpoint"]["realm_id"] =
-            json!("ak:realm:01999999-0000-7000-8000-00000000bad0");
+            json!("ak:realm:01999999-0000-8000-8000-00000000bad0");
         assert!(
             validate_agent_did_document_binding(
                 &wrong_pcr,
@@ -1525,9 +1525,7 @@ mod tests {
         let realm_id = RealmId::new(PCR).unwrap();
         let mut event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
-            arkret_wire::ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            },
+            arkret_wire::ScopeRef::RealmGenesis,
             Did::new(AGENT).unwrap(),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),

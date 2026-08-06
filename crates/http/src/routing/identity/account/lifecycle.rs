@@ -376,7 +376,7 @@ async fn append_account_deactivation_propagation_state(
     let _ = crate::routing::events::projection::append_projection_event(
         state,
         soland_services::events::ProjectedEvent {
-            event_id: crate::ids::generate_event_id(),
+            event_id: crate::ids::generate_local_ref(),
             realm_id: soland_services::identity::principal_control_realm_for_did(did),
             event_kind: "ak.account.status".to_owned(),
             operation_kind: "account_status_deactivation_propagation".to_owned(),

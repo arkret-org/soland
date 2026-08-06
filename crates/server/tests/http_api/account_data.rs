@@ -107,7 +107,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         verified_dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob")
             .await;
 
-    let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    let realm_id = "ak:realm:0196419b-0000-8000-8000-000000000000";
     let key = format!("ak.contacts.realm.{realm_id}");
     let remark = account_data_encrypted_value(
         "did:web:alice.example",
@@ -380,7 +380,7 @@ async fn account_data_requires_auth() {
         DEMO_REALM_ID,
         "ak.account_data.set",
         serde_json::json!({
-            "key": "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
+            "key": "ak.contacts.realm.ak:realm:0196419b-0000-8000-8000-000000000000",
             "expected_revision": 0,
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},

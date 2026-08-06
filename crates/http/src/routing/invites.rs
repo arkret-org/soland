@@ -1688,7 +1688,7 @@ mod invite_locator_security_tests {
             },
             soland_storage_postgres::Db { pool: None },
         );
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000401";
+        let realm_id = "ak:realm:01904100-0000-8000-8000-000000000401";
         let invite_id = "ak:invite:01904100-0000-7000-8000-000000000402";
         let subject = "did:web:bob.example";
         let body = json!({

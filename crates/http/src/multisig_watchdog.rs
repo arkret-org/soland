@@ -417,7 +417,7 @@ mod tests {
         }
         soland_storage::MultisigPendingRecord {
             seal_id: seal_id.to_owned(),
-            realm_id: "ak:realm:0196419b-0000-7000-8000-00000000014a".to_owned(),
+            realm_id: "ak:realm:0196419b-0000-8000-8000-00000000014a".to_owned(),
             threshold_k,
             threshold_n: 3,
             members: (0..3)

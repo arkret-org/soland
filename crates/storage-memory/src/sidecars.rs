@@ -104,7 +104,7 @@ mod tests {
     fn record(sidecar_id: &str, circle_id: &str) -> AgentSidecarRecord {
         AgentSidecarRecord {
             sidecar_id: sidecar_id.to_owned(),
-            realm_id: "ak:realm:01964137-0000-7000-8000-000000000030".to_owned(),
+            realm_id: "ak:realm:01964137-0000-8000-8000-000000000030".to_owned(),
             controller_id: "did:web:example.com:users:alice".to_owned(),
             backing_circle_id: circle_id.to_owned(),
             state: "active".to_owned(),

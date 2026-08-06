@@ -10,8 +10,8 @@ use super::*;
 fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_a = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
-    let realm_b = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
+    let realm_a = "ak:realm:01904100-0000-8000-8000-aaaaaaaaaaaa";
+    let realm_b = "ak:realm:01904100-0000-8000-8000-bbbbbbbbbbbb";
     let parent_in_a = "ak:space:01904100-0000-8000-8000-000000000001";
     let child_in_b = "ak:space:01904100-0000-8000-8000-000000000002";
     // Container hosted inside Realm A (the to-be-destroyed Realm).
@@ -94,7 +94,7 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
 fn space_container_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let container_space_id = "ak:space:01904100-0000-8000-8000-1fb50799ad42";
 
     // create
@@ -197,7 +197,7 @@ fn space_container_lifecycle_round_trip() {
 fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let container_space_id = "ak:space:01904100-0000-8000-8000-1fb50799ad43";
 
     // Create the Space container (Active).
@@ -300,7 +300,7 @@ fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
         arkret_wire::EventKind::SPACE_ARCHIVE,
-        "ak:realm:01904100-0000-7000-8000-cfc039892036",
+        "ak:realm:01904100-0000-8000-8000-cfc039892036",
         serde_json::json!({ "space_id": "ak:space:01904100-0000-8000-8000-cfc039892039" }),
     );
     assert_eq!(
@@ -313,7 +313,7 @@ fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
 fn space_update_and_parent_accept_canonical_payload_fields() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let container_space_id = "ak:space:01904100-0000-8000-8000-cfc039892037";
     let parent_space_id = "ak:space:01904100-0000-8000-8000-cfc039892038";
 
@@ -417,7 +417,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
 fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let space_id = "ak:space:01904100-0000-8000-8000-cfc039892099";
 
     let create = make_operation(
@@ -488,7 +488,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
 fn space_container_child_order_tracks_rank_updates() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
     let first_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
     let second_id = "ak:space:01904100-0000-8000-8000-0000000000a2";
@@ -565,7 +565,7 @@ fn space_container_child_order_tracks_rank_updates() {
 fn list_archive_cascades_card_and_restore_preserves_rank() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
     let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
     let strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
@@ -681,7 +681,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
 fn board_archive_cascades_child_lists_and_cards() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
     let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
     let strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
@@ -792,7 +792,7 @@ fn board_archive_cascades_child_lists_and_cards() {
 fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let circle_id = "ak:circle:01904100-0000-8000-8000-00000000c001";
     let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
     let public_strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
@@ -930,7 +930,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
 fn child_scope_policy_gates_space_parent_edges() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
     let circle_id = "ak:circle:01904100-0000-8000-8000-00000000c002";
     let parent_id = "ak:space:01904100-0000-8000-8000-0000000000b1";
     let child_id = "ak:space:01904100-0000-8000-8000-0000000000b2";

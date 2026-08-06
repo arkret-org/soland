@@ -94,7 +94,7 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
     let verification_method =
         arkret_wire::DidUrl::new(format!("{did}#{did_key_fragment}")).expect("fixture DID URL");
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-a11ce0000001".to_owned(),
     )
     .unwrap();
     let actor_id = arkret_identifiers::Did::new(did.clone()).unwrap();
@@ -177,7 +177,7 @@ async fn member_identity_unsupported_signature_algorithm_is_422() {
 async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     let state = make_state(false);
     let payload = json!({
-        "realm_id": "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+        "realm_id": "ak:realm:01904100-0000-8000-8000-a11ce0000001",
         "actor_id": "did:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
         "segment": "member_identity",
         "identity_payload": {
@@ -264,7 +264,7 @@ fn declared_required_feature_is_accepted() {
 #[tokio::test]
 async fn policy_bundle_media_plaintext_reads_realm_meta() {
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-a11ce0000001";
     let now = chrono::Utc::now();
     state
         .realms()
@@ -310,7 +310,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     // SEC-08 — a minimal-metadata Realm rejects an encrypted message whose
     // aad_visibility_event_id is not `hidden`, and accepts `hidden`.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000002";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-a11ce0000002";
     let now = chrono::Utc::now();
     state
         .realms()
@@ -411,7 +411,7 @@ async fn circle_scoped_write_requires_circle_membership() {
     // Regression guard for the gap where a Realm-wide grant (notably an Applet
     // bot / Ghost Actor) could inject content into a Circle it never joined.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-c1c1e0000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-c1c1e0000001";
     let circle_id = "ak:circle:01904100-0000-8000-8000-c1c1e0000002";
     let member = "did:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
@@ -498,7 +498,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     // circle.md §8 — a reaction is a write into the target Message's Strand
     // scope, so reacting to a Circle message requires Circle membership too.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-c2c2e0000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-c2c2e0000001";
     let circle_id = "ak:circle:01904100-0000-8000-8000-c2c2e0000002";
     let strand_id = "ak:strand:01904100-0000-8000-8000-c2c2e0000003";
     let event_id = "ak:event:01904100-0000-8000-8000-c2c2e0000004";
@@ -608,7 +608,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     // scope. A Realm-wide grant is insufficient when the Morph was created
     // under a Circle scope.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-c3c3e0000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-c3c3e0000001";
     let circle_id = "ak:circle:01904100-0000-8000-8000-c3c3e0000002";
     let scoped_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000003";
     let realm_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000004";
@@ -719,7 +719,7 @@ async fn applet_registration_requires_realm_admin() {
     // its own — this gate closes that bypass. Realm ownership alone is not a
     // capability; an active `ak.realm.admin` grant is required.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-a99e70000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-a99e70000001";
     let owner = "did:web:alice.example";
     let outsider = "did:web:mallory.example";
     let now = chrono::Utc::now();
@@ -810,7 +810,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
     // are orthogonal, and an undeclared component is the `hidden` ceiling, so
     // `routing_digest` only becomes reachable once the Realm declares it.
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000003";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-a11ce0000003";
     let now = chrono::Utc::now();
     state
         .realms()
@@ -969,7 +969,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
         "kind": arkret_wire::EventKind::REALM_CREATE,
         "requirements": { "schema": ["ak.schema.event.v1"] },
         "actor_id": session.actor.clone(),
-        "effective_scope": "ak:realm:01904100-0000-7000-8000-a11ce0000001"
+        "effective_scope": "ak:realm:01904100-0000-8000-8000-a11ce0000001"
     });
 
     let err = validate_event_envelope(&state, &session, &envelope)
@@ -988,7 +988,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+                "ak:realm:01904100-0000-8000-8000-a11ce0000001",
             )
             .unwrap(),
         },
@@ -1017,7 +1017,7 @@ fn event_canonical_bytes_reject_non_canonical_numbers() {
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+                "ak:realm:01904100-0000-8000-8000-a11ce0000001",
             )
             .unwrap(),
         },
@@ -1059,7 +1059,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
     let valid = json!({
         "payload": {
             "actor_id": "did:web:bob.example",
-            "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
+            "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
             "membership": "join",
             "reason": "invite_accept",
             "invite_ref": "ak:invite:01904100-0000-7000-8000-000000000001",
@@ -1169,11 +1169,11 @@ fn event_payload_validator_enforces_patch_family_schema() {
         (
             "ak.realm.update",
             json!({
-                "target_ref": "ak:realm:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:realm:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:realm:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:realm:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
@@ -1244,7 +1244,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
             "ak.profile.realm_override",
             &json!({
                 "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
-                "target_realm_id": "ak:realm:01904100-0000-7000-8000-f10dc0000002",
+                "target_realm_id": "ak:realm:01904100-0000-8000-8000-f10dc0000002",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
         )
@@ -1285,7 +1285,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
 #[test]
 fn realm_create_rejects_world_readable_history_without_history_capable_scheme() {
     let state = make_state(true);
-    let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
+    let realm_id = "ak:realm:01904100-0000-8000-8000-a11ce0000001";
     let envelope = json!({
         "payload": {
             "object": {
@@ -1527,7 +1527,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
         .expect("SDK ProductionVerifier must accept detached_jws kind");
 }
 
-const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
+const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-8000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-8000-8000-000000000001";
 /// The MLS group named by every E2EE fixture ciphertext.

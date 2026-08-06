@@ -341,8 +341,8 @@ mod tests {
 
     use super::*;
 
-    const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000010";
-    const REALM_OTHER: &str = "ak:realm:0196419b-0000-7000-8000-000000000099";
+    const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000010";
+    const REALM_OTHER: &str = "ak:realm:0196419b-0000-8000-8000-000000000099";
     const ORG: &str = "did:webvh:example.test:orgs:01J0000000000000000000000A";
     const ORG2: &str = "did:webvh:example.test:orgs:01J0000000000000000000000B";
 

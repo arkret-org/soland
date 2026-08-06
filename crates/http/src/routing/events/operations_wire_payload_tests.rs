@@ -59,7 +59,7 @@ fn principal_control_realm_binding_enforced() {
         ))
         .is_ok()
     );
-    let wrong = "ak:realm:01904100-0000-7000-8000-0000000000ff";
+    let wrong = "ak:realm:01904100-0000-8000-8000-0000000000ff";
     assert_eq!(
         validate_principal_control_realm_binding(&mk(wrong, "ak.device.authorize", payload))
             .unwrap_err(),

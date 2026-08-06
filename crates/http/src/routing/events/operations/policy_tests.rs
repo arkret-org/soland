@@ -27,7 +27,7 @@ fn test_config() -> crate::config::AppConfig {
 fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let state = AppState::new(test_config(), Db { pool: None });
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000601".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000601".to_owned(),
     )
     .unwrap();
     let now = chrono::Utc::now();
@@ -172,7 +172,7 @@ fn realm_create_proposal_policy_uses_sdk_cross_field_validator() {
     ];
     for (index, (decision, absolute, defers, expected_valid)) in cases.into_iter().enumerate() {
         let realm_id = arkret_identifiers::RealmId::new(format!(
-            "ak:realm:01904100-0000-7000-8000-0000000007b{index}"
+            "ak:realm:01904100-0000-8000-8000-0000000007b{index}"
         ))
         .unwrap();
         let operation = op(
@@ -194,7 +194,7 @@ fn realm_create_proposal_policy_uses_sdk_cross_field_validator() {
 fn realm_update_validates_the_complete_candidate_before_projection() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007b3".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007b3".to_owned(),
     )
     .unwrap();
     let create = op(
@@ -228,7 +228,7 @@ fn realm_update_validates_the_complete_candidate_before_projection() {
         state
             .test_projection()
             .lock()
-            .realm_metadata_cell_value("ak:realm:01904100-0000-7000-8000-0000000007b3")
+            .realm_metadata_cell_value("ak:realm:01904100-0000-8000-8000-0000000007b3")
             .and_then(|value| value.get("proposal_decision_window_ms"))
             .and_then(serde_json::Value::as_u64),
         Some(30_000)
@@ -238,7 +238,7 @@ fn realm_update_validates_the_complete_candidate_before_projection() {
 #[test]
 fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000611").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-000000000611").unwrap();
     for definition in [
         json!({"collection": {"page_size": 50}}),
         json!({"collection": {"selection_policy": "multiple"}}),
@@ -279,7 +279,7 @@ fn shared_view_events_never_carry_a_private_view() {
     // log can never surface from a shared View query, so this is the read-side
     // guarantee as well as the write-side one.
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000613").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-000000000613").unwrap();
     let private_view = json!({
         "id": "ak:view:01904100-0000-8000-8000-000000000613",
         "schema": "ak.schema.view.v1",
@@ -541,9 +541,9 @@ fn seed_read_receipt_inheritance(
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_visibility_loosening() {
     let state = test_state();
-    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009911";
+    let parent_realm = "ak:realm:01904100-0000-8000-8000-000000009911";
     let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009912".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009912".to_owned(),
     )
     .unwrap();
     seed_read_receipt_inheritance(
@@ -577,9 +577,9 @@ async fn read_receipt_child_policy_rejects_visibility_loosening() {
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
     let state = test_state();
-    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009921";
+    let parent_realm = "ak:realm:01904100-0000-8000-8000-000000009921";
     let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009922".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009922".to_owned(),
     )
     .unwrap();
     seed_read_receipt_inheritance(
@@ -613,9 +613,9 @@ async fn read_receipt_child_policy_rejects_required_floor_without_escape() {
 #[tokio::test]
 async fn read_receipt_child_policy_allows_required_floor_escape() {
     let state = test_state();
-    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009931";
+    let parent_realm = "ak:realm:01904100-0000-8000-8000-000000009931";
     let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009932".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009932".to_owned(),
     )
     .unwrap();
     seed_read_receipt_inheritance(
@@ -649,9 +649,9 @@ async fn read_receipt_child_policy_allows_required_floor_escape() {
 #[tokio::test]
 async fn read_receipt_child_policy_rejects_any_change_when_overrides_disabled() {
     let state = test_state();
-    let parent_realm = "ak:realm:01904100-0000-7000-8000-000000009941";
+    let parent_realm = "ak:realm:01904100-0000-8000-8000-000000009941";
     let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009942".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009942".to_owned(),
     )
     .unwrap();
     seed_read_receipt_inheritance(
@@ -711,7 +711,7 @@ async fn put_agent_participation_ceiling(
 async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009951".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009951".to_owned(),
     )
     .unwrap();
     let circle_id = "ak:circle:01904100-0000-8000-8000-000000009952";
@@ -735,7 +735,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
             "sender": "did:web:alice.example",
             "object": {
                 "id": strand_id,
-                "realm_id": "ak:realm:01904100-0000-7000-8000-000000009951",
+                "realm_id": "ak:realm:01904100-0000-8000-8000-000000009951",
                 "scope_circle_id": circle_id,
                 "metadata": {"title": "Scoped"},
                 "agent_participation": {
@@ -763,7 +763,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
 async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000009961".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000009961".to_owned(),
     )
     .unwrap();
     let circle_id = "ak:circle:01904100-0000-8000-8000-000000009962";
@@ -840,7 +840,7 @@ async fn register_agent_selection(
     let mut record = soland_services::identity::AgentPairingState::new(
         agent_id.to_owned(),
         "did:web:alice.example".to_owned(),
-        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
         arkret_wire::DidUrl::new(format!("{agent_id}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         chrono::Utc::now(),
@@ -892,7 +892,7 @@ async fn register_native_agent_membership_context(
     let mut record = soland_storage::AgentPrincipalRecord::new(
         agent.to_owned(),
         controller.to_owned(),
-        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
         arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         now,
@@ -937,7 +937,7 @@ async fn register_native_agent_membership_context(
             event_id: "ak:event:01904100-0000-8000-8000-0000000007d1".to_owned(),
             actor_id: controller.to_owned(),
             actor_seq: 1,
-            realm_id: Some("ak:realm:01904100-0000-7000-8000-000000000001".to_owned()),
+            realm_id: Some("ak:realm:01904100-0000-8000-8000-000000000001".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: "sha256:test".to_owned(),
@@ -1091,7 +1091,7 @@ async fn register_native_agent_membership_context(
 async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d1").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-0000000007d1").unwrap();
     register_native_agent_membership_context(&state, &realm_id, true, false).await;
     let operation = op(
         realm_id,
@@ -1118,7 +1118,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
 async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d2").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-0000000007d2").unwrap();
     register_native_agent_membership_context(&state, &realm_id, true, true).await;
     let operation = op(
         realm_id,
@@ -1142,7 +1142,7 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
 async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
     let state = test_state();
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-0000000007d3").unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-0000000007d3").unwrap();
     register_native_agent_membership_context(&state, &realm_id, false, false).await;
     let operation = op(
         realm_id,
@@ -1361,7 +1361,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
 async fn act_on_behalf_agent_requires_participation_bit() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000701".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000701".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1395,7 +1395,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
 async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000702".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000702".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1429,7 +1429,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
 async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007a2".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1460,7 +1460,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
 async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c1".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c1".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1501,7 +1501,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
 async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007b1".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007b1".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1514,7 +1514,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
             "sender": "did:web:alice.example",
             "actor_id": agent,
             "membership": "join",
-            "realm_id": "ak:realm:01904100-0000-7000-8000-0000000007b1",
+            "realm_id": "ak:realm:01904100-0000-8000-8000-0000000007b1",
             "delivery_status": "unroutable"
         }),
     );
@@ -1528,7 +1528,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
 async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismatch() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c2".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c2".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1579,7 +1579,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c3".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c3".to_owned(),
     )
     .unwrap();
     let operation = op(
@@ -1610,7 +1610,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
 async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c4".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c4".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1650,7 +1650,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
 async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c5".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c5".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1689,7 +1689,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
 async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c6".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c6".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1726,7 +1726,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
 async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c7".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c7".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1766,7 +1766,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
 async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_record() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007c8".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007c8".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -1798,7 +1798,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
 async fn profile_accountable_principal_requires_active_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007a3".to_owned(),
     )
     .unwrap();
     let profile = op(
@@ -1824,7 +1824,7 @@ async fn profile_accountable_principal_requires_active_grant() {
 async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007a4".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007a4".to_owned(),
     )
     .unwrap();
     let profile = op(
@@ -1864,7 +1864,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
 async fn profile_accountable_principal_accepts_active_atomic_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007a8".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007a8".to_owned(),
     )
     .unwrap();
     let grant = op(
@@ -1894,7 +1894,7 @@ async fn profile_accountable_principal_accepts_active_atomic_grant() {
 async fn profile_accountable_principal_atomic_revoke_wins() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007aa".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007aa".to_owned(),
     )
     .unwrap();
     let grant = op(
@@ -1933,7 +1933,7 @@ async fn profile_accountable_principal_atomic_revoke_wins() {
 async fn profile_accountability_uses_signed_frozen_time() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007ad".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007ad".to_owned(),
     )
     .unwrap();
     let grant = op(
@@ -1966,7 +1966,7 @@ async fn profile_accountability_uses_signed_frozen_time() {
 async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-0000000007a6".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-0000000007a6".to_owned(),
     )
     .unwrap();
     state
@@ -2020,7 +2020,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
 async fn circle_member_manage_rejects_forged_verdict_without_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000881".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000881".to_owned(),
     )
     .unwrap();
     let member_add = op(
@@ -2053,7 +2053,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
 async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000882".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000882".to_owned(),
     )
     .unwrap();
     let circle_id = "ak:circle:01904100-0000-8000-8000-000000000882";
@@ -2091,7 +2091,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
 async fn circle_lifecycle_requires_circle_manage_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000883".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000883".to_owned(),
     )
     .unwrap();
     let circle_id = "ak:circle:01904100-0000-8000-8000-000000000883";
@@ -2128,7 +2128,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
 async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000703".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000703".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -2160,7 +2160,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
 async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000704".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000704".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -2194,7 +2194,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
 async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000705".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000705".to_owned(),
     )
     .unwrap();
     let agent = "did:web:agent.example";
@@ -2232,7 +2232,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
 async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000801".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000801".to_owned(),
     )
     .unwrap();
     let circle_id = "ak:circle:01904100-0000-8000-8000-000000000801";
@@ -2342,7 +2342,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
 async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000901".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000901".to_owned(),
     )
     .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
@@ -2371,7 +2371,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
 async fn moderation_decision_allows_authorized_issuer() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000902".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000902".to_owned(),
     )
     .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
@@ -2397,7 +2397,7 @@ async fn moderation_decision_allows_authorized_issuer() {
 async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000903".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000903".to_owned(),
     )
     .unwrap();
     grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
@@ -2425,7 +2425,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
 async fn call_recording_start_defaults_to_record_capability() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000904".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000904".to_owned(),
     )
     .unwrap();
     grant_call_action(
@@ -2462,7 +2462,7 @@ async fn call_recording_start_defaults_to_record_capability() {
 async fn call_recording_start_transcript_requires_transcribe_capability() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000905".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000905".to_owned(),
     )
     .unwrap();
     grant_call_action(
@@ -2509,7 +2509,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
 async fn call_recording_start_transcript_allows_transcribe_capability() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000906".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000906".to_owned(),
     )
     .unwrap();
     grant_call_action(
@@ -2546,7 +2546,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
 async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-000000000907".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-000000000907".to_owned(),
     )
     .unwrap();
     grant_call_action(
@@ -2601,7 +2601,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
 async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000c100".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000c100".to_owned(),
     )
     .unwrap();
     let create = op(
@@ -2647,7 +2647,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
 async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000c200".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000c200".to_owned(),
     )
     .unwrap();
     let create = op(
@@ -2682,7 +2682,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
 async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000c210".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000c210".to_owned(),
     )
     .unwrap();
     let create = op(
@@ -2709,7 +2709,7 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
 async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000c220".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000c220".to_owned(),
     )
     .unwrap();
     let create = op(
@@ -2742,7 +2742,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
 
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000c300".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000c300".to_owned(),
     )
     .unwrap();
     let now = chrono::Utc::now();
@@ -2809,7 +2809,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000d100".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000d100".to_owned(),
     )
     .unwrap();
     let recovery_principal = "did:web:hr.example";
@@ -2866,7 +2866,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
 async fn realm_key_share_member_device_accepts_projection_metadata() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000d300".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000d300".to_owned(),
     )
     .unwrap();
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00.000Z")
@@ -2994,7 +2994,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
 
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:01904100-0000-7000-8000-00000000d200".to_owned(),
+        "ak:realm:01904100-0000-8000-8000-00000000d200".to_owned(),
     )
     .unwrap();
     {
