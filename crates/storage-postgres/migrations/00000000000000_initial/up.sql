@@ -708,7 +708,6 @@ CREATE TABLE public.mls_commits (
     leader_actor_id text NOT NULL,
     creator_device_id text NOT NULL,
     genesis_event_ref text NOT NULL,
-    covered_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
     accepted_commit_ref text,
     committed_at bigint NOT NULL,
