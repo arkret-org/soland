@@ -2148,8 +2148,17 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         "Cursor Author",
     )
     .await;
-    let realm_id = DEMO_REALM_ID;
-    add_test_realm_member(&state, realm_id, actor);
+    let realm = seed_test_realm(
+        &state,
+        actor,
+        "Events read pagination Realm",
+        None,
+        "invite_only",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = realm["realm_id"].as_str().unwrap();
 
     for body in ["first backfill page", "second backfill page"] {
         let sent = submit_message_event(
@@ -2165,7 +2174,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         assert!(sent["operation_id"].as_str().is_some());
     }
 
-    let read_body = serde_json::json!({"limit": 1, "realms": [realm_id]});
+    let read_body = serde_json::json!({"limit": 1, "actors": [actor]});
     let query_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&read_body)
@@ -2183,8 +2192,9 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         .await
         .unwrap();
 
+    let encoded_actor = actor.replace(':', "%3A");
     let first_page: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&limit=1"
+        "http://server/_arkret/self/events?actors={encoded_actor}&limit=1"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -2193,21 +2203,29 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     .await
     .unwrap();
     assert_eq!(
-        query_page, first_page,
-        "QUERY and GET must share read semantics"
+        query_page["events"], first_page["events"],
+        "QUERY and GET must return the same Events"
     );
+    assert_eq!(query_page["has_more"], first_page["has_more"]);
     assert_eq!(
-        post_page, first_page,
-        "POST and GET must share read semantics"
+        post_page["events"], first_page["events"],
+        "POST and GET must return the same Events"
     );
-    assert_eq!(first_page["events"].as_array().unwrap().len(), 1);
+    assert_eq!(post_page["has_more"], first_page["has_more"]);
+    assert!(query_page["next_cursor"].as_str().is_some());
+    assert!(post_page["next_cursor"].as_str().is_some());
+    assert_eq!(
+        first_page["events"].as_array().unwrap().len(),
+        1,
+        "expected one Event in the first read page: {first_page}"
+    );
     assert_eq!(first_page["has_more"], true);
     assert!(first_page["prev_cursor"].is_null());
     let next_cursor = first_page["next_cursor"].as_str().unwrap();
     assert!(next_cursor.starts_with("ak:cursor:"));
 
     let second_page: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&limit=1&after={next_cursor}"
+        "http://server/_arkret/self/events?actors={encoded_actor}&limit=1&after={next_cursor}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -2219,7 +2237,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
 
     let mut invalid_cursor = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&after=ak:event:01904100-0000-8000-8000-b8ab57920a67"
+        "http://server/_arkret/self/events?actors={encoded_actor}&after=ak:event:01904100-0000-8000-8000-b8ab57920a67"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))

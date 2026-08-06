@@ -218,7 +218,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
             .starts_with("sha256:")
     );
     assert_eq!(frontier["issuer"], SERVICE_ID);
-    assert_eq!(frontier["signature"]["alg"], "Ed25519");
+    assert_eq!(frontier["signature"]["scheme"], "ed25519-detached-jws");
     assert_eq!(
         frontier["signature"]["signed_payload"]["frontier_root"],
         frontier["frontier_root"]
@@ -1160,7 +1160,12 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let event_id = event["event_id"].as_str().unwrap().to_owned();
     let actor_id = event["actor_id"].as_str().unwrap().to_owned();
     let actor_seq = event["actor_seq"].as_u64().unwrap();
-    let realm_id = event["realm_id"].as_str().unwrap().to_owned();
+    // Realm genesis omits `realm_id` on the wire because the resolved Realm id
+    // is event-derived; the persistence fixture still needs that resolved key.
+    let realm_id = event["realm_id"]
+        .as_str()
+        .unwrap_or(TEST_REALM_ID)
+        .to_owned();
     let kind = event["kind"].as_str().unwrap().to_owned();
     let schema_id = "ak.schema.event_envelope.v1".to_owned();
     let canonical_digest = event_canonical_digest(&event);

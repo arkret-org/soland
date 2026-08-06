@@ -88,8 +88,6 @@ fn install_event_read_query_bindings(doc: &mut Value) {
             )
         })
     };
-    let component_schema = |name: &str| json!({"$ref": format!("#/components/schemas/{name}")});
-
     install_query_binding(
         doc,
         "/_arkret/self/events/describe",
@@ -126,7 +124,7 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         "/_arkret/self/events/resolve",
         "post",
         "ak.self.events.read.resolve",
-        Some(component_schema("EventsResolveRequestBody")),
+        Some(dto_schema("EventsResolveRequestBody")),
         &[("/_arkret/self/events/resolve", "post")],
     );
     install_query_binding(
@@ -135,7 +133,9 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         "/_arkret/self/events/mls-governance-proof",
         "post",
         "ak.self.events.read.mls_governance_proof",
-        Some(component_schema("MlsGovernanceProofRequestBodyBody")),
+        Some(json!({
+            "$ref": "../schemas/mls-governance-proof-bundle.schema.json#/$defs/proof_request"
+        })),
         &[("/_arkret/self/events/mls-governance-proof", "post")],
     );
     install_query_binding(
