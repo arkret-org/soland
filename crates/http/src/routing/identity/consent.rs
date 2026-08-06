@@ -4,16 +4,24 @@
 //! `ak.component.consent.grant.v1`: the in-process projection stores one
 //! OR-set-like cell per `(holder_did, peer_did, scope)`, and contact
 //! requests consult that projection before opening or accepting a request.
+//!
+//! `grant` and `revoke` take the holder-signed `ak.consent.grant` /
+//! `ak.consent.revoke` Control Move and submit those exact bytes through ordinary
+//! Event admission. The or_set dot is `ak:event:<event_id>:<write_index>` and the
+//! cell subject is the caller-minted `consent_id`, so the service chooses neither
+//! (spec `zh/identity/consent-model.md` sections 3.1 and 3.2). A dot no Event
+//! produced would be an element in replicated state that nothing in the log
+//! explains, and revoke targets dots by value.
 
 use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{ConsentId, Did, EventId};
 use arkret_models_collaboration::account_lifecycle::{
-    ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
-    ConsentUpdateRequestBody,
+    ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestRequestBody,
+    ConsentRevokeRequestBody, ConsentState,
 };
-use arkret_wire::AccountDataKey;
+use arkret_wire::{AccountDataKey, Event};
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -24,6 +32,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, ConsentCellRecord, FindAccountByActorQuery,
+    SessionIdentityState as SessionRecord,
 };
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
@@ -180,38 +189,43 @@ async fn grant_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-    body: JsonBody<ConsentUpdateRequestBody>,
+    body: JsonBody<ConsentGrantRequestBody>,
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
-    let body = body.into_inner();
-    validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
-    let scope = normalize_scope(body.consent_scope.as_deref())?;
-    let previous = consent_cell_snapshot(state, &holder, body.peer_did.as_str(), &scope);
-    let updated = grant_cell(
-        state,
+    let submission = body.into_inner().grant_event;
+    let target = caller_signed_consent_target(
+        &session.actor,
         &holder,
-        body.peer_did.as_str(),
-        &scope,
-        body.expires_at,
-        now(),
-    );
-    persist_consent_cell(state, &updated, previous).await?;
+        &submission.event,
+        arkret_wire::EventKind::CONSENT_GRANT,
+    )?;
+    submit_caller_signed_consent_event(state, &session, submission).await?;
+    // Admission projected the or_set add through
+    // `project_consent_grant_operation`, which derives the cell subject from the
+    // Event's own `payload.consent_id` and the dot from its `event_id`.
+    let cell = state
+        .consents()
+        .cell(&holder, &target.peer, &target.scope)
+        .ok_or_else(|| {
+            AppError::internal("consent grant accepted but the cell was not projected")
+        })?;
     append_audit_log(
         state,
         Some(&holder),
         "consent.grant",
         json!({
             "holder_did": holder,
-            "peer_did": body.peer_did,
-            "consent_scope": scope,
-            "expires_at": body.expires_at,
+            "peer_did": target.peer,
+            "consent_scope": target.scope,
+            "consent_id": target.consent_id,
+            "grant_event_id": target.event_id,
         }),
         "accepted",
     )
     .await;
-    json_ok(consent_response(&updated, now())?)
+    json_ok(consent_response(&cell, now())?)
 }
 
 #[endpoint(
@@ -225,47 +239,115 @@ async fn revoke_consent_cell(
     depot: &mut Depot,
     req: &mut Request,
     holder_did: PathParam<String>,
-    body: JsonBody<ConsentUpdateRequestBody>,
+    body: JsonBody<ConsentRevokeRequestBody>,
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_did.into_inner();
-    let body = body.into_inner();
-    validate_holder_update(&session.actor, &holder, body.peer_did.as_str())?;
-    let scope = normalize_scope(body.consent_scope.as_deref())?;
-    let revoked_at = now();
-    let mutations = revoke_cells(state, &holder, body.peer_did.as_str(), &scope, revoked_at);
-    let updated = mutations
-        .iter()
-        .find(|mutation| mutation.updated.scope == scope)
-        .map(|mutation| mutation.updated.clone())
-        .unwrap_or_else(|| empty_cell(&holder, body.peer_did.as_str(), &scope, revoked_at));
-    for mutation in &mutations {
-        persist_consent_cell(state, &mutation.updated, mutation.previous.clone()).await?;
-    }
-    emit_consent_revoke_invalidation(
-        state,
+    let submission = body.into_inner().revoke_event;
+    let target = caller_signed_consent_target(
+        &session.actor,
         &holder,
-        body.peer_did.as_str(),
-        &scope,
-        revoked_at,
-        &mutations,
-    )
-    .await;
+        &submission.event,
+        arkret_wire::EventKind::CONSENT_REVOKE,
+    )?;
+    // The dots being removed come from the Event the holder signed, never from a
+    // server-side enumeration: an observe-remove OR-Set revoke is only correct
+    // when the revoker named the dots it observed.
+    let observed_dots = observed_dots(&event_payload_value(&submission.event))?;
+    submit_caller_signed_consent_event(state, &session, submission).await?;
+    let cell = state
+        .consents()
+        .cell(&holder, &target.peer, &target.scope)
+        .ok_or_else(|| {
+            AppError::internal("consent revoke accepted but the cell was not projected")
+        })?;
     append_audit_log(
         state,
         Some(&holder),
         "consent.revoke",
         json!({
             "holder_did": holder,
-            "peer_did": body.peer_did,
-            "consent_scope": scope,
-            "observed_dots": updated.revoked_dots.iter().cloned().collect::<Vec<_>>(),
+            "peer_did": target.peer,
+            "consent_scope": target.scope,
+            "consent_id": target.consent_id,
+            "revoke_event_id": target.event_id,
+            "observed_dots": observed_dots,
         }),
         "accepted",
     )
     .await;
-    json_ok(consent_response(&updated, now())?)
+    json_ok(consent_response(&cell, now())?)
+}
+
+/// What a caller-signed consent Event says it is acting on.
+#[derive(Debug)]
+struct ConsentTarget {
+    event_id: String,
+    consent_id: String,
+    peer: String,
+    scope: String,
+}
+
+/// Check what the request wrapper alone can decide about a caller-signed consent
+/// Control Move, and report the cell it names.
+///
+/// The signature, envelope shape and the holder's consent-write authorization are
+/// the ordinary Event admission path's job. This covers only the bindings between
+/// the authenticated session, the path holder and the Event that was submitted.
+fn caller_signed_consent_target(
+    actor: &str,
+    holder: &str,
+    event: &Event,
+    expected_kind: &str,
+) -> Result<ConsentTarget, AppError> {
+    if event.kind.as_str() != expected_kind {
+        return Err(AppError::invalid_param(format!(
+            "submitted Event kind must be {expected_kind}"
+        )));
+    }
+    if event.actor_id.as_str() != holder {
+        return Err(AppError::invalid_param(
+            "the submitted Event must be authored by the path holder",
+        ));
+    }
+    // The payload accessors are shared with the projection path, which reads a
+    // whole-value payload; an envelope carries the same object as a map.
+    let payload = event_payload_value(event);
+    let peer = consent_peer(&payload)?;
+    validate_holder_update(actor, holder, peer.as_str())?;
+    Ok(ConsentTarget {
+        event_id: event.event_id.to_string(),
+        consent_id: consent_id(&payload)?,
+        peer,
+        scope: consent_scope(&payload)?,
+    })
+}
+
+/// Restate a typed envelope's payload as the whole `Value` the shared payload
+/// accessors expect.
+fn event_payload_value(event: &Event) -> Value {
+    Value::Object(event.payload.clone().into_iter().collect())
+}
+
+/// Submit the holder's exact Event bytes through ordinary Event admission.
+async fn submit_caller_signed_consent_event(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<(), AppError> {
+    let kind = submission.event.kind.as_str().to_owned();
+    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                &format!("{kind} submit failed"),
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })
 }
 
 #[endpoint(
@@ -818,26 +900,6 @@ pub(super) async fn auto_revoke_requester_side_contact_consent(
     Ok((revoked_dots, complete))
 }
 
-fn grant_cell(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    expires_at: Option<DateTime<Utc>>,
-    granted_at: DateTime<Utc>,
-) -> ConsentCellRecord {
-    grant_cell_with_dot(
-        state,
-        holder,
-        peer,
-        scope,
-        ids::generate("consent"),
-        None,
-        expires_at,
-        granted_at,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn grant_cell_with_dot(
     state: &AppState,
@@ -859,16 +921,6 @@ fn grant_cell_with_dot(
         expires_at,
         granted_at,
     )
-}
-
-fn revoke_cells(
-    state: &AppState,
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    revoked_at: DateTime<Utc>,
-) -> Vec<ConsentCellMutation> {
-    revoke_cells_inner(state, holder, peer, scope, None, revoked_at)
 }
 
 fn revoke_cells_with_observed_dots(
@@ -1008,25 +1060,13 @@ fn authorize_reader(session_actor: &str, holder: &str, _peer: &str) -> Result<()
     }
 }
 
-fn empty_cell(
-    holder: &str,
-    peer: &str,
-    scope: &str,
-    updated_at: DateTime<Utc>,
-) -> ConsentCellRecord {
-    ConsentCellRecord {
-        holder: holder.to_owned(),
-        peer: peer.to_owned(),
-        scope: scope.to_owned(),
-        cell_id: consent_cell_id(holder, peer, scope),
-        requested_at: None,
-        grant_dots: std::collections::BTreeMap::new(),
-        revoked_dots: std::collections::BTreeSet::new(),
-        revoked_at: None,
-        updated_at,
-    }
-}
-
+/// Fallback cell subject for a cell whose `consent_id` is not known here.
+///
+/// KNOWN DEFECT: `consent-model.md` section 3.1 defines the subject as the
+/// `consent_id`, and `consent_cell_view.cell_id`'s own pattern already refuses
+/// this digest form. It only ever applies at first insert (`or_insert_with`), so
+/// the paths that pass a real `consent_id` are unaffected; what still reaches it
+/// are the contact-managed and MiMi projections. Do not add callers.
 fn consent_cell_id(holder: &str, peer: &str, scope: &str) -> String {
     let digest = sha256_hex(format!("{holder}\0{peer}\0{scope}").as_bytes());
     format!("ak:cell:ak.component.consent.grant.v1:{}", &digest[..32])
@@ -1615,6 +1655,114 @@ mod tests {
         // Sanity — 5 channels, 5 cascade scopes.
         assert_eq!(ConsentRevokeInvalidationChannel::ALL.len(), 5);
         assert_eq!(CONSENT_SCOPE_CASCADE.len(), 5);
+    }
+
+    const HOLDER: &str = "did:web:holder.example";
+    const PEER: &str = "did:web:peer.example";
+    const CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000041";
+    const GRANT_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
+    const HOLDER_PCR: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+
+    fn consent_event(kind: &str, actor: &str, payload: Value) -> Event {
+        serde_json::from_value(json!({
+            "event_id": GRANT_EVENT,
+            "kind": kind,
+            "realm_id": HOLDER_PCR,
+            "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": payload,
+            "proofs": [],
+        }))
+        .expect("consent envelope")
+    }
+
+    fn grant_payload() -> Value {
+        json!({
+            "consent_id": CONSENT_ID,
+            "peer": PEER,
+            "consent_scope": "invite",
+        })
+    }
+
+    #[test]
+    fn a_grant_event_reports_the_cell_it_names() {
+        let event = consent_event(
+            arkret_wire::EventKind::CONSENT_GRANT,
+            HOLDER,
+            grant_payload(),
+        );
+        let target = caller_signed_consent_target(
+            HOLDER,
+            HOLDER,
+            &event,
+            arkret_wire::EventKind::CONSENT_GRANT,
+        )
+        .unwrap();
+
+        assert_eq!(target.consent_id, CONSENT_ID);
+        assert_eq!(target.peer, PEER);
+        assert_eq!(target.scope, "invite");
+        // The cell subject is the caller's consent_id, so the service never picks
+        // it: `consent_cell_id_for_consent_id` is a pure function of the payload.
+        assert_eq!(
+            consent_cell_id_for_consent_id(&target.consent_id),
+            format!("ak:cell:ak.component.consent.grant.v1:{CONSENT_ID}")
+        );
+    }
+
+    #[test]
+    fn a_consent_event_authored_by_someone_else_is_rejected() {
+        let event = consent_event(
+            arkret_wire::EventKind::CONSENT_GRANT,
+            "did:web:attacker.example",
+            grant_payload(),
+        );
+        caller_signed_consent_target(
+            HOLDER,
+            HOLDER,
+            &event,
+            arkret_wire::EventKind::CONSENT_GRANT,
+        )
+        .expect_err("only the holder may author a write to the holder's consent cell");
+    }
+
+    #[test]
+    fn a_revoke_endpoint_refuses_a_grant_event() {
+        let event = consent_event(
+            arkret_wire::EventKind::CONSENT_GRANT,
+            HOLDER,
+            grant_payload(),
+        );
+        caller_signed_consent_target(
+            HOLDER,
+            HOLDER,
+            &event,
+            arkret_wire::EventKind::CONSENT_REVOKE,
+        )
+        .expect_err("the revoke surface must not accept a grant Event");
+    }
+
+    #[test]
+    fn a_revoke_event_must_name_the_dots_it_observed() {
+        // An observe-remove OR-Set revoke with no observed dots is the
+        // concurrent-revoke race the dot model exists to close.
+        let mut payload = grant_payload();
+        payload["revoked_at"] = json!("2026-07-06T00:00:00.000Z");
+        let event = consent_event(arkret_wire::EventKind::CONSENT_REVOKE, HOLDER, payload);
+        observed_dots(&event_payload_value(&event))
+            .expect_err("observed_dots is required on ak.consent.revoke");
+
+        let mut with_dots = grant_payload();
+        with_dots["observed_dots"] = json!([format!("{GRANT_EVENT}:0")]);
+        let event = consent_event(arkret_wire::EventKind::CONSENT_REVOKE, HOLDER, with_dots);
+        assert_eq!(
+            observed_dots(&event_payload_value(&event)).unwrap(),
+            vec![format!("{GRANT_EVENT}:0")]
+        );
     }
 
     fn test_config() -> AppConfig {
