@@ -349,9 +349,15 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     owner: &str,
     key: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    // The admission actor is the holder, not this service. `ak.account_data.set`'s
+    // actor-private cell subject is composite[envelope.actor_id, payload.key], so an
+    // Event admitted under the service DID would land every holder's value for one
+    // key in a single cell keyed by the service, sharing one server_revision_cas
+    // counter. The admission still only substitutes for the ordinary Realm-membership
+    // check; schema, proof, actor-lock and reducer admission all still run.
     let admission = InternalEventAdmission::account_data(
         realm_id,
-        state.service_id().as_str(),
+        owner,
         session.device_id.as_str(),
         owner,
         key,
