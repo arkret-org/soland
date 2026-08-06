@@ -386,6 +386,12 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
         .allow_headers(vec![
             "authorization",
             "content-type",
+            // RFC 9421 message signatures ride on every `/_arkret/self/*` and
+            // `/_arkret/root/*` request the SDK signs; without these three the
+            // browser preflight rejects the request before it reaches us.
+            "signature",
+            "signature-input",
+            "content-digest",
             "dpop",
             "idempotency-key",
             "x-arkret-request-id",

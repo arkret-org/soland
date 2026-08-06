@@ -70,6 +70,55 @@ async fn configured_cors_allows_only_explicit_origin() {
 }
 
 #[tokio::test]
+async fn configured_cors_allows_query_reads_and_message_signature_headers() {
+    // api-conventions.md §5 binds canonical `read` operations to RFC 10008
+    // `QUERY`, and §3 requires RFC 9421 message signatures on sensitive reads.
+    // A browser preflight that omits either the method or the signature
+    // headers blocks the request before it ever reaches the router.
+    let mut config = test_config();
+    config.cors_allow_origin = Some("https://app.example".to_owned());
+    let service = app_from_state(soland_test_support::app_state(config));
+
+    let allowed = TestClient::options("http://server/_arkret/self/events/frontier")
+        .add_header("Origin", "https://app.example", true)
+        .add_header("Access-Control-Request-Method", "QUERY", true)
+        .add_header(
+            "Access-Control-Request-Headers",
+            "authorization, content-type, signature, signature-input, content-digest",
+            true,
+        )
+        .send(&service)
+        .await;
+
+    let allow_methods = allowed
+        .headers()
+        .get("access-control-allow-methods")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        allow_methods
+            .split(',')
+            .any(|method| method.trim() == "query"),
+        "canonical read binding is QUERY; browser preflight must advertise it: {allow_methods}"
+    );
+
+    let allow_headers = allowed
+        .headers()
+        .get("access-control-allow-headers")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let advertised: Vec<&str> = allow_headers.split(',').map(str::trim).collect();
+    for header in ["signature", "signature-input", "content-digest"] {
+        assert!(
+            advertised.contains(&header),
+            "RFC 9421 signed request header must survive browser preflight: {header}; got {allow_headers}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn configured_cors_allows_blob_upload_headers() {
     let mut config = test_config();
     config.cors_allow_origin = Some("https://app.example".to_owned());
