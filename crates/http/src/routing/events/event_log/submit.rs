@@ -942,7 +942,7 @@ async fn submit_event_batch_outcome_with_leases(
     if batch_begins_realm_create(&envelopes)
         && batch_is_managed_agent_pcr_create(&envelopes)
         && let (Some(realm_id), Some(actor_id)) = (
-            event_string_field_from_value(&envelopes[0], "realm_id"),
+            event_realm_id_from_value(&envelopes[0]),
             event_string_field_from_value(&envelopes[0], "actor_id"),
         )
     {
@@ -2231,6 +2231,37 @@ pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Optio
     value
         .as_object()
         .and_then(|object| event_string_field(object, &[field]))
+}
+
+/// Resolve an envelope's Realm id the way the SDK envelope type does.
+///
+/// `ak.realm.create` carries no wire `realm_id` (`zh/models/realm-and-space.md`
+/// section 2.5.0) — the id is derived from the genesis Event itself, and an
+/// envelope that does carry one is rejected upstream as
+/// `realm_id_not_event_derived`. A flat `realm_id` read is therefore *always*
+/// `None` on a genesis create, so every caller that needs a Realm id for a batch
+/// that may begin with one must go through this instead of
+/// `event_string_field_from_value(.., "realm_id")`.
+pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
+    if let Some(realm_id) = event_string_field_from_value(value, "realm_id") {
+        return Some(realm_id);
+    }
+    if event_string_field_from_value(value, "kind").as_deref()
+        != Some(arkret_wire::EventKind::REALM_CREATE)
+    {
+        return None;
+    }
+    let event_id =
+        arkret_wire::EventId::new(event_string_field_from_value(value, "event_id")?).ok()?;
+    let actor_id = arkret_wire::Did::new(event_string_field_from_value(value, "actor_id")?).ok()?;
+    Some(
+        arkret_wire::derive_genesis_realm_id(
+            &event_id,
+            &actor_id,
+            value.get("payload").and_then(|payload| payload.get("object")),
+        )
+        .into_string(),
+    )
 }
 
 mod delivery_binding;

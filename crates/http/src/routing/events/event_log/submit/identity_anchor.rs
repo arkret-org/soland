@@ -75,7 +75,10 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let lock_actor = event_string_field_from_value(&envelopes[0], "actor_id")
         .ok_or_else(|| unit_error("identity anchor Event requires actor_id"))?;
-    let lock_realm = event_string_field_from_value(&envelopes[0], "realm_id")
+    // The bootstrap head is an `ak.realm.create`, which carries no wire
+    // `realm_id`: resolve it the SDK way rather than reading a flat field that
+    // is absent by construction.
+    let lock_realm = event_realm_id_from_value(&envelopes[0])
         .ok_or_else(|| unit_error("identity anchor Event requires realm_id"))?;
     let actor_lock = actor_submit_lock(&lock_realm, &lock_actor);
     let _guard = actor_lock.lock().await;

@@ -238,7 +238,7 @@ fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrap
         == Some(arkret_wire::EventKind::REALM_CREATE)
     {
         match (
-            event_string_field_from_value(envelope, "realm_id"),
+            event_realm_id_from_value(envelope),
             event_string_field_from_value(envelope, "actor_id"),
         ) {
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
@@ -611,7 +611,7 @@ pub(super) async fn submit_event_value_with_context(
     }
     let managed_bootstrap_contexts = if managed_agent_pcr_genesis {
         match (
-            event_string_field_from_value(&envelope, "realm_id"),
+            event_realm_id_from_value(&envelope),
             event_string_field_from_value(&envelope, "actor_id"),
         ) {
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
