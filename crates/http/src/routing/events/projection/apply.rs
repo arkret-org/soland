@@ -60,20 +60,21 @@ fn accepted_operation_cell_writes(
         .get("sender")
         .and_then(Value::as_str)
         .unwrap_or(origin);
-    let realm_id = operation.realm_id.as_str();
-    let envelope = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        "scope_ref": { "kind": "realm", "realm_id": realm_id },
-        "actor_id": actor_id,
-        "actor_seq": 0,
-        "created_at": arkret_canonical::format_timestamp_canonical(operation.created_at),
-        "prev_refs": [],
-        "payload": crate::routing::events::projection_context_stripped_payload(&operation.payload),
-        "proofs": [],
-    });
-    let event = match serde_json::from_value::<arkret_wire::Event>(envelope) {
+    // A Realm genesis names no Realm: `realm_id` is `retype(event_id)` of the
+    // genesis itself, so it carries the closed `realm_genesis` scope and the SDK
+    // derives the Realm id from the Event. Giving it the `realm` scope every
+    // other kind uses fails `realm_id_not_event_derived`, and the failure is
+    // silent — the Operation yields no cell writes and the Realm's founding
+    // writes are simply lost. The id restated here is the accepted Event's own,
+    // so the derivation reproduces the Realm id this Operation already carries.
+    let scope_ref = if kind == arkret_wire::EventKind::REALM_CREATE {
+        arkret_wire::ScopeRef::RealmGenesis
+    } else {
+        arkret_wire::ScopeRef::Realm {
+            realm_id: operation.realm_id.clone(),
+        }
+    };
+    let event = match restate_accepted_event(operation, event_id, actor_id, kind, scope_ref) {
         Ok(event) => event,
         Err(error) => {
             tracing::error!(
@@ -98,6 +99,45 @@ fn accepted_operation_cell_writes(
             Vec::new()
         }
     }
+}
+
+/// Restate an accepted Operation as the SDK `Event` the single cell-write
+/// evaluator reads.
+///
+/// Built through the SDK constructor rather than assembled as JSON and parsed
+/// back: `Event` is the spec type, and every hand-written envelope literal is a
+/// second place for its shape to drift from the one the SDK owns.
+fn restate_accepted_event(
+    operation: &Operation,
+    event_id: String,
+    actor_id: &str,
+    kind: &str,
+    scope_ref: arkret_wire::ScopeRef,
+) -> Result<arkret_wire::Event, String> {
+    let event_id = arkret_identifiers::EventId::new(event_id)
+        .map_err(|error| format!("restated event id: {error}"))?;
+    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned())
+        .map_err(|error| format!("restated actor id: {error}"))?;
+    // The Operation's own HLC, read before the projection context is stripped
+    // back out of the payload below.
+    let hlc = operation
+        .payload
+        .get("hlc")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "operation carries no hlc".to_owned())?;
+    let hlc = arkret_identifiers::Hlc::new(hlc.to_owned())
+        .map_err(|error| format!("restated hlc: {error}"))?;
+    arkret_wire::Event::new_with_id_at(
+        event_id,
+        kind,
+        scope_ref,
+        actor_id,
+        0,
+        hlc,
+        crate::routing::events::projection_context_stripped_payload(&operation.payload),
+        operation.created_at,
+    )
+    .map_err(|error| format!("restated envelope: {error}"))
 }
 
 fn accepted_circle_member_reducer_operation(
@@ -964,8 +1004,20 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     // already-verified row, and treat a fresh authorize as verified.
     let verification_state = "verified".to_owned();
     let revoked_at = existing.as_ref().and_then(|device| device.revoked_at);
-    let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-    let authorize_event_id = ids::format_typed_uuid("event", &operation_uuid);
+    // The accepted Event's own id, not the Operation id retyped into one. An
+    // `ak:operation:` id is producer-allocated and an `ak:event:` id is derived
+    // from Event content, so retyping across those two id forms produces a
+    // value no Event can ever have: the `canonical_event` lookup below always
+    // missed, and `GET /_arkret/self/account/viewer` answered 500 parsing the
+    // stored result back as an `EventId`.
+    let authorize_event_id = super::event_json::operation_event_id(operation);
+    if !authorize_event_id.starts_with("ak:event:") {
+        tracing::error!(
+            operation_id = %operation.operation_id,
+            "accepted device.authorize carries no Event id; device authorization is not projected"
+        );
+        return;
+    }
     let authorized_generation_ref = match state
         .event_queries()
         .canonical_event(&authorize_event_id)
