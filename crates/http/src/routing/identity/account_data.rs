@@ -12,7 +12,8 @@
 
 use arkret_identifiers::{Did, EventId, Hlc, RealmId};
 use arkret_models_identity::account::{
-    AccountDataDeleteOutcome, AccountDataList, AccountDataReplaceRequestBody, AccountDataRow,
+    AccountDataDeleteOutcome, AccountDataDeleteRequestBody, AccountDataList,
+    AccountDataReplaceRequestBody, AccountDataRow,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -269,15 +270,100 @@ async fn session_is_agent_context(
     session_actor_is_agent_runtime(state.identities(), &session.actor).await
 }
 
-async fn persist_account_data_event(
+/// Admit the holder-signed `ak.account_data.set` the caller submitted.
+///
+/// The service used to build and sign this Event itself, under its own DID with
+/// the notary key, leaving the real holder in `payload.owner`. That is not a
+/// missing-signature nit: `ak.account_data.set`'s actor-private cell subject is
+/// `composite[envelope.actor_id, payload.key]` and `owner` is not part of it, so
+/// every holder's value for one key projected into a single cell keyed by the
+/// service DID, sharing one `server_revision_cas` counter. It stayed invisible
+/// because the CAS check below reads soland's own per-(actor, key) table: the
+/// server was self-consistent, and only a receiver replaying the Events saw the
+/// collapse.
+///
+/// Five places in the spec forbid the service producing that signature
+/// (`capabilities.md` §118/§361, `conformance-profiles.md` §638,
+/// `applet-schema.md` §234, `key-management.md` §411), and `event-and-patch.md`
+/// §342 says actor-private does not excuse a missing signed envelope. So the
+/// holder signs and this function only checks the Event says what the endpoint
+/// promised, then hands the caller's exact bytes to ordinary Event admission.
+///
+/// Returns the accepted revision.
+async fn admit_caller_signed_account_data_set(
     state: &AppState,
     session: &soland_services::identity::SessionIdentityState,
     account_data_key: &str,
-    content: Option<Value>,
-    expected_revision: u64,
+    set_event: arkret_wire::EventInitialSubmission,
+    expect_tombstone: bool,
 ) -> Result<u64, AppError> {
-    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
-    let _service_event_guard = service_event_lock.lock().await;
+    let event = &set_event.event;
+    if event.kind.as_str() != arkret_wire::EventKind::ACCOUNT_DATA_SET {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            format!(
+                "set_event.event.kind must be {}",
+                arkret_wire::EventKind::ACCOUNT_DATA_SET
+            ),
+        ));
+    }
+    // The subject is the actor, so a mismatch here is what the whole change exists
+    // to prevent: it would write another principal's cell.
+    if event.actor_id.as_str() != session.actor {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "set_event.event.actor_id must be the authenticated holder",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    let payload_str = |field: &str| -> Option<String> {
+        event
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    if payload_str("key").as_deref() != Some(account_data_key) {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "set_event payload.key must equal the path account_data_key",
+        ));
+    }
+    // `owner` is optional and redundant with `actor_id`; when present it MUST agree
+    // (`zh/discovery/client-preferences.md` §180).
+    if let Some(owner) = payload_str("owner")
+        && owner != session.actor
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "set_event payload.owner must equal the Event actor_id",
+        ));
+    }
+    let has_tombstone = event
+        .payload
+        .get("tombstone")
+        .is_some_and(|value| value != &Value::Bool(false));
+    if expect_tombstone != has_tombstone {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            if expect_tombstone {
+                "set_event payload must carry tombstone on this endpoint"
+            } else {
+                "set_event payload must not carry tombstone; use the delete endpoint"
+            },
+        ));
+    }
+    let expected_revision = event
+        .payload
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                "set_event payload.expected_revision is required",
+            )
+        })?;
+
     let current = state
         .account_data()
         .entry(&session.actor, account_data_key)
@@ -296,118 +382,25 @@ async fn persist_account_data_event(
             "account data revision high-water mark is exhausted",
         )
     })?;
-    let service_actor = state.service_id().as_str();
     let realm_id = RealmId::new(soland_services::identity::principal_control_realm_for_did(
         &session.actor,
     ))
     .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
-    let records = state
-        .event_queries()
-        .canonical_events_for_realm_actor(realm_id.as_str(), service_actor)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("account_data frontier lookup failed: {error}"))
-        })?;
-    let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
-    let actor_seq = max_actor_seq
-        .map(|value| {
-            value.checked_add(1).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierSequenceExhausted,
-                    "account_data actor sequence is exhausted",
-                )
-                .with_status(StatusCode::CONFLICT)
-            })
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let created_at = now();
-    let mut payload = json!({
-        "owner": session.actor,
-        "key": account_data_key,
-        "expected_revision": expected_revision,
-        "updated_at": arkret_canonical::format_timestamp_canonical(created_at),
-    });
-    if let Some(content) = content {
-        payload["body"] = content;
-    } else {
-        payload["tombstone"] = Value::Bool(true);
+    if event.realm_id.as_str() != realm_id.as_str() {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "set_event.event.realm_id must be the holder's principal-control Realm",
+        ));
     }
-    let service_did = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = Event::new_with_derived_id_at(
-        arkret_wire::EventKind::ACCOUNT_DATA_SET,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        service_did.clone(),
-        actor_seq,
-        Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("account_data HLC invalid: {error}")))?,
-        payload,
-        created_at,
-    )
-    .map_err(|error| AppError::internal(format!("account_data Event build failed: {error}")))?;
-    if let Some(max_actor_seq) = max_actor_seq {
-        event.prev_refs = records
-            .iter()
-            .filter(|record| record.actor_seq == max_actor_seq)
-            .map(|record| {
-                EventId::new(record.event_id.clone()).map_err(|error| {
-                    AppError::internal(format!("account_data predecessor invalid: {error}"))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        event
-            .prev_refs
-            .sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        event.prev_refs.dedup();
-    }
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "service notary verification method is invalid: {error}"
-                ))
-            },
-        )?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        service_did,
-        verification_method.clone(),
-    );
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(event.realm_id.as_str());
-    arkret_signatures::sign_event_with_digest_suite(
-        &mut event,
-        &signer,
-        &verification_method,
-        digest_suite,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-    )
-    .map_err(|error| AppError::internal(format!("account_data Event signing failed: {error}")))?;
-    // `id-kind-registry.json` gives the `operation` kind `id_form:
-    // producer_allocated`, so the Operation id belongs to whoever authors the
-    // Event — here the service. A receiver cannot derive one from the
-    // content-bound (UUIDv8) Event id, and without it the accepted Event has no
-    // projection Operation, so the `ak.account_data.set` reducer never runs and
-    // the row this handler reads back immediately afterwards is never written.
-    // It goes in `unsigned`, after signing, because it is outside the signed
-    // canonical Event transcript (same slot and order as
-    // `arkret_event_draft::Operation::into_event_envelope`).
-    event.unsigned.insert(
-        "local_operation_idempotency_alias".to_owned(),
-        Value::String(crate::ids::generate_operation_id()),
-    );
-    let mut service_session = session.clone();
-    service_session.actor = state.service_id().clone();
-    let envelope = serde_json::to_value(event).map_err(|error| {
+
+    // The caller's exact bytes. Re-serializing the parsed Event would be the service
+    // rebuilding it, and the proof covers the bytes as submitted.
+    let envelope = serde_json::to_value(&set_event.event).map_err(|error| {
         AppError::internal(format!("account_data Event serialize failed: {error}"))
     })?;
     crate::routing::events::event_log::submit_account_data_event_value(
         state,
-        &service_session,
+        session,
         envelope,
         realm_id.as_str(),
         &session.actor,
@@ -460,16 +453,24 @@ async fn put_account_data(
     }
 
     let body = body.into_inner();
-    let expected_revision = body.expected_revision;
-    validate_private_account_data_content_for_actor(
-        &session.actor,
-        &account_data_key,
-        &body.content,
-    )?;
+    let content = body
+        .set_event
+        .event
+        .payload
+        .get("body")
+        .or_else(|| body.set_event.event.payload.get("encrypted_payload"))
+        .cloned()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                "set_event payload must carry body or encrypted_payload",
+            )
+        })?;
+    validate_private_account_data_content_for_actor(&session.actor, &account_data_key, &content)?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
     // filling the row with megabytes of base64.
-    if serde_json::to_vec(&body.content)
+    if serde_json::to_vec(&content)
         .map(|bytes| bytes.len())
         .unwrap_or(usize::MAX)
         > MAX_PAYLOAD_BYTES
@@ -487,12 +488,12 @@ async fn put_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some_and(|record| !record.tombstone);
 
-    persist_account_data_event(
+    admit_caller_signed_account_data_set(
         state,
         &session,
         &account_data_key,
-        Some(body.content),
-        expected_revision,
+        body.set_event,
+        false,
     )
     .await?;
     let record = state
@@ -595,19 +596,13 @@ async fn delete_account_data(
     depot: &mut Depot,
     req: &mut Request,
     account_data_key: PathParam<String>,
+    body: JsonBody<AccountDataDeleteRequestBody>,
 ) -> JsonResult<AccountDataDeleteOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
     validate_registered_account_data_key(&account_data_key)?;
-    let expected_revision = req.query::<u64>("expected_revision").ok_or_else(|| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            "expected_revision query parameter is required",
-        )
-    })?;
-
     if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
     {
@@ -625,9 +620,14 @@ async fn delete_account_data(
         .with_reason_code("physical_delete_forbidden"));
     }
 
-    let revision =
-        persist_account_data_event(state, &session, &account_data_key, None, expected_revision)
-            .await?;
+    let revision = admit_caller_signed_account_data_set(
+        state,
+        &session,
+        &account_data_key,
+        body.into_inner().set_event,
+        true,
+    )
+    .await?;
 
     super::append_audit_log(
         state,

@@ -40,9 +40,10 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CircleId, Did, EventId, OperationId, RealmId};
 use arkret_models_collaboration::governance::circle::{
-    CircleCreateRequestBody, CircleList, CircleMemberRequestBody, CircleMembership,
-    CircleMembershipOutcome, CirclePendingMlsRemoval, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
+    CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberRequestBody,
+    CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval, CircleRestoreRequestBody,
+    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleTombstoneRequestBody, CircleView,
+    EncryptionFloor,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -226,16 +227,6 @@ fn circle_pending_mls_removal_from_obligation(
         principal_id,
         membership_frontier,
     })
-}
-
-fn circle_membership_to_reducer_state(membership: CircleMembership) -> &'static str {
-    match membership {
-        CircleMembership::Join => "join",
-        CircleMembership::Invite => "invite",
-        CircleMembership::Knock => "knock",
-        CircleMembership::Leave => "leave",
-        CircleMembership::Ban => "ban",
-    }
 }
 
 fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {
@@ -527,98 +518,72 @@ async fn post_circle_member(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
-    let body = body.into_inner();
-    let realm_scope = circle_realm_scope(state, &circle_id)?;
-    let membership = body.membership.unwrap_or(CircleMembership::Join);
-    let target_state = circle_membership_to_reducer_state(membership);
-    // AKP-0007 strict-subset invariant (`Circle.members ⊆ Realm.members`) —
-    // surfaced HERE, pre-projection, because `accept_local_operations` projects
-    // fire-and-forget and does not propagate the reducer's `Rejected` effect
-    // back to the HTTP caller. Without this gate, activating a non-member would
-    // be silently dropped by the reducer yet return 200. We mirror the reducer's
-    // `apply_circle_member_state` check (parent realm membership == "join") and
-    // return the same canonical 422 wire code the reducer emits.
-    if membership == CircleMembership::Join {
-        let realm_id = realm_scope.to_string();
-        let parent_joined = {
-            let projection = state.projections().snapshot();
-            projection
-                .member(&realm_id, body.actor_id.as_str())
-                .map(|m| m.state == "join")
-                .unwrap_or(false)
-        };
-        if !parent_joined {
-            return Err(AppError::new(
-                ErrorCode::FailedPrecondition,
-                "circle reducer rejected: circle_member_must_be_realm_member",
-            )
-            .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-            .with_wire_code(CIRCLE_MEMBER_MUST_BE_REALM_MEMBER));
-        }
-    }
-    // AKP-0007 §8 — authoritative capability decision for "pull another actor
-    // into the Circle". When the requester is activating *someone else*, they
-    // MUST hold `ak.circle.member.manage` (narrowed by `allowed_circle_ids`)
-    // on this Circle. The engine evaluates the selector against the
-    // `ak:circle:<uuid>` resource; we stamp the verdict into the operation so
-    // the reducer's fail-closed second-line check can rely on it. A
-    // self-service join (`actor == sender`) is left to the reducer's
-    // `join_rule=public` gate.
-    let join_rule = {
-        let projection = state.projections().snapshot();
-        projection
-            .circle(&circle_id)
-            .map(|circle| circle.join_rule.clone())
-    };
-    let manage_required = circle_member_manage_required(
-        &session.actor,
-        body.actor_id.as_str(),
-        target_state,
-        join_rule.as_deref(),
-    );
-    let manage_verified = if manage_required {
-        let realm_id = realm_scope.to_string();
-        ensure_circle_capability(
-            state,
-            &session.actor,
-            "ak.circle.member.manage",
-            &circle_id,
-            &realm_id,
-            CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
-        )
-        .await?;
-        true
-    } else {
-        false
-    };
-    let payload = json!({
-        "circle_id": circle_id,
-        "actor_id": body.actor_id,
-        "membership": target_state,
-        "sender": session.actor.clone(),
-        "manage_capability_verified": manage_verified,
-        "actor_capability": {
-            "action": "ak.circle.member.manage",
-            "circle_id": circle_id,
-            "allowed": manage_verified,
-        },
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
+    let submission = body.into_inner().member_event;
+    // Neither the strict-subset invariant nor the `ak.circle.member.manage`
+    // decision is re-implemented here any more. Both were mirrored in this handler
+    // only because `accept_local_operations` projects fire-and-forget and drops the
+    // reducer's `Rejected` effect; ordinary Event admission returns it. The
+    // capability itself is decided by the policy layer against projected grants
+    // (`events/operations/policy/realm_circle.rs`), which is also what makes a
+    // request-supplied verdict worthless — and `circle_member_state_payload` is
+    // closed, so the caller could not carry one even if it wanted to.
+    let target = caller_signed_circle_member_target(&session.actor, &circle_id, &submission.event)?;
+    submit_caller_signed_circle_event(state, &session, submission).await?;
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
             .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
-        actor_id: body.actor_id,
-        membership,
+        actor_id: target.actor_id,
+        membership: target.membership,
+    })
+}
+
+/// What a caller-signed `ak.circle.member.state` Event says it is acting on.
+#[derive(Debug)]
+struct CircleMemberTarget {
+    actor_id: Did,
+    membership: CircleMembership,
+}
+
+/// Check what the request wrapper alone can decide about a caller-signed
+/// `ak.circle.member.state`, and report the membership transition it names.
+fn caller_signed_circle_member_target(
+    actor: &str,
+    circle_id: &str,
+    event: &Event,
+) -> Result<CircleMemberTarget, AppError> {
+    if event.kind != arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
+        return Err(AppError::invalid_param(
+            "member_event.event.kind must be ak.circle.member.state",
+        ));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "member_event.event.actor_id must be the authenticated caller",
+        ));
+    }
+    let payload_circle = event
+        .payload
+        .get("circle_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("member_event payload.circle_id is required"))?;
+    if payload_circle != circle_id {
+        return Err(AppError::invalid_param(
+            "member_event payload.circle_id must equal the path circle_id",
+        ));
+    }
+    let target_actor = event
+        .payload
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("member_event payload.actor_id is required"))?;
+    let membership = event
+        .payload
+        .get("membership")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("member_event payload.membership is required"))?;
+    Ok(CircleMemberTarget {
+        actor_id: parse_sdk_field("actor_id", target_actor)?,
+        membership: parse_sdk_field("membership", membership)?,
     })
 }
 
@@ -772,6 +737,7 @@ async fn post_scope_rotate(
 async fn post_circle_archive(
     aa: AuthArgs,
     circle_id: PathParam<String>,
+    body: JsonBody<CircleArchiveRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
@@ -781,6 +747,7 @@ async fn post_circle_archive(
         aa,
         circle_id.into_inner(),
         arkret_wire::EventKind::CIRCLE_ARCHIVE,
+        body.into_inner().lifecycle_event,
     )
     .await
 }
@@ -794,6 +761,7 @@ async fn post_circle_archive(
 async fn post_circle_restore(
     aa: AuthArgs,
     circle_id: PathParam<String>,
+    body: JsonBody<CircleRestoreRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
@@ -803,6 +771,7 @@ async fn post_circle_restore(
         aa,
         circle_id.into_inner(),
         arkret_wire::EventKind::CIRCLE_RESTORE,
+        body.into_inner().lifecycle_event,
     )
     .await
 }
@@ -816,6 +785,7 @@ async fn post_circle_restore(
 async fn post_circle_tombstone(
     aa: AuthArgs,
     circle_id: PathParam<String>,
+    body: JsonBody<CircleTombstoneRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleView> {
@@ -825,6 +795,7 @@ async fn post_circle_tombstone(
         aa,
         circle_id.into_inner(),
         arkret_wire::EventKind::CIRCLE_TOMBSTONE,
+        body.into_inner().lifecycle_event,
     )
     .await
 }
@@ -835,31 +806,14 @@ async fn submit_circle_lifecycle(
     aa: AuthArgs,
     circle_id: String,
     kind: &'static str,
+    submission: arkret_wire::EventInitialSubmission,
 ) -> JsonResult<CircleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let realm_scope = circle_realm_scope(state, &circle_id)?;
-    let realm_id = realm_scope.to_string();
-    ensure_circle_capability(
-        state,
-        &session.actor,
-        "ak.circle.manage",
-        &circle_id,
-        &realm_id,
-        CIRCLE_MANAGE_CAPABILITY_REQUIRED,
-    )
-    .await?;
-    preflight_circle_lifecycle(state, &circle_id, kind)?;
-    let payload = json!({
-        "circle_id": circle_id,
-        "sender": session.actor.clone(),
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, kind, payload);
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
+    // `ak.circle.manage` and the lifecycle transition matrix are both the
+    // admission path's job now; this only binds the submitted Event to the path.
+    caller_signed_circle_lifecycle_target(&session.actor, &circle_id, kind, &submission.event)?;
+    submit_caller_signed_circle_event(state, &session, submission).await?;
     let projection = state.projections().snapshot();
     // For tombstone the read-helper hides the row; fall back to direct
     // map lookup so the response still surfaces the terminal state.
@@ -871,55 +825,38 @@ async fn submit_circle_lifecycle(
     json_ok(response)
 }
 
-fn preflight_circle_lifecycle(
-    state: &AppState,
+/// Bind a caller-signed Circle lifecycle Event to the path it was submitted on.
+///
+/// `object_lifecycle_payload` single-sources the target by `target_ref`, so that
+/// is the field checked; a body that named a different Circle than the URL would
+/// otherwise act on the Circle in the payload.
+fn caller_signed_circle_lifecycle_target(
+    actor: &str,
     circle_id: &str,
     kind: &'static str,
+    event: &Event,
 ) -> Result<(), AppError> {
-    let projection = state.projections().snapshot();
-    let circle = projection
-        .circles
-        .get(circle_id)
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
-    let reason = match kind {
-        arkret_wire::EventKind::CIRCLE_ARCHIVE if circle.state == CircleLifecycleState::Active => {
-            None
-        }
-        arkret_wire::EventKind::CIRCLE_ARCHIVE => Some("circle_not_active"),
-        arkret_wire::EventKind::CIRCLE_RESTORE
-            if circle.state == CircleLifecycleState::Archived =>
-        {
-            None
-        }
-        arkret_wire::EventKind::CIRCLE_RESTORE => Some("circle_not_archived"),
-        arkret_wire::EventKind::CIRCLE_TOMBSTONE
-            if matches!(
-                circle.state,
-                CircleLifecycleState::Active | CircleLifecycleState::Archived
-            ) =>
-        {
-            None
-        }
-        arkret_wire::EventKind::CIRCLE_TOMBSTONE => Some("circle_already_terminal"),
-        _ => None,
-    };
-    match reason {
-        Some(reason) => Err(reducer_reject_to_app_error(reason)),
-        None => Ok(()),
+    if event.kind.as_str() != kind {
+        return Err(AppError::invalid_param(format!(
+            "lifecycle_event.event.kind must be {kind}"
+        )));
     }
-}
-
-fn circle_member_manage_required(
-    sender: &str,
-    target: &str,
-    membership: &str,
-    join_rule: Option<&str>,
-) -> bool {
-    match membership {
-        "invite" | "ban" => true,
-        "join" if target == sender => join_rule.is_some_and(|rule| rule != "public"),
-        _ => target != sender,
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "lifecycle_event.event.actor_id must be the authenticated caller",
+        ));
     }
+    let target_ref = event
+        .payload
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::missing_param("lifecycle_event payload.target_ref is required"))?;
+    if target_ref != circle_id {
+        return Err(AppError::invalid_param(
+            "lifecycle_event payload.target_ref must equal the path circle_id",
+        ));
+    }
+    Ok(())
 }
 
 async fn ensure_circle_capability(
@@ -957,13 +894,6 @@ async fn ensure_circle_capability(
 /// reducer constant of the same name so the HTTP 403 and the reducer 422
 /// surface the same wire code.
 const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
-
-const CIRCLE_MANAGE_CAPABILITY_REQUIRED: &str = "circle_manage_capability_required";
-
-/// AKP-0007 strict-subset invariant reason code (`Circle.members ⊆
-/// Realm.members`). Kept in sync with the reducer constant of the same name so
-/// the HTTP 422 and the reducer 422 surface the same wire code.
-const CIRCLE_MEMBER_MUST_BE_REALM_MEMBER: &str = "circle_member_must_be_realm_member";
 
 /// Resolve the `(owner, members)` pair the `SolandAuthzEngine::check` default-rule
 /// path needs for a Realm. Mirrors the lookup in `routing/access/authz.rs`.
@@ -1095,6 +1025,108 @@ mod tests {
             &circle_create_event(circle_object()),
         )
         .expect_err("the submitted Event must be authored by the authenticated caller");
+    }
+
+    const CIRCLE: &str = "ak:circle:01964137-0000-8000-8000-000000000041";
+
+    fn member_state_event(actor: &str, payload: Value) -> Event {
+        serde_json::from_value(json!({
+            "event_id": "ak:event:01964137-0000-8000-8000-000000000050",
+            "kind": arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+            "realm_id": REALM,
+            "scope_ref": { "kind": "realm", "realm_id": REALM },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": payload,
+            "proofs": [],
+        }))
+        .expect("member state envelope")
+    }
+
+    fn lifecycle_event(kind: &str, actor: &str, target_ref: &str) -> Event {
+        serde_json::from_value(json!({
+            "event_id": "ak:event:01964137-0000-8000-8000-000000000051",
+            "kind": kind,
+            "realm_id": REALM,
+            "scope_ref": { "kind": "realm", "realm_id": REALM },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": { "target_ref": target_ref },
+            "proofs": [],
+        }))
+        .expect("lifecycle envelope")
+    }
+
+    #[test]
+    fn a_member_event_reports_the_transition_it_names() {
+        let event = member_state_event(
+            ACTOR,
+            json!({
+                "circle_id": CIRCLE,
+                "actor_id": "did:web:bob.example",
+                "membership": "join",
+            }),
+        );
+        let target = caller_signed_circle_member_target(ACTOR, CIRCLE, &event).unwrap();
+
+        assert_eq!(target.actor_id.as_str(), "did:web:bob.example");
+        assert_eq!(target.membership, CircleMembership::Join);
+    }
+
+    #[test]
+    fn a_member_event_naming_another_circle_than_the_path_is_rejected() {
+        // Without this the body would act on the Circle in the payload while the
+        // URL named a different one.
+        let event = member_state_event(
+            ACTOR,
+            json!({
+                "circle_id": "ak:circle:01964137-0000-8000-8000-0000000000ff",
+                "actor_id": "did:web:bob.example",
+                "membership": "join",
+            }),
+        );
+        caller_signed_circle_member_target(ACTOR, CIRCLE, &event)
+            .expect_err("payload.circle_id must equal the path circle_id");
+    }
+
+    #[test]
+    fn a_lifecycle_event_binds_to_the_path_circle_and_its_own_kind() {
+        caller_signed_circle_lifecycle_target(
+            ACTOR,
+            CIRCLE,
+            arkret_wire::EventKind::CIRCLE_ARCHIVE,
+            &lifecycle_event(arkret_wire::EventKind::CIRCLE_ARCHIVE, ACTOR, CIRCLE),
+        )
+        .unwrap();
+
+        // The archive endpoint must not accept a tombstone Event.
+        caller_signed_circle_lifecycle_target(
+            ACTOR,
+            CIRCLE,
+            arkret_wire::EventKind::CIRCLE_ARCHIVE,
+            &lifecycle_event(arkret_wire::EventKind::CIRCLE_TOMBSTONE, ACTOR, CIRCLE),
+        )
+        .expect_err("the archive surface must not accept a tombstone Event");
+
+        // `object_lifecycle_payload` single-sources the target, so a mismatch is a
+        // request for a different Circle than the URL.
+        caller_signed_circle_lifecycle_target(
+            ACTOR,
+            CIRCLE,
+            arkret_wire::EventKind::CIRCLE_ARCHIVE,
+            &lifecycle_event(
+                arkret_wire::EventKind::CIRCLE_ARCHIVE,
+                ACTOR,
+                "ak:circle:01964137-0000-8000-8000-0000000000ff",
+            ),
+        )
+        .expect_err("payload.target_ref must equal the path circle_id");
     }
 
     #[test]

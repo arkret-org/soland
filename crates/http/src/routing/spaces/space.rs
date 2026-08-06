@@ -13,18 +13,14 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, OperationId, RealmId, SpaceId};
-use arkret_models_collaboration::events_payloads::{
-    HistorySharingPolicyPayloadValue, RealmFreezePayload,
-};
+use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
 };
 use arkret_models_collaboration::governance::realm_governance::{
-    RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
-};
-use arkret_models_collaboration::governance::realm_lifecycle::{
-    RealmArchivePayload, RealmDestroyPayload, RealmTombstonePayload,
+    RealmArchiveRequestBody, RealmDestroyRequestBody, RealmFreezeRequestBody, RealmLifecycleView,
+    RealmModerationPolicyReplaceRequestBody, RealmTombstoneRequestBody,
 };
 use arkret_policy::history_visibility::matching_restricted_rules;
 use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
@@ -149,22 +145,61 @@ fn operation_reject_to_app_error(reason: &'static str) -> AppError {
     }
 }
 
+/// Submit a caller-signed Realm lifecycle Move through ordinary Event admission.
+///
+/// These four operations used to take the Event payload and let the service build
+/// the Move around it, which meant the signature could only have come from a
+/// service key. Now the caller signs and the service forwards those exact bytes;
+/// the lifecycle transition matrix and the `ak.realm.*` capability are admission's
+/// to enforce.
 async fn submit_realm_lifecycle_command(
     state: &AppState,
-    actor: &str,
+    session: &SessionRecord,
     realm_id: String,
     kind: &'static str,
-    payload: Value,
+    submission: arkret_wire::EventInitialSubmission,
 ) -> Result<RealmLifecycleView, AppError> {
-    let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(op_id, realm_scope, kind, payload);
-    accept_local_operations(state, actor, std::slice::from_ref(&operation))
+    caller_signed_realm_lifecycle_target(&session.actor, &realm_id, kind, &submission.event)?;
+    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
         .await
-        .map_err(operation_reject_to_app_error)?;
+        .map(|_| ())
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                &format!("{kind} submit failed"),
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
     realm_lifecycle_response(state, &realm_id).await
+}
+
+/// Bind a caller-signed Realm lifecycle Event to the path it was submitted on.
+///
+/// The Realm is single-sourced by `event.realm_id`, so that is what the path is
+/// checked against; a body naming another Realm would otherwise act on that one.
+fn caller_signed_realm_lifecycle_target(
+    actor: &str,
+    realm_id: &str,
+    kind: &'static str,
+    event: &arkret_wire::Event,
+) -> Result<(), AppError> {
+    if event.kind.as_str() != kind {
+        return Err(AppError::invalid_param(format!(
+            "lifecycle_event.event.kind must be {kind}"
+        )));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "lifecycle_event.event.actor_id must be the authenticated caller",
+        ));
+    }
+    if event.realm_id.as_str() != realm_id {
+        return Err(AppError::invalid_param(
+            "lifecycle_event.event.realm_id must equal the path realm_id",
+        ));
+    }
+    Ok(())
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.archive", tags("spaces"))]
@@ -174,20 +209,16 @@ async fn archive_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<RealmArchivePayload>,
+    body: JsonBody<RealmArchiveRequestBody>,
 ) -> JsonResult<RealmLifecycleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body
-        .into_inner()
-        .to_value()
-        .map_err(|error| AppError::invalid_param(format!("realm archive payload: {error}")))?;
     submit_realm_lifecycle_command(
         state,
-        &session.actor,
+        &session,
         realm_id.into_inner(),
         arkret_wire::EventKind::REALM_ARCHIVE,
-        payload,
+        body.into_inner().lifecycle_event,
     )
     .await
     .map(salvo::prelude::Json)
@@ -200,20 +231,16 @@ async fn freeze_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<RealmFreezePayload>,
+    body: JsonBody<RealmFreezeRequestBody>,
 ) -> JsonResult<RealmLifecycleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body
-        .into_inner()
-        .to_value()
-        .map_err(|error| AppError::invalid_param(format!("realm freeze payload: {error}")))?;
     submit_realm_lifecycle_command(
         state,
-        &session.actor,
+        &session,
         realm_id.into_inner(),
         arkret_wire::EventKind::REALM_FREEZE,
-        payload,
+        body.into_inner().lifecycle_event,
     )
     .await
     .map(salvo::prelude::Json)
@@ -226,20 +253,16 @@ async fn tombstone_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<RealmTombstonePayload>,
+    body: JsonBody<RealmTombstoneRequestBody>,
 ) -> JsonResult<RealmLifecycleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body
-        .into_inner()
-        .to_value()
-        .map_err(|error| AppError::invalid_param(format!("realm tombstone payload: {error}")))?;
     submit_realm_lifecycle_command(
         state,
-        &session.actor,
+        &session,
         realm_id.into_inner(),
         arkret_wire::EventKind::REALM_TOMBSTONE,
-        payload,
+        body.into_inner().lifecycle_event,
     )
     .await
     .map(salvo::prelude::Json)
@@ -252,20 +275,16 @@ async fn destroy_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-    body: JsonBody<RealmDestroyPayload>,
+    body: JsonBody<RealmDestroyRequestBody>,
 ) -> JsonResult<RealmLifecycleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let payload = body
-        .into_inner()
-        .to_value()
-        .map_err(|error| AppError::invalid_param(format!("realm destroy payload: {error}")))?;
     submit_realm_lifecycle_command(
         state,
-        &session.actor,
+        &session,
         realm_id.into_inner(),
         arkret_wire::EventKind::REALM_DESTROY,
-        payload,
+        body.into_inner().lifecycle_event,
     )
     .await
     .map(salvo::prelude::Json)
@@ -1175,6 +1194,80 @@ async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LIFECYCLE_ACTOR: &str = "did:web:owner.example";
+    const LIFECYCLE_REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+
+    fn realm_lifecycle_event(kind: &str, actor: &str, realm_id: &str) -> arkret_wire::Event {
+        serde_json::from_value(serde_json::json!({
+            "event_id": "ak:event:01964137-0000-8000-8000-000000000060",
+            "kind": kind,
+            "realm_id": realm_id,
+            "scope_ref": { "kind": "realm", "realm_id": realm_id },
+            "actor_id": actor,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": { "archived": true },
+            "proofs": [],
+        }))
+        .expect("realm lifecycle envelope")
+    }
+
+    #[test]
+    fn a_realm_lifecycle_event_binds_to_the_path_realm_and_its_own_kind() {
+        caller_signed_realm_lifecycle_target(
+            LIFECYCLE_ACTOR,
+            LIFECYCLE_REALM,
+            arkret_wire::EventKind::REALM_ARCHIVE,
+            &realm_lifecycle_event(
+                arkret_wire::EventKind::REALM_ARCHIVE,
+                LIFECYCLE_ACTOR,
+                LIFECYCLE_REALM,
+            ),
+        )
+        .unwrap();
+
+        // The archive endpoint must not be a way to submit a terminal destroy.
+        caller_signed_realm_lifecycle_target(
+            LIFECYCLE_ACTOR,
+            LIFECYCLE_REALM,
+            arkret_wire::EventKind::REALM_ARCHIVE,
+            &realm_lifecycle_event(
+                arkret_wire::EventKind::REALM_DESTROY,
+                LIFECYCLE_ACTOR,
+                LIFECYCLE_REALM,
+            ),
+        )
+        .expect_err("the archive surface must not accept a destroy Event");
+
+        // The Realm is single-sourced by event.realm_id, so a mismatch is a
+        // request to act on a Realm the URL did not name.
+        caller_signed_realm_lifecycle_target(
+            LIFECYCLE_ACTOR,
+            LIFECYCLE_REALM,
+            arkret_wire::EventKind::REALM_ARCHIVE,
+            &realm_lifecycle_event(
+                arkret_wire::EventKind::REALM_ARCHIVE,
+                LIFECYCLE_ACTOR,
+                "ak:realm:01964137-0000-8000-8000-0000000000ff",
+            ),
+        )
+        .expect_err("event.realm_id must equal the path realm_id");
+
+        caller_signed_realm_lifecycle_target(
+            LIFECYCLE_ACTOR,
+            LIFECYCLE_REALM,
+            arkret_wire::EventKind::REALM_ARCHIVE,
+            &realm_lifecycle_event(
+                arkret_wire::EventKind::REALM_ARCHIVE,
+                "did:web:someone-else.example",
+                LIFECYCLE_REALM,
+            ),
+        )
+        .expect_err("the submitted Event must be authored by the authenticated caller");
+    }
 
     #[test]
     fn operation_rejection_keeps_organization_approval_as_reason_code() {
