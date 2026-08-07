@@ -887,8 +887,9 @@ diesel::table! {
         circle_pk -> Int8,
         actor_id -> Text,
         state -> Text,
+        invited_at -> Nullable<Timestamptz>,
         joined_at -> Timestamptz,
-        removed_at -> Nullable<Timestamptz>,
+        updated_at -> Timestamptz,
     }
 }
 

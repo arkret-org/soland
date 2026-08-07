@@ -710,6 +710,28 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
         Ok(())
     }
 
+    async fn store_circle_projection(
+        &self,
+        record: &crate::events::CircleProjectionRecord,
+        members: &[crate::events::CircleMemberProjectionRecord],
+    ) -> crate::ServiceResult<()> {
+        let circles = self.persistence.circle_projections();
+        circles.put(record).await?;
+        circles.put_members(&record.circle_id, members).await?;
+        Ok(())
+    }
+
+    async fn store_strand_watch_projection(
+        &self,
+        record: &crate::events::StrandWatchProjectionRecord,
+    ) -> crate::ServiceResult<()> {
+        self.persistence
+            .strand_watch_projections()
+            .put(record)
+            .await?;
+        Ok(())
+    }
+
     async fn store_morph_projection(
         &self,
         record: &crate::events::MorphProjectionRecord,

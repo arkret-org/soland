@@ -187,7 +187,9 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn key_backups(&self) -> &dyn KeyBackupStore;
     fn multisig_pending(&self) -> &dyn MultisigPendingStore;
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
+    fn circle_projections(&self) -> &dyn CircleProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;
+    fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     /// Publication evidence (lease + minted ingress receipt) per accepted
     /// Event digest (`authz/offline-publication.md` §2.1).

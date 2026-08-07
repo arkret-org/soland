@@ -1,10 +1,12 @@
 use serde_json::Value;
 
 use super::{
-    Arc, BTreeMap, MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceError,
-    PersistenceResult, ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
-    RealmMetaRecord, RealmMetaStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
-    StrandProjectionRecord, StrandProjectionStore, async_trait,
+    Arc, BTreeMap, CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
+    MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceError, PersistenceResult,
+    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, RealmMetaRecord,
+    RealmMetaStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
+    StrandProjectionRecord, StrandProjectionStore, StrandWatchProjectionRecord,
+    StrandWatchProjectionStore, async_trait,
 };
 // In-memory Realm meta store
 pub(crate) struct MemoryRealmMetaStore {
@@ -311,5 +313,99 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
 
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         Ok(self.data.lock().iter().take(limit).cloned().collect())
+    }
+}
+
+pub(crate) struct MemoryCircleProjectionStore {
+    data: Arc<Mutex<BTreeMap<String, CircleProjectionRecord>>>,
+    members: Arc<Mutex<BTreeMap<String, Vec<CircleMemberProjectionRecord>>>>,
+}
+impl MemoryCircleProjectionStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+            members: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+#[async_trait]
+impl CircleProjectionStore for MemoryCircleProjectionStore {
+    async fn get(&self, circle_id: &str) -> PersistenceResult<Option<CircleProjectionRecord>> {
+        let data = self.data.lock();
+        Ok(data.get(circle_id).cloned())
+    }
+
+    async fn put(&self, record: &CircleProjectionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock();
+        data.insert(record.circle_id.clone(), record.clone());
+        Ok(())
+    }
+
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CircleProjectionRecord>> {
+        let data = self.data.lock();
+        Ok(data
+            .values()
+            .filter(|r| r.realm_id == realm_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CircleProjectionRecord>> {
+        let data = self.data.lock();
+        Ok(data.values().cloned().collect())
+    }
+
+    async fn delete(&self, circle_id: &str) -> PersistenceResult<()> {
+        self.data.lock().remove(circle_id);
+        self.members.lock().remove(circle_id);
+        Ok(())
+    }
+
+    async fn put_members(
+        &self,
+        circle_id: &str,
+        members: &[CircleMemberProjectionRecord],
+    ) -> PersistenceResult<()> {
+        let mut data = self.members.lock();
+        if members.is_empty() {
+            data.remove(circle_id);
+        } else {
+            data.insert(circle_id.to_owned(), members.to_vec());
+        }
+        Ok(())
+    }
+
+    async fn snapshot_all_members(&self) -> PersistenceResult<Vec<CircleMemberProjectionRecord>> {
+        let data = self.members.lock();
+        Ok(data.values().flatten().cloned().collect())
+    }
+}
+pub(crate) struct MemoryStrandWatchProjectionStore {
+    data: Arc<Mutex<BTreeMap<(String, String), StrandWatchProjectionRecord>>>,
+}
+impl MemoryStrandWatchProjectionStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+#[async_trait]
+impl StrandWatchProjectionStore for MemoryStrandWatchProjectionStore {
+    async fn put(&self, record: &StrandWatchProjectionRecord) -> PersistenceResult<()> {
+        let mut data = self.data.lock();
+        data.insert(
+            (record.strand_id.clone(), record.actor_id.clone()),
+            record.clone(),
+        );
+        Ok(())
+    }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandWatchProjectionRecord>> {
+        let data = self.data.lock();
+        Ok(data.values().cloned().collect())
     }
 }

@@ -263,6 +263,14 @@ pub enum ProjectionWriteThroughRecord {
     SpaceContainer(crate::events::SpaceContainerProjectionRecord),
     Strand(crate::events::StrandProjectionRecord),
     Morph(crate::events::MorphProjectionRecord),
+    /// The Circle row plus its complete membership set. Membership is written
+    /// as a whole set because it is what the wire validator enforces
+    /// `Circle.members` is a subset of `Realm.members` against.
+    Circle(
+        crate::events::CircleProjectionRecord,
+        Vec<crate::events::CircleMemberProjectionRecord>,
+    ),
+    StrandWatch(crate::events::StrandWatchProjectionRecord),
 }
 
 impl From<ProjectionEffect> for ProjectionEffectView {
@@ -1408,8 +1416,24 @@ impl ProjectionService {
                 | arkret_wire::EventKind::MORPH_ARCHIVE
                 | arkret_wire::EventKind::MORPH_RESTORE
         );
+        let is_circle_kind = matches!(
+            kind,
+            arkret_wire::EventKind::CIRCLE_CREATE
+                | arkret_wire::EventKind::CIRCLE_UPDATE
+                | arkret_wire::EventKind::CIRCLE_ARCHIVE
+                | arkret_wire::EventKind::CIRCLE_RESTORE
+                | arkret_wire::EventKind::CIRCLE_TOMBSTONE
+                | arkret_wire::EventKind::CIRCLE_MEMBER_STATE
+        );
+        let is_strand_watch_kind = kind == arkret_wire::EventKind::STRAND_WATCH_SET;
         let is_redaction = kind == arkret_wire::EventKind::REDACTION;
-        if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
+        if !(is_space_container_kind
+            || is_strand_kind
+            || is_morph_kind
+            || is_circle_kind
+            || is_strand_watch_kind
+            || is_redaction)
+        {
             return None;
         }
 
@@ -1429,6 +1453,69 @@ impl ProjectionService {
                 .map(ToOwned::to_owned)
         };
         let state = self.state.lock();
+        if is_circle_kind {
+            let id = if kind == arkret_wire::EventKind::CIRCLE_CREATE {
+                object_id()
+            } else {
+                string_field("circle_id").or_else(|| string_field("target_ref"))
+            }?;
+            return state.circles.get(&id).map(|row| {
+                let members = state
+                    .circle_memberships
+                    .iter()
+                    .filter(|((circle_id, _), _)| circle_id == &id)
+                    .map(
+                        |(_, membership)| crate::events::CircleMemberProjectionRecord {
+                            circle_id: membership.circle_id.clone(),
+                            actor_id: membership.member.clone(),
+                            state: membership.state.clone(),
+                            invited_at: membership.invited_at,
+                            joined_at: membership.joined_at,
+                            updated_at: membership.updated_at,
+                        },
+                    )
+                    .collect();
+                ProjectionWriteThroughRecord::Circle(
+                    crate::events::CircleProjectionRecord {
+                        circle_id: row.circle_id.clone(),
+                        realm_id: row.realm_id.clone(),
+                        profile_ref: row.profile_ref.clone(),
+                        title: row.title.clone(),
+                        summary: row.summary.clone(),
+                        display: row.display.clone(),
+                        directory_visibility: row.directory_visibility.clone(),
+                        join_rule: row.join_rule.clone(),
+                        history_visibility: row.history_visibility.clone(),
+                        content_encryption_floor: row.content_encryption_floor.clone(),
+                        metadata_encryption_floor: row.metadata_encryption_floor.clone(),
+                        encryption_profile: row.encryption_profile.clone(),
+                        mls_group_ref: row.mls_group_ref.clone(),
+                        state: row.state.as_str().to_owned(),
+                        state_changed_at: row.state_changed_at,
+                        created_by: row.created_by.clone(),
+                        updated_by: row.updated_by.clone(),
+                        created_at: row.created_at,
+                        updated_at: row.updated_at,
+                    },
+                    members,
+                )
+            });
+        }
+        if is_strand_watch_kind {
+            let strand_id = string_field("strand_id").or_else(|| string_field("target_ref"))?;
+            let actor_id = operation.actor()?.to_string();
+            return state.strand_watches.get(&(strand_id, actor_id)).map(|row| {
+                ProjectionWriteThroughRecord::StrandWatch(
+                    crate::events::StrandWatchProjectionRecord {
+                        strand_id: row.strand_id.clone(),
+                        actor_id: row.actor_id.clone(),
+                        level: row.level.clone(),
+                        level_public: row.level_public,
+                        updated_at: row.updated_at,
+                    },
+                )
+            });
+        }
         if is_space_container_kind {
             let id = string_field("space_id").or_else(object_id)?;
             return state.space_containers.get(&id).map(|row| {

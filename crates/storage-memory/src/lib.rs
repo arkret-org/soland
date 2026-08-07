@@ -14,8 +14,9 @@ pub(crate) use soland_storage::{
     AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentSidecarContextRecord,
     AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
     AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
-    BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
-    ContactKey, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
+    CircleProjectionStore, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey,
+    ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
     ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
@@ -50,8 +51,9 @@ pub(crate) use soland_storage::{
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
     ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
     SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
-    StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord, SyncCursorStore,
-    WebsocketAuthStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    StrandProjectionRecord, StrandProjectionStore, StrandWatchProjectionRecord,
+    StrandWatchProjectionStore, SyncCursorRecord, SyncCursorStore, WebsocketAuthStore,
+    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
     agent_participation_record_key, cross_signing_reset_blocks_queued_message,
     device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
     evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
@@ -145,8 +147,9 @@ pub(crate) use notifications::MemoryNotificationStore;
 pub(crate) use organization_registration::MemoryOrganizationRegistrationStore;
 pub(crate) use policy::MemoryPolicyDocumentStore;
 pub(crate) use projection::{
-    MemoryMorphProjectionStore, MemoryProjectionEventStore, MemoryRealmMetaStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryCircleProjectionStore, MemoryMorphProjectionStore, MemoryProjectionEventStore,
+    MemoryRealmMetaStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryStrandWatchProjectionStore,
 };
 pub(crate) use publication_evidence::MemoryPublicationEvidenceStore;
 pub(crate) use push::{MemoryPushBridgeCacheStore, MemoryPushDeviceStore};

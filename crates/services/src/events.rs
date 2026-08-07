@@ -67,6 +67,12 @@ pub struct SpaceContainerProjectionRecord {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+/// Circle projection records are shared verbatim with the persistence layer:
+/// there is no service-side reshaping to justify a second copy of the shape.
+pub use soland_storage::{
+    CircleMemberProjectionRecord, CircleProjectionRecord, StrandWatchProjectionRecord,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StrandProjectionRecord {
     pub strand_id: String,
@@ -937,6 +943,16 @@ pub trait ProjectionWritePort: Send + Sync {
         record: &SpaceContainerProjectionRecord,
     ) -> ServiceResult<()>;
     async fn store_strand_projection(&self, record: &StrandProjectionRecord) -> ServiceResult<()>;
+    /// Persist one Circle row together with its complete membership set.
+    async fn store_circle_projection(
+        &self,
+        record: &CircleProjectionRecord,
+        members: &[CircleMemberProjectionRecord],
+    ) -> ServiceResult<()>;
+    async fn store_strand_watch_projection(
+        &self,
+        record: &StrandWatchProjectionRecord,
+    ) -> ServiceResult<()>;
     async fn store_morph_projection(&self, record: &MorphProjectionRecord) -> ServiceResult<()>;
     async fn store_realm_organization_statement(
         &self,
@@ -1409,6 +1425,23 @@ impl EventQueryService {
         record: &MorphProjectionRecord,
     ) -> ServiceResult<()> {
         self.projections.store_morph_projection(record).await
+    }
+
+    pub async fn store_circle_projection(
+        &self,
+        record: &CircleProjectionRecord,
+        members: &[CircleMemberProjectionRecord],
+    ) -> ServiceResult<()> {
+        self.projections
+            .store_circle_projection(record, members)
+            .await
+    }
+
+    pub async fn store_strand_watch_projection(
+        &self,
+        record: &StrandWatchProjectionRecord,
+    ) -> ServiceResult<()> {
+        self.projections.store_strand_watch_projection(record).await
     }
 
     pub async fn store_realm_organization_statement(

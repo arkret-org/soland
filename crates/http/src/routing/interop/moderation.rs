@@ -778,7 +778,6 @@ async fn moderation_report(
         &source_ip_hash,
     )
     .await?;
-    let report_id = ids::generate_report_id();
     // Internal assignment keeps the `<did>#moderation` role form; the wire
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
     let moderation_role = format!("{}#moderation", state.service_id());
@@ -808,6 +807,17 @@ async fn moderation_report(
         Value::Object(report_fields.clone()),
     )
     .await?;
+    // `report` and `moderation_queue_item` are both Event-derived kinds, and the
+    // registry names the same `ak.self.moderation.report` Event as the genesis
+    // of each: they are two distinct typed outputs of one accepted Event, not
+    // ids anyone may mint. Neither can be known before the Event is accepted,
+    // and neither enters its payload — the Event digest would then depend on a
+    // value derived from itself.
+    let report_event = arkret_identifiers::EventId::new(report_event_id.clone())
+        .map_err(|error| AppError::internal(format!("moderation Event id invalid: {error}")))?;
+    let report_id = arkret_identifiers::ReportId::from_event_id(&report_event).to_string();
+    let queue_item_ref =
+        arkret_identifiers::ModerationQueueItemId::from_event_id(&report_event).to_string();
     report_fields.insert("report_id".to_owned(), json!(report_id));
     report_fields.insert("event_id".to_owned(), json!(report_event_id));
     report_fields.insert("created_at".to_owned(), json!(now()));
@@ -839,7 +849,6 @@ async fn moderation_report(
     // assign reviewers. We default to `status=submitted`,
     // `visibility=metadata_only`, `priority=normal` — sodmin can update
     // via `POST /_soland/admin/moderation/queue/{id}/{assign,prioritise}`.
-    let queue_item_ref = ids::generate("modq");
     let queue_item = json!({
         "id": queue_item_ref,
         "report": report_payload,

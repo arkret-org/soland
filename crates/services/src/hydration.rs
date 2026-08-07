@@ -547,9 +547,10 @@ pub async fn hydrate_projections_from_persistence(
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
-        KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome,
-        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
-        SpaceContainerProjection, StrandProjection,
+        CircleLifecycleState, CircleMembershipState, CircleProjection, KeyPackageLifetime,
+        MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome, MorphProjection,
+        ObjectLifecycleState, SpaceContainerLifecycleState, SpaceContainerProjection,
+        StrandProjection, StrandWatchProjection,
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
@@ -586,6 +587,14 @@ pub async fn hydrate_projections_from_persistence(
             "active" => Some(SpaceContainerLifecycleState::Active),
             "archived" => Some(SpaceContainerLifecycleState::Archived),
             "tombstoned" => Some(SpaceContainerLifecycleState::Tombstoned),
+            _ => None,
+        }
+    }
+    fn parse_circle_state(value: &str) -> Option<CircleLifecycleState> {
+        match value {
+            "active" => Some(CircleLifecycleState::Active),
+            "archived" => Some(CircleLifecycleState::Archived),
+            "tombstoned" => Some(CircleLifecycleState::Tombstoned),
             _ => None,
         }
     }
@@ -729,6 +738,97 @@ pub async fn hydrate_projections_from_persistence(
                     schema_refs: Vec::new(),
                     schedule_revision_heads: Vec::new(),
                     scope_circle_id: record.scope_circle_id,
+                },
+            );
+        }
+    }
+    // Circle membership is the set the wire validator enforces
+    // `Circle.members` is a subset of `Realm.members` against, so it is
+    // hydrated before the Circle rows that carry the active-member view.
+    let mut circle_memberships: BTreeMap<
+        String,
+        Vec<soland_storage::CircleMemberProjectionRecord>,
+    > = BTreeMap::new();
+    if let Ok(rows) = persistence
+        .circle_projections()
+        .snapshot_all_members()
+        .await
+    {
+        for record in rows {
+            proj.circle_memberships.insert(
+                (record.circle_id.clone(), record.actor_id.clone()),
+                CircleMembershipState {
+                    circle_id: record.circle_id.clone(),
+                    member: record.actor_id.clone(),
+                    state: record.state.clone(),
+                    invited_at: record.invited_at,
+                    joined_at: record.joined_at,
+                    updated_at: record.updated_at,
+                },
+            );
+            circle_memberships
+                .entry(record.circle_id.clone())
+                .or_default()
+                .push(record);
+        }
+    }
+    if let Ok(rows) = persistence.circle_projections().snapshot_all().await {
+        for record in rows {
+            let Some(state) = parse_circle_state(&record.state) else {
+                tracing::warn!(
+                    circle_id = %record.circle_id,
+                    state = %record.state,
+                    "skipping circle projection row with unknown state during hydrate"
+                );
+                continue;
+            };
+            let members = circle_memberships
+                .get(&record.circle_id)
+                .map(|members| {
+                    members
+                        .iter()
+                        .filter(|member| member.state == "active")
+                        .map(|member| member.actor_id.clone())
+                        .collect::<BTreeSet<String>>()
+                })
+                .unwrap_or_default();
+            proj.circles.insert(
+                record.circle_id.clone(),
+                CircleProjection {
+                    circle_id: record.circle_id,
+                    realm_id: record.realm_id,
+                    profile_ref: record.profile_ref,
+                    title: record.title,
+                    summary: record.summary,
+                    display: record.display,
+                    directory_visibility: record.directory_visibility,
+                    join_rule: record.join_rule,
+                    history_visibility: record.history_visibility,
+                    content_encryption_floor: record.content_encryption_floor,
+                    metadata_encryption_floor: record.metadata_encryption_floor,
+                    encryption_profile: record.encryption_profile,
+                    mls_group_ref: record.mls_group_ref,
+                    state,
+                    state_changed_at: record.state_changed_at,
+                    created_by: record.created_by,
+                    created_at: record.created_at,
+                    updated_by: record.updated_by,
+                    updated_at: record.updated_at,
+                    members,
+                },
+            );
+        }
+    }
+    if let Ok(rows) = persistence.strand_watch_projections().snapshot_all().await {
+        for record in rows {
+            proj.strand_watches.insert(
+                (record.strand_id.clone(), record.actor_id.clone()),
+                StrandWatchProjection {
+                    strand_id: record.strand_id,
+                    actor_id: record.actor_id,
+                    level: record.level,
+                    level_public: record.level_public,
+                    updated_at: record.updated_at,
                 },
             );
         }

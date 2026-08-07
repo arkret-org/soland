@@ -5,14 +5,15 @@ use soland_storage::ControlProposalAuthorityAckStore;
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
     AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
-    ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
-    DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
-    EventStore, FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxStore,
-    HandleReleaseStore, IdempotencyStore, InviteLocatorStore, InviteReceivePolicyStore,
-    KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
+    CircleProjectionStore, ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore,
+    DeviceMessageStore, DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork,
+    DevicePairingStore, EventStore, FederationFrontierExchangeStore, FederationOperationsStore,
+    FederationOutboxStore, HandleReleaseStore, IdempotencyStore, InviteLocatorStore,
+    InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
     MemoryAccountLocalpartStore, MemoryAccountStore, MemoryAgentParticipationStore,
-    MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore, MemoryConsentCellStore,
-    MemoryContactStore, MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
+    MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore,
+    MemoryCircleProjectionStore, MemoryConsentCellStore, MemoryContactStore,
+    MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryDevicePairingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
     MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryHandleReleaseStore,
     MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
@@ -27,17 +28,17 @@ use super::{
     MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
     MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemorySessionStore,
     MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
-    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore, MemoryWebvhStore,
-    MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore,
-    MorphProjectionStore, MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore,
-    OrganizationPolicyStore, OrganizationRegistrationStore, OrganizationStore, PersistenceStore,
-    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
-    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
-    RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
-    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebsocketAuthStore,
-    WebvhStore,
+    MemoryStrandProjectionStore, MemoryStrandWatchProjectionStore, MemorySyncCursorStore,
+    MemoryWebsocketAuthStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
+    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore, Mutex,
+    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationRegistrationStore,
+    OrganizationStore, PersistenceStore, PolicyDocumentStore, ProjectionEventStore,
+    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmInviteStore,
+    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
+    RealmOrganizationStore, RecoveryPolicyStore, RecoverySessionStore, RetentionPolicyStore,
+    RetentionTombstoneStore, SecurityTransactionStore, ServiceIdentityStore, SessionStore,
+    SidecarStore, SignalRelayStore, SpaceContainerProjectionStore, StrandProjectionStore,
+    StrandWatchProjectionStore, SyncCursorStore, WebsocketAuthStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -95,7 +96,9 @@ pub struct SolandMemoryPersistenceStore {
     key_backups: MemoryKeyBackupStore,
     multisig_pending: MemoryMultisigPendingStore,
     space_container_projections: MemorySpaceContainerProjectionStore,
+    circle_projections: MemoryCircleProjectionStore,
     strand_projections: MemoryStrandProjectionStore,
+    strand_watch_projections: MemoryStrandWatchProjectionStore,
     morph_projections: MemoryMorphProjectionStore,
     publication_evidence: MemoryPublicationEvidenceStore,
     // G3.S1: MLS lifecycle stores.
@@ -193,7 +196,9 @@ impl SolandMemoryPersistenceStore {
             key_backups: MemoryKeyBackupStore::new(),
             multisig_pending: MemoryMultisigPendingStore::new(),
             space_container_projections: MemorySpaceContainerProjectionStore::new(),
+            circle_projections: MemoryCircleProjectionStore::new(),
             strand_projections: MemoryStrandProjectionStore::new(),
+            strand_watch_projections: MemoryStrandWatchProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
             publication_evidence: MemoryPublicationEvidenceStore::with_data(
                 publication_evidence_data,
@@ -510,6 +515,14 @@ impl soland_storage::EventProjectionStoreRegistry for SolandMemoryPersistenceSto
 
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore {
         &self.space_container_projections
+    }
+
+    fn circle_projections(&self) -> &dyn CircleProjectionStore {
+        &self.circle_projections
+    }
+
+    fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore {
+        &self.strand_watch_projections
     }
 
     fn strand_projections(&self) -> &dyn StrandProjectionStore {

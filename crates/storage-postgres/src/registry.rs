@@ -47,6 +47,8 @@ pub struct PgPersistenceStore {
     webvh: PgWebvhStore,
     service_identity: PgServiceIdentityStore,
     realm_invites: PgRealmInviteStore,
+    circle_projections: PgCircleProjectionStore,
+    strand_watch_projections: PgStrandWatchProjectionStore,
     key_backups: PgKeyBackupStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
@@ -112,6 +114,8 @@ impl PgPersistenceStore {
             webvh: PgWebvhStore { pool: pool.clone() },
             service_identity: PgServiceIdentityStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
+            circle_projections: PgCircleProjectionStore { pool: pool.clone() },
+            strand_watch_projections: PgStrandWatchProjectionStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
@@ -408,6 +412,14 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore {
         &self.space_container_projections
+    }
+
+    fn circle_projections(&self) -> &dyn CircleProjectionStore {
+        &self.circle_projections
+    }
+
+    fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore {
+        &self.strand_watch_projections
     }
 
     fn strand_projections(&self) -> &dyn StrandProjectionStore {

@@ -105,10 +105,6 @@ pub fn generate_snapshot_id() -> String {
     generate("snapshot")
 }
 
-pub fn generate_report_id() -> String {
-    generate("report")
-}
-
 pub fn generate_read_cursor_id() -> String {
     generate("read_cursor")
 }
@@ -244,7 +240,6 @@ mod tests {
         assert!(generate_grant_id().starts_with("ak:grant:"));
         assert!(generate_invite_id().starts_with("ak:invite:"));
         assert!(generate_snapshot_id().starts_with("ak:snapshot:"));
-        assert!(generate_report_id().starts_with("ak:report:"));
         assert!(generate_notification_id().starts_with("ak:notification:"));
         assert!(generate_view_id().starts_with("ak:view:"));
         assert!(generate_request_id().starts_with("ak:request:"));

@@ -1601,8 +1601,9 @@ CREATE TABLE public.projection_circle_members (
     circle_pk bigint NOT NULL,
     actor_id text NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
+    invited_at timestamp with time zone,
     joined_at timestamp with time zone NOT NULL,
-    removed_at timestamp with time zone,
+    updated_at timestamp with time zone NOT NULL,
     CONSTRAINT projection_circle_members_state_check CHECK ((state = ANY (ARRAY['invited'::text, 'active'::text, 'removed'::text, 'banned'::text, 'left'::text])))
 );
 

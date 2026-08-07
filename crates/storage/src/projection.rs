@@ -47,6 +47,39 @@ pub trait StrandProjectionStore: Send + Sync {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>>;
     async fn delete(&self, strand_id: &str) -> PersistenceResult<()>;
 }
+/// Durable Circle projection store (mirror of `projection_circles` +
+/// `projection_circle_members`).
+///
+/// Circle membership is the set the wire validator enforces
+/// `Circle.members subset of Realm.members` against, so losing it on restart
+/// would silently widen a Circle boundary until the log is replayed.
+#[async_trait]
+pub trait CircleProjectionStore: Send + Sync {
+    async fn get(&self, circle_id: &str) -> PersistenceResult<Option<CircleProjectionRecord>>;
+    async fn put(&self, record: &CircleProjectionRecord) -> PersistenceResult<()>;
+    async fn list_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<CircleProjectionRecord>>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CircleProjectionRecord>>;
+    async fn delete(&self, circle_id: &str) -> PersistenceResult<()>;
+    /// Replace the whole membership set of one Circle. Membership is a set,
+    /// not a log: a row that disappeared from the reducer has to disappear
+    /// here too, so a partial upsert would resurrect removed members.
+    async fn put_members(
+        &self,
+        circle_id: &str,
+        members: &[CircleMemberProjectionRecord],
+    ) -> PersistenceResult<()>;
+    async fn snapshot_all_members(&self) -> PersistenceResult<Vec<CircleMemberProjectionRecord>>;
+}
+/// Durable per-(Strand, Actor) watch preference store (mirror of
+/// `projection_strand_watches`).
+#[async_trait]
+pub trait StrandWatchProjectionStore: Send + Sync {
+    async fn put(&self, record: &StrandWatchProjectionRecord) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandWatchProjectionRecord>>;
+}
 /// Durable Morph projection store (mirror of `projection_morphs` table).
 #[async_trait]
 pub trait MorphProjectionStore: Send + Sync {
@@ -119,6 +152,47 @@ pub struct MorphProjectionRecord {
     pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CircleProjectionRecord {
+    pub circle_id: String,
+    pub realm_id: String,
+    pub profile_ref: Option<String>,
+    pub title: String,
+    pub summary: Option<String>,
+    pub display: Value,
+    pub directory_visibility: String,
+    pub join_rule: String,
+    pub history_visibility: String,
+    pub content_encryption_floor: Option<String>,
+    pub metadata_encryption_floor: Option<String>,
+    pub encryption_profile: String,
+    pub mls_group_ref: Option<String>,
+    /// One of `active` / `archived` / `tombstoned` per spec.
+    pub state: String,
+    pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_by: String,
+    pub updated_by: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CircleMemberProjectionRecord {
+    pub circle_id: String,
+    pub actor_id: String,
+    /// One of `invited` / `active` / `removed` / `banned` / `left`.
+    pub state: String,
+    pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrandWatchProjectionRecord {
+    pub strand_id: String,
+    pub actor_id: String,
+    pub level: Option<String>,
+    pub level_public: bool,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 /// Projection-side event log (append-only, index/debug surfaces).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

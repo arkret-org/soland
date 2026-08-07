@@ -835,7 +835,6 @@ pub(super) async fn mimi_report_abuse(
         &source_ip_hash,
     )
     .await?;
-    let report_id = ids::generate_report_id();
     let canonical_reason = body
         .get("abuse_reason_code")
         .and_then(Value::as_str)
@@ -878,8 +877,15 @@ pub(super) async fn mimi_report_abuse(
     )
     .await?;
 
+    // `report` is Event-derived: the id is the accepted
+    // `ak.self.moderation.report` Event token retyped, so it exists only after
+    // admission and never enters the Event payload.
+    let report_id = ReportId::from_event_id(
+        &arkret_identifiers::EventId::new(report_event_id.clone())
+            .map_err(|error| AppError::internal(format!("MIMI report Event id: {error}")))?,
+    );
     let mut report_fields = event_fields;
-    report_fields.insert("report_id".to_owned(), json!(report_id));
+    report_fields.insert("report_id".to_owned(), json!(report_id.as_str()));
     report_fields.insert("event_id".to_owned(), json!(report_event_id));
     report_fields.insert("kind".to_owned(), json!("mimi_abuse_report"));
     report_fields.insert(
@@ -918,8 +924,6 @@ pub(super) async fn mimi_report_abuse(
             "reporter_resolution": "holder_claim_or_consent",
         }),
     );
-    let report_id = ReportId::new(report_id)
-        .map_err(|error| AppError::internal(format!("MIMI report id: {error}")))?;
     json_ok(MimiReportAbuseOutcome {
         report_id,
         status: arkret_wire::NonEmptyString::new("queued")

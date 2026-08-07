@@ -348,6 +348,18 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
         ProjectionWriteThroughRecord::Morph(record) => {
             state.event_queries().store_morph_projection(&record).await
         }
+        ProjectionWriteThroughRecord::Circle(record, members) => {
+            state
+                .event_queries()
+                .store_circle_projection(&record, &members)
+                .await
+        }
+        ProjectionWriteThroughRecord::StrandWatch(record) => {
+            state
+                .event_queries()
+                .store_strand_watch_projection(&record)
+                .await
+        }
     };
     if let Err(error) = result {
         tracing::warn!(
