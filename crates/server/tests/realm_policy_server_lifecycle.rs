@@ -841,7 +841,11 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
     );
     assert_eq!(
         seals[0]["id"].as_str(),
-        Some(accepted_seal_frontier(&state, &token, &realm).await.as_str()),
+        Some(
+            accepted_seal_frontier(&state, &token, &realm)
+                .await
+                .as_str()
+        ),
         "a freshly bootstrapped Realm's covering Seal is its accepted frontier: {resolved}"
     );
 
