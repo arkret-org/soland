@@ -144,8 +144,8 @@ diesel::table! {
         normalized_context_ref_digest -> Text,
         version -> Int8,
         normalized_context_ref -> Jsonb,
-        predecessor_event_id -> Nullable<Bytea>,
-        attach_event_id -> Bytea,
+        predecessor_event_ref -> Nullable<Bytea>,
+        attach_event_ref -> Bytea,
         created_at -> Timestamptz,
     }
 }
@@ -364,9 +364,9 @@ diesel::table! {
         granted_to_target_scopes -> Array<Text>,
         granted_to_requester_scopes -> Array<Text>,
         status -> Text,
-        request_event_ref -> Nullable<Text>,
-        response_event_ref -> Nullable<Text>,
-        tombstone_event_ref -> Nullable<Text>,
+        request_event_ref -> Nullable<Bytea>,
+        response_event_ref -> Nullable<Bytea>,
+        tombstone_event_ref -> Nullable<Bytea>,
         message -> Nullable<Text>,
         peer_service_id -> Nullable<Text>,
         created_at -> Timestamptz,
@@ -714,8 +714,8 @@ diesel::table! {
         lifetime_not_after -> Int8,
         claimed_by_mls_group_id -> Nullable<Text>,
         ssk_generation -> Nullable<Int8>,
-        device_authorize_event_id -> Nullable<Text>,
-        agent_key_authorize_event_id -> Nullable<Text>,
+        device_authorize_event_id -> Nullable<Bytea>,
+        agent_key_authorize_event_id -> Nullable<Bytea>,
         claimed_at -> Nullable<Int8>,
         claim_expires_at_unix_ms -> Nullable<Int8>,
         consumed_at -> Nullable<Int8>,
@@ -1200,7 +1200,7 @@ diesel::table! {
 
 diesel::table! {
     retention_tombstones (event_id) {
-        event_id -> Text,
+        event_id -> Bytea,
         realm_id -> Text,
         reason -> Text,
         policy_ttl_seconds -> Int8,

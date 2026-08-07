@@ -7,8 +7,27 @@ use super::{
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
     PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait,
-    db_ssk_generation, json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
+    db_ssk_generation, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
 };
+
+/// Encode a key package's trust-binding Event reference for storage.
+///
+/// These columns hold the same 33-octet token `canonical_events.id` does, so a
+/// malformed wire id is rejected here rather than stored and found on read.
+fn parse_authorize_event_id(event_id: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> {
+    event_id
+        .map(|value| {
+            ids::event_token_part_or_schema_violation(value, "event").map(|token| token.to_vec())
+        })
+        .transpose()
+}
+
+fn format_authorize_event_id(token: &[u8]) -> String {
+    ids::format_event_id(
+        &<[u8; ids::EVENT_ID_BYTES]>::try_from(token)
+            .expect("mls_key_packages authorize Event id is a 33-octet Event id"),
+    )
+}
 pub struct PgMlsKeyPackageStore {
     pub pool: PgPool,
 }
@@ -55,8 +74,12 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<BigInt, _>(record.lifetime_not_after)
         .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
         .bind::<Nullable<BigInt>, _>(ssk_generation)
-        .bind::<Nullable<Text>, _>(&record.device_authorize_event_id)
-        .bind::<Nullable<Text>, _>(&record.agent_key_authorize_event_id)
+        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+            record.device_authorize_event_id.as_deref(),
+        )?)
+        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+            record.agent_key_authorize_event_id.as_deref(),
+        )?)
         .bind::<Nullable<BigInt>, _>(record.claimed_at)
         .bind::<Nullable<BigInt>, _>(record.claim_expires_at_unix_ms)
         .bind::<Nullable<BigInt>, _>(record.consumed_at)
@@ -167,8 +190,8 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(group_id)
         .bind::<Nullable<Text>, _>(intended_realm_id)
         .bind::<Nullable<BigInt>, _>(ssk_generation)
-        .bind::<Nullable<Text>, _>(device_authorize_event_id)
-        .bind::<Nullable<Text>, _>(agent_key_authorize_event_id)
+        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(device_authorize_event_id)?)
+        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(agent_key_authorize_event_id)?)
         .bind::<BigInt, _>(claimed_at)
         .bind::<Nullable<BigInt>, _>(claim_expires_at_unix_ms)
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
@@ -290,8 +313,12 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 .bind::<Text, _>(attempt.keypackage_id)
                 .bind::<Text, _>(attempt.mls_group_id)
                 .bind::<Nullable<BigInt>, _>(ssk_generation)
-                .bind::<Nullable<Text>, _>(attempt.device_authorize_event_id)
-                .bind::<Nullable<Text>, _>(attempt.agent_key_authorize_event_id)
+                .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+                    attempt.device_authorize_event_id,
+                )?)
+                .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
+                    attempt.agent_key_authorize_event_id,
+                )?)
                 .bind::<BigInt, _>(attempt.claimed_at)
                 .bind::<BigInt, _>(attempt.claim_expires_at_unix_ms)
                 .get_result::<MlsKeyPackagePgRow>(conn)
@@ -790,10 +817,10 @@ struct MlsKeyPackagePgRow {
     claimed_by_mls_group_id: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
     ssk_generation: Option<i64>,
-    #[diesel(sql_type = Nullable<Text>)]
-    device_authorize_event_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    agent_key_authorize_event_id: Option<String>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    device_authorize_event_id: Option<Vec<u8>>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    agent_key_authorize_event_id: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<BigInt>)]
     claimed_at: Option<i64>,
     #[diesel(sql_type = Nullable<BigInt>)]
@@ -868,8 +895,14 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
                 .ssk_generation
                 .and_then(|generation| u64::try_from(generation).ok())
                 .filter(|generation| *generation >= 1),
-            device_authorize_event_id: row.device_authorize_event_id,
-            agent_key_authorize_event_id: row.agent_key_authorize_event_id,
+            device_authorize_event_id: row
+                .device_authorize_event_id
+                .as_deref()
+                .map(format_authorize_event_id),
+            agent_key_authorize_event_id: row
+                .agent_key_authorize_event_id
+                .as_deref()
+                .map(format_authorize_event_id),
             claimed_at: row.claimed_at,
             claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
             consumed_at: row.consumed_at,

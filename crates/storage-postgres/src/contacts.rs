@@ -1,11 +1,30 @@
-use diesel::sql_types::BigInt;
+use diesel::sql_types::{BigInt, Binary};
 
 use super::{
     Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
     ContactStore, InviteReceivePolicyStore, Jsonb, Nullable, OptionalExtension, PersistenceError,
     PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait,
-    decode_grant_dots, encode_grant_dots, pg_conn, sql_query,
+    decode_grant_dots, encode_grant_dots, ids, pg_conn, sql_query,
 };
+/// Encode a contact's Event reference for storage.
+///
+/// The `contacts` Event-reference columns hold the same 33-octet token
+/// `canonical_events.id` does, so a malformed wire id is rejected at the
+/// storage boundary rather than stored and discovered on read.
+fn parse_contact_event_ref(event_ref: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> {
+    event_ref
+        .map(|value| {
+            ids::event_token_part_or_schema_violation(value, "event").map(|token| token.to_vec())
+        })
+        .transpose()
+}
+
+fn format_contact_event_ref(token: &[u8]) -> String {
+    ids::format_event_id(
+        &<[u8; ids::EVENT_ID_BYTES]>::try_from(token)
+            .expect("contacts Event reference is a 33-octet Event id"),
+    )
+}
 // ── Pg-backed contact projection store ───────────────────────────────────
 // Durable backing for the holder↔peer `ContactStore`. Mirrors the
 // `MemoryContactStore` query shape onto the `contacts` table. Column order
@@ -29,12 +48,12 @@ struct ContactRow {
     granted_to_requester_scopes: Vec<String>,
     #[diesel(sql_type = Text)]
     status: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    request_event_ref: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    response_event_ref: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    tombstone_event_ref: Option<String>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    request_event_ref: Option<Vec<u8>>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    response_event_ref: Option<Vec<u8>>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    tombstone_event_ref: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<Text>)]
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -54,9 +73,18 @@ impl From<ContactRow> for ContactRecord {
             granted_to_target_scopes: row.granted_to_target_scopes,
             granted_to_requester_scopes: row.granted_to_requester_scopes,
             status: row.status,
-            request_event_ref: row.request_event_ref,
-            response_event_ref: row.response_event_ref,
-            tombstone_event_ref: row.tombstone_event_ref,
+            request_event_ref: row
+                .request_event_ref
+                .as_deref()
+                .map(format_contact_event_ref),
+            response_event_ref: row
+                .response_event_ref
+                .as_deref()
+                .map(format_contact_event_ref),
+            tombstone_event_ref: row
+                .tombstone_event_ref
+                .as_deref()
+                .map(format_contact_event_ref),
             message: row.message,
             peer_service_id: row.peer_service_id,
             created_at: row.created_at,
@@ -114,9 +142,11 @@ impl ContactStore for PgContactStore {
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
-        .bind::<Nullable<Text>, _>(record.request_event_ref.as_deref())
-        .bind::<Nullable<Text>, _>(record.response_event_ref.as_deref())
-        .bind::<Nullable<Text>, _>(record.tombstone_event_ref.as_deref())
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_deref())?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_deref())?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
+            record.tombstone_event_ref.as_deref(),
+        )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
         .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
         .bind::<Timestamptz, _>(record.created_at)

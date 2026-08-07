@@ -70,9 +70,9 @@ struct SidecarContextRow {
     #[diesel(sql_type = BigInt)]
     version: i64,
     #[diesel(sql_type = Nullable<Binary>)]
-    predecessor_event_id: Option<Vec<u8>>,
+    predecessor_event_ref: Option<Vec<u8>>,
     #[diesel(sql_type = Binary)]
-    attach_event_id: Vec<u8>,
+    attach_event_ref: Vec<u8>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -91,8 +91,8 @@ impl From<SidecarContextRow> for AgentSidecarContextRecord {
             normalized_context_ref_digest: row.normalized_context_ref_digest,
             normalized_context_ref: row.normalized_context_ref,
             version: row.version,
-            predecessor_event_ref: row.predecessor_event_id.as_deref().map(event_token),
-            attach_event_ref: event_token(&row.attach_event_id),
+            predecessor_event_ref: row.predecessor_event_ref.as_deref().map(event_token),
+            attach_event_ref: event_token(&row.attach_event_ref),
             created_at: row.created_at,
         }
     }
@@ -101,7 +101,7 @@ impl From<SidecarContextRow> for AgentSidecarContextRecord {
 const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
 // `sidecar_pk` never leaves the database, so every context read joins back to
 // `agent_sidecars` and returns the protocol 33-byte Sidecar identity instead.
-const CONTEXT_SELECT: &str = "SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_id, c.attach_event_id, c.created_at      FROM agent_sidecar_contexts c JOIN agent_sidecars s ON s.pk = c.sidecar_pk";
+const CONTEXT_SELECT: &str = "SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_ref, c.attach_event_ref, c.created_at      FROM agent_sidecar_contexts c JOIN agent_sidecars s ON s.pk = c.sidecar_pk";
 
 #[derive(QueryableByName)]
 struct SidecarPkRow {
@@ -218,20 +218,20 @@ impl SidecarStore for PgSidecarStore {
     ) -> PersistenceResult<AgentSidecarContextRecord> {
         let mut conn = pg_conn(&self.pool).await?;
         let sidecar_pk = sidecar_pk(&mut conn, &record.sidecar_id).await?;
-        let predecessor_event_id = record
+        let predecessor_event_ref = record
             .predecessor_event_ref
             .as_deref()
             .map(|event_id| ids::event_token_part_expect_internal(event_id, "event").to_vec());
-        let attach_event_id =
+        let attach_event_ref =
             ids::event_token_part_expect_internal(&record.attach_event_ref, "event").to_vec();
         sql_query(
             "WITH inserted AS (\
-             INSERT INTO agent_sidecar_contexts (sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at) \
+             INSERT INTO agent_sidecar_contexts (sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
              VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (sidecar_pk, normalized_context_ref_digest, version) DO NOTHING \
-             RETURNING sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at) \
-             SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_id, c.attach_event_id, c.created_at \
+             RETURNING sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
+             SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_ref, c.attach_event_ref, c.created_at \
              FROM (SELECT * FROM inserted UNION ALL \
-                   SELECT sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at \
+                   SELECT sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at \
                    FROM agent_sidecar_contexts WHERE sidecar_pk=$1 AND normalized_context_ref_digest=$2 AND version=$4) c \
              JOIN agent_sidecars s ON s.pk = c.sidecar_pk LIMIT 1",
         )
@@ -239,8 +239,8 @@ impl SidecarStore for PgSidecarStore {
         .bind::<Text, _>(&record.normalized_context_ref_digest)
         .bind::<Jsonb, _>(&record.normalized_context_ref)
         .bind::<BigInt, _>(record.version)
-        .bind::<Nullable<Binary>, _>(predecessor_event_id)
-        .bind::<Binary, _>(attach_event_id)
+        .bind::<Nullable<Binary>, _>(predecessor_event_ref)
+        .bind::<Binary, _>(attach_event_ref)
         .bind::<Timestamptz, _>(record.created_at)
         .get_result::<SidecarContextRow>(&mut *conn)
         .await

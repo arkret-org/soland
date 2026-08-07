@@ -151,7 +151,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 )
                 .into());
             }
-            if identity_matches.as_slice().first().is_some() {
+            if !identity_matches.is_empty() {
                 let outcome = insert_canonical_event(conn, &request.event).await?;
                 if matches!(
                     outcome,

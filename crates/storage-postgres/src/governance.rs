@@ -1,11 +1,13 @@
+use diesel::sql_types::Binary;
+
 use super::{
     BTreeMap, BTreeSet, BigInt, Bool, HandleReleaseStore, Jsonb, Nullable, OptionalExtension,
     OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
     PersistenceError, PersistenceResult, PgPool, QueryableByName, RealmModerationPolicyRecord,
     RealmModerationPolicyStore, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
     RealmOrganizationStore, RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord,
-    RetentionTombstoneStore, RunQueryDsl, Text, Timestamptz, Value, async_trait, json_string_array,
-    pg_conn, sql_query,
+    RetentionTombstoneStore, RunQueryDsl, Text, Timestamptz, Value, async_trait, ids,
+    json_string_array, pg_conn, sql_query,
 };
 pub struct PgHandleReleaseStore {
     pub pool: PgPool,
@@ -148,7 +150,7 @@ impl RetentionTombstoneStore for PgRetentionTombstoneStore {
             "SELECT event_id, realm_id, reason, policy_ttl_seconds, expired_at, tombstoned_at, sealed \
              FROM retention_tombstones WHERE event_id = $1",
         )
-        .bind::<Text, _>(event_id)
+        .bind::<Binary, _>(ids::event_token_part_or_schema_violation(event_id, "event")?.to_vec())
         .get_result::<RetentionTombstoneRow>(&mut *conn)
         .await
         .optional()
@@ -172,7 +174,9 @@ impl RetentionTombstoneStore for PgRetentionTombstoneStore {
                tombstoned_at = EXCLUDED.tombstoned_at, \
                sealed = EXCLUDED.sealed",
         )
-        .bind::<Text, _>(&record.event_id)
+        .bind::<Binary, _>(
+            ids::event_token_part_or_schema_violation(&record.event_id, "event")?.to_vec(),
+        )
         .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.reason)
         .bind::<BigInt, _>(record.policy_ttl_seconds)
@@ -205,8 +209,8 @@ impl RetentionTombstoneStore for PgRetentionTombstoneStore {
 }
 #[derive(QueryableByName)]
 struct RetentionTombstoneRow {
-    #[diesel(sql_type = Text)]
-    event_id: String,
+    #[diesel(sql_type = Binary)]
+    event_id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
@@ -223,7 +227,10 @@ struct RetentionTombstoneRow {
 impl From<RetentionTombstoneRow> for RetentionTombstoneRecord {
     fn from(row: RetentionTombstoneRow) -> Self {
         Self {
-            event_id: row.event_id,
+            event_id: ids::format_event_id(
+                &<[u8; ids::EVENT_ID_BYTES]>::try_from(row.event_id.as_slice())
+                    .expect("retention_tombstones.event_id is a 33-octet Event id"),
+            ),
             realm_id: row.realm_id,
             reason: row.reason,
             policy_ttl_seconds: row.policy_ttl_seconds,

@@ -210,7 +210,8 @@ pub(crate) async fn insert_canonical_event(
     .load::<StoredEventIdentityRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
-    for stored in existing {
+    // `canonical_events.id` is UNIQUE, so this is at most one row.
+    if let Some(stored) = existing.into_iter().next() {
         if stored.digest_suite != i16::from(identity.digest_suite)
             || stored.digest != identity.digest
         {
