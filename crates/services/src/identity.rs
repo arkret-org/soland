@@ -2926,7 +2926,7 @@ mod tests {
                 }
             }))
             .expect("valid signing-key binding fixture");
-        binding.public_key_digest =
+        binding.core.public_key_digest =
             arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
                 .expect("authorization-domain digest");
         binding

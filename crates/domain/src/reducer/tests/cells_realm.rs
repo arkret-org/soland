@@ -52,18 +52,14 @@ fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
     const FAMILY: &str = arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1;
 
     let mut state = ProjectionState::new();
-    for (index, (realm_id, binding_mode)) in [(REALM_A, "direct"), (REALM_B, "relay")]
-        .into_iter()
-        .enumerate()
-    {
+    for (realm_id, binding_mode) in [(REALM_A, "direct"), (REALM_B, "relay")] {
         // The registered contract for this facet is a single `cas_register`
         // write on the `null`-subject cell whose value is the whole payload,
         // so the payload here IS the cell value the assertions below read.
         let payload = serde_json::json!({"binding_mode": binding_mode});
-        let cell_writes = projected_cell_writes(
+        let (_, cell_writes) = projected_cell_writes(
             arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
             realm_id,
-            &format!("ak:event:01904100-0000-8000-8000-b0000000000{index}"),
             &payload,
         );
         let operation = make_operation(
