@@ -852,7 +852,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "wakeup_kind": "message",
                 "timing_profile_hint": "default",
                 "event_id": "ak:event:01904100-0000-8000-8000-0000000000ee",
-                "realm_id": "ak:realm:0190419b-0000-8000-8000-0000000000ee",
+                "realm_id": "ak:realm:AWRb-Bbhs1lJYMdAAkBJQ7GGxWqzFGTYiQRGUA3wq0Z5",
                 "sender_actor_id": "did:web:bob.example",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
             }

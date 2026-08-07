@@ -61,7 +61,7 @@ diesel::table! {
         agent_id -> Text,
         scope_kind -> Text,
         scope_key -> Text,
-        realm_id -> Uuid,
+        realm_id -> Text,
         scope -> Jsonb,
         version -> Int8,
         reply_message -> Bool,
@@ -77,7 +77,7 @@ diesel::table! {
     agent_participation_ceiling (id) {
         scope_kind -> Text,
         id -> Text,
-        realm_id -> Uuid,
+        realm_id -> Text,
         reply_message -> Bool,
         reaction_add -> Bool,
         reaction_remove -> Bool,
@@ -153,7 +153,7 @@ diesel::table! {
 diesel::table! {
     agent_sidecars (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         controller_id -> Text,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
@@ -207,7 +207,7 @@ diesel::table! {
         request_id -> Nullable<Uuid>,
         action -> Text,
         outcome -> Text,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         operation_id -> Nullable<Uuid>,
         device_id -> Nullable<Text>,
         payload -> Jsonb,
@@ -236,7 +236,7 @@ diesel::table! {
         media_type -> Text,
         filename -> Nullable<Text>,
         uploaded_by_id -> Text,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         size_bytes -> Int8,
         storage_backend -> Text,
         storage_key -> Text,
@@ -294,6 +294,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    canonical_realms (pk) {
+        pk -> Int8,
+        id -> Bytea,
+        derivation_class -> Int2,
+        digest_suite -> Int2,
+        digest -> Bytea,
+        wire_id -> Text,
+    }
+}
+
+diesel::table! {
     canonical_events (pk) {
         pk -> Int8,
         id -> Bytea,
@@ -302,6 +313,7 @@ diesel::table! {
         actor_id -> Text,
         actor_seq -> Int8,
         realm_id -> Nullable<Text>,
+        realm_pk -> Nullable<Int8>,
         kind -> Text,
         schema_id -> Text,
         canonical_bytes -> Bytea,
@@ -475,7 +487,7 @@ diesel::table! {
 diesel::table! {
     events (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         event_type -> Text,
         sender_id -> Nullable<Text>,
         thread_id -> Nullable<Text>,
@@ -487,7 +499,7 @@ diesel::table! {
 
 diesel::table! {
     federation_frontier_exchange (realm_id, peer_service_id) {
-        realm_id -> Uuid,
+        realm_id -> Text,
         peer_service_id -> Text,
         status -> Text,
         consecutive_failures -> Int4,
@@ -502,7 +514,7 @@ diesel::table! {
 diesel::table! {
     federation_operations (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         object_kind -> Text,
         object_id -> Nullable<Text>,
         operation_kind -> Text,
@@ -748,7 +760,7 @@ diesel::table! {
         moderator_id -> Nullable<Text>,
         target_actor_id -> Nullable<Text>,
         action_kind -> Nullable<Text>,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -760,7 +772,7 @@ diesel::table! {
         reporter_id -> Nullable<Text>,
         target_actor_id -> Nullable<Text>,
         target_event_id -> Nullable<Uuid>,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -769,7 +781,7 @@ diesel::table! {
 diesel::table! {
     multisig_pending (id) {
         id -> Text,
-        realm_id -> Uuid,
+        realm_id -> Text,
         threshold_k -> Int4,
         threshold_n -> Int4,
         members -> Array<Nullable<Text>>,
@@ -787,7 +799,7 @@ diesel::table! {
     notifications (id) {
         id -> Uuid,
         recipient_id -> Text,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         source_event_id -> Nullable<Text>,
         controller_account_id -> Nullable<Uuid>,
         recipient_service_id -> Nullable<Text>,
@@ -897,7 +909,7 @@ diesel::table! {
 diesel::table! {
     projection_circles (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         profile_ref -> Nullable<Text>,
         title -> Text,
         summary -> Nullable<Text>,
@@ -923,6 +935,7 @@ diesel::table! {
         pk -> Int8,
         id -> Bytea,
         event_pk -> Int8,
+        realm_pk -> Int8,
         realm_id -> Text,
         event_kind -> Text,
         operation_kind -> Text,
@@ -937,7 +950,7 @@ diesel::table! {
 diesel::table! {
     projection_morphs (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         morph_kind -> Text,
         title -> Nullable<Text>,
         state -> Text,
@@ -958,7 +971,7 @@ diesel::table! {
 diesel::table! {
     projection_spaces (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         scope_circle_id -> Nullable<Uuid>,
         child_scope_policy -> Nullable<Text>,
         child_scope_policy_scope_circle_id -> Nullable<Uuid>,
@@ -991,7 +1004,7 @@ diesel::table! {
 diesel::table! {
     projection_strands (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         scope_circle_id -> Nullable<Uuid>,
         tracks -> Jsonb,
         title -> Text,
@@ -1041,7 +1054,7 @@ diesel::table! {
 diesel::table! {
     realm_invites (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         inviter_id -> Text,
         invitee_id -> Nullable<Text>,
         invite_delivery_target -> Nullable<Jsonb>,
@@ -1254,7 +1267,7 @@ diesel::table! {
 diesel::table! {
     space_members (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         actor_id -> Text,
         membership -> Text,
         payload -> Jsonb,
@@ -1267,7 +1280,7 @@ diesel::table! {
 diesel::table! {
     space_state_events (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         event_type -> Text,
         subject -> Text,
         sender_id -> Nullable<Text>,
@@ -1278,8 +1291,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    spaces (id) {
-        id -> Uuid,
+    spaces (pk) {
+        pk -> Int8,
+        realm_pk -> Int8,
+        realm_id -> Text,
         title -> Text,
         summary -> Nullable<Text>,
         owner_id -> Nullable<Text>,
@@ -1386,7 +1401,7 @@ diesel::table! {
 diesel::table! {
     webrtc_sessions (id) {
         id -> Uuid,
-        realm_id -> Uuid,
+        realm_id -> Text,
         initiator_id -> Text,
         ice_config -> Jsonb,
         signaling_state -> Jsonb,
@@ -1427,6 +1442,9 @@ diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id)
 diesel::joinable!(event_batch_receipt_events -> canonical_events (event_pk));
 diesel::joinable!(event_collision_variants -> canonical_events (event_pk));
 diesel::joinable!(event_federation_outbox -> canonical_events (event_pk));
+diesel::joinable!(canonical_events -> canonical_realms (realm_pk));
+diesel::joinable!(projection_events -> canonical_realms (realm_pk));
+diesel::joinable!(spaces -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
@@ -1449,6 +1467,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     backup_series,
     blobs,
     canonical_events,
+    canonical_realms,
     consent_cells,
     contacts,
     device_message_ack_tokens,

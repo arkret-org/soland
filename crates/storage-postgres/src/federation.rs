@@ -6,8 +6,8 @@ use super::{
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
     JsonPayloadRow, Jsonb, Nullable, Operation, OptionalExtension, PersistenceError,
     PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text,
-    Timestamptz, Uuid, async_trait, frontier_exchange_failure_record,
-    frontier_exchange_success_record, ids, pg_conn, sql_query,
+    Timestamptz, async_trait, frontier_exchange_failure_record, frontier_exchange_success_record,
+    ids, pg_conn, sql_query,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -466,14 +466,13 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT realm_id, peer_service_id, status, consecutive_failures, \
              last_success_at, last_failure_at, last_frontier_root, last_error, updated_at \
              FROM federation_frontier_exchange \
              WHERE realm_id = $1 AND peer_service_id = $2",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .bind::<Text, _>(peer_service_id)
         .get_result::<FederationFrontierExchangeRow>(&mut *conn)
         .await
@@ -553,7 +552,7 @@ impl PgFederationFrontierExchangeStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
+        crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO federation_frontier_exchange \
              (realm_id, peer_service_id, status, consecutive_failures, last_success_at, \
@@ -568,7 +567,7 @@ impl PgFederationFrontierExchangeStore {
              last_error = EXCLUDED.last_error, \
              updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.peer_service_id)
         .bind::<Text, _>(&record.status)
         .bind::<Integer, _>(record.consecutive_failures)
@@ -602,7 +601,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             .unwrap_or_else(|| "create".to_owned());
         let operation_id_uuid =
             ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
+        crate::realm_identity::ensure_realm_pk(&mut conn, operation.realm_id.as_str()).await?;
         sql_query(
             "INSERT INTO federation_operations \
              (id, realm_id, object_kind, object_id, operation_kind, payload, created_at) \
@@ -610,7 +609,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(operation_id_uuid)
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(operation.realm_id.as_str())
         .bind::<Text, _>(&operation.object_kind)
         .bind::<Nullable<Text>, _>(&object_id)
         .bind::<Text, _>(&operation_kind)
@@ -639,12 +638,11 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         let rows: Vec<JsonPayloadRow> = sql_query(
             "SELECT payload FROM federation_operations \
              WHERE realm_id = $1 ORDER BY created_at ASC, id ASC",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .load::<JsonPayloadRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -687,8 +685,8 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 
 #[derive(QueryableByName)]
 struct FederationFrontierExchangeRow {
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Text)]
     peer_service_id: String,
     #[diesel(sql_type = Text)]
@@ -709,7 +707,7 @@ struct FederationFrontierExchangeRow {
 impl From<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
     fn from(row: FederationFrontierExchangeRow) -> Self {
         Self {
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            realm_id: row.realm_id,
             peer_service_id: row.peer_service_id,
             status: row.status,
             consecutive_failures: row.consecutive_failures,

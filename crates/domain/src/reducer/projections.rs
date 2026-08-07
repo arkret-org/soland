@@ -1227,10 +1227,10 @@ pub struct SolandRealmState {
     /// `realm-and-space.md` §2.5 / §2.5.1.
     pub terminal_state: Option<String>,
     /// Stream-F (Wave 1B) — for `ak.realm.tombstone` only: the
-    /// `ak:realm:<uuid>` of the successor Realm that takes over child
+    /// `ak:realm:<44-char-token>` of the successor Realm that takes over child
     /// Space/Strand placement. `None` for live or destroyed Realms.
     pub successor_realm_id: Option<String>,
-    /// COT-06-004 — the Realm's default Strand pointer (`ak:strand:<UUIDv7>`).
+    /// COT-06-004 — the Realm's default Strand pointer (`ak:strand:<44-char-token>`).
     /// Set by `ak.realm.set_default_strand` (`apply_realm_set_default_strand`);
     /// the Strand it names MUST already be projected in this Realm. A Strand's
     /// derived `is_default` flag is computed at query time as

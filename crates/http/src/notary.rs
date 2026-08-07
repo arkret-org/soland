@@ -1595,7 +1595,8 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let realm_id = RealmId::new("ak:realm:019f9c00-0000-8000-8000-000000000001").unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:AepUJBPSBQ40nBlXKXioXFOFOjLB3EAX9OcEBHC4LhSE").unwrap();
         let notary_cell = notary_cell_ref(&realm_id).unwrap();
         let move_id = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let local_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(

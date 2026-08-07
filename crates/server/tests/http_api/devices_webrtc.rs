@@ -1050,7 +1050,7 @@ async fn admin_realm_media_service_renders_projected_cell() {
     );
 
     // A Realm with no committed epoch renders an empty (but well-typed) view.
-    let other_realm = "ak:realm:0196419b-0000-8000-8000-0000000000ff";
+    let other_realm = "ak:realm:ASdf4eIWF6PRMc-8Gd-gIixaHGjUJGN1G-tVBdF9xOQy";
     let empty: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{other_realm}/media-service"
     ))
@@ -1142,7 +1142,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
     );
 }
 
-/// Register `bob` as a realm member and return a fresh `ak:call:<uuidv7>` id.
+/// Register `bob` as a realm member and return a fresh `ak:call:<44-char-event-token>` id.
 /// The media token issuer is decoupled from any ephemeral signaling session
 /// (`media-service-binding.md` §3 durable-roster ordering — after token
 /// exchange the client MUST land its `participant_binding` in a durable

@@ -9,7 +9,7 @@ use super::*;
 fn strand_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-1fb50799ad50";
 
     let create_effect = state.apply(
@@ -81,7 +81,7 @@ fn strand_lifecycle_round_trip() {
 fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-1fb50799ad51";
 
     state.apply(
@@ -150,7 +150,7 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
         arkret_wire::EventKind::STRAND_ARCHIVE,
-        "ak:realm:01904100-0000-8000-8000-cfc039892036",
+        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({ "target_ref": "ak:strand:nope-not-here" }),
     );
     assert_eq!(
@@ -165,7 +165,7 @@ fn strand_lifecycle_preflight_tolerates_unknown_strand() {
 fn morph_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let morph_id = "ak:morph:01904100-0000-8000-8000-1fb50799ad60";
 
     let create_effect = state.apply(
@@ -218,7 +218,7 @@ fn morph_lifecycle_round_trip() {
 fn morph_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let morph_id = "ak:morph:01904100-0000-8000-8000-1fb50799ad61";
 
     state.apply(
@@ -287,7 +287,7 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
         arkret_wire::EventKind::MORPH_ARCHIVE,
-        "ak:realm:01904100-0000-8000-8000-cfc039892036",
+        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({ "target_ref": "ak:morph:nope-not-here" }),
     );
     assert_eq!(
@@ -305,7 +305,7 @@ fn morph_lifecycle_preflight_tolerates_unknown_morph() {
 fn strand_position_events_touch_projection_without_changing_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-2fb50799ad50";
     let board_space_id = "ak:space:01904100-0000-8000-8000-c10dc0000001";
 
@@ -394,7 +394,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
 fn strand_position_events_queue_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-2fb50799ad51";
     let effect = state.apply(
         &make_operation(
@@ -441,7 +441,7 @@ fn strand_position_events_queue_unknown_strand() {
 fn redaction_with_strand_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-3fb50799ad50";
 
     state.apply(
@@ -493,7 +493,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 fn redaction_with_morph_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let morph_id = "ak:morph:01904100-0000-8000-8000-3fb50799ad60";
 
     state.apply(
@@ -540,7 +540,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
 fn redaction_preflight_rejects_against_already_terminal() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-3fb50799ad51";
     let morph_id = "ak:morph:01904100-0000-8000-8000-3fb50799ad61";
 
@@ -642,7 +642,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
 fn strand_tracks_update_touches_active_strand_only() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad50";
 
     state.apply(
@@ -692,7 +692,7 @@ fn strand_tracks_update_touches_active_strand_only() {
 fn strand_tracks_update_projects_discussion_enabled_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad52";
 
     state.apply(
@@ -759,7 +759,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
 fn strand_tracks_preflight_rejects_when_strand_archived() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad51";
 
     state.apply(
@@ -817,7 +817,7 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let tracks_op = make_operation(
         arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
-        "ak:realm:01904100-0000-8000-8000-cfc039892036",
+        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "strand_id": "ak:strand:nope-not-here",
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
@@ -832,7 +832,7 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
 #[test]
 fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     let state = ProjectionState::new();
-    let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     // Unknown object_ref.
     let unknown = make_operation(
         arkret_wire::EventKind::REDACTION,

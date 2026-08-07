@@ -990,7 +990,7 @@ mod report_safety_tests {
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};
 
-    const REALM: &str = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d0d0";
+    const REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
     const TARGET: &str = "ak:message:01904100-0000-8000-8000-000000000777";
     const FRANKING_EVENT: &str = "ak:event:01904100-0000-8000-8000-000000000222";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
@@ -1105,7 +1105,7 @@ mod report_safety_tests {
 
         let bad_scope = json!({
             "kind": "realm",
-            "realm_id": "ak:realm:01904100-0000-8000-8000-badbadbadbad",
+            "realm_id": "ak:realm:AY0gS_Ca_ad26DoNgNiV6G3woRWfh98gR3yAOYzEkyz5",
         });
         let bad = valid_evidence(bad_scope);
         let error = validate_moderation_evidence_package(&bad, &scope).unwrap_err();

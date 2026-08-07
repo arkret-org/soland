@@ -44,7 +44,7 @@ fn call_cell(family: &str, subject: &str) -> arkret_identifiers::CellRef {
 fn call_create_derives_call_id_and_establishes_initial_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let event_id = "ak:event:01904100-0000-8000-8000-c00000000009";
     let call_id = "ak:call:01904100-0000-8000-8000-c00000000009";
     let input = call_input(
@@ -76,7 +76,7 @@ fn call_create_derives_call_id_and_establishes_initial_state() {
 fn call_state_projects_independent_state_focus_and_roster_cells() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000a";
     let event_id = "ak:event:01904100-0000-8000-8000-e00000000001";
     let participant = serde_json::json!({
@@ -135,7 +135,7 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
 fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000b";
     let first = call_input(
         arkret_wire::EventKind::CALL_STATE,
@@ -177,7 +177,7 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
 fn moderation_restore_only_removes_observed_matching_ban() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000c";
     let event_id = "ak:event:01904100-0000-8000-8000-e00000000002";
     let dot = arkret_schema::or_set_dot(event_id, CALL_STATE_MODERATION_WRITE_INDEX);
@@ -249,7 +249,7 @@ fn moderation_restore_only_removes_observed_matching_ban() {
 fn recording_start_requires_consent_before_both_cells_are_written() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000d";
     let recording_id = "capture-1";
     let subject = arkret_wire::composite_subject(&[call_id, recording_id]).unwrap();
@@ -304,7 +304,7 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
 fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000f";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
@@ -362,7 +362,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
 fn state_sibling_conflict_does_not_freeze_roster_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c00000000010";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
@@ -444,7 +444,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
 fn terminal_summary_reads_the_split_state_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:01904100-0000-8000-8000-c0000000000e";
     for (index, (from, to)) in [
         (Value::Null, "connecting"),

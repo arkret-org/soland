@@ -314,12 +314,12 @@ mod tests {
     }
 
     #[test]
-    fn realm_id_rejects_wrong_kind_and_bad_uuid() {
+    fn realm_id_rejects_wrong_kind_and_bad_token() {
         let space = generate_space_id();
         assert!(RealmId::new(space).is_err());
-        // Non-Realm kinds and malformed UUIDs are rejected.
+        // Non-Realm kinds and malformed 44-character tokens are rejected.
         assert!(RealmId::new("ak:strand:00000000-0000-8000-8000-000000000000").is_err());
-        assert!(RealmId::new("ak:realm:not-a-uuid").is_err());
+        assert!(RealmId::new("ak:realm:not-a-token").is_err());
         assert!(RealmId::new("ak:realm:00000000-0000-0000-0000-000000000000").is_err());
         assert!(RealmId::new("").is_err());
     }

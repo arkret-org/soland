@@ -1180,7 +1180,7 @@ mod tests {
     use super::*;
 
     const LIFECYCLE_ACTOR: &str = "did:web:owner.example";
-    const LIFECYCLE_REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const LIFECYCLE_REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn realm_lifecycle_event(kind: &str, actor: &str, realm_id: &str) -> arkret_wire::Event {
         serde_json::from_value(serde_json::json!({
@@ -1235,7 +1235,7 @@ mod tests {
             &realm_lifecycle_event(
                 arkret_wire::EventKind::REALM_ARCHIVE,
                 LIFECYCLE_ACTOR,
-                "ak:realm:01964137-0000-8000-8000-0000000000ff",
+                "ak:realm:AW6ST0TiEb2kdaVDQ-YtsKW8ig0EM-l6_Y5YiT16u7b-",
             ),
         )
         .expect_err("event.realm_id must equal the path realm_id");

@@ -299,7 +299,7 @@ pub(super) async fn resolve_realm_for_address(
             .collect()
     };
     candidates.into_iter().find(|entry| match &parsed.realm {
-        RealmRef::RealmId(uuid) => entry.realm_id.as_str() == format!("ak:realm:{uuid}"),
+        RealmRef::RealmId(token) => entry.realm_id.as_str() == format!("ak:realm:{token}"),
         RealmRef::Alias(alias) => entry.title.eq_ignore_ascii_case(alias),
     })
 }

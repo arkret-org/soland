@@ -164,6 +164,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
+            let realm_pk =
+                crate::realm_identity::ensure_realm_pk(conn, realm_id_value).await?;
             let scope_lock = realm_actor_lock_key(realm_id_value, &request.event.actor_id);
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&scope_lock)
@@ -172,9 +174,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .map_err(PersistenceError::database)?;
             let scoped = sql_query(
                 "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
-                 FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+                 FROM canonical_events WHERE state = 'accepted' AND realm_pk = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
             )
-            .bind::<Text, _>(realm_id_value)
+            .bind::<BigInt, _>(realm_pk)
             .bind::<Text, _>(&request.event.actor_id)
             .load::<CanonicalEventRow>(conn)
             .await
@@ -185,8 +187,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             validate_actor_scope_commit(scoped.iter(), &request.event)?;
             let event_pk = sql_query(
                 "INSERT INTO canonical_events \
-                 (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING pk",
+                 (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING pk",
             )
             .bind::<Binary, _>(identity.id.to_vec())
             .bind::<SmallInt, _>(i16::from(identity.digest_suite))
@@ -194,6 +196,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .bind::<Text, _>(&request.event.actor_id)
             .bind::<BigInt, _>(request.event.actor_seq as i64)
             .bind::<Nullable<Text>, _>(request.event.realm_id.as_deref())
+            .bind::<BigInt, _>(realm_pk)
             .bind::<Text, _>(&request.event.kind)
             .bind::<Text, _>(&request.event.schema_id)
             .bind::<Binary, _>(&request.event.canonical_bytes)
@@ -307,14 +310,24 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .as_deref()
                     .map(ids::typed_uuid_part_or_schema_violation)
                     .transpose()?;
+                let projection_realm_pk =
+                    crate::realm_identity::ensure_realm_pk(conn, &projection.realm_id).await?;
+                if projection_realm_pk != realm_pk {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: projection Realm does not match canonical Event Realm"
+                            .to_owned(),
+                    )
+                    .into());
+                }
                 projections_inserted += sql_query(
                     "INSERT INTO projection_events \
-                     (id, event_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+                     (id, event_pk, realm_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
                      ON CONFLICT (id) DO NOTHING",
                 )
                 .bind::<Binary, _>(event_id.to_vec())
                 .bind::<BigInt, _>(event_pk)
+                .bind::<BigInt, _>(projection_realm_pk)
                 .bind::<Text, _>(&projection.realm_id)
                 .bind::<Text, _>(&projection.event_kind)
                 .bind::<Text, _>(&projection.operation_kind)

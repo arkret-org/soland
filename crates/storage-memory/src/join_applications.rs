@@ -219,7 +219,7 @@ mod tests {
 
     use super::MemoryJoinApplicationStore;
 
-    const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
+    const REALM: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
     const APPLICANT: &str = "did:web:alice.example";
     const KNOCK: &str = "ak:event:0196419b-0000-8000-8000-000000000001";
 

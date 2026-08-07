@@ -28,9 +28,7 @@ impl ModerationStore for PgModerationStore {
         let target_event_id_uuid: Option<Uuid> = target_event_id
             .as_deref()
             .map(ids::typed_uuid_part_expect_internal);
-        let realm_id_uuid: Option<Uuid> = realm_id
-            .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
         sql_query(
             "INSERT INTO moderation_reports \
              (id, reporter_id, target_actor_id, target_event_id, realm_id, payload, created_at) \
@@ -41,7 +39,7 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&reporter)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
-        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+        .bind::<Nullable<Text>, _>(realm_id.as_deref())
         .bind::<Jsonb, _>(&report)
         .execute(&mut *conn)
         .await
@@ -67,9 +65,7 @@ impl ModerationStore for PgModerationStore {
         let action_kind = extract("action_kind");
         let realm_id = extract("realm_id");
         let action_id_uuid = ids::typed_uuid_part_expect_internal(&action_id);
-        let realm_id_uuid: Option<Uuid> = realm_id
-            .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
         sql_query(
             "INSERT INTO moderation_actions \
              (id, moderator_id, target_actor_id, action_kind, realm_id, payload, created_at) \
@@ -80,7 +76,7 @@ impl ModerationStore for PgModerationStore {
         .bind::<Nullable<Text>, _>(&moderator)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<Text>, _>(&action_kind)
-        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+        .bind::<Nullable<Text>, _>(realm_id.as_deref())
         .bind::<Jsonb, _>(&action)
         .execute(&mut *conn)
         .await

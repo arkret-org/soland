@@ -1062,8 +1062,8 @@ mod cross_realm_relation_tests {
 
     use super::*;
 
-    const REALM_A: &str = "ak:realm:01904100-0000-8000-8000-000000000a01";
-    const REALM_B: &str = "ak:realm:01904100-0000-8000-8000-000000000a02";
+    const REALM_A: &str = "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru";
+    const REALM_B: &str = "ak:realm:AaI4Pi7YjaMfo9_Oldm1_7Gl7z-mO6uU0oL8ZWvRl8uZ";
     const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-000000000c01";
     const STRAND_A: &str = "ak:strand:01904100-0000-8000-8000-000000000b01";
     const STRAND_A2: &str = "ak:strand:01904100-0000-8000-8000-000000000b02";

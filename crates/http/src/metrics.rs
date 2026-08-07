@@ -722,7 +722,7 @@ mod tests {
     fn path_ids_are_normalized_for_operation_label() {
         assert_eq!(
             normalize_path_for_metrics(
-                "/_soland/self/realms/ak:realm:01904100-0000-8000-8000-bbbbbbbbbbbb/events"
+                "/_soland/self/realms/ak:realm:AS1N4QnbZ6JgVObAF-yTx1GWoK2XnO_vUaZ2qe0WCyQV/events"
             ),
             "/_soland/self/realms/{id}/events"
         );

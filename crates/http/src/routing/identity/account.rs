@@ -1577,7 +1577,7 @@ mod tests {
         let mut record = AgentPairingState::new(
             "did:web:agents.example:assistant".to_owned(),
             "did:web:alice.example".to_owned(),
-            "ak:realm:019f0000-0000-8000-8000-000000000001".to_owned(),
+            "ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL".to_owned(),
             arkret_wire::DidUrl::new("did:web:agents.example:assistant#managed-controller")
                 .unwrap(),
             AgentLifecycleState::Active,
@@ -1656,21 +1656,14 @@ mod tests {
     }
 
     #[test]
-    fn principal_realm_for_did_is_realm_uuid7() {
+    fn principal_realm_for_did_is_subject_derived_full_digest_token() {
         let s = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        assert!(s.starts_with("ak:realm:"), "got {s}");
-        let uuid_segment = s.strip_prefix("ak:realm:").unwrap();
-        // Sections separated by '-'.
-        let parts: Vec<&str> = uuid_segment.split('-').collect();
-        assert_eq!(parts.len(), 5, "uuid has 5 dash-separated groups");
-        // Group at index 2 is `version + 3 hex chars`. UUIDv7 → starts with "7".
-        assert!(parts[2].starts_with('7'), "expected v7, got {}", parts[2]);
-        // Group at index 3 starts with hex byte where top two bits = 0b10
-        // → first hex digit is 8/9/a/b.
-        let first_hex = parts[3].chars().next().unwrap();
-        assert!(
-            matches!(first_hex, '8' | '9' | 'a' | 'b'),
-            "expected RFC9562 variant nibble 8|9|a|b, got {first_hex}"
+        let realm_id = arkret_identifiers::RealmId::new(s).unwrap();
+        assert_eq!(realm_id.token_bytes()[0], 0x11);
+        assert_eq!(
+            realm_id.derivation_class(),
+            arkret_identifiers::RealmDerivationClass::PrincipalSubjectDerived
         );
+        assert!(realm_id.event_id().is_none());
     }
 }

@@ -49,7 +49,7 @@ pub fn try_build_validated_sdk_cell_registry() -> Result<MemoryCellRegistry, Con
     let contracts = canonical_fsm_contracts()?;
     validate_canonical_fsm_exact_closure(&contracts)?;
     let registry = try_build_sdk_cell_registry()?;
-    let realm = RealmId::new("ak:realm:01900000-0000-8000-8000-000000000000".to_owned())
+    let realm = RealmId::new("ak:realm:AS6APqej-Rh7QFhSceTHVNyMDqcQte46AfERL21Hkt5_".to_owned())
         .map_err(|error| ContractRegistryError::Invalid(error.to_string()))?;
     for contract in &contracts {
         let cell = CellRef::new(format!("ak:cell:{}:startup-probe", contract.cell_family))

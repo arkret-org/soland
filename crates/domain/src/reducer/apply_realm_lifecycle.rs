@@ -1216,7 +1216,7 @@ impl ProjectionState {
 
         // Stream-F (Wave 1B): ak.realm.tombstone preconditions. The
         // event MUST carry a syntactically valid `successor_realm_id`
-        // pointing at a `ak:realm:<UUIDv7>` distinct from the
+        // pointing at a `ak:realm:<44-char-token>` distinct from the
         // terminating Realm. Absent → `missing_successor`; malformed →
         // `schema_violation`; self-reference → `successor_self_reference`.
         let payload_successor_realm_id = operation

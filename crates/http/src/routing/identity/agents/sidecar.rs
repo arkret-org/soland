@@ -1376,7 +1376,8 @@ mod tests {
             .with_nanosecond(987_654_321)
             .unwrap();
         let realm_id =
-            RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030".to_owned()).unwrap();
+            RealmId::new("ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b".to_owned())
+                .unwrap();
         let event = new_unsigned_sidecar_event(
             arkret_wire::EventKind::SIDECAR_CREATE,
             realm_id.clone(),
@@ -1477,11 +1478,11 @@ mod tests {
         let value = json!({
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
-            "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
+            "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
             "sidecar_id": "ak:sidecar:01964137-0000-8000-8000-000000000031",
             "effective_scope": {
                 "kind": "sidecar",
-                "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
+                "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
                 "sidecar_id": "ak:sidecar:01964137-0000-8000-8000-000000000031"
             },
             "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",

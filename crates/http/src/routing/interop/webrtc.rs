@@ -1424,7 +1424,7 @@ mod tests {
         let issued_at = Utc::now();
         let request = MediaTokenIssueRequestBody {
             focus: &focus,
-            realm_id: "ak:realm:01904100-0000-8000-8000-cfc039892063",
+            realm_id: "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
             call_id: "ak:call:01904100-0000-8000-8000-c0000000000c",
             actor_id: "did:web:alice.example",
             device_id: "ak:device:01904100-0000-7000-8000-000000000001",
@@ -1454,7 +1454,7 @@ mod tests {
     #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
         let epoch = parse_media_service_epoch(
-            "ak:realm:01904100-0000-8000-8000-cfc039892063",
+            "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
             &json!({
                 "service_id": "did:web:media.example",
                 "foci": [{

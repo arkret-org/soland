@@ -176,7 +176,7 @@ mod tests {
         let mut record = AgentPrincipalRecord::new(
             agent_id.to_owned(),
             controller_id.to_owned(),
-            "ak:realm:01999999-0000-8000-8000-00000000feed".to_owned(),
+            "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M".to_owned(),
             arkret_wire::DidUrl::new(format!("{agent_id}#managed-controller")).unwrap(),
             AgentLifecycleState::Active,
             created_at,
@@ -225,7 +225,7 @@ mod tests {
             "resources": [
                 {
                     "kind": "realm",
-                    "realm_id": "ak:realm:01999999-0000-8000-8000-000000000099"
+                    "realm_id": "ak:realm:AWRn2H80ZSW4qBxlHzdkMQbOwl5Ts8OnQRef8M3BJ93F"
                 },
                 { "kind": "service", "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service" }
             ]
@@ -460,7 +460,7 @@ mod tests {
             "ak.agent.key.authorize",
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(
-                    "ak:realm:01999999-0000-8000-8000-00000000feed",
+                    "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M",
                 )
                 .unwrap(),
             },

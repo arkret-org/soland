@@ -21,7 +21,7 @@ use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 use soland_http::authz::SolandAuthzEngine;
 
-const REALM: &str = "ak:realm:01904100-0000-8000-8000-cccccccccccc";
+const REALM: &str = "ak:realm:Aemw9elq19fDvIg-i7BJI44N3RJHLqzlZ0EYQW_cgutY";
 const GRANT_ID: &str = "ak:grant:01904100-0000-8000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";

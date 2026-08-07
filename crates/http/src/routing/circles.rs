@@ -954,7 +954,7 @@ mod tests {
     use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
-    const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const CREATE_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
 
     fn circle_create_event(object: Value) -> Event {

@@ -2084,7 +2084,7 @@ mod tests {
             event_id: event_id(suffix),
             actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
             actor_seq: u64::from(suffix),
-            realm_id: Some("ak:realm:01964137-0000-8000-8000-000000000001".to_owned()),
+            realm_id: Some("ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6".to_owned()),
             kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
             schema_id: "ak.schema.message.v1".to_owned(),
             canonical_digest: format!("sha256:{digest_suffix:064x}"),
@@ -2222,8 +2222,13 @@ mod tests {
     #[tokio::test]
     async fn accepted_event_command_is_committed_through_one_port() {
         let now = Utc::now();
-        let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
-        let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
+        let event_id = arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x31; 32],
+        );
+        let realm_id = arkret_identifiers::RealmId::from_event_id(&event_id);
+        let event_id = event_id.to_string();
+        let realm_id = realm_id.to_string();
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
@@ -2294,7 +2299,7 @@ mod tests {
             event_id: event_id.to_owned(),
             actor_id: "did:web:controller.example".to_owned(),
             actor_seq,
-            realm_id: Some("ak:realm:019f0000-0000-8000-8000-000000000001".to_owned()),
+            realm_id: Some("ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: format!("sha256:{actor_seq}"),

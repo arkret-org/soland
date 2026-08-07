@@ -1,5 +1,6 @@
 use super::*;
 use crate::routing::events::event_log::DataEventQueryGrade;
+use sha2::{Digest, Sha256};
 
 /// The registry projection evaluator for a bootstrap unit.
 ///
@@ -447,9 +448,21 @@ fn normalize_relation_create_payload(
 }
 
 /// Domain separator for the Operation handle soland derives for an accepted
-/// Event. Versioned and distinct per id family, as
-/// [`arkret_identifiers::subject_derived_uuid`] requires.
+/// Event. Versioned and distinct from protocol identity domains. This is a
+/// Soland-local operation handle and is not a Realm identity derivation.
 const EVENT_PROJECTION_OPERATION_DOMAIN: &[u8] = b"ak:operation:soland-event-projection:v1:";
+
+fn event_projection_operation_uuid(event_id: &str) -> uuid::Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(EVENT_PROJECTION_OPERATION_DOMAIN);
+    hasher.update(event_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes)
+}
 
 fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
@@ -488,10 +501,7 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     let event_id = EventId::new(event_id.to_owned()).ok()?;
     OperationId::new(format!(
         "ak:operation:{}",
-        arkret_identifiers::subject_derived_uuid(
-            EVENT_PROJECTION_OPERATION_DOMAIN,
-            event_id.as_str(),
-        )
+        event_projection_operation_uuid(event_id.as_str())
     ))
     .ok()
 }
@@ -508,7 +518,7 @@ mod projection_operation_tests {
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
-            realm_id: "ak:realm:01904100-0000-8000-8000-000000000003".to_owned(),
+            realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
             kind: kind.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             prev_refs: Vec::new(),

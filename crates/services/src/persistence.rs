@@ -147,7 +147,7 @@ impl PersistenceHandle {
         self.persistence
             .realm_meta()
             .put(
-                "ak:realm:0196419b-0000-8000-8000-000000000000",
+                "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
                 &soland_storage::RealmMetaRecord {
                     owner: account.did,
                     deleted: false,

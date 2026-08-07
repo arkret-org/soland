@@ -486,7 +486,7 @@ async fn events_describe_and_single_event_submit_work() {
     );
     assert_eq!(
         fetched["visibility"]["realm_id"],
-        "ak:realm:0196419b-0000-8000-8000-000000000000"
+        "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1"
     );
 
     let second = signed_event_envelope(
@@ -689,7 +689,7 @@ async fn events_describe_and_single_event_submit_work() {
     // Inaccessible realm must read as not_found (no existence leak).
     let mut hidden = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({
-            "realm_id": "ak:realm:0196419b-0000-8000-8000-00000000dead"
+            "realm_id": "ak:realm:AeqRpQIZxaoTV-G0Cl9jzAJ6wSak3GJUvizlNJRsvSFY"
         }))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))

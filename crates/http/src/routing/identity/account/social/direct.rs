@@ -642,7 +642,7 @@ mod binding_digest_tests {
                 "did:webvh:z6mkfixture:bob.example",
                 "did:webvh:z6mkfixture:alice.example"
             ],
-            "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000101",
+            "realm_id": "ak:realm:AdoahEryEldhLbQHY9vRcm90ddQW1gjDVrYmHsbaLIJc",
             "main_strand_id": "ak:strand:0196419b-0000-8000-8000-000000000201",
             "founding_unit_digest": format!("sha256:{}", "b".repeat(64)),
             "authorization_basis": {

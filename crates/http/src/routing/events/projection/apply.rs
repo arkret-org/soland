@@ -1124,7 +1124,7 @@ mod tests {
             soland_storage_postgres::Db { pool: None },
         );
         let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:0196419b-1000-8000-8000-000000000101".to_owned(),
+            "ak:realm:AfQwJHPhBleRZGcIQe5JusJEaZwwkeT8TDwxd957Ic4z".to_owned(),
         )
         .unwrap();
         let operation_id = arkret_identifiers::OperationId::new(
@@ -1202,7 +1202,7 @@ mod tests {
 
     #[test]
     fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {
-        let realm_id = "ak:realm:0196419b-1000-8000-8000-000000000001";
+        let realm_id = "ak:realm:ARZTx1K62JEESOCDcEVZTToJPN3vCoG0zRRnpm3t3OeX";
         let operation_id = "ak:operation:0196419b-1000-7000-8000-000000000002";
         let sender = "did:web:alice.example";
         let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -1264,7 +1264,7 @@ mod tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:0196419b-1000-8000-8000-000000000201".to_owned(),
+                "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::CIRCLE_MEMBER_STATE,

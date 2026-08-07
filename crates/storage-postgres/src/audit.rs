@@ -32,7 +32,7 @@ impl AuditStore for PgAuditStore {
         let audit_id_uuid = audit_uuid_index("audit_id", &audit_id, "audit")?;
         let request_id_uuid =
             optional_audit_uuid_index("request_id", request_id.as_deref(), "request")?;
-        let realm_id_uuid = optional_audit_uuid_index("realm_id", realm_id.as_deref(), "realm")?;
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
         let operation_id_uuid = operation_uuid_index(operation_id.as_deref());
         sql_query(
             "INSERT INTO audit_logs \
@@ -45,7 +45,7 @@ impl AuditStore for PgAuditStore {
         .bind::<Nullable<SqlUuid>, _>(request_id_uuid)
         .bind::<Text, _>(&action)
         .bind::<Text, _>(&outcome)
-        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+        .bind::<Nullable<Text>, _>(realm_id.as_deref())
         .bind::<Nullable<SqlUuid>, _>(operation_id_uuid)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Jsonb, _>(&entry)

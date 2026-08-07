@@ -10,8 +10,8 @@ pub struct PgRealmInviteStore {
 struct RealmInviteRow {
     #[diesel(sql_type = SqlUuid)]
     id: Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Text)]
     inviter: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -41,7 +41,7 @@ impl From<RealmInviteRow> for RealmInviteRecord {
     fn from(row: RealmInviteRow) -> Self {
         Self {
             invite_id: ids::format_typed_uuid("invite", &row.id),
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            realm_id: row.realm_id,
             inviter: row.inviter,
             invitee: row.invitee,
             invite_delivery_target: row.invite_delivery_target,
@@ -81,7 +81,7 @@ impl RealmInviteStore for PgRealmInviteStore {
             .await
             .map_err(PersistenceError::database)?;
         let invite_id_uuid = ids::typed_uuid_part_expect_internal(&record.invite_id);
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
+        crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO realm_invites \
              (id, realm_id, inviter_id, invitee_id, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \
@@ -101,7 +101,7 @@ impl RealmInviteStore for PgRealmInviteStore {
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<SqlUuid, _>(invite_id_uuid)
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.inviter)
         .bind::<Nullable<Text>, _>(&record.invitee)
         .bind::<Nullable<Jsonb>, _>(&record.invite_delivery_target)

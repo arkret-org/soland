@@ -315,7 +315,7 @@ mod cba_capability_cell_tests {
     #[test]
     fn engine_grant_reads_registry_projected_wrapper() {
         let grant_id = "ak:grant:019fa9d5-0000-8000-8000-000000000001";
-        let realm_id = "ak:realm:019fa9d5-0000-8000-8000-000000000002";
+        let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
         let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let state = CellState::Value(Value::Array(vec![json!({
             "tag": "ak:event:019fa9d5-0000-8000-8000-000000000003:0",
@@ -2076,7 +2076,7 @@ mod agent_key_tests {
     use crate::reducer::{ProjectionState, SolandRealmState};
 
     const AGENT: &str = "did:web:agent.example";
-    const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000000";
+    const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
     const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000a1";
     const GRANT_2: &str = "ak:grant:01970000-0000-8000-8000-0000000000a2";
     const GRANT_3: &str = "ak:grant:01970000-0000-8000-8000-0000000000a3";
@@ -2811,7 +2811,7 @@ mod authority_cycle_tests {
 
     use crate::reducer::{ProjectionState, SolandRealmState};
 
-    const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000000";
+    const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
     const G_A: &str = "ak:grant:01970000-0000-8000-8000-00000000a001";
     const G_B: &str = "ak:grant:01970000-0000-8000-8000-00000000b002";
     const G_C: &str = "ak:grant:01970000-0000-8000-8000-00000000c003";
@@ -3078,8 +3078,8 @@ mod federation_revoke_fanout_tests {
 
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
-    const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000000";
-    const OTHER_REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000001";
+    const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
+    const OTHER_REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_ID: &str = "did:web:beta.example";
     const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000d1";
@@ -3254,7 +3254,7 @@ mod realm_owner_authority_tests {
 
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
-    const REALM: &str = "ak:realm:01980000-0000-8000-8000-000000000000";
+    const REALM: &str = "ak:realm:ATKefSdBA52dfl_b0kwuiBO-JG0nPTlnS_bXWGh3Z57K";
     const OWNER: &str = "did:web:owner.example";
     const CO_OWNER: &str = "did:web:co-owner.example";
     const STRANGER: &str = "did:web:stranger.example";

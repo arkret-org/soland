@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn on_last_read_waits_for_active_realm_member_aggregate() {
         let event_id = "ak:event:01904100-0000-8000-8000-0000000000b3";
-        let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
         let now = fixed_time("2020-01-01T00:00:00.000Z");
         let mut message = expired_message(event_id, realm_id);
         message.expiry = Some(json!({
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn projection_event_for_expired_message_strips_payload_content() {
         let event_id = "ak:event:01904100-0000-8000-8000-0000000000c1";
-        let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
         let projection = ProjectionState::new();
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn retention_tombstone_strips_derived_surfaces_and_marks_risk() {
         let event_id = "ak:event:01904100-0000-8000-8000-0000000000c2";
-        let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
         let tombstone = retention_tombstone(event_id, realm_id, true);
         let payload = json!({
             "content": {"kind": "ak.content.text", "body": "secret"},
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn pin_projection_event_for_redacted_target_is_stubbed() {
         let event_id = "ak:event:01904100-0000-8000-8000-0000000000a1";
-        let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
         let now = chrono::Utc::now();
         let mut projection = ProjectionState::new();
         projection.messages.insert(
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn pin_projection_event_for_expired_target_is_stubbed() {
         let event_id = "ak:event:01904100-0000-8000-8000-0000000000d1";
-        let realm_id = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
         let now = fixed_time("2026-06-19T00:00:01.000Z");
         let mut projection = ProjectionState::new();
         projection

@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn self_realm_owner_reconciles_without_implying_capability() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-        let realm_id = "ak:realm:019f5548-2d3c-851b-90d6-f262c6feacea";
+        let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
         let controller = "did:webvh:z6mkfixture:example.test:users:alice";
 
         reconcile_self_realm_owner_projection(
@@ -420,7 +420,7 @@ mod tests {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         let error = reconcile_self_realm_owner_projection(
             &state,
-            "ak:realm:019f5548-2d3c-851b-90d6-f262c6feacea",
+            "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
             "did:webvh:z6mkfixture:example.test:users:alice",
             &realm_meta("did:webvh:z6mkfixture:example.test:users:bob"),
         )

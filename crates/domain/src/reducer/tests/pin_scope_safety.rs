@@ -2,7 +2,7 @@ use arkret_identifiers::CellRef;
 
 use super::*;
 
-const REALM_ID: &str = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const CIRCLE_ID: &str = "ak:circle:01904100-0000-8000-8000-00000000c001";
 const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-0000000000f1";
 const MESSAGE_EVENT_ID: &str = "ak:event:01904100-0000-8000-8000-0000000000a1";

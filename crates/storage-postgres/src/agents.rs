@@ -20,8 +20,8 @@ struct AgentParticipationRow {
     scope_kind: String,
     #[diesel(sql_type = Text)]
     scope_key: String,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Jsonb)]
     scope: Value,
     #[diesel(sql_type = BigInt)]
@@ -43,7 +43,7 @@ impl From<AgentParticipationRow> for Value {
             "agent_id": row.agent_id,
             "scope_kind": row.scope_kind,
             "scope_key": row.scope_key,
-            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
+            "realm_id": row.realm_id,
             "scope": row.scope,
             "version": row.version,
             "reply_message": row.reply_message,
@@ -60,8 +60,8 @@ struct AgentParticipationCeilingRow {
     scope_kind: String,
     #[diesel(sql_type = Text)]
     scope_key: String,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Bool)]
     reply_message: bool,
     #[diesel(sql_type = Bool)]
@@ -78,7 +78,7 @@ impl From<AgentParticipationCeilingRow> for Value {
         serde_json::json!({
             "scope_kind": row.scope_kind,
             "scope_key": row.scope_key,
-            "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
+            "realm_id": row.realm_id,
             "reply_message": row.reply_message,
             "reaction_add": row.reaction_add,
             "reaction_remove": row.reaction_remove,
@@ -132,6 +132,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let scope_kind = get_str("scope_kind")?;
         let scope_key = get_str("scope_key")?;
         let realm_id = get_str("realm_id")?;
+        crate::realm_identity::ensure_realm_pk(&mut conn, &realm_id).await?;
         let scope = record.get("scope").cloned().unwrap_or(Value::Null);
         sql_query(
             "INSERT INTO agent_participation \
@@ -151,7 +152,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         .bind::<Text, _>(&agent_id)
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&realm_id))
+        .bind::<Text, _>(&realm_id)
         .bind::<Jsonb, _>(&scope)
         .bind::<BigInt, _>(accepted_version)
         .bind::<Bool, _>(get_bool("reply_message"))
@@ -225,6 +226,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let scope_kind = get_str("scope_kind")?;
         let scope_key = get_str("scope_key")?;
         let realm_id = get_str("realm_id")?;
+        crate::realm_identity::ensure_realm_pk(&mut conn, &realm_id).await?;
         sql_query(
             "INSERT INTO agent_participation_ceiling \
              (scope_kind, id, realm_id, reply_message, reaction_add, reaction_remove, \
@@ -239,7 +241,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         )
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&realm_id))
+        .bind::<Text, _>(&realm_id)
         .bind::<Bool, _>(get_bool("reply_message"))
         .bind::<Bool, _>(get_bool("reaction_add"))
         .bind::<Bool, _>(get_bool("reaction_remove"))

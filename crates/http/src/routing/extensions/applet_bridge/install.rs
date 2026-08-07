@@ -1701,7 +1701,8 @@ mod tests {
 
     fn sample_record(package: &AppletPackage, response: &AppletInstallOutcome) -> AppletRecord {
         let realm_id =
-            RealmId::new("ak:realm:01974100-0000-8000-8000-000000000001".to_owned()).unwrap();
+            RealmId::new("ak:realm:AQK7pbzo4Evme1sP5EOcF51pF6dnP7NQRddexkTCf0Ov".to_owned())
+                .unwrap();
         let scope_ref = ScopeRef::Realm {
             realm_id: realm_id.clone(),
         };

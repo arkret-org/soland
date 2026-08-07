@@ -391,7 +391,7 @@ mod tests {
 
     use super::*;
 
-    const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000001";
+    const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
     const INVITE: &str = "ak:invite:0196419b-0000-8000-8000-000000000101";
     const SUBJECT: &str = "did:web:bob.example";
     const SUBJECT_CURRENT_METHOD: &str = "did:web:bob.example#device-current";

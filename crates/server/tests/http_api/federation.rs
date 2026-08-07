@@ -56,7 +56,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
 const SERVICE_ID: &str =
     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
 const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
-const TEST_REALM_ID: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
+const TEST_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const TEST_CIRCLE_ID: &str = "ak:circle:0196419b-0000-8000-8000-0000000000c1";
 
 fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {

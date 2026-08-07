@@ -106,6 +106,7 @@ mod policy;
 mod projection;
 mod publication_evidence;
 mod push;
+mod realm_identity;
 mod realm_invites;
 mod recovery;
 mod registry;

@@ -420,7 +420,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     let claim_request_id = URL_SAFE_NO_PAD.encode([41_u8; 16]);
     let claim_nonce = URL_SAFE_NO_PAD.encode([42_u8; 16]);
     let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:0196419b-0000-8000-8000-000000000294".to_owned(),
+        "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju".to_owned(),
     )
     .unwrap();
     let strand_id = arkret_identifiers::StrandId::new(

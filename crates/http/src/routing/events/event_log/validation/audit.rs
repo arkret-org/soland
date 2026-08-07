@@ -383,7 +383,7 @@ mod tests {
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
-            realm_id: "ak:realm:01904100-0000-8000-8000-000000000003".to_owned(),
+            realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
             kind: kind.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             prev_refs: Vec::new(),
@@ -407,7 +407,7 @@ mod tests {
             "event_id": WRITE_ID,
             "kind": arkret_wire::EventKind::STRAND_WATCH_SET,
             "actor_id": WRITER,
-            "realm_id": "ak:realm:01904100-0000-8000-8000-000000000003",
+            "realm_id": "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv",
             "payload": {
                 "strand_id": STRAND,
                 "watcher_actor_id": TARGET,

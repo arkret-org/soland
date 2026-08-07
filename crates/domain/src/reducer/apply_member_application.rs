@@ -531,7 +531,7 @@ mod tests {
 
     use super::{MemberApplicationState, ProjectionState};
 
-    const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
+    const REALM: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
     const APPLICATION: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REVIEW_ONE: &str =

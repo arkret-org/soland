@@ -531,7 +531,7 @@ mod tests {
 
     const EVENT: &str = "ak:event:01970000-0000-8000-8000-000000000001";
     const GRANT: &str = "ak:grant:01970000-0000-8000-8000-000000000002";
-    const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000003";
+    const REALM: &str = "ak:realm:AQ6KYssbGDHzIUms5NHakAquoH4LUTKtciSfTFrOTH6i";
     const ISSUER: &str = "did:web:coauth.example";
     const SUBJECT: &str = "did:web:alice.example";
 

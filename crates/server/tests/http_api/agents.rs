@@ -840,7 +840,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             idempotency_key: arkret_wire::IdempotencyKey::new("unallocated-commit-001").unwrap(),
             agent_id: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000001",
+                "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             )
             .unwrap(),
             allocation_handle: arkret_wire::ProtocolOpaqueId::new("unallocated.fixture.signature")

@@ -1117,7 +1117,7 @@ mod tests {
                 "did:web:alice",
                 action,
                 "ak:circle:01904100-0000-8000-8000-000000000001",
-                "ak:realm:01904100-0000-8000-8000-000000000001",
+                "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 Some("did:web:alice"),
                 &[],
                 &[],

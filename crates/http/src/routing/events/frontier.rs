@@ -154,7 +154,7 @@ mod tests {
     use super::*;
 
     fn realm() -> RealmId {
-        RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001").unwrap()
+        RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K").unwrap()
     }
 
     fn alice() -> Did {
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(signature["signed_payload"]["frontier_root"], root.as_str());
         assert_eq!(
             signature["signed_payload"]["realm_id"],
-            "ak:realm:01904100-0000-8000-8000-000000000001"
+            "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"
         );
 
         let bytes = canonical::canonical_json_bytes(&signature["signed_payload"]).unwrap();

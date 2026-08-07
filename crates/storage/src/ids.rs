@@ -5,12 +5,38 @@ use uuid::Uuid;
 pub const EVENT_ID_PREFIX: &str = "ak:event:";
 pub const EVENT_ID_BYTES: usize = 33;
 pub const EVENT_DIGEST_BYTES: usize = 32;
+pub const REALM_ID_PREFIX: &str = "ak:realm:";
+pub const REALM_ID_BYTES: usize = 33;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct EventIdentityParts {
     pub id: [u8; EVENT_ID_BYTES],
     pub digest_suite: u8,
     pub digest: [u8; EVENT_DIGEST_BYTES],
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RealmIdentityParts {
+    pub id: [u8; REALM_ID_BYTES],
+    pub derivation_class: u8,
+    pub digest_suite: u8,
+    pub digest: [u8; EVENT_DIGEST_BYTES],
+}
+
+pub fn realm_identity_parts(realm_id: &str) -> Result<RealmIdentityParts, crate::PersistenceError> {
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).map_err(|error| {
+        crate::PersistenceError::SchemaViolation(format!("malformed canonical Realm id: {error}"))
+    })?;
+    let id = realm_id.token_bytes();
+    let header = id[0];
+    let mut digest = [0_u8; EVENT_DIGEST_BYTES];
+    digest.copy_from_slice(&id[1..]);
+    Ok(RealmIdentityParts {
+        id,
+        derivation_class: header >> 4,
+        digest_suite: header & 0x0f,
+        digest,
+    })
 }
 
 fn digest_suite_code(suite: &str) -> Option<u8> {
@@ -205,6 +231,28 @@ mod tests {
         assert!(parse_event_digest(&digest(0xaa)).is_some());
         assert!(parse_event_digest(&digest(0xaa).to_uppercase()).is_none());
         assert!(parse_event_digest(&format!("sha512:{}", "00".repeat(32))).is_none());
+    }
+
+    #[test]
+    fn realm_identity_preserves_derivation_class_suite_and_full_digest() {
+        let event_id = arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x44; EVENT_DIGEST_BYTES],
+        );
+        let event_realm = arkret_identifiers::RealmId::from_event_id(&event_id);
+        let event_parts = realm_identity_parts(event_realm.as_str()).unwrap();
+        assert_eq!(event_parts.derivation_class, 0);
+        assert_eq!(event_parts.digest_suite, 1);
+        assert_eq!(event_parts.digest, [0x44; EVENT_DIGEST_BYTES]);
+
+        let principal_realm =
+            arkret_identifiers::principal_control_realm_id("did:web:alice.example");
+        let principal_parts = realm_identity_parts(principal_realm.as_str()).unwrap();
+        assert_eq!(principal_parts.derivation_class, 1);
+        assert_eq!(principal_parts.digest_suite, 1);
+        assert_eq!(principal_parts.id[0], 0x11);
+
+        assert!(realm_identity_parts("ak:realm:01900000-0000-7000-8000-000000000000").is_err());
     }
 
     #[test]

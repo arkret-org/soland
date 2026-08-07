@@ -1802,7 +1802,8 @@ mod proposal_decision_tests {
 
     fn ack() -> ControlProposalAck {
         let mut member = ControlProposalAuthorityAck {
-            realm_id: RealmId::new("ak:realm:01999999-0000-8000-8000-00000000cba1").unwrap(),
+            realm_id: RealmId::new("ak:realm:ARbhO1ZYW_wEmLXo_1A_SBk1RXuTUmCoJg2PW6B5FMJz")
+                .unwrap(),
             proposal_digest: hash('a'),
             received_at: at(0),
             decision_due_at: at(30),
@@ -1997,7 +1998,7 @@ mod event_seal_commit_tests {
         let cell_store = arkret_state::state::MemoryCellStore::default();
         let registry =
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
-        let realm = RealmId::new("ak:realm:01999999-0000-8000-8000-00000000ca55").unwrap();
+        let realm = RealmId::new("ak:realm:AZNm59MVqzgAGc4q_sl4Kbc5rafvtPEBQ5Jpz3ZVvQ1e").unwrap();
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did:web:member.example".to_owned())
                 .unwrap();
@@ -2048,7 +2049,8 @@ mod event_seal_commit_tests {
             cell_registry: registry.clone(),
         });
         let realm =
-            RealmId::new("ak:realm:01904100-0000-8000-8000-a11ce0000001".to_owned()).unwrap();
+            RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
+                .unwrap();
         let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
         let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
         let barrier = Arc::new(Barrier::new(3));

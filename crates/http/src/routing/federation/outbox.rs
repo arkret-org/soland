@@ -1432,9 +1432,10 @@ mod tests {
         // binds every one of those digests, so the fixture computes them instead
         // of asserting placeholders: the retry rebuilder has to carry the whole
         // submission through, and it must never re-stamp a receipt.
-        let realm_id =
-            arkret_identifiers::RealmId::new("ak:realm:019f0000-0000-8000-8000-000000000000")
-                .unwrap();
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:Ad45OVvW8PvF-UFqAF8ApvgyX0o6xBWwpg8UvABbuY40",
+        )
+        .unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
         let scope_ref = arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),

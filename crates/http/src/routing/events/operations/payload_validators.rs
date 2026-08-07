@@ -937,8 +937,10 @@ mod tests {
                 "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-cfc039892036")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+            )
+            .unwrap(),
             arkret_wire::EventKind::MESSAGE_CREATE,
             json!({
                 "content": {"kind": "ak.content.text", "body": "secret"},
@@ -980,8 +982,10 @@ mod tests {
                 "ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned(),
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-cfc039892036")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+            )
+            .unwrap(),
             arkret_wire::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": "ak:invite:01904100-0000-8000-8000-0000000000e2",
@@ -1059,7 +1063,7 @@ mod tests {
             "ciphertext": "Y2lwaGVydGV4dA",
             "aad_visibility_event_id": "hidden",
             "aad": {
-                "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
+                "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "event_kind": "ak.message.create"
             },
             "key_ref": {

@@ -378,7 +378,7 @@ mod tests {
     fn capability_summary_round_trip() {
         let wire = serde_json::json!({
             "grant_id": "ak:grant:01904100-0000-8000-8000-000000000abc",
-            "realm_id": "ak:realm:01904100-0000-8000-8000-0000000000aa",
+            "realm_id": "ak:realm:AWEs1cV4Rn1CVWdYoOUZ1yiMPe9Ze6ZYmP0ChDr89cPl",
             "issuer": "did:web:owner.example",
             "subject": "did:web:member.example",
             "resource": "realm",

@@ -31,6 +31,14 @@ async fn test_pool() -> Option<PgPool> {
         .clone()
 }
 
+fn event_derived_realm_id(seed: &[u8]) -> String {
+    let event_id = arkret_identifiers::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(seed),
+    );
+    arkret_identifiers::RealmId::from_event_id(&event_id).to_string()
+}
+
 #[tokio::test]
 async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured() {
     let Some(pool) = test_pool().await else {
@@ -96,13 +104,12 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     };
     let _db_guard = DB_GUARD.lock().await;
     let now = chrono::Utc::now();
-    let realm_id =
-        arkret_identifiers::RealmId::new(format!("ak:realm:{}", uuid::Uuid::now_v7())).unwrap();
     let actor_id = arkret_identifiers::Did::new(format!(
         "did:web:managed-anchor-{}.example",
         uuid::Uuid::now_v7()
     ))
     .unwrap();
+    let realm_id = arkret_identifiers::principal_control_realm_id(actor_id.as_str());
     let event = arkret_wire::Event::new_with_derived_id_at(
         arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
@@ -120,30 +127,17 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-    let member = arkret_wire::ControlProposalAuthorityAck {
+    let ack = arkret_wire::ControlProposalAck {
+        kind: arkret_wire::ControlProposalAckKind::SignedAck,
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),
         received_at: now,
         decision_due_at: now + chrono::Duration::hours(1),
         absolute_due_at: now + chrono::Duration::hours(2),
+        defer_count: 0,
         authority_set_ref: authority_set_ref.clone(),
-        signature: arkret_wire::PayloadSignature {
-            verification_method: arkret_wire::DidUrl::new(
-                "did:web:controller.example#device-1".to_owned(),
-            )
-            .unwrap(),
-            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64)))
-                .unwrap(),
-            created_at: now,
-            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-            extra: Default::default(),
-        },
+        authority_acks: Vec::new(),
     };
-    let ack = arkret_wire::ControlProposalAck::from_authority_acks(
-        vec![member],
-        arkret_wire::ControlProposalDecisionPolicy::default(),
-    )
-    .unwrap();
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
@@ -185,7 +179,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
 
 #[tokio::test]
 async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_conflict() {
-    use diesel::sql_types::{BigInt, Binary, Text};
+    use diesel::sql_types::{BigInt, Binary, SmallInt, Text};
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
     use soland_storage::{
@@ -221,7 +215,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let event_id = ids::format_event_id(&id);
     let canonical_digest = ids::format_event_digest(0x01, &digest).unwrap();
     let now = chrono::Utc::now();
-    let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
+    let realm_id = event_derived_realm_id(b"postgres-collision-contract-realm");
     let actor_id = format!("did:web:collision-{}.example", uuid::Uuid::now_v7());
     let incoming = CanonicalEventRecord {
         event_id: event_id.clone(),
@@ -236,15 +230,31 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         received_at: now,
     };
     let mut conn = pool.get().await.unwrap();
+    let realm_identity = ids::realm_identity_parts(&realm_id).unwrap();
+    let realm_pk = sql_query(
+        "INSERT INTO canonical_realms \
+         (id, derivation_class, digest_suite, digest, wire_id) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING pk",
+    )
+    .bind::<Binary, _>(realm_identity.id.to_vec())
+    .bind::<SmallInt, _>(i16::from(realm_identity.derivation_class))
+    .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
+    .bind::<Binary, _>(realm_identity.digest.to_vec())
+    .bind::<Text, _>(&realm_id)
+    .get_result::<PkRow>(&mut conn)
+    .await
+    .unwrap()
+    .pk;
     let event_pk = sql_query(
         "INSERT INTO canonical_events \
-         (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
-         VALUES ($1, 1, $2, $3, 0, $4, $5, $6, $7, $8, $9) RETURNING pk",
+         (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \
+         VALUES ($1, 1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10) RETURNING pk",
     )
     .bind::<Binary, _>(id.to_vec())
     .bind::<Binary, _>(digest.to_vec())
     .bind::<Text, _>(&actor_id)
     .bind::<Text, _>(&realm_id)
+    .bind::<BigInt, _>(realm_pk)
     .bind::<Text, _>(&incoming.kind)
     .bind::<Text, _>(&incoming.schema_id)
     .bind::<Binary, _>(b"hypothetical-colliding-preimage".to_vec())
@@ -256,11 +266,12 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     .pk;
     sql_query(
         "INSERT INTO projection_events \
-         (id, event_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
-         VALUES ($1, $2, $3, $4, 'test', '{}'::jsonb, $5, $5)",
+         (id, event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
+         VALUES ($1, $2, $3, $4, $5, 'test', '{}'::jsonb, $6, $6)",
     )
     .bind::<Binary, _>(id.to_vec())
     .bind::<BigInt, _>(event_pk)
+    .bind::<BigInt, _>(realm_pk)
     .bind::<Text, _>(&realm_id)
     .bind::<Text, _>(&incoming.kind)
     .bind::<diesel::sql_types::Timestamptz, _>(now)

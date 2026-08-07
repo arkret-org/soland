@@ -31,7 +31,7 @@ pub(crate) use soland_storage::{
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
-pub(crate) const DEMO_REALM_ID: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
+pub(crate) const DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
@@ -2110,7 +2110,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
         space.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:0196419b-0000-8000-8000-000000000000".to_owned())
+            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
         });
         space
             .entry("created_at".to_owned())
@@ -2214,7 +2214,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
         strand.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:0196419b-0000-8000-8000-000000000000".to_owned())
+            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
         });
         strand
             .entry("created_at".to_owned())
@@ -2294,7 +2294,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
         morph.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:0196419b-0000-8000-8000-000000000000".to_owned())
+            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
         });
         morph
             .entry("created_at".to_owned())

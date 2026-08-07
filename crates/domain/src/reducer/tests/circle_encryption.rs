@@ -32,7 +32,7 @@ fn apply_policy_bundle(
 // fail-closed second-line check directly.
 
 fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
-    let realm = "ak:realm:01904100-0000-8000-8000-c1c1c1c1c1c1".to_owned();
+    let realm = "ak:realm:ASk_eoIHpJ8N_FKjxDcSCUURWkTNTCM3Ry9G5DEyb2gX".to_owned();
     let circle = "ak:circle:01904100-0000-8000-8000-aaaaaaaaaaaa".to_owned();
     let mut state = ProjectionState::new();
     let now = chrono::Utc::now();
@@ -232,7 +232,7 @@ fn circle_self_join_requires_open_rule() {
 fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892061";
+    let realm = "ak:realm:Adf3DLZoUazXJZ2LuNbfkSARy3KNCMJc9FAdPevb2Quf";
     let apply_floor = |state: &mut ProjectionState, floor: Option<&str>| {
         let payload = match floor {
             Some(f) => serde_json::json!({ "content_encryption_floor": f }),
@@ -266,7 +266,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
 fn metadata_floor_ratchet_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892062";
+    let realm = "ak:realm:ASsEoTdZTKBwj6I0KNzFzWw0bfaKHScCL8uIPwx33cH8";
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         apply_policy_bundle(
             state,
@@ -293,7 +293,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
 fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let apply_scheme = |state: &mut ProjectionState, scheme: Option<&str>| {
         let payload = match scheme {
             Some(s) => serde_json::json!({ "content_scheme": s }),
@@ -334,7 +334,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
 fn content_scheme_rejects_unknown_value() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892064";
+    let realm = "ak:realm:AdX3Acd0WvYOiVl9-lqFGgGa8xxz2Z5P3Zcp5ply14zF";
     let effect = apply_policy_bundle(
         &mut state,
         &hlc,
@@ -353,7 +353,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0c001";
+    let realm = "ak:realm:AT7NHZtjTsuzRThBF8kLDDkl9394Uno1fO21jOiLjo-U";
     state.realm_create_cells.insert(
         realm.to_owned(),
         CellState::Value(serde_json::json!([{
@@ -393,7 +393,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-ok");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0c002";
+    let realm = "ak:realm:AQ5hB6Hsk2fZA-x-ErLhDAYuzeu8Y_gLzUPe2VZUa8Z8";
     state.realm_create_cells.insert(
         realm.to_owned(),
         CellState::Value(serde_json::json!([{
@@ -420,7 +420,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-create");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0c012";
+    let realm = "ak:realm:ATJpGWcxXQSxhpRxXI7xH5XTDhzIUCqOy5m6bXv454ge";
     state.realm_create_cells.insert(
         realm.to_owned(),
         CellState::Value(serde_json::json!([{
@@ -454,7 +454,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
 fn durability_policy_requires_exporter_aead_scheme() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-scheme");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d001";
+    let realm = "ak:realm:ARM_okyR4stVa2JmCJPyJcnwpoxsI3jimzSgJEra7UL0";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
         "principal_id": "did:web:hr.example",
@@ -484,7 +484,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
 fn durability_policy_accepted_on_exporter_aead_scheme() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-ok");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d002";
+    let realm = "ak:realm:AcfJePA6div26qnIQkrT20tbJtdJ79JSjQFTRuB8pA7T";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
         "principal_id": "did:web:hr.example",
@@ -523,7 +523,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
 fn durability_policy_rejects_empty_recipients() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-empty");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d003";
+    let realm = "ak:realm:AQxJQaLWacjxt_NW7mRMxg7nFhvaLcCnmR-020-l4hIa";
     let effect = apply_policy_bundle(
         &mut state,
         &hlc,
@@ -547,7 +547,7 @@ fn durability_policy_rejects_empty_recipients() {
 fn durability_policy_threshold_validates_k_of_n() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-threshold");
-    let realm = "ak:realm:01904100-0000-8000-8000-d0d0d0d0d004";
+    let realm = "ak:realm:AQxy0zXCpXmA_8kcoWOSePqrAA7vI9NsCp7RMO8ha6ak";
     let recipients = serde_json::json!([
         {"recipient_id": "rrk-1", "principal_id": "did:web:a.example", "verification_method": "did:web:a.example#rrk"},
         {"recipient_id": "rrk-2", "principal_id": "did:web:b.example", "verification_method": "did:web:b.example#rrk"}

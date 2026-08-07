@@ -12,8 +12,8 @@ pub struct PgSidecarStore {
 struct SidecarRow {
     #[diesel(sql_type = SqlUuid)]
     id: uuid::Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: uuid::Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Text)]
     controller_id: String,
     #[diesel(sql_type = Text)]
@@ -30,7 +30,7 @@ impl From<SidecarRow> for AgentSidecarRecord {
     fn from(row: SidecarRow) -> Self {
         Self {
             sidecar_id: ids::format_typed_uuid("sidecar", &row.id),
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            realm_id: row.realm_id,
             controller_id: row.controller_id,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -85,7 +85,7 @@ impl SidecarStore for PgSidecarStore {
     ) -> PersistenceResult<AgentSidecarRecord> {
         let mut conn = pg_conn(&self.pool).await?;
         let id = ids::typed_uuid_part_expect_internal(&record.sidecar_id);
-        let realm_id = ids::typed_uuid_part_expect_internal(&record.realm_id);
+        crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "WITH inserted AS (\
              INSERT INTO agent_sidecars (id, realm_id, controller_id, state, state_changed_at, created_at, updated_at) \
@@ -96,7 +96,7 @@ impl SidecarStore for PgSidecarStore {
              FROM agent_sidecars WHERE realm_id=$2 AND controller_id=$3 LIMIT 1",
         )
         .bind::<SqlUuid, _>(id)
-        .bind::<SqlUuid, _>(realm_id)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.controller_id)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
@@ -126,11 +126,10 @@ impl SidecarStore for PgSidecarStore {
         controller_id: &str,
     ) -> PersistenceResult<Option<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(format!(
             "{SIDECAR_SELECT} WHERE realm_id=$1 AND controller_id=$2"
         ))
-        .bind::<SqlUuid, _>(realm_id)
+        .bind::<Text, _>(realm_id)
         .bind::<Text, _>(controller_id)
         .get_result::<SidecarRow>(&mut *conn)
         .await
@@ -145,12 +144,11 @@ impl SidecarStore for PgSidecarStore {
         realm_id: Option<&str>,
     ) -> PersistenceResult<Vec<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let realm_id = realm_id.map(ids::typed_uuid_part_expect_internal);
         sql_query(format!(
             "{SIDECAR_SELECT} WHERE controller_id=$1 AND ($2 IS NULL OR realm_id=$2) ORDER BY created_at,id"
         ))
         .bind::<Text, _>(controller_id)
-        .bind::<Nullable<SqlUuid>, _>(realm_id)
+            .bind::<Nullable<Text>, _>(realm_id)
         .load::<SidecarRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(AgentSidecarRecord::from).collect())

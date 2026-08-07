@@ -666,7 +666,7 @@ mod tests {
 
     use super::*;
 
-    const REALM: &str = "ak:realm:019fbb72-ef34-86b2-bdc4-d9e31e134e89";
+    const REALM: &str = "ak:realm:AdLYeSYbF1FJx56D-sYzJ--z1eUpXoCui7ZQTBhWJbKp";
     const ACTOR: &str = "did:web:alice.local.host";
     const REGISTRY_DIGEST: &str =
         "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";

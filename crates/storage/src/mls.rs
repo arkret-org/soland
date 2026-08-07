@@ -211,7 +211,7 @@ mod key_package_lifecycle_tests {
 
     #[test]
     fn last_resort_binding_is_a_reuse_policy_not_a_group_claim() {
-        let realm_id = "ak:realm:01904100-0000-8000-8000-000000000001";
+        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
         let lifecycle =
             classify_key_package_lifecycle(true, Some(realm_id), None, None, None, None).unwrap();
         assert_eq!(

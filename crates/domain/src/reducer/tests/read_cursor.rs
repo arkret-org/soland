@@ -1,6 +1,6 @@
 use super::*;
 
-const REALM_ID: &str = "ak:realm:01964137-0000-8000-8000-000000000001";
+const REALM_ID: &str = "ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6";
 const ACTOR_ID: &str = "did:webvh:z6mkalice:alice.example";
 
 fn cursor_operation(

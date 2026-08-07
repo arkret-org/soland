@@ -2037,8 +2037,9 @@ mod tests {
 
     #[test]
     fn account_filter_maps_every_websocket_selector_to_http_semantics() {
-        let realm = RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000099".to_owned())
-            .expect("realm id");
+        let realm =
+            RealmId::new("ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS".to_owned())
+                .expect("realm id");
         let filter = websocket_account_filter(
             arkret_models_collaboration::sync_frames::websocket_binding::WebSocketAccountFilter {
                 realms: Some(vec![realm.clone()]),

@@ -20,8 +20,8 @@ struct NotificationRow {
     notification_id: Uuid,
     #[diesel(sql_type = Text)]
     recipient_id: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    realm_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     source_event_id: Option<String>,
     #[diesel(sql_type = Nullable<SqlUuid>)]
@@ -82,7 +82,7 @@ impl NotificationRow {
             })?;
         let realm_id = self
             .realm_id
-            .map(|id| RealmId::new(ids::format_typed_uuid("realm", &id)))
+            .map(RealmId::new)
             .transpose()
             .map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -270,10 +270,8 @@ impl NotificationStore for PgNotificationStore {
                 "recipient notification must have an Event source".to_owned(),
             ));
         };
-        let realm_id = source
-            .realm_id
-            .as_ref()
-            .map(|id| ids::typed_uuid_part_expect_internal(id.as_str()));
+        let realm_id = source.realm_id.as_ref().map(RealmId::as_str);
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id).await?;
         let preview = record
             .notification
             .preview
@@ -311,7 +309,7 @@ impl NotificationStore for PgNotificationStore {
             record.notification.id.as_str(),
         ))
         .bind::<Text, _>(record.notification.actor_id.as_str())
-        .bind::<Nullable<SqlUuid>, _>(realm_id)
+        .bind::<Nullable<Text>, _>(realm_id)
         .bind::<Text, _>(source.source_event_id.as_str())
         .bind::<Nullable<Text>, _>(
             source

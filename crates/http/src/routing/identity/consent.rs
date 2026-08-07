@@ -1473,7 +1473,7 @@ mod tests {
     const PEER: &str = "did:web:peer.example";
     const CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000041";
     const GRANT_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
-    const HOLDER_PCR: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const HOLDER_PCR: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn consent_event(kind: &str, actor: &str, payload: Value) -> Event {
         serde_json::from_value(json!({

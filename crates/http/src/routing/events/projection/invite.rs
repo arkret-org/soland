@@ -1107,7 +1107,7 @@ mod tests {
 
     use super::*;
 
-    const CANCEL_REALM: &str = "ak:realm:01904100-0000-8000-8000-000000000521";
+    const CANCEL_REALM: &str = "ak:realm:AeMdjqxM9dnJ8ik-DD-XWcNeb1liwy0eVEWHTvxfesqr";
     const CANCEL_INVITE: &str = "ak:invite:01904100-0000-8000-8000-000000000522";
     const CANCEL_INVITER: &str = "did:web:alice.example";
     const CANCEL_INVITEE: &str = "did:web:bob.example";
@@ -1349,7 +1349,8 @@ mod tests {
             },
             soland_storage_postgres::Db { pool: None },
         );
-        let realm_id = RealmId::new("ak:realm:01904100-0000-8000-8000-000000000501").unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:ATgPyXyxa7nHOBDf8wno4jWA7fVMO63Mba64ZIYHssA9").unwrap();
         let invite_id = "ak:invite:01904100-0000-8000-8000-000000000502";
         let inviter = "did:web:alice.example";
         let invitee = "did:web:bob.example";
@@ -1427,7 +1428,8 @@ mod tests {
             },
             soland_storage_postgres::Db { pool: None },
         );
-        let realm_id = RealmId::new("ak:realm:01904100-0000-8000-8000-000000000511").unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:Ad-NSApg_uD02vD0do9fZZZJ1Zmt7NwwVBcwb04N9zN6").unwrap();
         let invite_id = "ak:invite:01904100-0000-8000-8000-000000000512";
         let invitee = "did:web:bob.example";
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();

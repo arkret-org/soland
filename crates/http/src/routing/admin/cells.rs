@@ -347,10 +347,11 @@ mod tests {
 
     #[test]
     fn parse_realm_scope_accepts_realm_id() {
-        let realm = parse_realm_scope("ak:realm:0196419b-0000-8000-8000-00000000014a").unwrap();
+        let realm =
+            parse_realm_scope("ak:realm:AXVdykmiwmiUakQOqyMoYAwL8Eh63mpQHFaMczNjNT5p").unwrap();
         assert_eq!(
             realm.as_str(),
-            "ak:realm:0196419b-0000-8000-8000-00000000014a"
+            "ak:realm:AXVdykmiwmiUakQOqyMoYAwL8Eh63mpQHFaMczNjNT5p"
         );
     }
 }

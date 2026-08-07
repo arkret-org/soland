@@ -3321,7 +3321,8 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 fn build_op(object_kind: &str, payload: Value) -> Operation {
     let op_id =
         OperationId::new("ak:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let realm_id = RealmId::new("ak:realm:01904100-0000-8000-8000-000000000000").expect("realm id");
+    let realm_id =
+        RealmId::new("ak:realm:AZvKsJv4SbKilJ8M35HH6gwhZE4wsi0ZHaNeeTs-d54E").expect("realm id");
     Operation::create(op_id, realm_id, object_kind, payload)
 }
 
@@ -3429,7 +3430,7 @@ mod trust_binding_tests {
         let public_key_digest =
             arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
         let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:01904100-0000-8000-8000-00000000000f".to_owned(),
+            "ak:realm:AYKC0LicsGtFBq78orvaQecIZl8Bxv9zAaV4Eg66tdIr".to_owned(),
         )
         .unwrap();
         let authorize_event = arkret_wire::Event::new(

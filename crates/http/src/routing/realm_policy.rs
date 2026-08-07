@@ -435,7 +435,7 @@ mod caller_signed_policy_server_tests {
     use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
-    const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn policy_server_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
         serde_json::from_value(json!({
@@ -504,7 +504,7 @@ mod caller_signed_policy_server_tests {
         caller_signed_policy_server_payload(
             "policy_server_event",
             ACTOR,
-            "ak:realm:01964137-0000-8000-8000-0000000000ff",
+            "ak:realm:AW6ST0TiEb2kdaVDQ-YtsKW8ig0EM-l6_Y5YiT16u7b-",
             &policy_server_event(ACTOR, REALM, declaration()),
         )
         .expect_err("event.realm_id must equal the path realm_id");

@@ -905,7 +905,7 @@ mod tests {
         for key in [
             "ak.agent.sidecar_projection.v1",
             "ak.agent.sidecar_projection.v1:did:web:alice.example",
-            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:0196419b-0000-8000-8000-000000000000",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
         ] {
             let err = validate_registered_account_data_key(key).unwrap_err();
             assert!(

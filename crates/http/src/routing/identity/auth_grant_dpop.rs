@@ -927,8 +927,10 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000003".to_owned())
-                        .unwrap(),
+                    RealmId::new(
+                        "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc".to_owned(),
+                    )
+                    .unwrap(),
                 ],
                 ..Default::default()
             },
@@ -946,7 +948,7 @@ mod tests {
         );
         assert_eq!(
             agent_session.scope_details["realm_ids"][0],
-            "ak:realm:0196419b-0000-8000-8000-000000000003"
+            "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc"
         );
     }
 
@@ -960,8 +962,10 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000003".to_owned())
-                        .unwrap(),
+                    RealmId::new(
+                        "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc".to_owned(),
+                    )
+                    .unwrap(),
                 ],
                 ..Default::default()
             },
@@ -1052,8 +1056,10 @@ mod tests {
         grant.scope_details = Some(
             arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
                 realm_ids: vec![
-                    RealmId::new("ak:realm:0196419b-0000-8000-8000-000000000004".to_owned())
-                        .unwrap(),
+                    RealmId::new(
+                        "ak:realm:Adu9FAkRisZrTbFmyaXkT1rsvvEehH_ZoNfgG2tFFv_A".to_owned(),
+                    )
+                    .unwrap(),
                 ],
                 ..Default::default()
             },

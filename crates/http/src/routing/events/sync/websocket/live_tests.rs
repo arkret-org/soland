@@ -24,7 +24,7 @@ use crate::config::AppConfig;
 use crate::state::{AppState, EventNotification};
 
 const ORIGIN: &str = "https://client.example";
-const REALM_ID: &str = "ak:realm:0196419b-0000-8000-8000-000000000000";
+const REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const ALICE_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000001";
 const BOB_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000002";
 const INITIAL_GRANT: &str = "ak.session.grant.live-test.initial";

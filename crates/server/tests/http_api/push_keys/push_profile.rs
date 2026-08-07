@@ -1132,7 +1132,8 @@ async fn signal_envelope_structural_contract_is_enforced() {
     // §1 — `scope_ref.realm_id == realm_id`.
     let mut foreign_scope = envelope(arkret_wire::SignalClass::Session, 30);
     foreign_scope.scope_ref = arkret_wire::ScopeRef::Realm {
-        realm_id: RealmId::new("ak:realm:0196419b-0000-8000-8000-0000000000ff".to_owned()).unwrap(),
+        realm_id: RealmId::new("ak:realm:ASdf4eIWF6PRMc-8Gd-gIixaHGjUJGN1G-tVBdF9xOQy".to_owned())
+            .unwrap(),
     };
     let foreign_scope_response = post_signal(state.clone(), &token, &foreign_scope).await;
     assert_eq!(

@@ -1,8 +1,8 @@
 use super::{
     Array, BTreeMap, BigInt, ClaimSeqRow, Integer, Jsonb, MultisigPendingRecord,
     MultisigPendingStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, ids,
-    partials_to_jsonb, pg_conn, sql_query,
+    QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, partials_to_jsonb,
+    pg_conn, sql_query,
 };
 pub struct PgMultisigPendingStore {
     pub pool: PgPool,
@@ -11,8 +11,8 @@ pub struct PgMultisigPendingStore {
 struct MultisigPendingRow {
     #[diesel(sql_type = Text)]
     seal_id: String,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Integer)]
     threshold_k: i32,
     #[diesel(sql_type = Integer)]
@@ -42,7 +42,7 @@ impl From<MultisigPendingRow> for MultisigPendingRecord {
         };
         Self {
             seal_id: row.seal_id,
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            realm_id: row.realm_id,
             threshold_k: row.threshold_k as u32,
             threshold_n: row.threshold_n as u32,
             members: row.members,
@@ -62,7 +62,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(&record.realm_id);
+        crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO multisig_pending \
              (id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
@@ -76,7 +76,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
                 expires_at = EXCLUDED.expires_at",
         )
         .bind::<Text, _>(&record.seal_id)
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Integer, _>(record.threshold_k as i32)
         .bind::<Integer, _>(record.threshold_n as i32)
         .bind::<Array<Text>, _>(&record.members)
@@ -141,14 +141,13 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .load::<MultisigPendingRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(MultisigPendingRecord::from).collect())

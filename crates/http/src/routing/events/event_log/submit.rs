@@ -2286,7 +2286,8 @@ mod received_at_stamp_tests {
                 "ak:operation:01904100-0000-7000-8000-{suffix:012x}"
             ))
             .unwrap(),
-            RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001".to_owned()).unwrap(),
+            RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned())
+                .unwrap(),
             kind,
             json!({ "actor_id": "did:web:alice.example" }),
         )
@@ -2330,7 +2331,8 @@ mod managed_agent_pcr_batch_tests {
 
     fn managed_agent_create_value() -> Value {
         let realm_id =
-            RealmId::new("ak:realm:01999999-0000-8000-8000-00000000cafe".to_owned()).unwrap();
+            RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
+                .unwrap();
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
             realm_id.clone(),
@@ -2430,13 +2432,13 @@ mod internal_event_admission_tests {
     #[test]
     fn mimi_provider_admission_reads_provenance_from_canonical_metadata() {
         let admission = InternalEventAdmission::mimi_provider(
-            "ak:realm:01904100-0000-8000-8000-000000000001",
+            "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "did:web:mimi.example",
             "ak:mimi-binding:01904100-0000-7000-8000-000000000001",
         );
         let object = json!({
             "actor_id": "did:web:mimi.example",
-            "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
+            "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "kind": "ak.message.create",
             "payload": {
                 "metadata": {
@@ -2467,7 +2469,7 @@ mod federation_delivery_binding_tests {
     ) -> DeliveryBindingMemberView {
         DeliveryBindingMemberView {
             member: actor.to_owned(),
-            realm_id: "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
+            realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
             recipient_service_id: recipient_service_id.to_owned(),
             membership_event_ref: Some(frontier.as_str().to_owned()),
             delivery_binding_frontier_ref: frontier.as_str().to_owned(),
@@ -2498,7 +2500,8 @@ mod federation_delivery_binding_tests {
     fn realm_sync_endpoint_binding_requires_declared_destination_and_create_frontier() {
         let create_event_id = event_id(1);
         let binding = FederationServiceBindingRef {
-            realm_id: RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001").unwrap(),
+            realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
             realm_policy_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
             membership_frontier: vec![create_event_id.clone()],
             delivery_binding_frontier: vec![create_event_id.clone()],

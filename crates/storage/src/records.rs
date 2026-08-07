@@ -271,7 +271,7 @@ pub struct WebvhLogRecord {
 ///
 /// One row per `(actor, account_data_key)`. `account_data_key` is the canonical wire key
 /// (e.g. `ak.read_receipt.preferences`, `ak.contacts.actor.did:web:alice.example`,
-/// `ak.contacts.realm.ak:realm:0196419b-0000-8000-8000-000000000000`). Soland
+/// `ak.contacts.realm.ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
 /// happens server-side; clients are responsible for canonical encoding.
 ///

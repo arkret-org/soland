@@ -58,7 +58,7 @@ async fn dev_token(svc: &salvo::Service) -> String {
 async fn realms_delivery_binding_policy_endpoint_responds() {
     let svc = app();
     let token = dev_token(&svc).await;
-    let realm_id = "ak:realm:01904100-0000-8000-8000-d00ddeadbeef";
+    let realm_id = "ak:realm:ATtvDFNJFO-h1zle3_ulQJQNAk1tSUamRsHo37ll6mBW";
     let body: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{realm_id}/delivery-binding-policy"
     ))

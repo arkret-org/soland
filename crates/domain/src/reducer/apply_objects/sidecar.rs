@@ -235,8 +235,10 @@ mod tests {
                 "ak:operation:01964137-0000-7000-8000-000000000040",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
+            )
+            .unwrap(),
             arkret_wire::EventKind::SIDECAR_CREATE,
             serde_json::json!({
                 "encryption_profile": "mls_rfc9420",

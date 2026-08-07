@@ -440,7 +440,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
-    let custom_realm = "ak:realm:0196419b-0000-8000-8000-aaaaaaaaaaaa";
+    let custom_realm = "ak:realm:AcJakZNcLdeLGN3Qu3o6b2SFZA4jfqyQ3VD6sp4vrTxg";
     seed_test_realm_basis_seal(&state, demo_realm, state.service_id()).await;
     seed_test_realm_basis_seal(&state, custom_realm, state.service_id()).await;
     let room_id = "01JSMIMI-P4-E2E";

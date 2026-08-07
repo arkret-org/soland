@@ -285,8 +285,10 @@ mod tests {
                 "ak:operation:01964137-0000-7000-8000-000000000040",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
+            )
+            .unwrap(),
             arkret_wire::EventKind::CIRCLE_CREATE,
             payload,
         )
@@ -308,7 +310,7 @@ mod tests {
             "object": {
                 "id": "ak:circle:01964137-0000-8000-8000-000000000041",
                 "schema": "ak.schema.circle.v1",
-                "realm_id": "ak:realm:01964137-0000-8000-8000-000000000030",
+                "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
                 "title": "Agent Sidecar Scope",
                 "display": {
                     "short_name": "SC-ABCDEFGHIJKLMNOP",

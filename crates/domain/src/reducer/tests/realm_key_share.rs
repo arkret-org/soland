@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const REALM: &str = "ak:realm:0196419b-1000-8000-8000-000000000001";
-const OTHER_REALM: &str = "ak:realm:0196419b-2000-8000-8000-000000000001";
+const REALM: &str = "ak:realm:ARZTx1K62JEESOCDcEVZTToJPN3vCoG0zRRnpm3t3OeX";
+const OTHER_REALM: &str = "ak:realm:AVZ7nXDwlbG9ELz_LKV1N5EbIB4dgRviGHwq8qLD6yf_";
 const RECIPIENT: &str = "did:web:bob.example";
 const RECIPIENT_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000b1";
 const SENDER_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000a1";

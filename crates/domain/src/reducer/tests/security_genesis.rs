@@ -23,7 +23,7 @@ fn cell(family: &str, subject: &str) -> arkret_identifiers::CellRef {
 fn audit_binding_keeps_immutable_config_separate_from_lifecycle() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let create_event = "ak:event:01904100-0000-8000-8000-a00000000011";
     let binding_id = "ak:audit_binding:01904100-0000-8000-8000-a00000000011";
     let create_payload = serde_json::json!({
@@ -89,7 +89,7 @@ fn audit_binding_keeps_immutable_config_separate_from_lifecycle() {
 fn session_grant_subject_is_derived_from_event_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let event_id = "ak:event:01904100-0000-8000-8000-a00000000021";
     let session_grant_id = "ak:session_grant:01904100-0000-8000-8000-a00000000021";
     let (operation, writes) = input(

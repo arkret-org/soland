@@ -1350,7 +1350,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_REALM: &str = "ak:realm:01904100-0000-8000-8000-00000000aa01";
+    const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_MESSAGE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa11";
     const TEST_REVISE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa12";

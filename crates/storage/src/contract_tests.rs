@@ -694,6 +694,13 @@ pub struct EventCommitContractStores<'a> {
     pub outbox: &'a dyn FederationOutboxStore,
 }
 
+fn contract_realm_id(seed: &str) -> String {
+    let digest = arkret_canonical::sha256_bytes(seed.as_bytes());
+    let event_id =
+        arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest);
+    arkret_identifiers::RealmId::from_event_id(&event_id).to_string()
+}
+
 fn canonical_wire_event_record(
     _event_id: &str,
     actor_id: &str,
@@ -738,22 +745,55 @@ fn canonical_wire_event_record(
     }
 }
 
+fn contract_control_proposal_ack(
+    record: &CanonicalEventRecord,
+    realm_id: &str,
+    now: chrono::DateTime<Utc>,
+) -> arkret_wire::ControlProposalAck {
+    let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+    let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).expect("typed realm id"),
+        proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
+        received_at: now,
+        decision_due_at: now + policy.decision_window,
+        absolute_due_at: now + policy.absolute_horizon,
+        authority_set_ref: Hash::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("typed authority set ref"),
+        signature: arkret_wire::PayloadSignature {
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:storage-contract.example#authority-1",
+            )
+            .expect("authority verification method"),
+            payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("placeholder digest"),
+            created_at: now,
+            jws: "e30..c2ln".to_owned(),
+            extra: std::collections::BTreeMap::new(),
+        },
+    };
+    authority_ack.signature.payload_digest = authority_ack
+        .authority_ack_digest()
+        .expect("authority Ack digest");
+    arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy)
+        .expect("valid Control Proposal Ack")
+}
+
 pub async fn assert_event_commit_unit_of_work_contract(
     stores: EventCommitContractStores<'_>,
     namespace: &str,
 ) {
     let now = database_timestamp_now();
     let event_uuid = uuid::Uuid::now_v7();
-    let realm_uuid = uuid::Uuid::now_v7();
-    let realm_id = format!("ak:realm:{realm_uuid}");
+    let realm_id = contract_realm_id(&format!("event-commit:{namespace}:{event_uuid}"));
     let principal_id = format!("did:web:{namespace}.example");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
     let event_id = event.event_id.clone();
+    let control_proposal_ack = contract_control_proposal_ack(&event, &realm_id, now);
     let request = EventCommitRequest {
         event,
-        control_proposal_ack: None,
+        control_proposal_ack: Some(control_proposal_ack),
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -835,12 +875,14 @@ pub async fn assert_event_commit_unit_of_work_contract(
     );
 
     let rollback_uuid = uuid::Uuid::now_v7();
-    let rollback_event_id = format!("ak:event:{rollback_uuid}");
     let rollback_idempotency_key = format!("event-rollback:{namespace}:{rollback_uuid}");
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
+    let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 1, now);
+    let rollback_event_id = rollback_event.event_id.clone();
+    let rollback_ack = contract_control_proposal_ack(&rollback_event, &realm_id, now);
     let failed = EventCommitRequest {
-        event: canonical_wire_event_record(&rollback_event_id, &principal_id, &realm_id, 1, now),
-        control_proposal_ack: None,
+        event: rollback_event,
+        control_proposal_ack: Some(rollback_ack),
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),
@@ -1336,23 +1378,13 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
 ) {
     let now = database_timestamp_now();
     let principal_id = format!("did:web:{namespace}.example");
-    let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
+    let realm_id = contract_realm_id(&format!("atomic-batch:{namespace}"));
     // The Realm genesis unit requires one Control Proposal Ack per Event. Supplying
     // them is what makes this test actually about the outbox: without them the
     // batch would abort on receipt cardinality and never reach the outbox
     // insert, so the rollback assertion below would pass for the wrong reason.
-    let control_proposal_ack = |record: &CanonicalEventRecord| arkret_wire::ControlProposalAck {
-        kind: arkret_wire::ControlProposalAckKind::SignedAck,
-        realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("typed realm id"),
-        proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
-        received_at: now,
-        decision_due_at: now + Duration::hours(1),
-        absolute_due_at: now + Duration::hours(24),
-        defer_count: 0,
-        authority_set_ref: Hash::new(format!("sha256:{}", "a".repeat(64)))
-            .expect("typed authority set ref"),
-        authority_acks: Vec::new(),
-    };
+    let control_proposal_ack =
+        |record: &CanonicalEventRecord| contract_control_proposal_ack(record, &realm_id, now);
     let colliding_id = format!("outbox:{namespace}:collision");
     // Two intents sharing one primary key: the first inserts, the second must
     // abort the batch.
@@ -1379,9 +1411,8 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         ]
     };
 
-    let bootstrap_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
-    let bootstrap_record =
-        canonical_wire_event_record(&bootstrap_event_id, &principal_id, &realm_id, 0, now);
+    let bootstrap_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let bootstrap_event_id = bootstrap_record.event_id.clone();
     assert!(
         events
             .put_realm_bootstrap_batch_atomic(
@@ -1409,9 +1440,8 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         "the partially-inserted delivery intent rolls back too"
     );
 
-    let anchor_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
-    let anchor_record =
-        canonical_wire_event_record(&anchor_event_id, &principal_id, &realm_id, 0, now);
+    let anchor_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let anchor_event_id = anchor_record.event_id.clone();
     assert!(
         events
             .put_identity_anchor_batch_atomic(
@@ -1444,10 +1474,9 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     );
 
     // The happy path still commits both halves together.
-    let committed_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
     let committed_outbox_id = format!("outbox:{namespace}:committed");
-    let committed_record =
-        canonical_wire_event_record(&committed_event_id, &principal_id, &realm_id, 0, now);
+    let committed_record = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let committed_event_id = committed_record.event_id.clone();
     events
         .put_realm_bootstrap_batch_atomic(
             vec![committed_record.clone()],
@@ -1639,7 +1668,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
 ) {
     let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort");
     keypackage.last_resort = true;
-    let realm_id = "ak:realm:01904100-0000-8000-8000-000000000001";
+    let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
     keypackage.last_resort_realm_id = Some(realm_id.to_owned());
     store
         .put(&keypackage)

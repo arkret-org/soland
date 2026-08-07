@@ -316,10 +316,12 @@ pub(crate) async fn insert_canonical_event(
             .map_err(PersistenceError::database)?;
         return Ok(CanonicalInsertOutcome::Collision);
     }
+    let realm_pk =
+        crate::realm_identity::ensure_optional_realm_pk(conn, record.realm_id.as_deref()).await?;
     sql_query(
         "INSERT INTO canonical_events \
-         (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING pk",
+         (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING pk",
     )
     .bind::<Binary, _>(identity.id.to_vec())
     .bind::<SmallInt, _>(i16::from(identity.digest_suite))
@@ -327,6 +329,7 @@ pub(crate) async fn insert_canonical_event(
     .bind::<Text, _>(&record.actor_id)
     .bind::<BigInt, _>(record.actor_seq as i64)
     .bind::<Nullable<Text>, _>(record.realm_id.as_deref())
+    .bind::<Nullable<BigInt>, _>(realm_pk)
     .bind::<Text, _>(&record.kind)
     .bind::<Text, _>(&record.schema_id)
     .bind::<Binary, _>(&record.canonical_bytes)
@@ -1055,7 +1058,7 @@ impl EventStore for PgEventStore {
         sql_query(
             "SELECT COUNT(*)::bigint AS event_count, \
              COALESCE(SUM(OCTET_LENGTH(canonical_bytes)), 0)::bigint AS canonical_bytes \
-             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1",
+             FROM canonical_events WHERE state = 'accepted' AND realm_pk = (SELECT pk FROM canonical_realms WHERE wire_id = $1)",
         )
         .bind::<Text, _>(realm_id)
         .get_result::<RealmEventStatsRow>(&mut *conn)
@@ -1092,7 +1095,7 @@ impl EventStore for PgEventStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+             FROM canonical_events WHERE state = 'accepted' AND realm_pk = (SELECT pk FROM canonical_realms WHERE wire_id = $1) AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
         )
         .bind::<Text, _>(realm_id)
         .bind::<Text, _>(actor_id)
@@ -1191,7 +1194,7 @@ impl EventStore for PgEventStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 ORDER BY received_at DESC, id DESC",
+             FROM canonical_events WHERE state = 'accepted' AND realm_pk = (SELECT pk FROM canonical_realms WHERE wire_id = $1) ORDER BY received_at DESC, id DESC",
         )
         .bind::<Text, _>(realm_id)
         .load::<CanonicalEventRow>(&mut *conn).await

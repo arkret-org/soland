@@ -259,14 +259,21 @@ pub fn realm_genesis_payload(
 /// without one answers `quorum_unreachable` on every Control Move. A fixture
 /// that stands a Realm up out of band still owes it its genesis Event.
 pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject: &str) {
-    // Principal Control Realm ids retain the registered subject-derived UUIDv7
-    // form. Collaboration Realm ids carry their genesis Event's complete
-    // suite-tagged digest token; inspecting a UUID nibble is therefore no
-    // longer a valid branch discriminator.
-    let is_principal_control_realm = RealmId::new(realm_id.to_owned())
-        .expect("fixture Realm id is typed")
-        .subject_uuid()
-        .is_some();
+    // The genesis Event id has to be the one this Realm id derives from, or a
+    // receiver that re-derives `realm_id` from the Event lands on a different
+    // Realm than the fixture stood up — which is exactly what admission checks.
+    //
+    // Two derivation classes, matching `arkret_wire::derive_genesis_realm_id`.
+    // Event-derived class 0 can be retyped byte-for-byte to EventId. Principal
+    // subject-derived class 1 cannot; that branch ignores the Event id, so any
+    // well-formed content-bound Event id will do for fixture construction.
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
+        .expect("fixture Realm id is canonical");
+    let is_principal_control_realm = realm_id.event_id().is_none();
+    let genesis_event_id = realm_id
+        .event_id()
+        .map(|event_id| event_id.to_string())
+        .unwrap_or_else(|| crate::fixture_content_bound_id("ak:event:"));
     // A Realm has exactly one canonical create and the store enforces that, so
     // do not write another when this Realm already has one — whether from a
     // previous call here or from a fixture that authored its own genesis

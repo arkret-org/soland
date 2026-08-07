@@ -1,7 +1,7 @@
 use super::{
     BigInt, BlobRecord, BlobStore, Bool, Jsonb, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
-    Value, async_trait, ids, pg_conn, sql_query,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait,
+    pg_conn, sql_query,
 };
 pub struct PgBlobStore {
     pub pool: PgPool,
@@ -31,10 +31,8 @@ impl BlobStore for PgBlobStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid: Option<Uuid> = record
-            .realm_id
-            .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, record.realm_id.as_deref())
+            .await?;
         let payload = serde_json::json!({
             "encryption": record.encryption.clone(),
         });
@@ -63,7 +61,7 @@ impl BlobStore for PgBlobStore {
         .bind::<Text, _>(&record.media_type)
         .bind::<Nullable<Text>, _>(&record.filename)
         .bind::<Text, _>(&record.uploaded_by)
-        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+        .bind::<Nullable<Text>, _>(record.realm_id.as_deref())
         .bind::<BigInt, _>(record.size_bytes)
         .bind::<Text, _>(&record.storage_backend)
         .bind::<Text, _>(&record.storage_key)
@@ -121,8 +119,8 @@ struct BlobRow {
     media_type: String,
     #[diesel(sql_type = Nullable<Text>)]
     filename: Option<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    realm_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     encryption: Option<Value>,
     #[diesel(sql_type = Bool)]
@@ -145,10 +143,7 @@ impl From<BlobRow> for BlobRecord {
             storage_key: row.storage_key,
             media_type: row.media_type,
             filename: row.filename,
-            realm_id: row
-                .realm_id
-                .as_ref()
-                .map(|uuid| ids::format_typed_uuid("realm", uuid)),
+            realm_id: row.realm_id,
             encryption: row.encryption,
             legal_hold: row.legal_hold,
             redacted: row.redacted,

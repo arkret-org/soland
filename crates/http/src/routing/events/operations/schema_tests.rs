@@ -11,7 +11,7 @@ mod invite_create_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000701".to_owned(),
+                "ak:realm:AT2g1B8NlsTQnu9kxPR0nPvh-bVNWGGMseceRnfLYwih".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::INVITE_CREATE,
@@ -144,7 +144,7 @@ mod event_projection_dto_boundary_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-0000000007a1".to_owned(),
+                "ak:realm:AY-NL3trYz8vjYLmWqHHbkR1liZa47Xd9S7NW2vlxEjW".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_JOIN_RULE,
@@ -159,7 +159,7 @@ mod event_projection_dto_boundary_tests {
             "event_id": "ak:event:01904100-0000-8000-8000-0000000007a1",
             "sender": "did:web:alice.example",
             "effects": [{
-                "cell": "ak:cell:ak.component.realm.join_rule.v1:ak:realm:01904100-0000-8000-8000-0000000007a1",
+                "cell": "ak:cell:ak.component.realm.join_rule.v1:ak:realm:AY-NL3trYz8vjYLmWqHHbkR1liZa47Xd9S7NW2vlxEjW",
                 "op": {"type": "set", "value": "invite"}
             }]
         }));
@@ -214,7 +214,7 @@ mod event_projection_dto_boundary_tests {
                 )
                 .unwrap(),
                 arkret_identifiers::RealmId::new(
-                    "ak:realm:01904100-0000-8000-8000-0000000007a3".to_owned(),
+                    "ak:realm:ARHX7LGKk2svV3upZ10pEmGoLdgEaEPI06-04trUQQdu".to_owned(),
                 )
                 .unwrap(),
                 arkret_wire::EventKind::REALM_POLICY_BUNDLE,
@@ -272,7 +272,7 @@ mod event_projection_dto_boundary_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-0000000007a2".to_owned(),
+                "ak:realm:AVRRrROGV2ARk6OPXu6lATgiM5XQyZ_JcgwRjMC3Im1B".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
@@ -420,7 +420,7 @@ mod key_backup_active_series_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-0000000007a1".to_owned(),
+                "ak:realm:AY-NL3trYz8vjYLmWqHHbkR1liZa47Xd9S7NW2vlxEjW".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
@@ -504,7 +504,7 @@ mod realm_key_share_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-0000000007aa".to_owned(),
+                "ak:realm:AaajU0E3YekQlILA6KFwZaoB7JHYohg-O0crFYr4hwuS".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_KEY_SHARE,
@@ -527,7 +527,7 @@ mod realm_key_share_schema_tests {
             "key_scope": {
                 "effective_scope": {
                     "kind": "realm",
-                    "realm_id": "ak:realm:01904100-0000-8000-8000-0000000007aa"
+                    "realm_id": "ak:realm:AaajU0E3YekQlILA6KFwZaoB7JHYohg-O0crFYr4hwuS"
                 },
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "from_epoch": 0,
@@ -586,7 +586,7 @@ mod read_receipt_policy_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000702".to_owned(),
+                "ak:realm:AZeoe8skvYdUZma_1pH3dCWvAy7ap4MWYRpM5f16O5yw".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY,
@@ -633,7 +633,7 @@ mod realm_media_service_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000901".to_owned(),
+                "ak:realm:ARkNLd10PLFU6nWXwpfON7eQhZGezakXw3pvJ5cRGc0Q".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_MEDIA_SERVICE,
@@ -668,7 +668,7 @@ mod realm_plaintext_visible_services_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000902".to_owned(),
+                "ak:realm:AUYLjBoI0xYRjG5SKmFPOh3Agj-mEAcV6cmiVPn4KB64".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
@@ -697,12 +697,12 @@ mod realm_plaintext_visible_services_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000904".to_owned(),
+                "ak:realm:AfBbfcm-ayz4ms4IjZtpa_UeR-zkx9xDxFy3_SgyqMkh".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
             json!({
-                "source_realm_id": "ak:realm:01904100-0000-8000-8000-000000000905",
+                "source_realm_id": "ak:realm:AbvPRiXVavzVHJKCDG8HK7s2PlyJBga3olAriX06ZGPZ",
                 "inherits": {
                     "policy_rules": ["moderation.banned_keywords"]
                 },
@@ -733,12 +733,12 @@ mod realm_plaintext_visible_services_schema_tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(
-                "ak:realm:01904100-0000-8000-8000-000000000906".to_owned(),
+                "ak:realm:AYMs5egM4i4NiSry19jn62Jo_3_cXrETY3yjnsupOeTI".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
             json!({
-                "source_realm_id": "ak:realm:01904100-0000-8000-8000-000000000905",
+                "source_realm_id": "ak:realm:AbvPRiXVavzVHJKCDG8HK7s2PlyJBga3olAriX06ZGPZ",
                 "allowed_policies": ["moderation.banned_keywords"],
                 "max_depth": 1
             }),
@@ -756,7 +756,7 @@ mod realm_plaintext_visible_services_schema_tests {
     #[test]
     fn moderation_control_kinds_are_registered_for_projection() {
         let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:01904100-0000-8000-8000-000000000903".to_owned(),
+            "ak:realm:AQsAANkzbRAod6oC5lFzs1OxsLEt5mVJ35YGKc4cf_Vn".to_owned(),
         )
         .unwrap();
         let cases = [
@@ -848,8 +848,10 @@ mod message_projection_schema_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             kind,
             payload,
         )
@@ -899,8 +901,10 @@ mod agent_action_schema_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             kind,
             payload,
         )
@@ -920,7 +924,7 @@ mod agent_action_schema_tests {
                 "proposed_action": "ak.message.create",
                 "target": {
                     "kind": "realm",
-                    "realm_id": "ak:realm:01904100-0000-8000-8000-668e2181b41d"
+                    "realm_id": "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr"
                 },
                 "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "draft_content_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -980,8 +984,10 @@ mod spec_sync_validator_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             kind,
             payload,
         )
@@ -1134,8 +1140,10 @@ mod sdk_artifact_schema_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             "ak.cross_signing.reset",
             payload,
         )
@@ -1147,8 +1155,10 @@ mod sdk_artifact_schema_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c6",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             "ak.cross_signing.publish",
             payload,
         )
@@ -1347,8 +1357,10 @@ mod derived_relation_and_morph_immutability_tests {
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-8000-8000-668e2181b41d")
-                .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
+            )
+            .unwrap(),
             kind,
             payload,
         )

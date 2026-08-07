@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
-const REALM_A: &str = "ak:realm:01904100-0000-8000-8000-cfc039892036";
+const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(

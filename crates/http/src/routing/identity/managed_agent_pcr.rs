@@ -1356,7 +1356,7 @@ mod tests {
 
     const AGENT: &str = "did:web:agent.example";
     const CONTROLLER: &str = "did:web:controller.example";
-    const PCR: &str = "ak:realm:01999999-0000-8000-8000-00000000feed";
+    const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
     const AUTHORIZATION: &str = "did:web:agent.example#managed-controller";
 
     fn requested_scope() -> Value {
@@ -1445,7 +1445,7 @@ mod tests {
 
         let mut wrong_pcr = did_document();
         wrong_pcr["service"][0]["serviceEndpoint"]["realm_id"] =
-            json!("ak:realm:01999999-0000-8000-8000-00000000bad0");
+            json!("ak:realm:ASS1mcFATTBtSi74HDHQvz-KGm_L5ziYJH6B5sQavpVy");
         assert!(
             validate_agent_did_document_binding(
                 &wrong_pcr,

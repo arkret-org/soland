@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use soland_domain::reducer::realm_policy_server::apply_realm_policy_server;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, RealmLinkState};
 
-const CHILD_REALM: &str = "ak:realm:0196414c-8000-8000-8000-000000000000";
-const ORG_REALM: &str = "ak:realm:0196414c-8000-8000-8000-000000000001";
+const CHILD_REALM: &str = "ak:realm:ARUgpqlRQEOsctG13hpmVzQjx09UVbnHOe3BxpK76Jj_";
+const ORG_REALM: &str = "ak:realm:AWJFMKcHr4DUa3zaD-8OM-lGsu9eMHxFq5OHnkdJrT07";
 const CELL_ID: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
 
 fn operation(realm_id: &str, payload: Value) -> Operation {
@@ -177,7 +177,10 @@ fn resolution_fails_closed_for_bottom_and_ambiguous_governance() {
 
     let mut ambiguous_state = ProjectionState::new();
     let now = Utc::now();
-    for target_realm_id in [ORG_REALM, "ak:realm:0196414c-8000-8000-8000-000000000002"] {
+    for target_realm_id in [
+        ORG_REALM,
+        "ak:realm:ASyD_Vn3M1MpuekoxTO6YGME46X1AXzYor22WYgNNpEZ",
+    ] {
         ambiguous_state
             .realm_links
             .entry(CHILD_REALM.to_owned())
