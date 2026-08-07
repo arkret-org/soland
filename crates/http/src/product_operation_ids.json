@@ -74,7 +74,6 @@
   "org.arkret.soland.applets.ghosts.provision",
   "org.arkret.soland.applets.manifest.verify",
   "org.arkret.soland.applets.register",
-  "org.arkret.soland.applets.revoke",
   "org.arkret.soland.audit.erasure_receipts.list",
   "org.arkret.soland.audit.events",
   "org.arkret.soland.audit.franking.verify",

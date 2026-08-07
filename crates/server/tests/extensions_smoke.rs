@@ -1367,21 +1367,73 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
                 && entry["did"] == package.controller_id.to_string())
     );
 
-    let revoke: Value = TestClient::post(format!(
-        "http://server/_arkret/self/applets/{applet_id}/revoke"
+    let revoke_preview: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke/preview"
     ))
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
         "effective_scope": {"kind": "realm", "realm_id": realm_id},
         "reason_code": "smoke_test",
-        "revoke_mode": "revoke_all",
+        "revoke_mode": "revoke_runtime_only",
     }))
     .send(&app)
     .await
     .take_json()
     .await
     .unwrap();
+    let (capability_revoke_events, membership_state_events) =
+        signed_revoke_events(&state, realm_id, &revoke_preview).await;
+    let revoke_body = json!({
+        "revoke_plan_digest": revoke_preview["revoke_plan_digest"].clone(),
+        "effective_scope": {"kind": "realm", "realm_id": realm_id},
+        "reason_code": "smoke_test",
+        "revoke_mode": "revoke_runtime_only",
+        "capability_revoke_events": capability_revoke_events,
+        "membership_state_events": membership_state_events,
+    });
+    let revoke_key = format!("revoke-{suffix}");
+    let revoke: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .add_header("Idempotency-Key", revoke_key.clone(), true)
+    .json(&revoke_body)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(revoke["ok"], json!(true));
+    assert_eq!(revoke["status"], json!("complete"));
+
+    let replay: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .add_header("Idempotency-Key", revoke_key.clone(), true)
+    .json(&revoke_body)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(replay["operation_id"], revoke["operation_id"]);
+    assert_eq!(replay["steps"], revoke["steps"]);
+
+    let mut conflicting_body = revoke_body.clone();
+    conflicting_body["reason_code"] = json!("different_reason");
+    let conflict: Value = TestClient::post(format!(
+        "http://server/_arkret/self/applets/{applet_id}/revoke"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .add_header("Idempotency-Key", revoke_key, true)
+    .json(&conflicting_body)
+    .send(&app)
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(conflict["error"]["code"], json!("duplicate_conflict"));
 
     let rejected_idempotency_key = format!("tx-after-revoke-{suffix}");
     let rejected = post_signed_applet_message_transaction(
@@ -1743,6 +1795,100 @@ async fn signed_install_events(
         capability_grant_events.push(event);
     }
     (registration_event, capability_grant_events)
+}
+
+async fn signed_revoke_events(
+    state: &AppState,
+    realm_id: &str,
+    preview: &Value,
+) -> (
+    Vec<arkret_wire::EventInitialSubmission>,
+    Vec<arkret_wire::EventInitialSubmission>,
+) {
+    let actor_id = Did::new("did:web:alice.example").unwrap();
+    let realm_id = RealmId::new(realm_id.to_owned()).unwrap();
+    let scope_ref = ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let verification_method =
+        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary").unwrap();
+    let signer = Ed25519PayloadSigner::new(
+        SigningKey::from_bytes(&[0x21; 32]),
+        actor_id.clone(),
+        verification_method.clone(),
+    );
+    let seal_id = state
+        .test_seal_leaves(&realm_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("extension test Realm has an accepted Seal");
+    let seal_basis = state
+        .test_seal(&seal_id)
+        .unwrap()
+        .expect("extension test Seal is readable")
+        .seal_basis();
+    let existing = state
+        .test_persistence()
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap();
+    let frontier = existing
+        .iter()
+        .filter(|event| {
+            event.actor_id == actor_id.as_str()
+                && event.realm_id.as_deref() == Some(realm_id.as_str())
+        })
+        .max_by_key(|event| event.actor_seq)
+        .expect("extension test Realm has Alice's install frontier");
+    let now =
+        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
+    let millis = now.timestamp_millis().max(0) as u64;
+    let mut previous_event_id = EventId::new(frontier.event_id.clone()).unwrap();
+    let intents = preview["revoke_plan"]["capability_revocations"]
+        .as_array()
+        .expect("preview capability revoke intents");
+    let mut submissions = Vec::with_capacity(intents.len());
+    for (offset, intent) in intents.iter().enumerate() {
+        let counter = offset + 1;
+        let mut event = Event::new(
+            arkret_wire::EventKind::CAPABILITY_REVOKE,
+            scope_ref.clone(),
+            actor_id.clone(),
+            frontier.actor_seq + counter as u64,
+            Hlc::new(format!("{millis:012x}-{counter:04x}-a11ce001")).unwrap(),
+            json!({
+                "grant_id": intent["grant_id"].clone(),
+                "reason": intent["reason_code"].clone(),
+            }),
+        )
+        .unwrap();
+        event.prev_refs = vec![previous_event_id];
+        event.seal_basis = Some(seal_basis.clone());
+        arkret_signatures::sign_event(
+            &mut event,
+            &signer,
+            &verification_method,
+            SignEventOptions::new().with_created_at(now),
+        )
+        .unwrap();
+        previous_event_id = event.event_id.clone();
+        submissions.push(arkret_wire::EventInitialSubmission {
+            event,
+            authorization_lease: None,
+            cba_proof_bundles: Vec::new(),
+            control_proposal_ack: None,
+            membership_compensation_evidence: None,
+        });
+    }
+    assert!(
+        preview["revoke_plan"]["membership_removals"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "this runtime-only smoke install does not create managed membership Events"
+    );
+    (submissions, Vec::new())
 }
 
 async fn install_applet_package_with_approved_actions(

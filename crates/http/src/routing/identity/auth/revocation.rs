@@ -22,19 +22,6 @@ pub async fn active_delegated_sessions_for_actor(
         .map_err(|error| error.to_string())
 }
 
-pub async fn revoke_delegated_sessions_for_applet(
-    state: &AppState,
-    applet_id: &str,
-    service_id: Option<&str>,
-    grant_refs: &[String],
-) -> Result<Vec<String>, String> {
-    state
-        .sessions()
-        .revoke_delegated_sessions(applet_id, service_id, grant_refs, now())
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Revoke every active device record for an actor.
 pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     let revoked_at = now();

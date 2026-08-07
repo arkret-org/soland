@@ -57,6 +57,8 @@ pub struct AppletRecord {
     #[serde(default)]
     pub install_execution: Option<Value>,
     #[serde(default)]
+    pub revoke_execution: Option<Value>,
+    #[serde(default)]
     pub ghosts: Vec<GhostActorRecord>,
 }
 
@@ -97,6 +99,7 @@ pub struct AppletRevokeRecordOutcome {
 pub struct AppletInstallPaths {
     pub preview_path: String,
     pub commit_path: String,
+    pub revoke_preview_path: String,
     pub revoke_path: String,
     pub ghost_actor_provision_path: String,
 }

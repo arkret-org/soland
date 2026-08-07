@@ -1,11 +1,11 @@
-use super::*;
-
 use arkret_models_collaboration::agent_operations::{
     AgentSidecarEncryptionProfile, AgentSidecarExchangeControlPayload, AgentSidecarState,
 };
 use arkret_models_collaboration::sidecar_operations::{
     SidecarContextAttachPayload, SidecarContextRef,
 };
+
+use super::*;
 
 fn event_derived_sidecar_id(event_ref: &str) -> Option<String> {
     let event_id = arkret_identifiers::EventId::new(event_ref.to_owned()).ok()?;

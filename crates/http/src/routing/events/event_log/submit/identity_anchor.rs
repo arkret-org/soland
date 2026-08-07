@@ -2068,7 +2068,6 @@ mod tests {
                 ),
                 capability_action_registry_digest:
                     arkret_policy::current_capability_action_registry_digest().unwrap(),
-                event_id: arkret_identifiers::EventId::new(event_id("000000000001")).unwrap(),
                 created_at,
                 hlc: arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             },

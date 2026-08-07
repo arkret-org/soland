@@ -4,8 +4,8 @@
 //! the canonical cells declared by
 //! `event-kind-registry.json`:
 //!
-//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per GrantId).
-//!   plus its `issuer_authority_refs` chain references.
+//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per GrantId). plus its
+//!   `issuer_authority_refs` chain references.
 //!
 //! Convergence rules (capabilities.md §12.1):
 //! - **grant** = or_set **add**. The add dot is the reducer-deterministic

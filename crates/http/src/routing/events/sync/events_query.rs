@@ -1375,11 +1375,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let sidecar_id = "ak:sidecar:01904100-0000-8000-8000-00000000aa41";
-        let event = arkret_wire::Event::new_with_id_at(
-            arkret_identifiers::EventId::new(
-                "ak:event:01904100-0000-8000-8000-00000000aa43".to_owned(),
-            )
-            .unwrap(),
+        let event = arkret_wire::Event::new_with_derived_id_at(
             arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
             arkret_wire::ScopeRef::Sidecar {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),

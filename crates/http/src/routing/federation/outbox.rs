@@ -1472,12 +1472,8 @@ mod tests {
         let received_at: chrono::DateTime<chrono::Utc> =
             "2026-07-26T00:00:01.000Z".parse().unwrap();
 
-        let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
-            let mut event = arkret_wire::Event::new_with_id_at(
-                arkret_identifiers::EventId::new(format!(
-                    "ak:event:019f0000-0000-8000-8000-{suffix}"
-                ))
-                .unwrap(),
+        let submission = |_suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
+            let mut event = arkret_wire::Event::new_with_derived_id_at(
                 arkret_wire::EventKind::MESSAGE_CREATE,
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),

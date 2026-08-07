@@ -71,9 +71,8 @@ use login::dev_login;
 use logout::session_revoke;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
-    active_delegated_sessions_for_actor, is_device_revoked, revoke_delegated_sessions_for_applet,
-    revoke_device_record, revoke_devices_for_actor, revoke_sessions_for_actor,
-    session_credential_hash, token_for,
+    active_delegated_sessions_for_actor, is_device_revoked, revoke_device_record,
+    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash, token_for,
 };
 pub use sessions::{auth_or_render, authenticated_session};
 

@@ -340,6 +340,7 @@ pub(super) async fn register_package_install(
         registration_event: Some(registration_event),
         capability_grant_events,
         install_execution: None,
+        revoke_execution: None,
         ghosts: Vec::new(),
     };
     record.install_execution = Some(build_install_execution_record(
@@ -667,6 +668,7 @@ pub(super) async fn register_verified_applet(
         registration_event: None,
         capability_grant_events: Vec::new(),
         install_execution: None,
+        revoke_execution: None,
         ghosts: Vec::new(),
     };
     // SOL-HYG-01: the bot actor's liveness/revocation state is captured durably
@@ -1707,8 +1709,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let registration_event = Event::new_with_id_at(
-            response.registration_event_ref.clone().unwrap(),
+        let registration_event = Event::new_with_derived_id_at(
             arkret_wire::EventKind::APPLET_REGISTRATION,
             scope_ref.clone(),
             actor_id.clone(),
@@ -1723,12 +1724,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(offset, grant_id)| {
-                Event::new_with_id_at(
-                    EventId::new(format!(
-                        "ak:event:01974100-0000-8000-8000-{:012x}",
-                        0x20 + offset
-                    ))
-                    .unwrap(),
+                Event::new_with_derived_id_at(
                     arkret_wire::EventKind::CAPABILITY_GRANT,
                     scope_ref.clone(),
                     actor_id.clone(),
@@ -1774,6 +1770,7 @@ mod tests {
             registration_event: Some(registration_event),
             capability_grant_events,
             install_execution: None,
+            revoke_execution: None,
             ghosts: Vec::new(),
         }
     }

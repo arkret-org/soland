@@ -1720,8 +1720,7 @@ mod seal_delta_tests {
         let realm_id =
             RealmId::new("ak:realm:01904100-0000-8000-8000-a11ce0000001".to_owned()).unwrap();
         let issued_at = chrono::Utc::now();
-        let mut event = Event::new_with_id_at(
-            arkret_wire::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap(),
+        let mut event = Event::new_with_derived_id_at(
             arkret_wire::EventKind::MESSAGE_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
             actor_id.clone(),
