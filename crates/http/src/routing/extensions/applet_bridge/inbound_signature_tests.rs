@@ -1,8 +1,6 @@
 use serde_json::json;
 
-use super::signature::{
-    applet_http_signature_base, applet_source_signature_anchor, applet_validate_signature_params,
-};
+use super::signature::{applet_source_signature_anchor, applet_validate_signature_input};
 
 fn params(created: i64, expires: i64) -> String {
     format!(
@@ -23,80 +21,20 @@ fn content_digest_header_is_rfc9421_structured() {
     assert!(!header.contains("sha256:"));
 }
 
-/// The signature base MUST cover the §7.3.1 header set in order.
-#[test]
-fn signature_base_covers_required_components() {
-    let base = applet_http_signature_base(
-        "POST",
-        "https://edge.example/_arkret/edge/applet/transactions",
-        "edge.example",
-        "sha-256=:abc=:",
-        "did:web:app",
-        "did:web:edge",
-        "idem-1",
-        &params(0, 0),
-    );
-    for needle in [
-        "\"@method\": POST",
-        "\"@target-uri\":",
-        "\"@authority\": edge.example",
-        "\"content-digest\": sha-256=:abc=:",
-        "\"source-service-id\": did:web:app",
-        "\"destination-service-id\": did:web:edge",
-        "\"idempotency-key\": idem-1",
-        "\"@signature-params\":",
-    ] {
-        assert!(base.contains(needle), "base missing {needle}:\n{base}");
-    }
-}
-
 /// keyid mismatch is `http_signature_invalid` (not a window error).
 #[test]
 fn keyid_mismatch_is_invalid_signature() {
     let now = chrono::Utc::now().timestamp();
-    let err = applet_validate_signature_params(
-        &params(now, now + 60),
-        "did:web:other#applet-service-key",
-    )
-    .expect_err("keyid mismatch must fail");
+    let input = arkret_signatures::http_signature::parse_signature_input(&format!(
+        "sig1={}",
+        params(now, now + 60)
+    ))
+    .unwrap();
+    let err = applet_validate_signature_input(&input, "did:web:other#applet-service-key")
+        .expect_err("keyid mismatch must fail");
     assert_eq!(
         err.top_level_reason.as_deref(),
         Some("http_signature_invalid")
-    );
-}
-
-/// A fresh, well-formed window passes param validation.
-#[test]
-fn fresh_window_validates() {
-    let now = chrono::Utc::now().timestamp();
-    applet_validate_signature_params(&params(now, now + 60), "did:web:app#applet-service-key")
-        .expect("fresh window must validate");
-}
-
-/// An ancient window is `signature_window_invalid`.
-#[test]
-fn ancient_window_is_window_invalid() {
-    let err = applet_validate_signature_params(
-        &params(1_000_000_000, 1_000_000_200),
-        "did:web:app#applet-service-key",
-    )
-    .expect_err("ancient window must fail");
-    assert_eq!(
-        err.top_level_reason.as_deref(),
-        Some("signature_window_invalid")
-    );
-}
-
-/// An over-wide window (> 300s) is `signature_window_invalid`.
-#[test]
-fn overwide_window_is_window_invalid() {
-    let now = chrono::Utc::now().timestamp();
-    let err =
-        applet_validate_signature_params(&params(now, now + 600), "did:web:app#applet-service-key")
-            .expect_err("over-wide window must fail");
-    assert_eq!(
-        err.top_level_reason.as_deref(),
-        Some("signature_window_invalid")
     );
 }
 

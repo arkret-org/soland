@@ -1,10 +1,14 @@
 use std::time::{Duration as StdDuration, Instant};
 
+use arkret_signatures::http_signature::{
+    Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
+    SignatureVerificationPolicy,
+};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;
-use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
+use soland_http::http_signature;
 
 use super::wire::FederationTrustHeaders;
 use crate::state::AppState;
@@ -74,15 +78,6 @@ pub(in crate::routing) async fn verify_inbound_peer_http_signature(
     req: &mut Request,
     has_body: bool,
 ) -> Result<(), AppError> {
-    if has_body {
-        http_signature::reject_content_encoding(req, || {
-            AppError::new(
-                soland_http::error::ErrorCode::SchemaViolation,
-                "peer signed JSON requests must not use Content-Encoding",
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?;
-    }
     let body_bytes = match has_body {
         true => Some(
             req.payload()
@@ -109,41 +104,13 @@ fn verify_inbound_peer_http_signature_inner(
     req: &Request,
     body_bytes: Option<&[u8]>,
 ) -> Result<(), AppError> {
-    let body_digests = match body_bytes {
-        Some(bytes) => {
-            let body_digests = http_signature::exact_body_digests(bytes);
-            validate_federation_request_binding(&state.config().trust_domain, req)?;
-            Some(body_digests)
-        }
-        None => None,
-    };
-
-    let content_digest = if let Some(expected) = body_digests {
-        let content_digest = required_header(req, "content-digest")?;
-        if content_digest != expected.content_digest {
-            crate::metrics::record_digest_mismatch("peer_request_content_digest");
-            return Err(signature_error(
-                "Content-Digest does not match peer canonical request body",
-            ));
-        }
-        http_signature::validate_canonical_json_body(
-            body_bytes.expect("body digests exist only for bodied requests"),
-            |error| {
-                AppError::new(
-                    soland_http::error::ErrorCode::SchemaViolation,
-                    format!("peer request body is not canonical JSON: {error}"),
-                )
-                .with_status(StatusCode::BAD_REQUEST)
-            },
-        )?;
-        Some(content_digest)
-    } else {
-        None
-    };
+    if body_bytes.is_some() {
+        validate_federation_request_binding(&state.config().trust_domain, req)?;
+    }
 
     let source_service_id = required_header(req, "source-service-id")?;
     let destination_service_id = required_header(req, "destination-service-id")?;
-    let source_trust_domain = required_header(req, "source-trust-domain")?;
+    let _source_trust_domain = required_header(req, "source-trust-domain")?;
     let destination_trust_domain = required_header(req, "destination-trust-domain")?;
 
     if destination_service_id != *state.service_id() {
@@ -163,37 +130,57 @@ fn verify_inbound_peer_http_signature_inner(
     let authority = signature_authority(req, state);
     let endpoint_digest =
         validate_destination_authority(state, req, &authority, &destination_service_id)?;
-    let method = req.method().as_str().to_owned();
-    let outer_params = signature_params(req, "signature-input")?;
-    validate_signature_params(&outer_params, &source_service_id, "outer")?;
+    let signature_input = http_signature::parse_signature_input_header(req)
+        .map_err(|error| federation_verification_error(error, "outer"))?;
+    validate_signature_input(&signature_input, &source_service_id, "outer")?;
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let outer_base = peer_http_signature_base(
-        &method,
-        &target_uri,
-        &authority,
-        content_digest.as_deref(),
-        &source_service_id,
-        &destination_service_id,
-        &source_trust_domain,
-        &destination_trust_domain,
-        idempotency_key,
-        endpoint_digest.as_deref(),
-        &outer_params,
-    );
-    verify_signature_header(
-        state,
-        req,
-        "signature",
-        &source_service_id,
-        &outer_base,
-        "outer",
-    )?;
     let source_verifying_key = verifying_key_for_service_id(state, &source_service_id)?;
+    let mut required_components = vec![
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("source-trust-domain".to_owned()),
+        Component::Header("destination-trust-domain".to_owned()),
+    ];
+    if body_bytes.is_some() {
+        required_components.push(Component::Header("content-digest".to_owned()));
+    }
+    if idempotency_key.is_some() {
+        required_components.push(Component::Header("idempotency-key".to_owned()));
+    }
+    if endpoint_digest.is_some() {
+        required_components.push(Component::Header(
+            "destination-service-endpoint-digest".to_owned(),
+        ));
+    }
+    let policy = SignatureVerificationPolicy::new(required_components)
+        .require_content_digest(body_bytes.is_some());
+    let verification = match body_bytes {
+        Some(body) => http_signature::verify_signed_canonical_json_request(
+            req,
+            &target_uri,
+            &authority,
+            body,
+            &source_verifying_key,
+            &policy,
+        ),
+        None => http_signature::verify_signed_http_request(
+            req,
+            &target_uri,
+            &authority,
+            &[],
+            &source_verifying_key,
+            &policy,
+        ),
+    };
+    verification.map_err(|error| federation_verification_error(error, "outer"))?;
     let source_verification_method =
         crate::routing::federation::federation_service_signature_key_id(&source_service_id);
     state.install_federation_peer_verifying_key(None, &source_service_id, source_verifying_key);
@@ -208,40 +195,6 @@ fn verify_inbound_peer_http_signature_inner(
     }
 
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn peer_http_signature_base(
-    method: &str,
-    target_uri: &str,
-    authority: &str,
-    content_digest: Option<&str>,
-    source_service_id: &str,
-    destination_service_id: &str,
-    source_trust_domain: &str,
-    destination_trust_domain: &str,
-    idempotency_key: Option<&str>,
-    destination_service_endpoint_digest: Option<&str>,
-    signature_params: &str,
-) -> String {
-    http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_uri),
-            SignatureBaseComponent::required("@authority", authority),
-            SignatureBaseComponent::optional("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-id", source_service_id),
-            SignatureBaseComponent::required("destination-service-id", destination_service_id),
-            SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
-            SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
-            SignatureBaseComponent::optional("idempotency-key", idempotency_key),
-            SignatureBaseComponent::optional(
-                "destination-service-endpoint-digest",
-                destination_service_endpoint_digest,
-            ),
-        ],
-        signature_params,
-    )
 }
 
 /// federation.md §3.2 line 105-106: verify the signed `@authority` host matches
@@ -304,84 +257,51 @@ fn required_header(req: &Request, name: &str) -> Result<String, AppError> {
     })
 }
 
-fn signature_params(req: &Request, header_name: &str) -> Result<String, AppError> {
-    http_signature::signature_params(
-        req,
-        header_name,
-        || signature_error(format!("missing required federation header: {header_name}")),
-        || signature_error(format!("{header_name} must contain sig1 parameters")),
-    )
-}
-
-pub(super) fn validate_signature_params(
-    signature_params: &str,
+pub(super) fn validate_signature_input(
+    signature_input: &SignatureInput,
     expected_service_id: &str,
     label: &str,
 ) -> Result<(), AppError> {
     let expected_keyid =
         crate::routing::federation::federation_service_signature_key_id(expected_service_id);
-    let observed_keyid = http_signature::signature_param_value(signature_params, "keyid")
-        .ok_or_else(|| {
-            signature_error(format!(
-                "{label} Signature-Input missing keyid; key_rotation_hint=refresh_origin_service_id"
-            ))
-        })?;
-    if observed_keyid != expected_keyid {
+    if signature_input.label != "sig1" {
+        return Err(signature_error(format!(
+            "{label} Signature-Input must use the sig1 label"
+        )));
+    }
+    if signature_input.key_id != expected_keyid {
         return Err(signature_error(format!(
             "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_id"
         )));
     }
-    if http_signature::signature_param_value(signature_params, "alg").as_deref() != Some("ed25519")
-    {
-        return Err(signature_error(format!(
-            "{label} Signature-Input alg must be ed25519"
-        )));
-    }
-    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
-        let message = match violation {
-            SignatureWindowViolation::MissingCreated => {
-                format!("{label} Signature-Input missing required `created` parameter")
-            }
-            SignatureWindowViolation::MissingExpires => {
-                format!("{label} Signature-Input missing required `expires` parameter")
-            }
-            SignatureWindowViolation::CreatedOutsideSkew => {
-                format!("{label} signature created timestamp outside ±30s clock-skew window")
-            }
-            SignatureWindowViolation::InvalidValidityWindow => {
-                format!("{label} signature validity window exceeds 300s")
-            }
-            SignatureWindowViolation::Expired => format!("{label} signature is expired"),
-        };
-        signature_error(message)
-    })
+    Ok(())
 }
 
-fn verify_signature_header(
-    state: &AppState,
-    req: &Request,
-    header_name: &str,
-    service_id: &str,
-    signature_base: &str,
-    label: &str,
-) -> Result<(), AppError> {
-    http_signature::verify_signature_header(
-        req,
-        header_name,
-        signature_base,
-        |name| signature_error(format!("missing required federation header: {name}")),
-        |message| {
-            signature_error(format!(
-                "{label} signature decode failed: {message}; key_rotation_hint=refresh_origin_service_id"
-            ))
-        },
-        || {
-            signature_error(format!(
-                "{label} signature verification failed; key_rotation_hint=refresh_origin_service_id"
-            ))
-        },
-        || verifying_key_for_service_id(state, service_id),
-    )
+fn federation_verification_error(error: HttpMessageVerificationError, label: &str) -> AppError {
+    match error {
+        HttpMessageVerificationError::ContentEncodingNotAllowed
+        | HttpMessageVerificationError::NonCanonicalJson(_) => AppError::new(
+            soland_http::error::ErrorCode::SchemaViolation,
+            format!("peer signed JSON request is invalid: {error}"),
+        )
+        .with_status(StatusCode::BAD_REQUEST),
+        HttpMessageVerificationError::Signature(SignatureError::ContentDigestMismatch) => {
+            crate::metrics::record_digest_mismatch("peer_request_content_digest");
+            signature_error("Content-Digest does not match peer canonical request body")
+        }
+        HttpMessageVerificationError::Signature(
+            SignatureError::MissingSignatureInputParameter("created" | "expires"),
+        )
+        | HttpMessageVerificationError::Policy(
+            SignaturePolicyError::InvalidValidityWindow
+            | SignaturePolicyError::CreatedInFuture
+            | SignaturePolicyError::CreatedTooOld
+            | SignaturePolicyError::Expired,
+        ) => signature_error(format!("{label} signature window invalid: {error}")),
+        _ => signature_error(format!(
+            "{label} signature verification failed: {error}; key_rotation_hint=refresh_origin_service_id"
+        )),
+    }
 }
 
 fn verifying_key_for_service_id(

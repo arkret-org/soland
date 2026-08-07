@@ -40,8 +40,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use arkret_signatures::http_signature::{
+    Component, SignedRequestParts, canonical_message, format_signature_input_component_list,
+    parse_signature_input,
+};
 use rand::RngExt;
-use soland_http::http_signature::{self, SignatureBaseComponent};
 use soland_services::federation::{
     ClaimFederationDeliveriesCommand, FederationDeadLetter, FederationDeliveryOutcome,
     FederationDeliveryRecord, FederationPolicyResolution, PendingFederationDelivery,
@@ -165,49 +168,47 @@ fn rfc9421_sign_with_window(
     let expires = created + validity_seconds;
     let keyid = super::federation_service_signature_key_id(state.service_id());
     let mut covered = vec![
-        "\"@method\"",
-        "\"@target-uri\"",
-        "\"@authority\"",
-        "\"content-digest\"",
-        "\"source-service-id\"",
-        "\"destination-service-id\"",
-        "\"source-trust-domain\"",
-        "\"destination-trust-domain\"",
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Header("content-digest".to_owned()),
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("source-trust-domain".to_owned()),
+        Component::Header("destination-trust-domain".to_owned()),
     ];
     let idempotency_key = header_value(&headers, "idempotency-key");
     if idempotency_key.is_some() {
-        covered.push("\"idempotency-key\"");
+        covered.push(Component::Header("idempotency-key".to_owned()));
     }
-    let covered = covered.join(" ");
-    let signature_params = format!(
-        "({covered});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+    let signature_input = format!(
+        "{};created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
+        format_signature_input_component_list("sig1", &covered)
+            .expect("federation signature component profile is valid")
     );
-    let signature_input = format!("sig1={signature_params}");
+    let parsed_signature_input =
+        parse_signature_input(&signature_input).expect("generated Signature-Input is valid");
     let authority = authority_from_target_url(target_url);
-
-    let content_digest = header_value(&headers, "content-digest").unwrap_or_default();
-    let source_service_id = header_value(&headers, "source-service-id").unwrap_or_default();
-    let destination_service_id =
-        header_value(&headers, "destination-service-id").unwrap_or_default();
-    let source_trust_domain = header_value(&headers, "source-trust-domain").unwrap_or_default();
-    let destination_trust_domain =
-        header_value(&headers, "destination-trust-domain").unwrap_or_default();
-    let signature_base = http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_url),
-            SignatureBaseComponent::required("@authority", &authority),
-            SignatureBaseComponent::required("content-digest", &content_digest),
-            SignatureBaseComponent::required("source-service-id", &source_service_id),
-            SignatureBaseComponent::required("destination-service-id", &destination_service_id),
-            SignatureBaseComponent::required("source-trust-domain", &source_trust_domain),
-            SignatureBaseComponent::required("destination-trust-domain", &destination_trust_domain),
-            SignatureBaseComponent::optional("idempotency-key", idempotency_key.as_deref()),
-        ],
-        &signature_params,
-    );
+    let request = SignedRequestParts {
+        method: method.to_owned(),
+        target_uri: target_url.to_owned(),
+        authority,
+        path: String::new(),
+        headers: headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
+            })
+            .collect(),
+        body_digest: header_value(&headers, "content-digest"),
+    };
+    let signature_base = canonical_message(&request, &parsed_signature_input)
+        .expect("generated federation signature components are present");
     let signature = arkret_signatures::http_signature::sign_message(
-        signature_base.as_bytes(),
+        &signature_base,
         &state.notary_signing_key(),
     );
     let signature_header = format!("sig1=:{signature}:");

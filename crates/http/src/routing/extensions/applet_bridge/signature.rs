@@ -3,10 +3,14 @@
 
 use arkret_canonical as canonical;
 use arkret_models_integration::applet::HttpMessageSignatureAlgorithm;
+use arkret_signatures::http_signature::{
+    Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
+    SignatureVerificationPolicy,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;
-use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
+use soland_http::http_signature;
 
 use super::record::applet_records;
 use super::types::AppletRecord;
@@ -94,43 +98,11 @@ async fn verify_inbound_transaction_signature(
         ));
     }
 
-    // §7.3.1 line 456: verify the body hash matches `Content-Digest` before
-    // validating the signature transcript. The signed body MUST be the
-    // canonical request body.
-    let body_digests = http_signature::exact_body_digests(body_bytes);
-    let request_digest = body_digests.request_digest;
-    let expected_content_digest = body_digests.content_digest;
-    let content_digest = applet_required_header(req, "content-digest")?;
-    if content_digest != expected_content_digest {
-        return Err(applet_signature_error_invalid(
-            "Content-Digest does not cover the canonical inbound transaction body",
-        ));
-    }
-    http_signature::validate_canonical_json_body(body_bytes, |error| {
-        applet_signature_error_invalid(format!(
-            "applet transaction body is not canonical JSON: {error}"
-        ))
-    })?;
-    let transaction = serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
-        applet_signature_error_invalid(format!("invalid applet transaction JSON: {error}"))
-    })?;
-    let source_service_id = transaction
-        .get("source_service_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            applet_signature_error_invalid(
-                "signed applet transaction body requires source_service_id",
-            )
-        })?;
-
-    // Bound trust headers MUST be consistent with the body / this service
-    // (`http_signature_invalid`).
+    let request_digest = arkret_canonical::sha256_digest(body_bytes);
+    // Bound trust headers select the verification key and MUST identify this
+    // service. The body/header binding is checked after the shared verifier has
+    // authenticated the canonical body bytes.
     let header_source = applet_required_header(req, "source-service-id")?;
-    if header_source != source_service_id {
-        return Err(applet_signature_error_invalid(
-            "Source-Service-ID header does not match the transaction source_service_id",
-        ));
-    }
     let header_idempotency = applet_required_header(req, "idempotency-key")?;
     if header_idempotency != idempotency_key {
         return Err(applet_signature_error_invalid(
@@ -148,32 +120,60 @@ async fn verify_inbound_transaction_signature(
     // the installed package webhook key controlled by `source_service_id`.
     // The no-install branch keeps authentication failure ordering stable; the
     // request still fails the active-install gate below.
-    let install = active_install_for_service_id(state, source_service_id).await?;
+    let install = active_install_for_service_id(state, &header_source).await?;
     let verification_method = install
         .as_ref()
-        .map(|install| applet_registration_verification_method(install, source_service_id))
+        .map(|install| applet_registration_verification_method(install, &header_source))
         .transpose()?
-        .unwrap_or_else(|| format!("{source_service_id}#applet-service-key"));
-
-    // Validate signature params (keyid / alg / freshness window). Window
-    // violations surface as `signature_window_invalid`.
-    let signature_params = applet_signature_params(req)?;
-    applet_validate_signature_params(&signature_params, &verification_method)?;
+        .unwrap_or_else(|| format!("{header_source}#applet-service-key"));
 
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
-    let method = req.method().as_str().to_owned();
-    let signature_base = applet_http_signature_base(
-        &method,
+    let signature_input =
+        http_signature::parse_signature_input_header(req).map_err(applet_verification_error)?;
+    applet_validate_signature_input(&signature_input, &verification_method)?;
+    let verifying_key = applet_resolve_verifying_key(state, &verification_method)?;
+    let policy = SignatureVerificationPolicy::new(vec![
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Header("content-digest".to_owned()),
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("idempotency-key".to_owned()),
+    ]);
+    let verified = http_signature::verify_signed_canonical_json_request(
+        req,
         &target_uri,
         &authority,
-        &content_digest,
-        source_service_id,
-        &destination_service_id,
-        idempotency_key,
-        &signature_params,
-    );
-    applet_verify_signature_header(state, req, &verification_method, &signature_base)?;
+        body_bytes,
+        &verifying_key,
+        &policy,
+    )
+    .map_err(applet_verification_error)?;
+    let content_digest = verified
+        .content_digest
+        .as_ref()
+        .expect("applet signature policy requires Content-Digest")
+        .wire_value
+        .as_str();
+
+    let transaction = serde_json::from_slice::<serde_json::Value>(body_bytes).map_err(|error| {
+        applet_signature_error_invalid(format!("invalid applet transaction JSON: {error}"))
+    })?;
+    let source_service_id = transaction
+        .get("source_service_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            applet_signature_error_invalid(
+                "signed applet transaction body requires source_service_id",
+            )
+        })?;
+    if header_source != source_service_id {
+        return Err(applet_signature_error_invalid(
+            "Source-Service-ID header does not match the transaction source_service_id",
+        ));
+    }
 
     // §7.3.1: a verified signature is not yet authorisation — the
     // `Source-Service-ID` MUST also hit an active effective install whose
@@ -191,19 +191,17 @@ async fn verify_inbound_transaction_signature(
         .as_ref()
         .ok_or_else(|| AppError::internal("active applet install is missing its package record"))?;
     let signature_header = applet_required_header(req, "signature")?;
-    let signature_algorithm =
-        applet_signature_param_value(&signature_params, "alg").unwrap_or_default();
     let source_signature_anchor = applet_source_signature_anchor(
         source_service_id,
         &destination_service_id,
         idempotency_key,
-        &content_digest,
+        content_digest,
         &request_digest,
         &verification_method,
         serde_json::to_value(&package.registration_epoch).unwrap_or(serde_json::Value::Null),
         serde_json::to_value(&package.webhook_auth).unwrap_or(serde_json::Value::Null),
-        &signature_algorithm,
-        &signature_params,
+        &verified.signature_input.algorithm,
+        &verified.signature_input.params_value,
         &signature_header,
     );
     Ok(VerifiedInboundTransactionSignature {
@@ -311,104 +309,42 @@ pub(super) fn applet_required_header(req: &Request, name: &str) -> Result<String
     })
 }
 
-pub(super) fn applet_signature_params(req: &Request) -> Result<String, AppError> {
-    http_signature::signature_params(
-        req,
-        "signature-input",
-        || applet_signature_error_required("missing Signature-Input header"),
-        || applet_signature_error_invalid("Signature-Input must carry sig1 parameters"),
-    )
-}
-
-pub(super) fn applet_signature_param_value(signature_params: &str, key: &str) -> Option<String> {
-    http_signature::signature_param_value(signature_params, key)
-}
-
-/// Validate the RFC 9421 signature params (§7.3.1): `alg=ed25519`, `keyid`
-/// equals the registration verification method, and the freshness window
-/// (`expires - created` ≤ 300s, `created` within ±30s, `expires` not past) per
-/// `federation.md` §3.2. Window violations are `signature_window_invalid`;
-/// keyid/alg mismatches are `http_signature_invalid`.
-pub(super) fn applet_validate_signature_params(
-    signature_params: &str,
+/// Apply the Applet registration binding after the SDK has parsed the RFC 9421
+/// input. Algorithm, component coverage and freshness are owned by the shared
+/// SDK verifier.
+pub(super) fn applet_validate_signature_input(
+    signature_input: &SignatureInput,
     expected_verification_method: &str,
 ) -> Result<(), AppError> {
-    let observed_keyid = applet_signature_param_value(signature_params, "keyid")
-        .ok_or_else(|| applet_signature_error_invalid("Signature-Input missing keyid"))?;
-    if observed_keyid != expected_verification_method {
+    if signature_input.label != "sig1" {
+        return Err(applet_signature_error_invalid(
+            "Signature-Input must use the sig1 label",
+        ));
+    }
+    if signature_input.key_id != expected_verification_method {
         return Err(applet_signature_error_invalid(
             "Signature-Input keyid does not match the Applet registration verification method",
         ));
     }
-    if applet_signature_param_value(signature_params, "alg").as_deref() != Some("ed25519") {
-        return Err(applet_signature_error_invalid(
-            "Signature-Input alg must be ed25519",
-        ));
+    Ok(())
+}
+
+fn applet_verification_error(error: HttpMessageVerificationError) -> AppError {
+    match error {
+        HttpMessageVerificationError::MissingHeader("Signature-Input" | "Signature") => {
+            applet_signature_error_required(error.to_string())
+        }
+        HttpMessageVerificationError::Signature(
+            SignatureError::MissingSignatureInputParameter("created" | "expires"),
+        )
+        | HttpMessageVerificationError::Policy(
+            SignaturePolicyError::InvalidValidityWindow
+            | SignaturePolicyError::CreatedInFuture
+            | SignaturePolicyError::CreatedTooOld
+            | SignaturePolicyError::Expired,
+        ) => applet_signature_error_window(error.to_string()),
+        _ => applet_signature_error_invalid(error.to_string()),
     }
-    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
-        let message = match violation {
-            SignatureWindowViolation::MissingCreated => {
-                "Signature-Input missing required `created` parameter"
-            }
-            SignatureWindowViolation::MissingExpires => {
-                "Signature-Input missing required `expires` parameter"
-            }
-            SignatureWindowViolation::CreatedOutsideSkew => {
-                "signature created timestamp outside ±30s clock-skew window"
-            }
-            SignatureWindowViolation::InvalidValidityWindow => {
-                "signature validity window exceeds 300s"
-            }
-            SignatureWindowViolation::Expired => "signature is expired",
-        };
-        applet_signature_error_window(message)
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn applet_http_signature_base(
-    method: &str,
-    target_uri: &str,
-    authority: &str,
-    content_digest: &str,
-    source_service_id: &str,
-    destination_service_id: &str,
-    idempotency_key: &str,
-    signature_params: &str,
-) -> String {
-    http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_uri),
-            SignatureBaseComponent::required("@authority", authority),
-            SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-id", source_service_id),
-            SignatureBaseComponent::required("destination-service-id", destination_service_id),
-            SignatureBaseComponent::required("idempotency-key", idempotency_key),
-        ],
-        signature_params,
-    )
-}
-
-pub(super) fn applet_verify_signature_header(
-    state: &AppState,
-    req: &Request,
-    verification_method: &str,
-    signature_base: &str,
-) -> Result<(), AppError> {
-    http_signature::verify_signature_header(
-        req,
-        "signature",
-        signature_base,
-        |name| {
-            applet_signature_error_invalid(format!(
-                "missing required inbound signature header: {name}"
-            ))
-        },
-        |message| applet_signature_error_invalid(format!("signature decode: {message}")),
-        || applet_signature_error_invalid("signature verification failed"),
-        || applet_resolve_verifying_key(state, verification_method),
-    )
 }
 
 /// Resolve the Ed25519 public key for the registration verification method via

@@ -100,19 +100,13 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
 }
 
 fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
-    let params = soland_http::http_signature::signature_params(
-        req,
-        "signature-input",
-        || schema_violation("missing Signature-Input"),
-        || schema_violation("Signature-Input must contain sig1 parameters"),
-    )?;
-    let created = soland_http::http_signature::signature_param_value(&params, "created")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| schema_violation("Signal relay Signature-Input requires created"))?;
-    let expires = soland_http::http_signature::signature_param_value(&params, "expires")
-        .and_then(|value| value.parse::<i64>().ok())
-        .ok_or_else(|| schema_violation("Signal relay Signature-Input requires expires"))?;
-    if expires < created || expires - created > 5 {
+    let signature_input =
+        soland_http::http_signature::parse_signature_input_header(req).map_err(|error| {
+            schema_violation(format!("invalid Signal relay Signature-Input: {error}"))
+        })?;
+    if signature_input.expires < signature_input.created
+        || signature_input.expires - signature_input.created > 5
+    {
         return Err(AppError::capability_denied(
             "Signal relay signature validity window must be at most 5 seconds",
         ));

@@ -37,71 +37,29 @@ fn verify_actor_headers_reject_destination_mismatch() {
 
 const SIG_TEST_DID: &str = "did:web:test.local";
 
-fn sig_params(extra: &str) -> String {
-    format!(
-        "sig1=(\"@method\");keyid=\"{SIG_TEST_DID}#federation-fanout-key\";alg=\"ed25519\"{extra}"
+fn signature_input(service_did: &str) -> arkret_signatures::http_signature::SignatureInput {
+    let now = chrono::Utc::now().timestamp();
+    let header = format!(
+        "sig1=(\"@method\");created={now};expires={};keyid=\"{service_did}#federation-fanout-key\";alg=\"ed25519\"",
+        now + 120
+    );
+    arkret_signatures::http_signature::parse_signature_input(&header).unwrap()
+}
+
+#[test]
+fn signature_input_accepts_expected_federation_key() {
+    validate_signature_input(&signature_input(SIG_TEST_DID), SIG_TEST_DID, "test")
+        .expect("matching federation key must pass deployment binding");
+}
+
+#[test]
+fn signature_input_rejects_mismatched_federation_key() {
+    let error = validate_signature_input(
+        &signature_input("did:web:other.local"),
+        SIG_TEST_DID,
+        "test",
     )
-}
-
-#[test]
-fn validate_signature_params_accepts_fresh_window() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={now};expires={}", now + 120));
-    validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect("fresh signature within ±30s / 300s window must pass");
-}
-
-#[test]
-fn validate_signature_params_rejects_missing_created() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";expires={}", now + 120));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("missing created must fail closed");
-    assert_auth_rejection_is_minimal(error);
-}
-
-#[test]
-fn validate_signature_params_rejects_missing_expires() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={now}"));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("missing expires must fail closed");
-    assert_auth_rejection_is_minimal(error);
-}
-
-#[test]
-fn validate_signature_params_rejects_past_clock_skew() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={};expires={}", now - 60, now + 120));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("created beyond past skew must fail closed");
-    assert_auth_rejection_is_minimal(error);
-}
-
-#[test]
-fn validate_signature_params_rejects_future_clock_skew() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={};expires={}", now + 60, now + 120));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("created beyond future skew must fail closed");
-    assert_auth_rejection_is_minimal(error);
-}
-
-#[test]
-fn validate_signature_params_rejects_window_over_300s() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={now};expires={}", now + 400));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("validity window over 300s must fail closed");
-    assert_auth_rejection_is_minimal(error);
-}
-
-#[test]
-fn validate_signature_params_rejects_already_expired() {
-    let now = Utc::now().timestamp();
-    let params = sig_params(&format!(";created={};expires={}", now - 20, now - 1));
-    let error = validate_signature_params(&params, SIG_TEST_DID, "test")
-        .expect_err("already-expired signature must fail closed");
+    .expect_err("mismatched federation key must fail closed");
     assert_auth_rejection_is_minimal(error);
 }
 

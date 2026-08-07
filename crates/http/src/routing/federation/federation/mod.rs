@@ -22,8 +22,6 @@ mod wire;
 // resolving the helpers it exercises after the structural split.
 // Imports re-exported for `federation_tests.rs` (`use super::*`) which relies
 // on these names resolving through the module that hosts `mod tests`.
-#[cfg(test)]
-use chrono::Utc;
 pub(crate) use endpoints::FederationSealsOutcome;
 pub(super) use endpoints::{
     federation_actor_events, federation_realm_members, federation_seals_pull,
@@ -41,7 +39,7 @@ pub(in crate::routing) use signature::{
     signature_authority, signature_target_uri, verify_inbound_peer_http_signature,
 };
 #[cfg(test)]
-use signature::{validate_federation_headers, validate_signature_params};
+use signature::{validate_federation_headers, validate_signature_input};
 pub(crate) use wire::{
     FederationTrustHeaders, delivery_binding_handed_over_response, delivery_binding_stale_response,
 };

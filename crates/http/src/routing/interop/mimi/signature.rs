@@ -13,26 +13,11 @@ pub(super) async fn verify_mimi_write_service_proof(
         ));
     }
 
-    http_signature::reject_content_encoding(req, || {
-        mimi_signature_error_invalid("MIMI signed JSON requests must not use Content-Encoding")
-    })?;
     let body_bytes = req
         .payload()
         .await
         .map_err(|error| AppError::bad_json(format!("unable to read MIMI request body: {error}")))?
         .to_vec();
-    let body_digests = http_signature::exact_body_digests(&body_bytes);
-    let expected_content_digest = body_digests.content_digest;
-    let content_digest = mimi_required_header(req, "content-digest")?;
-    if content_digest != expected_content_digest {
-        return Err(mimi_signature_error_invalid(
-            "Content-Digest does not cover the canonical MIMI request body",
-        ));
-    }
-    http_signature::validate_canonical_json_body(&body_bytes, |error| {
-        mimi_signature_error_invalid(format!("MIMI request body is not canonical JSON: {error}"))
-    })?;
-
     let source_service_id = mimi_required_header(req, "source-service-id")?;
     if !source_service_id.starts_with("did:") {
         return Err(mimi_signature_error_invalid(
@@ -64,24 +49,34 @@ pub(super) async fn verify_mimi_write_service_proof(
         None => None,
     };
 
-    let signature_params = mimi_signature_params(req)?;
-    let verification_method =
-        mimi_validate_signature_params(&signature_params, &source_service_id, room_uri.is_some())?;
-    let method = req.method().as_str().to_owned();
+    let signature_input =
+        http_signature::parse_signature_input_header(req).map_err(mimi_verification_error)?;
+    let verification_method = mimi_validate_signature_input(&signature_input, &source_service_id)?;
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
-    let signature_base = mimi_http_signature_base(
-        &method,
+    let mut required_components = vec![
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Header("content-digest".to_owned()),
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("provider-id".to_owned()),
+    ];
+    if signed_room_uri.is_some() {
+        required_components.push(Component::Header("mimi-room-uri".to_owned()));
+    }
+    let policy = SignatureVerificationPolicy::new(required_components);
+    let verifying_key = mimi_resolve_verifying_key(state, &verification_method)?;
+    http_signature::verify_signed_canonical_json_request(
+        req,
         &target_uri,
         &authority,
-        &content_digest,
-        &source_service_id,
-        &destination_service_id,
-        &provider_id,
-        signed_room_uri.as_deref(),
-        &signature_params,
-    );
-    mimi_verify_signature_header(state, req, &verification_method, &signature_base)?;
+        &body_bytes,
+        &verifying_key,
+        &policy,
+    )
+    .map_err(mimi_verification_error)?;
     Ok(source_service_id)
 }
 
@@ -91,125 +86,41 @@ pub(super) fn mimi_required_header(req: &Request, name: &str) -> Result<String, 
     })
 }
 
-pub(super) fn mimi_signature_params(req: &Request) -> Result<String, AppError> {
-    http_signature::signature_params(
-        req,
-        "signature-input",
-        || mimi_signature_error_required("missing Signature-Input header"),
-        || mimi_signature_error_invalid("Signature-Input must carry sig1 parameters"),
-    )
-}
-
-pub(super) fn mimi_signature_param_value(signature_params: &str, key: &str) -> Option<String> {
-    http_signature::signature_param_value(signature_params, key)
-}
-
-pub(super) fn mimi_validate_signature_params(
-    signature_params: &str,
+pub(super) fn mimi_validate_signature_input(
+    signature_input: &SignatureInput,
     source_service_id: &str,
-    room_scoped: bool,
 ) -> Result<String, AppError> {
-    for component in [
-        "@method",
-        "@target-uri",
-        "@authority",
-        "content-digest",
-        "source-service-id",
-        "destination-service-id",
-        "provider-id",
-    ] {
-        let needle = format!("\"{component}\"");
-        if !signature_params.contains(&needle) {
-            return Err(mimi_signature_error_invalid(format!(
-                "Signature-Input missing required MIMI component {component}"
-            )));
-        }
-    }
-    if room_scoped && !signature_params.contains("\"mimi-room-uri\"") {
+    if signature_input.label != "sig1" {
         return Err(mimi_signature_error_invalid(
-            "Signature-Input missing required MIMI component mimi-room-uri",
+            "Signature-Input must use the sig1 label",
         ));
     }
-
-    let verification_method = mimi_signature_param_value(signature_params, "keyid")
-        .ok_or_else(|| mimi_signature_error_invalid("Signature-Input missing keyid"))?;
+    let verification_method = signature_input.key_id.clone();
     let expected_prefix = format!("{source_service_id}#");
     if !verification_method.starts_with(&expected_prefix) {
         return Err(mimi_signature_error_invalid(
             "Signature-Input keyid must be controlled by Source-Service-ID",
         ));
     }
-    if mimi_signature_param_value(signature_params, "alg").as_deref() != Some("ed25519") {
-        return Err(mimi_signature_error_invalid(
-            "Signature-Input alg must be ed25519",
-        ));
-    }
-
-    http_signature::validate_signature_freshness(signature_params).map_err(|violation| {
-        let message = match violation {
-            SignatureWindowViolation::MissingCreated => {
-                "Signature-Input missing required `created` parameter"
-            }
-            SignatureWindowViolation::MissingExpires => {
-                "Signature-Input missing required `expires` parameter"
-            }
-            SignatureWindowViolation::CreatedOutsideSkew => {
-                "signature created timestamp outside +/-30s clock-skew window"
-            }
-            SignatureWindowViolation::InvalidValidityWindow => {
-                "signature validity window exceeds 300s"
-            }
-            SignatureWindowViolation::Expired => "signature is expired",
-        };
-        mimi_signature_error_window(message)
-    })?;
     Ok(verification_method)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn mimi_http_signature_base(
-    method: &str,
-    target_uri: &str,
-    authority: &str,
-    content_digest: &str,
-    source_service_id: &str,
-    destination_service_id: &str,
-    provider_id: &str,
-    room_uri: Option<&str>,
-    signature_params: &str,
-) -> String {
-    http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_uri),
-            SignatureBaseComponent::required("@authority", authority),
-            SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-id", source_service_id),
-            SignatureBaseComponent::required("destination-service-id", destination_service_id),
-            SignatureBaseComponent::required("provider-id", provider_id),
-            SignatureBaseComponent::optional("mimi-room-uri", room_uri),
-        ],
-        signature_params,
-    )
-}
-
-pub(super) fn mimi_verify_signature_header(
-    state: &AppState,
-    req: &Request,
-    verification_method: &str,
-    signature_base: &str,
-) -> Result<(), AppError> {
-    http_signature::verify_signature_header(
-        req,
-        "signature",
-        signature_base,
-        |name| {
-            mimi_signature_error_invalid(format!("missing required MIMI signature header: {name}"))
-        },
-        |message| mimi_signature_error_invalid(format!("signature decode: {message}")),
-        || mimi_signature_error_invalid("signature verification failed"),
-        || mimi_resolve_verifying_key(state, verification_method),
-    )
+fn mimi_verification_error(error: HttpMessageVerificationError) -> AppError {
+    match error {
+        HttpMessageVerificationError::MissingHeader("Signature-Input" | "Signature") => {
+            mimi_signature_error_required(error.to_string())
+        }
+        HttpMessageVerificationError::Signature(
+            SignatureError::MissingSignatureInputParameter("created" | "expires"),
+        )
+        | HttpMessageVerificationError::Policy(
+            SignaturePolicyError::InvalidValidityWindow
+            | SignaturePolicyError::CreatedInFuture
+            | SignaturePolicyError::CreatedTooOld
+            | SignaturePolicyError::Expired,
+        ) => mimi_signature_error_window(error.to_string()),
+        _ => mimi_signature_error_invalid(error.to_string()),
+    }
 }
 
 pub(super) fn mimi_resolve_verifying_key(
