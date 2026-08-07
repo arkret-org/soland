@@ -23,9 +23,9 @@ pub(crate) struct DevicePairingRow {
     pub device_id: Option<String>,
     pub authorized_by_actor_id: Option<String>,
     pub authorized_event_ref: Option<String>,
+    pub expires_at: DateTime<Utc>,
     #[diesel(skip_update)]
     pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
 }
 
 macro_rules! convert_device_pairing {

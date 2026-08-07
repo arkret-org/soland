@@ -75,8 +75,8 @@ diesel::table! {
 
 diesel::table! {
     agent_participation_ceiling (id) {
-        scope_kind -> Text,
         id -> Text,
+        scope_kind -> Text,
         realm_id -> Text,
         reply_message -> Bool,
         reaction_add -> Bool,
@@ -132,9 +132,9 @@ diesel::table! {
         verification_method -> Text,
         runtime_attestation -> Nullable<Jsonb>,
         state -> Text,
-        created_at -> Timestamptz,
         expires_at -> Nullable<Timestamptz>,
         revoked_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -142,8 +142,8 @@ diesel::table! {
     agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, version) {
         sidecar_id -> Uuid,
         normalized_context_ref_digest -> Text,
-        normalized_context_ref -> Jsonb,
         version -> Int8,
+        normalized_context_ref -> Jsonb,
         predecessor_event_ref -> Nullable<Uuid>,
         attach_event_ref -> Uuid,
         created_at -> Timestamptz,
@@ -223,9 +223,9 @@ diesel::table! {
         head_backup_id -> Nullable<Uuid>,
         head_seq -> Int8,
         frontier_ref -> Nullable<Text>,
+        retired_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
-        retired_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -444,8 +444,8 @@ diesel::table! {
         device_id -> Nullable<Text>,
         authorized_by_actor_id -> Nullable<Text>,
         authorized_event_ref -> Nullable<Text>,
-        created_at -> Timestamptz,
         expires_at -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 
@@ -472,8 +472,8 @@ diesel::table! {
         scope -> Jsonb,
         frontier -> Jsonb,
         events -> Jsonb,
-        created_at -> Timestamptz,
         proofs -> Jsonb,
+        created_at -> Timestamptz,
     }
 }
 
@@ -544,8 +544,8 @@ diesel::table! {
         lease_expires_at -> Nullable<Int8>,
         policy_version -> Nullable<Text>,
         supersedes_outbox_id -> Nullable<Text>,
-        created_at -> Int8,
         completed_at -> Nullable<Int8>,
+        created_at -> Int8,
     }
 }
 
@@ -614,8 +614,8 @@ diesel::table! {
         request_hash -> Text,
         response_status -> Int4,
         response_body -> Jsonb,
-        created_at -> Timestamptz,
         expires_at -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 
@@ -681,7 +681,6 @@ diesel::table! {
         backup_kind -> Nullable<Text>,
         backup_version -> Nullable<Text>,
         payload -> Jsonb,
-        created_at -> Timestamptz,
         last_accessed_at -> Nullable<Timestamptz>,
         account_id -> Nullable<Text>,
         scheme -> Nullable<Text>,
@@ -690,6 +689,7 @@ diesel::table! {
         series_actor_id -> Nullable<Text>,
         series_id -> Nullable<Text>,
         series_seq -> Nullable<Int8>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -790,8 +790,8 @@ diesel::table! {
         claimed_by_node_id -> Nullable<Text>,
         claimed_until -> Nullable<Timestamptz>,
         claim_seq -> Int8,
-        created_at -> Timestamptz,
         expires_at -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 
@@ -817,9 +817,9 @@ diesel::table! {
         projection_action -> Nullable<Text>,
         projection_data -> Nullable<Jsonb>,
         projection_position -> Int8,
+        read_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
-        read_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -924,8 +924,8 @@ diesel::table! {
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
-        created_at -> Timestamptz,
         updated_by_id -> Nullable<Text>,
+        created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
 }
@@ -942,8 +942,8 @@ diesel::table! {
         operation_id -> Nullable<Uuid>,
         sender_id -> Nullable<Text>,
         payload -> Jsonb,
-        created_at -> Timestamptz,
         received_at -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 
@@ -956,15 +956,15 @@ diesel::table! {
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
-        created_at -> Timestamptz,
         history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
-        updated_at -> Nullable<Timestamptz>,
         fields -> Jsonb,
         schema_refs -> Jsonb,
         facets -> Jsonb,
         versions -> Jsonb,
         scope_circle_id -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -983,9 +983,9 @@ diesel::table! {
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
-        created_at -> Timestamptz,
         history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
+        created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
 }
@@ -1012,9 +1012,9 @@ diesel::table! {
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_by_id -> Text,
-        created_at -> Timestamptz,
         history_basis_seals -> Jsonb,
         updated_by_id -> Nullable<Text>,
+        created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
 }
@@ -1146,9 +1146,9 @@ diesel::table! {
         state -> Text,
         proof_payload -> Nullable<Jsonb>,
         transaction_id -> Nullable<Uuid>,
+        expires_at -> Timestamptz,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
-        expires_at -> Timestamptz,
     }
 }
 
@@ -1186,7 +1186,6 @@ diesel::table! {
         principal_id -> Text,
         coordinator_service_id -> Text,
         expires_at -> Timestamptz,
-        created_at -> Timestamptz,
         request_digest -> Text,
         binding -> Jsonb,
         prepared_plan -> Jsonb,
@@ -1196,6 +1195,7 @@ diesel::table! {
         next_required_step -> Nullable<Text>,
         terminal_result -> Nullable<Jsonb>,
         canonical_request -> Binary,
+        created_at -> Timestamptz,
     }
 }
 
@@ -1300,8 +1300,6 @@ diesel::table! {
         owner_id -> Nullable<Text>,
         discoverability -> Text,
         payload -> Jsonb,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
         history_visibility -> Text,
         history_sharing_policy -> Nullable<Jsonb>,
         history_sharing_policy_digest -> Nullable<Text>,
@@ -1309,6 +1307,8 @@ diesel::table! {
         preview_policy_digest -> Nullable<Text>,
         encryption_profile -> Text,
         plaintext_visible_services -> Jsonb,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -1405,8 +1405,8 @@ diesel::table! {
         initiator_id -> Text,
         ice_config -> Jsonb,
         signaling_state -> Jsonb,
-        created_at -> Timestamptz,
         expires_at -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 

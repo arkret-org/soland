@@ -32,7 +32,10 @@ CREATE TABLE public.account_datas (
     actor_id text NOT NULL,
     account_data_key text NOT NULL,
     payload jsonb NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    revision bigint NOT NULL DEFAULT 1,
+    tombstone boolean NOT NULL DEFAULT false,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_datas_revision_positive CHECK (revision >= 1)
 );
 
 CREATE TABLE public.accounts (
@@ -97,8 +100,8 @@ CREATE TABLE public.agent_participation (
 );
 
 CREATE TABLE public.agent_participation_ceiling (
-    scope_kind text NOT NULL,
     id text NOT NULL,
+    scope_kind text NOT NULL,
     realm_id text NOT NULL,
     reply_message boolean DEFAULT false NOT NULL,
     reaction_add boolean DEFAULT false NOT NULL,
@@ -124,6 +127,7 @@ CREATE TABLE public.agent_principals (
     pairing_request_id text,
     paired_pairing_request_id text,
     paired_request_digest text,
+    pending_pairing_commit_intent jsonb,
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
@@ -164,8 +168,8 @@ CREATE TABLE public.agent_sidecars (
 CREATE TABLE public.agent_sidecar_contexts (
     sidecar_id uuid NOT NULL REFERENCES public.agent_sidecars(id) ON DELETE CASCADE,
     normalized_context_ref_digest text NOT NULL,
-    normalized_context_ref jsonb NOT NULL,
     version bigint NOT NULL CHECK (version >= 1),
+    normalized_context_ref jsonb NOT NULL,
     predecessor_event_ref uuid,
     attach_event_ref uuid NOT NULL UNIQUE,
     created_at timestamp with time zone NOT NULL,
@@ -180,9 +184,9 @@ CREATE TABLE public.agent_sessions (
     verification_method text NOT NULL,
     runtime_attestation jsonb,
     state text DEFAULT 'active'::text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone,
     revoked_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
     CONSTRAINT agent_sessions_state_check CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text])))
 );
 
@@ -241,9 +245,9 @@ CREATE TABLE public.backup_series (
     head_backup_id uuid,
     head_seq bigint DEFAULT 0 NOT NULL,
     frontier_ref text,
+    retired_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    retired_at timestamp with time zone,
     CONSTRAINT backup_series_backup_class_check CHECK ((backup_kind = ANY (ARRAY['did_recovery'::text, 'secret_storage'::text, 'mls_history'::text, 'external'::text]))),
     CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
 );
@@ -383,15 +387,15 @@ CREATE INDEX event_collision_variants_event_pk_idx
     ON public.event_collision_variants USING btree (event_pk);
 
 CREATE TABLE public.event_batch_receipts (
-    schema text NOT NULL,
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    schema text NOT NULL,
     id uuid NOT NULL UNIQUE,
     issuer text NOT NULL,
     scope jsonb NOT NULL,
     frontier jsonb NOT NULL,
     events jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    proofs jsonb NOT NULL
+    proofs jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
 );
 
 CREATE TABLE public.event_batch_receipt_events (
@@ -510,8 +514,8 @@ CREATE TABLE public.device_pairings (
     device_id text,
     authorized_by_actor_id text,
     authorized_event_ref text,
-    created_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
     PRIMARY KEY (device_pairing_request_id),
     CONSTRAINT device_pairings_state_check
         CHECK (state = ANY (ARRAY['pending_authorization', 'authorized', 'expired']))
@@ -606,8 +610,8 @@ CREATE TABLE public.federation_outbox (
     lease_expires_at bigint,
     policy_version text,
     supersedes_outbox_id text,
-    created_at bigint NOT NULL,
     completed_at bigint,
+    created_at bigint NOT NULL,
     CONSTRAINT federation_outbox_state_check CHECK (state IN ('pending', 'leased', 'delivered', 'policy_suppressed', 'dead_lettered', 'superseded'))
 );
 
@@ -713,7 +717,6 @@ CREATE TABLE public.key_backups (
     backup_kind text,
     backup_version text,
     payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_accessed_at timestamp with time zone,
     account_id text,
     scheme text,
@@ -728,7 +731,8 @@ CREATE TABLE public.key_backups (
     -- relying on a read-then-write (TOCTOU) snapshot check.
     series_actor_id text GENERATED ALWAYS AS ((payload ->> 'actor_id')) STORED,
     series_id text GENERATED ALWAYS AS ((payload ->> 'series_id')) STORED,
-    series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED
+    series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 -- key-management.md 7.8.1: the server-issued, durable, single-use delete
@@ -874,10 +878,10 @@ CREATE TABLE public.organization_registration_challenges (
     organization_id text NOT NULL,
     record jsonb NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     consumed_request_digest text,
     consumed_outcome_id text,
     consumed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
     CONSTRAINT organization_registration_challenge_consumption_complete CHECK (
         (consumed_request_digest IS NULL
             AND consumed_outcome_id IS NULL
@@ -1021,8 +1025,8 @@ CREATE TABLE public.multisig_pending (
     claimed_by_node_id text,
     claimed_until timestamp with time zone,
     claim_seq bigint DEFAULT 0 NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone DEFAULT (now() + '01:00:00'::interval) NOT NULL
+    expires_at timestamp with time zone DEFAULT (now() + '01:00:00'::interval) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
@@ -1048,9 +1052,9 @@ CREATE TABLE public.notifications (
     projection_action text,
     projection_data jsonb,
     projection_position bigint DEFAULT nextval('public.notification_projection_position_seq'::regclass) NOT NULL,
+    read_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    read_at timestamp with time zone,
     CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['add'::text, 'update'::text, 'remove'::text])))
 );
@@ -1198,8 +1202,8 @@ CREATE TABLE public.projection_circles (
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     updated_by_id text,
+    created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_circles_content_encryption_floor_check CHECK ((content_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
     CONSTRAINT projection_circles_directory_visibility_check CHECK ((directory_visibility = ANY (ARRAY['members'::text, 'realm_members'::text]))),
@@ -1219,8 +1223,8 @@ CREATE TABLE public.projection_events (
     operation_id uuid,
     sender_id text,
     payload jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     received_at timestamp with time zone NOT NULL DEFAULT now(),
+    created_at timestamp with time zone NOT NULL,
     CONSTRAINT projection_events_id_key UNIQUE (id),
     CONSTRAINT projection_events_event_pk_key UNIQUE (event_pk),
     CONSTRAINT projection_events_id_length_check CHECK (octet_length(id) = 33)
@@ -1246,9 +1250,9 @@ CREATE TABLE public.projection_strands (
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
+    created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_strands_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
@@ -1261,15 +1265,15 @@ CREATE TABLE public.projection_morphs (
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
-    updated_at timestamp with time zone,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
     versions jsonb DEFAULT '[]'::jsonb NOT NULL,
     scope_circle_id uuid,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone,
     CONSTRAINT projection_morphs_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 
@@ -1287,9 +1291,9 @@ CREATE TABLE public.projection_spaces (
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_by_id text NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by_id text,
+    created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_spaces_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['allow_any'::text, 'require_e2ee'::text, 'require_same_scope'::text, 'require_scope_circle_id'::text]))),
     CONSTRAINT projection_spaces_child_scope_policy_scope_check CHECK (((child_scope_policy <> 'require_scope_circle_id'::text) OR (child_scope_policy_scope_circle_id IS NOT NULL))),
@@ -1377,9 +1381,9 @@ CREATE TABLE public.recovery_sessions (
     state text DEFAULT 'pending'::text NOT NULL,
     proof_payload jsonb,
     transaction_id uuid,
+    expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
     CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = ANY (ARRAY['cross_signing'::text, 'enrollment_authority'::text]))),
     CONSTRAINT recovery_sessions_generation_shape_check CHECK ((((identity_model = 'cross_signing'::text) AND (ssk_generation >= 1) AND (current_device_generation_ref IS NULL) AND (device_generation_status IS NULL) AND (registry_head IS NULL) AND (accepted_seal_frontier IS NULL)) OR ((identity_model = 'enrollment_authority'::text) AND (ssk_generation IS NULL) AND (current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)))),
@@ -1393,7 +1397,6 @@ CREATE TABLE public.security_transactions (
     principal_id text NOT NULL,
     coordinator_service_id text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone NOT NULL,
     request_digest text NOT NULL,
     binding jsonb NOT NULL,
     prepared_plan jsonb NOT NULL,
@@ -1403,6 +1406,7 @@ CREATE TABLE public.security_transactions (
     next_required_step text,
     terminal_result jsonb,
     canonical_request bytea NOT NULL,
+    created_at timestamp with time zone NOT NULL,
     CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
     CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text]))),
     CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'awaiting_device_attestation'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
@@ -1479,8 +1483,6 @@ CREATE TABLE public.spaces (
     owner_id text,
     discoverability text DEFAULT 'invite_only'::text NOT NULL,
     payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
     history_visibility text DEFAULT 'joined'::text NOT NULL,
     history_sharing_policy jsonb,
     history_sharing_policy_digest text,
@@ -1488,6 +1490,8 @@ CREATE TABLE public.spaces (
     preview_policy_digest text,
     encryption_profile text DEFAULT 'mls_rfc9420'::text NOT NULL,
     plaintext_visible_services jsonb DEFAULT '[]'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT spaces_encryption_profile_check CHECK ((encryption_profile = ANY (ARRAY['none'::text, 'plaintext'::text, 'mls_rfc9420'::text]))),
     CONSTRAINT spaces_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text]))),
     CONSTRAINT spaces_realm_pk_key UNIQUE (realm_pk),
@@ -1546,8 +1550,8 @@ CREATE TABLE public.idempotency_keys (
     request_hash text NOT NULL,
     response_status integer NOT NULL,
     response_body jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    expires_at timestamp with time zone NOT NULL
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL
 );
 
 CREATE TABLE public.control_proposal_authority_acks (
@@ -1563,8 +1567,8 @@ CREATE TABLE public.webrtc_sessions (
     initiator_id text NOT NULL,
     ice_config jsonb DEFAULT '{}'::jsonb NOT NULL,
     signaling_state jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone NOT NULL
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE TABLE public.webvh_documents (
