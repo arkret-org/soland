@@ -731,6 +731,16 @@ impl ProjectionService {
         self.seal_store().get(seal_id)
     }
 
+    /// The accepted Seal covering a Control Move, or `None` when the Event is
+    /// unknown, still pending, or not a Control Move at all (a DataEvent never
+    /// appears in a Seal `delta[]`).
+    pub fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
+        let Some(seal_id) = self.control_event_store().sealed_by(event_digest)? else {
+            return Ok(None);
+        };
+        self.seal_by_id(&seal_id)
+    }
+
     pub fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
         self.seal_store().list_leaves(realm_id)
     }

@@ -547,6 +547,19 @@ async fn get_event(
     event_view_for_state(state, &record).await
 }
 
+/// The stored canonical digest of an accepted Event, typed.
+///
+/// This is the same digest a Seal carries in `delta[]`, so it is the join key
+/// between a resolved Event and the Seal that covers it.
+fn canonical_digest_of(record: &CanonicalEventRecord) -> Result<Hash, AppError> {
+    Hash::new(record.canonical_digest.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "events resolve: stored canonical digest for {} is malformed: {error}",
+            record.event_id
+        ))
+    })
+}
+
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.read.resolve", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.resolve"))]
 async fn resolve_events(
@@ -573,6 +586,9 @@ async fn resolve_events(
     let mut found = Vec::new();
     let mut seals = Vec::new();
     let mut missing = Vec::new();
+    // Canonical digest per returned Event, kept from the record we already
+    // read so the derived `seals[]` pass below never re-canonicalizes.
+    let mut event_digests: BTreeMap<String, Hash> = BTreeMap::new();
     let include_payload = body.include_payload.unwrap_or(true);
     for event_id in &body.event_ids {
         let event_id_string = event_id.to_string();
@@ -583,10 +599,12 @@ async fn resolve_events(
             .flatten()
         {
             Some(record) if event_visible_to_session(state, &record, &session).await => {
+                let digest = canonical_digest_of(&record)?;
                 let mut event = sdk_event_for_state(state, &record)?;
                 if !include_payload {
                     event.payload.clear();
                 }
+                event_digests.insert(event.event_id.as_str().to_owned(), digest);
                 found.push(event);
             }
             _ => missing.push(event_id_string),
@@ -613,10 +631,12 @@ async fn resolve_events(
                 .iter()
                 .any(|event| event.event_id.as_str() == record.event_id)
             {
+                let digest = canonical_digest_of(record)?;
                 let mut event = sdk_event_for_state(state, record)?;
                 if !include_payload {
                     event.payload.clear();
                 }
+                event_digests.insert(event.event_id.as_str().to_owned(), digest);
                 found.push(event);
             }
         }
@@ -631,6 +651,33 @@ async fn resolve_events(
             _ => missing.push(seal_ref.to_string()),
         }
     }
+    // `seals[]` is a closed derived set, not just the answer to `seal_refs[]`:
+    // for every Event returned above, the accepted Seal whose `delta[]` carries
+    // that Event's `event_digest`. A creator bootstrapping an MLS governance
+    // anchor (`encryption-and-audit.md` §2.5.4 T1) resolves its own
+    // `ak.realm.create` and has no way to name the genesis Seal id in advance;
+    // without this it received an empty `seals[]` and could never pin an
+    // anchor, so every encrypted write in the Realm failed forever.
+    //
+    // The covering Seal only — never a later descendant — and an Event that is
+    // accepted but not yet sealed contributes nothing. A DataEvent never
+    // appears in a `delta[]`, so it simply yields no entry.
+    for event in &found {
+        let digest = event_digests
+            .get(event.event_id.as_str())
+            .cloned()
+            .ok_or_else(|| AppError::internal("events resolve: resolved Event has no digest"))?;
+        let Some(seal) = state
+            .projections()
+            .seal_covering_event(&digest)
+            .map_err(|error| AppError::internal(format!("events resolve: {error}")))?
+        else {
+            continue;
+        };
+        seals.push(seal);
+    }
+    seals.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    seals.dedup_by(|left, right| left.id == right.id);
     json_ok(EventsResolveOutcome {
         events: found,
         seals,

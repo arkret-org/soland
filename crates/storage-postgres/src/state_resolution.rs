@@ -198,6 +198,12 @@ struct OptionalJsonRow {
 }
 
 #[derive(QueryableByName)]
+struct OptionalTextRow {
+    #[diesel(sql_type = Nullable<Text>)]
+    value: Option<String>,
+}
+
+#[derive(QueryableByName)]
 struct CountRow {
     #[diesel(sql_type = BigInt)]
     value: i64,
@@ -613,6 +619,27 @@ impl ControlEventStore for PgControlEventStore {
             .map_err(diesel_to_store)?
             .map(|row| control_event_from_value(row.value))
             .transpose()
+        })
+    }
+
+    fn sealed_by(&self, event_digest: &Hash) -> StoreResult<Option<SealId>> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "SELECT sealed_by AS value FROM state_control_events WHERE event_digest = $1",
+            )
+            .bind::<Text, _>(&digest)
+            .get_result::<OptionalTextRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.and_then(|row| row.value)
+                .map(|seal_id| {
+                    SealId::new(seal_id).map_err(|error| StoreError::Backend(error.to_string()))
+                })
+                .transpose()
         })
     }
 

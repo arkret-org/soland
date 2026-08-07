@@ -791,3 +791,78 @@ async fn policy_server_replace_without_head_eq_is_refused() {
     assert_eq!(status, StatusCode::OK, "guarded replace: {view}");
     assert_eq!(view["policy_server_did"], "did:web:second.example");
 }
+
+/// `ak.self.events.read.resolve` returns the Seal covering each resolved Event.
+///
+/// `service-http-binding.md` (`ak.self.events.read.resolve`) makes `seals[]` a
+/// closed derived set — for every returned Event, the accepted Seal whose
+/// `delta[]` carries that Event's `event_digest` — not merely the answer to
+/// `seal_refs[]`. A Realm creator bootstrapping its MLS governance anchor
+/// (`encryption-and-audit.md` section 2.5.4 T1) resolves the `ak.realm.create`
+/// it authored and cannot name the genesis Seal id in advance; while this
+/// endpoint filled `seals[]` from `seal_refs[]` alone the creator got an empty
+/// set, never pinned an anchor, and every encrypted write in the Realm failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence);
+    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let token = prepare_alice(&state).await;
+    let realm = bootstrap_realm(&state, &token, "events resolve derived seals").await;
+    let create_event_id =
+        arkret_identifiers::EventId::from_uuid(RealmId::new(realm.clone()).unwrap().uuid());
+
+    let resolved: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&json!({"event_ids": [create_event_id.to_string()]}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    let events = resolved["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 1, "resolve response: {resolved}");
+    let create_digest = events[0]["proofs"][0]["event_digest"]
+        .as_str()
+        .expect("create Event carries its canonical digest");
+
+    let seals = resolved["seals"].as_array().expect("seals array");
+    assert_eq!(
+        seals.len(),
+        1,
+        "the create Event's covering Seal must be derived without a seal_refs selector: {resolved}"
+    );
+    assert!(
+        seals[0]["delta"]
+            .as_array()
+            .expect("Seal delta")
+            .iter()
+            .any(|entry| entry.as_str() == Some(create_digest)),
+        "the returned Seal must be the one covering the create Event, not a descendant: {resolved}"
+    );
+    assert_eq!(
+        seals[0]["id"].as_str(),
+        Some(accepted_seal_frontier(&state, &token, &realm).await.as_str()),
+        "a freshly bootstrapped Realm's covering Seal is its accepted frontier: {resolved}"
+    );
+
+    // An Event id that does not exist stays in `missing[]` and contributes no
+    // Seal: the derived set never invents coverage for an unresolved selector.
+    let unknown: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&json!({"event_ids": ["ak:event:01904100-0000-8000-8000-30f4e405b35e"]}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert!(unknown["events"].as_array().unwrap().is_empty());
+    assert!(
+        unknown["seals"]
+            .as_array()
+            .map(|seals| seals.is_empty())
+            .unwrap_or(true),
+        "unresolved selectors contribute no Seal: {unknown}"
+    );
+}
