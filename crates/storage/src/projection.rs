@@ -259,7 +259,7 @@ pub fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&
 fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         soland_domain::kinds::canonical_kind_for_operation(operation),
-        Some(arkret_wire::EventKind::REALM_CREATE | arkret_wire::EventKind::REALM_UPDATE)
+        Some(arkret_wire::EventKind::REALM_PROFILE)
     )
 }
 
@@ -268,25 +268,21 @@ pub fn projected_operation_realm_title(operation: &Operation) -> Option<&str> {
     if !operation_updates_realm_metadata(operation) {
         return None;
     }
-    first_string_field(&operation.payload, &["realm_title", "title"])
-        .or_else(|| object_string_field(operation, &["title"]))
-        .or_else(|| patch_string_field(operation, "title"))
+    first_string_field(&operation.payload, &["title"])
 }
 #[doc(hidden)]
 pub fn projected_operation_realm_summary(operation: &Operation) -> Option<&str> {
     if !operation_updates_realm_metadata(operation) {
         return None;
     }
-    first_string_field(&operation.payload, &["realm_summary", "summary"])
-        .or_else(|| object_string_field(operation, &["summary"]))
-        .or_else(|| patch_string_field(operation, "summary"))
+    first_string_field(&operation.payload, &["summary"])
 }
 #[doc(hidden)]
 pub fn projected_operation_realm_discoverability(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["discoverability"])
-        .or_else(|| object_string_field(operation, &["default_discoverability", "discoverability"]))
-        .or_else(|| patch_string_field(operation, "default_discoverability"))
-        .or_else(|| patch_string_field(operation, "discoverability"))
+    (soland_domain::kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_wire::EventKind::REALM_DISCOVERY))
+    .then(|| first_string_field(&operation.payload, &["value"]))
+    .flatten()
 }
 
 #[cfg(test)]

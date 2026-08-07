@@ -1238,8 +1238,8 @@ pub struct SolandRealmState {
     /// per-Strand column.
     pub default_strand_id: Option<String>,
     /// `morph.md` §4.1 S3 — opt-in conformance profile ids the Realm has
-    /// declared (`active_profiles[]` / `profiles[]` on `ak.realm.create` or
-    /// `ak.realm.update`). Projected as a monotonically-growing set: a profile
+    /// declared through genesis `schema_refs[]` or another registered profile
+    /// carrier. Projected as a monotonically-growing set: a profile
     /// once observed stays declared (soland is not the committer and never
     /// silently relaxes a declared profile). Read by the morph schema-migration
     /// gate to decide whether breaking / transformation migrations are allowed.

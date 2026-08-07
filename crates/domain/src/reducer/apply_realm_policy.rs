@@ -546,6 +546,16 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::POLICY_REVISION_GAP.to_owned(),
             };
         }
+        if self.realm_security_class(&realm_id).as_deref() == Some("high_assurance")
+            && !matches!(
+                value.get("federation_policy").and_then(Value::as_str),
+                Some("closed" | "restricted" | "quarantine")
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: "high_assurance_federation_policy_invalid".to_owned(),
+            };
+        }
         if let Some(join_policy) = value.get("join_policy")
             && let Err(reason) = validate_join_policy_payload(join_policy)
         {

@@ -216,12 +216,12 @@ fn apply_realm_create_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_CREATE)
 }
-fn apply_realm_update_dispatch(
+fn apply_realm_profile_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_UPDATE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_PROFILE)
 }
 fn apply_realm_upgrade_dispatch(
     s: &mut ProjectionState,
@@ -1071,8 +1071,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_realm_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_UPDATE,
-        apply_realm_update_dispatch,
+        arkret_wire::EventKind::REALM_PROFILE,
+        apply_realm_profile_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::REALM_UPGRADE,

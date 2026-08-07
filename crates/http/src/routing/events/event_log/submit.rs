@@ -1101,10 +1101,10 @@ async fn direct_bootstrap_source_is_contact_authority(
         .ok()
         .map(|payload| payload.object)
     });
-    if realm
-        .as_ref()
-        .is_none_or(|realm| arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::validate(realm).is_err())
-    {
+    if realm.as_ref().is_none_or(|realm| {
+        realm.purpose
+            != arkret_models_collaboration::events_payloads::RealmPurpose::DirectConversation
+    }) {
         return false;
     }
     let peer = events.iter().find_map(|event| {

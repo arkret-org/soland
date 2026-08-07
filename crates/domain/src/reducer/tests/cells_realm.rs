@@ -370,16 +370,15 @@ fn realm_upgrade_requires_a_registered_direct_edge() {
 }
 
 #[test]
-fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
+fn realm_profile_writes_profile_cell_with_cas_register_semantics() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_UPDATE,
+            arkret_wire::EventKind::REALM_PROFILE,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "action": "update",
-                "owner": "did:web:alice",
+                "schema": "ak.schema.realm_profile.v1",
                 "title": "Renamed Realm",
             }),
         ),
@@ -387,9 +386,9 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     );
 
     let value = state
-        .realm_metadata_cell_value("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb")
-        .expect("metadata cell should resolve to Value");
-    // SOL-ORG-01 regression: ak.realm.update must NOT touch the
+        .realm_profile_cell_value("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb")
+        .expect("profile cell should resolve to Value");
+    // Profile writes must not touch the organization relationship cell family.
     // organization relationship cell family.
     assert!(
         state
@@ -406,23 +405,21 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
         Some("Renamed Realm")
     );
     assert_eq!(
-        value.get("owner").and_then(Value::as_str),
-        Some("did:web:alice")
+        value.get("schema").and_then(Value::as_str),
+        Some("ak.schema.realm_profile.v1")
     );
-    // updated_at is a server-side timestamp present on every update.
-    assert!(value.get("updated_at").is_some());
 }
 
 #[test]
-fn authoritative_realm_metadata_bottom_blocks_update() {
+fn authoritative_realm_profile_bottom_blocks_profile_write() {
     let mut state = ProjectionState::new();
     let realm = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let first_id =
         "ak:move:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let second_id =
         "ak:move:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    let cell = ProjectionState::realm_metadata_cell_id().unwrap();
-    state.realm_metadata_cells.insert(
+    let cell = ProjectionState::realm_profile_cell_id().unwrap();
+    state.realm_profile_cells.insert(
         realm.to_owned(),
         CellState::Bottom(arkret_wire::Bottom {
             kind: arkret_wire::BottomKind::Conflict,
@@ -439,10 +436,11 @@ fn authoritative_realm_metadata_bottom_blocks_update() {
     );
     assert_eq!(
         state.check_bottom_cell_transition(&make_operation(
-            arkret_wire::EventKind::REALM_UPDATE,
+            arkret_wire::EventKind::REALM_PROFILE,
             realm,
             serde_json::json!({
-                "patch": {"title": {"$op": "set", "value": "blocked while bottom"}},
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "blocked while bottom",
             }),
         )),
         Err("cell_bottom_state")

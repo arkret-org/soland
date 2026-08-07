@@ -298,19 +298,10 @@ impl ProjectionState {
 
     // ── Realm lifecycle cell helpers ──
 
-    /// SOL-ORG-01 — read the effective `ak.component.realm.metadata.v1`
-    /// cas-register value (mutable Realm metadata: owner, title,
-    /// security_class, federation_policy, updated_at). Returns `None` if no
-    /// `ak.realm.update` event has landed for this realm, or if the cell is in
-    /// `Bottom` (concurrent admin updates require recovery).
-    ///
-    /// This is the renamed-from `realm_organization_cell_value`: the
-    /// `ak.component.realm.organization.v1` cell family is now exclusively the
-    /// `ak.realm.organization` relationship-statement surface, keyed by
-    /// `(organization_id, relationship)`. Mutable Realm metadata moved to its
-    /// own `ak.component.realm.metadata.v1` cell.
-    pub fn realm_metadata_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        match self.realm_metadata_cells.get(realm_id)? {
+    /// Read the effective display profile singleton. Returns `None` for an
+    /// absent or conflicting profile cell.
+    pub fn realm_profile_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        match self.realm_profile_cells.get(realm_id)? {
             CellState::Value(value) => Some(value),
             CellState::Bottom(_) => None,
         }
@@ -326,29 +317,21 @@ impl ProjectionState {
         }
     }
 
+    /// Immutable identity/security genesis value projected by
+    /// `ak.realm.create` into its dedicated singleton cell.
+    pub fn realm_genesis_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_GENESIS_V1)
+    }
+
     /// Identifies the registered Direct Conversation Realm role from the
-    /// canonical Realm metadata cell seeded by the immutable genesis object.
-    ///
-    /// The registered `ak.component.realm.create.v1` ordered log intentionally
-    /// stores only the Realm id. Before the sealed cell is reloaded, the live
-    /// reducer also keeps a richer convenience entry there, but that shape is
-    /// not durable and MUST NOT be used for role discovery after restart.
-    /// Realm metadata is the canonical full-object cell; update patches merge
-    /// into it, so the genesis profile/discriminator and security fields stay
-    /// available for the shared typed validator.
-    ///
+    /// immutable genesis singleton.
     /// Unknown, incomplete, or malformed role declarations fail closed and
     /// never fall back to member-count, title, category, or tag heuristics.
     pub fn realm_is_direct_conversation(&self, realm_id: &str) -> bool {
-        self.realm_metadata_cell_value(realm_id)
-            .cloned()
-            .and_then(|metadata| {
-                serde_json::from_value::<
-                    arkret_models_collaboration::objects::realm::Realm,
-                >(metadata)
-                .ok()
-            })
-            .is_some_and(|realm| arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::matches(&realm))
+        self.realm_genesis_cell_value(realm_id)
+            .and_then(|object| object.get("purpose"))
+            .and_then(Value::as_str)
+            == Some("direct_conversation")
     }
 
     /// True when the `ak.component.realm.destroy.v1` cell has a Value.
@@ -575,16 +558,6 @@ impl ProjectionState {
         self.realm_join_rules
             .get(realm_id)
             .map(String::as_str)
-            .or_else(|| {
-                self.realm_create_log(realm_id)
-                    .and_then(|entries| entries.last())
-                    .and_then(|entry| {
-                        entry
-                            .pointer("/object/default_join_rule")
-                            .or_else(|| entry.get("default_join_rule"))
-                    })
-                    .and_then(Value::as_str)
-            })
             .unwrap_or("invite")
     }
 
@@ -804,12 +777,10 @@ impl ProjectionState {
         Err("realm_policy_server_governance_depth_exceeded")
     }
 
-    /// Read the create-locked Realm encryption profile from the genesis
-    /// create-log. `ak.realm.update` must never mutate this value.
+    /// Read the create-locked Realm encryption profile from genesis.
     pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
-        self.realm_create_log(realm_id)
-            .and_then(|entries| entries.last())
-            .and_then(|entry| entry.get("encryption_profile"))
+        self.realm_genesis_cell_value(realm_id)
+            .and_then(|genesis| genesis.get("encryption_profile"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
     }
@@ -822,9 +793,8 @@ impl ProjectionState {
     /// description — and the policy bundle deliberately does not carry the
     /// profile either, so this create-log read is the only source.
     pub fn realm_schema_refs(&self, realm_id: &str) -> Vec<String> {
-        self.realm_create_log(realm_id)
-            .and_then(|entries| entries.last())
-            .and_then(|entry| entry.get("schema_refs"))
+        self.realm_genesis_cell_value(realm_id)
+            .and_then(|genesis| genesis.get("schema_refs"))
             .and_then(Value::as_array)
             .map(|refs| {
                 refs.iter()
@@ -921,9 +891,8 @@ impl ProjectionState {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| {
-            self.realm_create_log(realm_id)
-                .and_then(|entries| entries.last())
-                .and_then(|entry| entry.get("digest_algorithm"))
+            self.realm_genesis_cell_value(realm_id)
+                .and_then(|genesis| genesis.get("digest_algorithm"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
@@ -954,36 +923,29 @@ impl ProjectionState {
     }
 
     /// Effective Realm `content_scheme` projected from the
-    /// `ak.component.realm.policy_bundle.v1` cell, falling back to the
-    /// create-log genesis value. `None` means no scheme has been negotiated
+    /// `ak.component.realm.policy_bundle.v1` cell. `None` means no scheme has been negotiated
     /// yet — callers treat that as the application-message default
     /// (`mls_rfc9420`). Drives the one-way `content_scheme` ratchet in
     /// `apply_realm_policy_bundle`.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
         self.realm_policy_bundle_cell_value(realm_id)
             .and_then(content_scheme_field)
-            .or_else(|| {
-                self.realm_create_log(realm_id)
-                    .and_then(|entries| entries.last())
-                    .and_then(|entry| entry.get("content_scheme"))
-                    .and_then(Value::as_str)
-            })
             .map(ToOwned::to_owned)
     }
 
-    /// Effective Realm `history_visibility` projected from the metadata cell,
-    /// falling back to the create-log genesis value.
+    /// Effective Realm `history_visibility` projected from its dedicated cell.
     pub fn realm_history_visibility(&self, realm_id: &str) -> Option<String> {
-        self.realm_metadata_cell_value(realm_id)
-            .and_then(|value| value.get("history_visibility"))
-            .and_then(Value::as_str)
-            .or_else(|| {
-                self.realm_create_log(realm_id)
-                    .and_then(|entries| entries.last())
-                    .and_then(|entry| entry.get("history_visibility"))
-                    .and_then(Value::as_str)
-            })
-            .map(ToOwned::to_owned)
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1,
+        )
+        .and_then(|value| {
+            value
+                .get("value")
+                .and_then(Value::as_str)
+                .or_else(|| value.as_str())
+        })
+        .map(ToOwned::to_owned)
     }
 
     /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
@@ -1002,51 +964,23 @@ impl ProjectionState {
         serde_json::from_value(durability.clone()).ok()
     }
 
-    /// R3.4 — read the projected Realm `security_class` (from the
-    /// `ak.component.realm.metadata.v1` cas-register cell). Returns
-    /// `None` when no Realm-update has landed yet — caller may infer
-    /// `standard` per spec default.
+    /// Read the create-locked Realm `security_class` from genesis.
     pub fn realm_security_class(&self, realm_id: &str) -> Option<String> {
-        // First check the metadata cell (cas-register, last write
-        // wins; carries the most recent update).
-        if let Some(v) = self
-            .realm_metadata_cell_value(realm_id)
-            .and_then(|c| c.get("security_class"))
-            .and_then(Value::as_str)
-        {
-            return Some(v.to_owned());
-        }
-        // Fallback: check the create-log cell's last entry.
-        if let Some(last) = self
-            .realm_create_log(realm_id)
-            .and_then(|entries| entries.last())
-            && let Some(s) = last.get("security_class").and_then(Value::as_str)
+        // Security class is create-locked and has no mutable fallback.
+        if let Some(genesis) = self.realm_genesis_cell_value(realm_id)
+            && let Some(s) = genesis.get("security_class").and_then(Value::as_str)
         {
             return Some(s.to_owned());
         }
         None
     }
 
-    /// R3.4 — read the effective Realm federation policy. The mutable
-    /// metadata cas-register wins; when no update has landed, fall
-    /// back to the latest `ak.realm.create` log entry that carried an
-    /// initial `federation_policy`.
+    /// Read the effective Realm federation policy from the policy bundle.
     pub fn realm_federation_policy(&self, realm_id: &str) -> Option<String> {
-        if let Some(v) = self
-            .realm_metadata_cell_value(realm_id)
-            .and_then(|c| c.get("federation_policy"))
+        self.realm_policy_bundle_cell_value(realm_id)
+            .and_then(|value| value.get("federation_policy"))
             .and_then(Value::as_str)
-        {
-            return Some(v.to_owned());
-        }
-        self.realm_create_log(realm_id).and_then(|entries| {
-            entries.iter().rev().find_map(|entry| {
-                entry
-                    .get("federation_policy")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-        })
+            .map(ToOwned::to_owned)
     }
 }
 

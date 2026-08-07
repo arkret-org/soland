@@ -1090,7 +1090,11 @@ impl ProjectionState {
     /// per-action whitelist — and a grantable action still passes its
     /// profile's own registration / constraint / evidence gates downstream.
     fn realm_declared_profiles(&self, realm_id: &str) -> Vec<String> {
-        let Some(metadata) = self.realm_metadata_cell_value(realm_id) else {
+        let Some(metadata) = self
+            .realm_create_log(realm_id)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("object"))
+        else {
             return Vec::new();
         };
         metadata
@@ -3390,7 +3394,7 @@ mod realm_owner_authority_tests {
         assert!(rooted.realm_owner_operationally_covers_action(
             REALM,
             OWNER,
-            "ak.realm.update",
+            "ak.realm.profile",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(

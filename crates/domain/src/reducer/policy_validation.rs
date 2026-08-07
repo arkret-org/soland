@@ -10,8 +10,6 @@ use arkret_event_draft::Operation;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
-pub(crate) const REALM_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
-    "realm_encryption_profile_create_locked";
 pub(crate) const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str =
     "circle_encryption_profile_create_locked";
 /// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
@@ -789,9 +787,8 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
 }
 
 /// `morph.md` §4.1 S3 — collect the opt-in conformance profile ids a Realm
-/// lifecycle event declares. Reads `active_profiles[]` / `profiles[]` from the
-/// payload root, the `object` block, and a `patch.active_profiles` register set
-/// (so `ak.realm.update` declarations are captured as well). Only well-formed
+/// lifecycle event declares. Reads canonical `schema_refs[]` plus profile
+/// arrays used by other registered object families. Only well-formed
 /// `ak.profile.*` strings are returned.
 pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
     let mut profiles = Vec::new();
@@ -807,7 +804,7 @@ pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
             }
         }
     };
-    for field in ["active_profiles", "profiles"] {
+    for field in ["schema_refs", "active_profiles", "profiles"] {
         push_array(operation.payload.get(field));
         push_array(
             operation
@@ -815,38 +812,8 @@ pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
                 .get("object")
                 .and_then(|object| object.get(field)),
         );
-        // `ak.realm.update` carries mutable fields in the patch register; a
-        // `patch.active_profiles: { "$op": "set", "value": [...] }` (or the
-        // direct-array sugar) declares the profile set.
-        if let Some(patch_field) = operation
-            .payload
-            .get("patch")
-            .and_then(|patch| patch.get(field))
-        {
-            match patch_field {
-                Value::Array(_) => push_array(Some(patch_field)),
-                Value::Object(op) if op.get("$op").and_then(Value::as_str) == Some("set") => {
-                    push_array(op.get("value"));
-                }
-                _ => {}
-            }
-        }
     }
     profiles
-}
-
-pub(crate) fn operation_encryption_profile(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("encryption_profile")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            operation
-                .payload
-                .get("object")
-                .and_then(|object| object.get("encryption_profile"))
-                .and_then(Value::as_str)
-        })
 }
 
 pub(crate) fn operation_touches_encryption_profile(operation: &Operation) -> bool {
@@ -856,15 +823,6 @@ pub(crate) fn operation_touches_encryption_profile(operation: &Operation) -> boo
             .get("object")
             .is_some_and(|object| value_has_direct_field(object, "encryption_profile"))
         || operation_patch_touches_field(&operation.payload, "encryption_profile")
-}
-
-pub(crate) fn operation_touches_digest_algorithm(operation: &Operation) -> bool {
-    operation.payload.get("digest_algorithm").is_some()
-        || operation
-            .payload
-            .get("object")
-            .is_some_and(|object| value_has_direct_field(object, "digest_algorithm"))
-        || operation_patch_touches_field(&operation.payload, "digest_algorithm")
 }
 
 pub(crate) fn value_has_direct_field(value: &Value, field: &str) -> bool {

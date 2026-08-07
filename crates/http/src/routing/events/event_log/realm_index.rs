@@ -9,20 +9,14 @@ pub(super) fn event_string_field(
         .map(ToOwned::to_owned)
 }
 
-/// True iff a `ak.realm.create` event's `payload.object.created_by`
-/// matches the session actor. Spec realm-and-space.md §2.6 — this is the
-/// genesis-member condition that lets the create event bypass the regular
-/// `realm_has_member` check.
+/// True iff `ak.realm.create` is authored by the authenticated envelope actor.
+/// The genesis payload no longer duplicates `created_by`; creator membership
+/// is an explicit later slot in the atomic bootstrap unit.
 pub(super) fn realm_create_actor_is_creator(
     object: &serde_json::Map<String, Value>,
     actor: &str,
 ) -> bool {
-    object
-        .get("payload")
-        .and_then(|payload| payload.get("object"))
-        .and_then(|create_object| create_object.get("created_by"))
-        .and_then(Value::as_str)
-        .is_some_and(|creator| creator == actor)
+    object.get("actor_id").and_then(Value::as_str) == Some(actor)
 }
 
 /// True when a `ak.invite.create` event is signed by its own inviter. The

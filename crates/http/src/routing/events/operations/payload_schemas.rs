@@ -203,11 +203,6 @@ pub(crate) const REALM_CREATE_REQUIREMENTS: &[PayloadRequirement] =
         "object",
         "ak.realm.create operation requires payload.object",
     )];
-pub(crate) const REALM_UPDATE_REQUIREMENTS: &[PayloadRequirement] =
-    &[PayloadRequirement::Required(
-        "patch",
-        "ak.realm.update operation requires patch",
-    )];
 pub(crate) const REALM_ARCHIVE_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::Required(
         "archived",

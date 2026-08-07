@@ -309,26 +309,23 @@ async fn validate_direct_binding_event_refs(
     payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
 ) -> Result<(), &'static str> {
     let realm_create = accepted_direct_realm_create(state, &payload.realm_id).await?;
-    let realm = realm_create
+    let genesis = realm_create
         .payload
         .get("object")
         .cloned()
         .and_then(|object| {
-            serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(object)
-                .ok()
+            serde_json::from_value::<arkret_models_collaboration::events_payloads::RealmGenesis>(
+                object,
+            )
+            .ok()
         })
         .ok_or("direct_conversation_realm_role_invalid")?;
     arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::validate(
-        &realm,
+        &genesis,
     )
     .map_err(|_| "direct_conversation_realm_role_invalid")?;
 
-    let creator = realm_create
-        .payload
-        .get("object")
-        .and_then(|object| object.get("created_by"))
-        .and_then(Value::as_str)
-        .ok_or("direct_conversation_binding_invalid")?;
+    let creator = realm_create.actor_id.as_str();
     let participants: Vec<&str> = payload
         .participants_unordered
         .iter()

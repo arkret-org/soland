@@ -665,38 +665,6 @@ impl ProjectionState {
         }
     }
 
-    fn bootstrap_realm_creator_member(
-        &mut self,
-        realm_id: &str,
-        creator: &str,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) {
-        self.members.insert(
-            (realm_id.to_owned(), creator.to_owned()),
-            SolandMembershipState {
-                member: creator.to_owned(),
-                realm_id: realm_id.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                delivery_status: None,
-                recipient_service_id: None,
-                membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
-                delivery_binding_frontier: None,
-                invited_at: None,
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{creator}"
-        )) {
-            self.cells
-                .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
-        }
-    }
-
     fn cascade_realm_member_removal_to_circles(
         &mut self,
         realm_id: &str,
@@ -916,8 +884,8 @@ impl ProjectionState {
         }
     }
 
-    /// The registered cell family that backs `ak.realm.update` mutable Realm
-    /// metadata and its CAS-register / bottom mechanics. Its
+    /// The registered cell family that backs `ak.realm.profile` display state
+    /// and its CAS-register / bottom mechanics. Its
     /// wire subject is the literal `null`; `realm_id` is the enclosing
     /// CellStore namespace and remains a side-band map key.
     ///
@@ -925,20 +893,20 @@ impl ProjectionState {
     /// cell family is the organization-authorized relationship statement
     /// surface (`ak.realm.organization`, cell subject
     /// `(organization_id, relationship)`) and must not be overwritten by
-    /// Realm metadata patches. The accepted SDK CellStore projection is the
+    /// Realm profile writes. The accepted SDK CellStore projection is the
     /// source of truth for conflict state; this service-local mirror must not
     /// infer concurrency from incomparable operation and Seal identifiers.
     #[cfg(test)]
-    pub(crate) fn realm_metadata_cell_id() -> Option<CellRef> {
-        CellRef::new(arkret_wire::REALM_METADATA_CELL.to_owned()).ok()
+    pub(crate) fn realm_profile_cell_id() -> Option<CellRef> {
+        CellRef::new(arkret_wire::REALM_PROFILE_CELL.to_owned()).ok()
     }
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::REALM_UPDATE) => {
+            Some(arkret_wire::EventKind::REALM_PROFILE) => {
                 let realm_id = operation.realm_id.to_string();
                 if matches!(
-                    self.realm_metadata_cells.get(&realm_id),
+                    self.realm_profile_cells.get(&realm_id),
                     Some(CellState::Bottom(_))
                 ) {
                     return Err("cell_bottom_state");
@@ -952,7 +920,7 @@ impl ProjectionState {
     /// Apply a `ak.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite
     /// of the former Realm lifecycle reducer: the function is now
     /// restricted to the canonical Realm lifecycle kinds
-    /// (`ak.realm.create`, `ak.realm.update`, `ak.realm.archive`,
+    /// (`ak.realm.create`, `ak.realm.profile`, `ak.realm.archive`,
     /// `ak.realm.tombstone`, `ak.realm.destroy`). Space-container lifecycle
     /// (`ak.space.create` / `update` / `parent` / `archive` / `restore`
     /// / `tombstone`) is handled by `apply_space_container_*`
@@ -977,7 +945,7 @@ impl ProjectionState {
             matches!(
                 kind,
                 arkret_wire::EventKind::REALM_CREATE
-                    | arkret_wire::EventKind::REALM_UPDATE
+                    | arkret_wire::EventKind::REALM_PROFILE
                     | arkret_wire::EventKind::REALM_ARCHIVE
                     | arkret_wire::EventKind::REALM_FREEZE
                     | arkret_wire::EventKind::REALM_TOMBSTONE
@@ -991,7 +959,7 @@ impl ProjectionState {
         // Per spec event-kind-registry, each ak.realm.* lifecycle event
         // writes a distinct cell family with its own lattice:
         //   ak.realm.create     → ak.component.realm.create.v1  (genesis singleton)
-        //   ak.realm.update     → ak.component.realm.metadata.v1 (cas-register, singleton)
+        //   ak.realm.profile    → ak.component.realm.profile.v1 (cas-register, singleton)
         //   ak.realm.archive    → ak.component.realm.archive.v1 (cas-register, singleton)
         //   ak.realm.freeze     → ak.component.realm.freeze.v1 (cas-register, singleton)
         //   ak.realm.tombstone  → ak.component.realm.tombstone.v1 (cas-register, singleton)
@@ -1023,97 +991,35 @@ impl ProjectionState {
             None
         };
         let creator = if kind == arkret_wire::EventKind::REALM_CREATE {
-            let Some(creator) = payload_object
-                .and_then(|object| object.get("created_by"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-            else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            };
-            Some(creator)
+            registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
+                value
+                    .get("controller_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
         } else {
             None
         };
         let owner = operation
             .payload
             .get("owner")
-            .or_else(|| payload_object.and_then(|object| object.get("created_by")))
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        // Realm create carries metadata in `payload.object`; update carries
-        // mutable presentation fields in the patch register.
+            .map(ToOwned::to_owned)
+            .or_else(|| creator.clone());
+        // Display state is carried only by `ak.realm.profile`.
         let title = operation
             .payload
             .get("title")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                payload_object
-                    .and_then(|object| object.get("title"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("patch")
-                    .and_then(|v| v.get("title"))
-                    .and_then(|patch_title| match patch_title {
-                        // `patch.title: "..."` (direct-value sugar)
-                        Value::String(s) => Some(s.clone()),
-                        // `patch.title: { "$op": "set", "value": "..." }`
-                        Value::Object(op)
-                            if op.get("$op").and_then(Value::as_str) == Some("set") =>
-                        {
-                            op.get("value")
-                                .and_then(Value::as_str)
-                                .map(ToOwned::to_owned)
-                        }
-                        _ => None,
-                    })
-            });
-        // R3.4 — Realm security_class + federation_policy projection.
-        // Spec: a Realm with `security_class=high_assurance` MUST have
-        // `federation_policy ∈ {closed, restricted, quarantine}`. Any
-        // update that violates this MUST be rejected with
-        // `high_assurance_federation_policy_invalid`. We resolve the
-        // effective security_class by taking the new payload's value if
-        // present, otherwise the projected value from a prior event.
-        let payload_security_class = operation
-            .payload
-            .get("security_class")
-            .or_else(|| payload_object.and_then(|object| object.get("security_class")))
-            .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let payload_federation_policy = operation
-            .payload
-            .get("federation_policy")
-            .or_else(|| payload_object.and_then(|object| object.get("federation_policy")))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        // Security class is create-locked genesis state. Federation policy is
+        // independently validated by the policy-bundle reducer.
         // Round 4 (B1.2) — capture (and validate against any existing
         // locked value) the Realm trust_domain.
         let payload_trust_domain = operation
             .payload
             .get("trust_domain")
             .or_else(|| payload_object.and_then(|object| object.get("trust_domain")))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let payload_encryption_profile =
-            operation_encryption_profile(operation).map(ToOwned::to_owned);
-        let payload_history_visibility = operation
-            .payload
-            .get("history_visibility")
-            .or_else(|| payload_object.and_then(|object| object.get("history_visibility")))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let payload_content_scheme = operation
-            .payload
-            .get("content_scheme")
-            .or_else(|| payload_object.and_then(|object| object.get("content_scheme")))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let payload_digest_algorithm = operation
@@ -1126,37 +1032,6 @@ impl ProjectionState {
         if arkret_canonical::digest_suite(&payload_digest_algorithm).is_err() {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
-            };
-        }
-        if kind == arkret_wire::EventKind::REALM_UPDATE
-            && operation_touches_encryption_profile(operation)
-        {
-            return ProjectionEffect::Rejected {
-                reason: REALM_ENCRYPTION_PROFILE_CREATE_LOCKED.to_owned(),
-            };
-        }
-        if kind == arkret_wire::EventKind::REALM_UPDATE
-            && operation_touches_digest_algorithm(operation)
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        }
-        if kind == arkret_wire::EventKind::REALM_UPDATE
-            && operation
-                .payload
-                .get("patch")
-                .and_then(Value::as_object)
-                .is_some_and(|patch| {
-                    patch.keys().any(|path| {
-                        path.strip_prefix("object.")
-                            .unwrap_or(path)
-                            .starts_with("reducer_profile")
-                    })
-                })
-        {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
         if let Some(ref new_td) = payload_trust_domain {
@@ -1178,24 +1053,6 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::CROSS_DOMAIN_REPLAY_REJECTED.to_owned(),
                 };
             }
-        }
-        let projected_security_class = self.realm_security_class(&realm_id);
-        let effective_security_class = payload_security_class.clone().or(projected_security_class);
-        // Constraint: high_assurance forbids federation_policy=open. The
-        // projected federation_policy is computed by taking the payload
-        // value if present, otherwise the prior cell value.
-        let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
-            self.realm_metadata_cell_value(&realm_id)
-                .and_then(|value| value.get("federation_policy"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        });
-        if matches!(effective_security_class.as_deref(), Some("high_assurance"))
-            && matches!(effective_federation_policy.as_deref(), Some("open"))
-        {
-            return ProjectionEffect::Rejected {
-                reason: "high_assurance_federation_policy_invalid".to_owned(),
-            };
         }
 
         // Stream-F (Wave 1B): terminal-state preflight. A Realm already
@@ -1266,21 +1123,29 @@ impl ProjectionState {
         // rejects the whole atomic bootstrap unit instead of materializing a
         // Realm nobody can govern.
         let authority_root = if kind == arkret_wire::EventKind::REALM_CREATE {
-            let derived = match genesis_authority_root_value(
-                payload_object,
-                creator.as_deref().unwrap_or_default(),
-            ) {
-                Ok(value) => value,
-                Err(reason) => {
-                    return ProjectionEffect::Rejected {
-                        reason: reason.to_owned(),
-                    };
-                }
+            let projected = registered_authority_root_write(self.projected_cell_writes());
+            let derived = match creator.as_deref() {
+                Some(creator) => match genesis_authority_root_value(payload_object, creator) {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        return ProjectionEffect::Rejected {
+                            reason: reason.to_owned(),
+                        };
+                    }
+                },
+                None => match projected.clone() {
+                    Some(value) => value,
+                    None => {
+                        return ProjectionEffect::Rejected {
+                            reason: "realm_authority_root_conflict".to_owned(),
+                        };
+                    }
+                },
             };
             // When the caller supplied the registry projection of the signed
             // Event, the two derivations must agree byte-for-byte: the value is
             // a `state_root` leaf preimage, so a divergence is a forked genesis.
-            if let Some(projected) = registered_authority_root_write(self.projected_cell_writes())
+            if let Some(projected) = projected
                 && projected != derived
             {
                 return ProjectionEffect::Rejected {
@@ -1374,33 +1239,15 @@ impl ProjectionState {
         // for this canonical kind.
         match kind {
             k if k == arkret_wire::EventKind::REALM_CREATE => {
-                let entry = serde_json::json!({
-                    "object": payload_object.cloned(),
-                    "owner": owner,
-                    "title": title,
-                    "security_class": payload_security_class,
-                    "federation_policy": payload_federation_policy,
-                    "history_visibility": payload_history_visibility,
-                    "encryption_profile": payload_encryption_profile,
-                    "content_scheme": payload_content_scheme,
-                    "digest_algorithm": payload_digest_algorithm,
-                    "created_at": arkret_canonical::format_timestamp_canonical(now),
-                    "operation_id": operation.operation_id.as_str(),
-                });
                 self.realm_create_cells.insert(
                     realm_id.clone(),
-                    CellState::Value(Value::Array(vec![entry])),
+                    CellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
                 );
-                if let Some(object) = payload_object {
-                    self.realm_metadata_cells.insert(
-                        realm_id.clone(),
-                        CellState::Value(Value::Object(object.clone())),
+                if let Some(genesis) = payload_object {
+                    self.realm_null_subject_cells.insert(
+                        (realm_id.clone(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
+                        CellState::Value(Value::Object(genesis.clone())),
                     );
-                    if let Some(join_rule) = object.get("default_join_rule").and_then(Value::as_str)
-                    {
-                        self.realm_join_rules
-                            .insert(realm_id.clone(), join_rule.to_owned());
-                    }
                 }
                 if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {
                     self.realm_notary_cells
@@ -1427,69 +1274,12 @@ impl ProjectionState {
                         CellState::Value(Value::String(reducer_profile)),
                     );
                 }
-                if let Some(creator) = creator.as_deref() {
-                    self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
-                }
             }
-            k if k == arkret_wire::EventKind::REALM_UPDATE => {
-                // cas-register: latest value wins. Composite of
-                // owner / title / arbitrary other organization fields
-                // pulled from payload (fields the spec evolves can land
-                // here without changing soland code).
-                // Start from the existing cell value so partial updates
-                // retain previously-set fields.
-                let mut value = match self.realm_metadata_cells.get(&realm_id) {
-                    Some(CellState::Value(Value::Object(existing))) => existing.clone(),
-                    _ => serde_json::Map::new(),
-                };
-                if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
-                    for (path, patch_value) in patch {
-                        let field = path.strip_prefix("object.").unwrap_or(path);
-                        if field.contains('.') {
-                            continue;
-                        }
-                        match patch_value.as_object().and_then(|patch_op| {
-                            patch_op
-                                .get("$op")
-                                .and_then(Value::as_str)
-                                .map(|op| (op, patch_op.get("value")))
-                        }) {
-                            Some(("set", Some(next))) => {
-                                value.insert(field.to_owned(), next.clone());
-                            }
-                            Some(("unset" | "remove", _)) => {
-                                value.remove(field);
-                            }
-                            Some(_) => {
-                                return ProjectionEffect::Rejected {
-                                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                                };
-                            }
-                            None => {
-                                value.insert(field.to_owned(), patch_value.clone());
-                            }
-                        }
-                    }
-                }
-                if let Some(o) = owner.as_ref() {
-                    value.insert("owner".to_owned(), Value::String(o.clone()));
-                }
-                if let Some(t) = title.as_ref() {
-                    value.insert("title".to_owned(), Value::String(t.clone()));
-                }
-                if let Some(sc) = payload_security_class.as_ref() {
-                    value.insert("security_class".to_owned(), Value::String(sc.clone()));
-                }
-                if let Some(fp) = payload_federation_policy.as_ref() {
-                    value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
-                }
-                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                value.insert(
-                    "operation_id".to_owned(),
-                    Value::String(operation.operation_id.as_str().to_owned()),
+            k if k == arkret_wire::EventKind::REALM_PROFILE => {
+                self.realm_profile_cells.insert(
+                    realm_id.clone(),
+                    CellState::Value(operation.payload.clone()),
                 );
-                self.realm_metadata_cells
-                    .insert(realm_id.clone(), CellState::Value(Value::Object(value)));
             }
             k if k == arkret_wire::EventKind::REALM_ARCHIVE => {
                 let mut value = serde_json::Map::new();

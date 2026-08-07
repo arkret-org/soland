@@ -119,21 +119,18 @@ pub struct ProjectionState {
     ///   - `memberships` / `banned_members` / `knocking_members` (FSM) — replaced by flat
     ///     `members: BTreeMap<(String, String), SolandMembershipState>` cache + per-actor
     ///     `ak.component.member.state.v1` FSM cell.
-    ///   - `realm_states` (mixed: ordered-log + cas-register) — kept as structured `realm_states`
-    ///     side-band cache (server-side `created_at`/`updated_at`/`deleted` flag) BUT every
-    ///     `apply_realm_lifecycle` now also writes one of: `ak.component.realm.create.v1`
-    ///     (ordered-log, append) / `ak.component.realm.metadata.v1` (cas-register, latest
-    ///     metadata) / `ak.component.realm.destroy.v1` (cas-register, terminal). Helpers:
-    ///     `realm_create_log` / `realm_metadata_cell_value` / `realm_is_destroyed` query cells
-    ///     directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
+    ///   - `realm_states` remains an application-side effective view; protocol truth is split
+    ///     across genesis/create-log/profile/facet/terminal cells. Helpers: `realm_create_log` /
+    ///     `realm_genesis_cell_value` / `realm_profile_cell_value` / `realm_is_destroyed` query
+    ///     cells directly. Durable-event-only fields (`messages` / `reactions` / `read_cursors` /
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
     ///     `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
-    /// Realm-scoped resolved values for the three protocol cell families
+    /// Realm-scoped resolved values for protocol cell families
     /// whose canonical subject is the literal `null`. The Realm id belongs
     /// to the CellStore namespace, not the wire cell id, so these values
     /// cannot safely share the global `cells` map.
-    pub realm_metadata_cells: BTreeMap<String, CellState>,
+    pub realm_profile_cells: BTreeMap<String, CellState>,
     pub realm_create_cells: BTreeMap<String, CellState>,
     pub realm_notary_cells: BTreeMap<String, CellState>,
     pub realm_policy_bundle_cells: BTreeMap<String, CellState>,
@@ -750,7 +747,7 @@ impl ProjectionState {
     /// of accidentally treating it as absent.
     pub fn realm_cell(&self, realm_id: &str, cell_id: &CellRef) -> Option<&CellState> {
         match cell_id.as_str() {
-            arkret_wire::REALM_METADATA_CELL => self.realm_metadata_cells.get(realm_id),
+            arkret_wire::REALM_PROFILE_CELL => self.realm_profile_cells.get(realm_id),
             arkret_wire::REALM_CREATE_CELL => self.realm_create_cells.get(realm_id),
             arkret_wire::REALM_NOTARY_CELL => self.realm_notary_cells.get(realm_id),
             "ak:cell:ak.component.realm.policy_bundle.v1:null" => {
@@ -1020,8 +1017,8 @@ impl ProjectionState {
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
             let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
             match cell.as_str() {
-                arkret_wire::REALM_METADATA_CELL => {
-                    self.realm_metadata_cells
+                arkret_wire::REALM_PROFILE_CELL => {
+                    self.realm_profile_cells
                         .insert(realm_id.to_string(), resolved);
                 }
                 arkret_wire::REALM_CREATE_CELL => {

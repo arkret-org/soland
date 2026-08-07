@@ -100,19 +100,10 @@ pub(super) fn principal_control_genesis_shape(
     object.get("kind").and_then(Value::as_str) == Some(arkret_wire::EventKind::REALM_CREATE)
         && object
             .get("payload")
-            .and_then(|payload| payload.pointer("/object/fields/purpose"))
+            .and_then(|payload| payload.pointer("/object/purpose"))
             .and_then(Value::as_str)
             == Some("principal_control")
-        && object
-            .get("payload")
-            .and_then(|payload| payload.pointer("/object/created_by"))
-            .and_then(Value::as_str)
-            == Some(actor_id)
-        && object
-            .get("payload")
-            .and_then(|payload| payload.pointer("/object/id"))
-            .and_then(Value::as_str)
-            == object.get("realm_id").and_then(Value::as_str)
+        && object.get("actor_id").and_then(Value::as_str) == Some(actor_id)
 }
 
 fn anchor_refs(object: &serde_json::Map<String, Value>) -> Vec<(&str, &str, bool)> {

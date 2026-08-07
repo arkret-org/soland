@@ -687,13 +687,12 @@ pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> S
     let projected = {
         let projection = state.projections().snapshot();
         projection
-            .realm_metadata_cell_value(realm_id)
-            .and_then(discoverability_from_realm_value)
-            .or_else(|| {
-                projection
-                    .realm_create_log(realm_id)
-                    .and_then(|entries| entries.last())
-                    .and_then(discoverability_from_realm_value)
+            .realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_DISCOVERY_V1)
+            .and_then(|value| {
+                value
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.as_str())
             })
             .map(ToOwned::to_owned)
     };
@@ -714,18 +713,6 @@ pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> S
                 "invite_only".to_owned()
             }
         })
-}
-
-fn discoverability_from_realm_value(value: &Value) -> Option<&str> {
-    value
-        .get("default_discoverability")
-        .or_else(|| value.get("discoverability"))
-        .or_else(|| value.pointer("/object/default_discoverability"))
-        .or_else(|| value.pointer("/object/discoverability"))
-        .or_else(|| value.pointer("/value/default_discoverability"))
-        .or_else(|| value.pointer("/value/discoverability"))
-        .and_then(Value::as_str)
-        .filter(|value| is_valid_discoverability(value))
 }
 
 pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &str) -> bool {

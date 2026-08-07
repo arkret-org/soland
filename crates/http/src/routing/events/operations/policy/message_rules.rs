@@ -539,11 +539,6 @@ pub async fn validate_content_encryption_floor(
 ) -> Result<(), &'static str> {
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::REALM_UPDATE)
-                if operation_touches_encryption_profile(operation) =>
-            {
-                return Err(REALM_ENCRYPTION_PROFILE_CREATE_LOCKED);
-            }
             Some(arkret_wire::EventKind::CIRCLE_UPDATE)
                 if operation_touches_encryption_profile(operation) =>
             {
