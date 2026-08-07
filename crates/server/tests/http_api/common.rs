@@ -954,53 +954,6 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&arkret_wire::event_digest_preimage(event).expect("event envelope is an object"))
 }
 
-/// Give `event` the CBA envelope shape its kind's registry row declares.
-///
-/// `event-auth-state-resolution.md` §3 puts `plane` on the cell family, and the
-/// event-kind registry row carries the plane every derived write of that kind
-/// lands in — the same descriptor soland's admission reads through
-/// `arkret_schema::validate_registered_cell_writes_in_context`. §4(1) then makes
-/// a data-plane Event a DataEvent (`seal_ref` + `auth_context`, never
-/// `seal_basis`) and §5 makes a control-plane Event a Control Move
-/// (`seal_basis`, never `seal_ref` / `auth_context`).
-///
-/// Two closed exceptions carry no basis field at all and are listed by §5, not
-/// derived from the kind's plane: the `ak.realm.create` genesis anchor unit and
-/// the B-model `ak.device.reanchor`, which fixes its frontier in
-/// `payload.pre_fence_basis`. Non-reducer-input kinds carry no CBA field either
-/// (`Event::validate_for_submit_structural`).
-fn apply_registered_cba_plane(event: &mut arkret_wire::Event, verification_method: &str) {
-    let Some(descriptor) = event.kind.descriptor().filter(|row| row.reducer_input) else {
-        return;
-    };
-    if matches!(
-        event.kind.as_str(),
-        arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
-    ) {
-        return;
-    }
-    let basis_seal = test_realm_basis_seal(event.realm_id.as_str(), event.actor_id.as_str());
-    match descriptor.plane {
-        Some("data") => {
-            event.seal_ref = Some(basis_seal.id);
-            event.auth_context = Some(arkret_wire::AuthContext {
-                did: event.actor_id.clone(),
-                key_id: verification_method
-                    .split_once('#')
-                    .map_or_else(|| verification_method.to_owned(), |(_, key)| key.to_owned()),
-                key_epoch: 0,
-                credential_epoch: None,
-            });
-        }
-        Some("control") => {
-            event.seal_basis = Some(arkret_wire::SealBasis {
-                leaves: vec![basis_seal.id],
-            });
-        }
-        _ => {}
-    }
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "the fixture mirrors the complete canonical event envelope"
@@ -1015,59 +968,42 @@ pub(crate) fn signed_canonical_event(
     prev_refs: Vec<&str>,
     payload: Value,
 ) -> Value {
-    let now = chrono::Utc::now();
-    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture actor DID");
-    let device_id = if device_id.starts_with("ak:device:") {
-        device_id.to_owned()
-    } else {
-        format!("ak:device:{device_id}")
-    };
-    let verification_method =
-        arkret_wire::DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
-            || format!("{actor_id}#{device_id}"),
-            |key| format!("{actor_id}#{key}"),
-        ))
-        .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
-        kind,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
-                .expect("fixture Realm id"),
-        },
-        actor.clone(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(format!(
-            "{:012x}-0000-00000000",
-            now.timestamp_millis().max(0) as u64
-        ))
-        .expect("fixture HLC"),
-        payload,
-        now,
+    caller_signed_event(
+        event_id, kind, actor_id, device_id, realm_id, actor_seq, prev_refs, payload,
     )
-    .expect("SDK Event builder accepts HTTP fixture");
-    event.prev_refs = prev_refs
-        .into_iter()
-        .map(|event_id| arkret_wire::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
-        .collect();
-    // v1 carries no producer `effects[]`: the receiver derives every write from
-    // `kind + payload` through the registered contract
-    // (`event-and-patch.md` section 2.4.2). What a fixture still owes is the CBA
-    // envelope shape, which follows from the kind's registered plane.
-    apply_registered_cba_plane(&mut event, &verification_method);
-    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        [21_u8; 32],
-        actor,
-        verification_method.clone(),
-    );
-    arkret_signatures::sign_event(
-        &mut event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    .build_value()
+}
+
+/// The shared caller-signed envelope builder, bound to this binary's fixture
+/// basis family.
+///
+/// `soland_test_support::signed_event` owns the envelope: the CBA plane switch,
+/// the device signature and the optional `head_eq` guard are the same everywhere
+/// and used to be restated per test binary. What stays here is only which
+/// fixture basis these HTTP fixtures seal — a different id domain than the one
+/// the standalone integration binaries use, so the two families do not
+/// renumber each other's Seals.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture mirrors the complete canonical event envelope"
+)]
+pub(crate) fn caller_signed_event<'a>(
+    event_id: &'a str,
+    kind: &'a str,
+    actor_id: &'a str,
+    device_id: &'a str,
+    realm_id: &'a str,
+    actor_seq: u64,
+    prev_refs: Vec<&'a str>,
+    payload: Value,
+) -> soland_test_support::signed_event::CallerSignedEvent<'a> {
+    soland_test_support::signed_event::CallerSignedEvent::new(
+        kind, actor_id, device_id, realm_id, payload,
     )
-    .expect("SDK Event signer accepts HTTP fixture");
-    serde_json::to_value(event).expect("SDK Event serializes")
+    .with_event_id(event_id)
+    .with_actor_seq(actor_seq)
+    .with_prev_refs(prev_refs)
+    .with_fixture_basis(HTTP_API_FIXTURE_BASIS)
 }
 
 pub(crate) fn resign_canonical_event(event: &mut Value) {
@@ -1627,35 +1563,20 @@ pub(crate) type TestRealmBasis = soland_services::conformance_basis::Conformance
 ///
 /// MLS security-frontier admission is independent from this ordinary Event
 /// authorization basis.
-/// Cached per-(realm, subject, notary) genesis basis shared by the fixtures.
-type TestRealmBasisCache =
-    std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>;
-
-static TEST_REALM_BASES: LazyLock<TestRealmBasisCache> =
-    LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+/// This binary's fixture basis family.
+///
+/// The id domain is this binary's own so the HTTP fixtures keep the Seal ids
+/// they had before the builder moved into `soland-test-support`; the cache
+/// itself is the shared one, which is what lets [`test_cited_basis_seal`] find a
+/// Seal whichever family minted it.
+pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cba_basis::FixtureBasis<'static> =
+    soland_test_support::cba_basis::FixtureBasis::in_domain(
+        "soland:http_api:realm-basis:",
+        &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
+    );
 
 fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
-    TEST_REALM_BASES
-        .lock()
-        .expect("fixture basis cache")
-        .entry((realm_id.to_owned(), subject.to_owned(), notary.to_owned()))
-        .or_insert_with(|| {
-            let actions = FIXTURE_DATA_PLANE_GRANT_ACTIONS
-                .iter()
-                .map(|action| (*action).to_owned())
-                .collect::<Vec<_>>();
-            soland_services::conformance_basis::build_realm_basis(
-                realm_id,
-                subject,
-                soland_services::conformance_basis::RealmBasisFixtureOptions {
-                    notary_authority: Some(notary),
-                    data_plane_actions: &actions,
-                    fixture_id_domain: "soland:http_api:realm-basis:",
-                },
-            )
-            .expect("fixture Realm basis")
-        })
-        .clone()
+    soland_test_support::cba_basis::realm_basis(realm_id, subject, notary, HTTP_API_FIXTURE_BASIS)
 }
 
 /// The service DID every fixture Realm designates as its notary.
@@ -1719,12 +1640,7 @@ pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::
                 .and_then(|basis| basis.leaves.first())
         })
         .expect("fixture Event cites a basis Seal");
-    TEST_REALM_BASES
-        .lock()
-        .expect("fixture basis cache")
-        .values()
-        .find(|basis| basis.seal.id == *cited)
-        .map(|basis| basis.seal.clone())
+    soland_test_support::cba_basis::basis_seal_with_id(cited)
         .expect("cited Seal was built by this fixture")
 }
 

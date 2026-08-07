@@ -41,46 +41,84 @@ const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
+/// The recovery notary a fixture Realm names, and the organization controlling
+/// it. The organization is deliberately not the Realm creator's: `single_did`
+/// recovery diversity is only satisfied when they differ.
+const FIXTURE_NOTARY_RECOVERY_MEMBER: &str = "did:web:recovery.notary.example";
+const FIXTURE_NOTARY_RECOVERY_ORGANIZATION: &str = "did:web:recovery.organization.example";
 
 /// One fixture Realm's accepted authorization basis for one subject.
-type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
+pub type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
 
-type BasisKey = (String, String, String, Vec<String>);
+/// One fixture family's basis identity.
+///
+/// A basis is only useful if the Seal an Event *names* is the Seal the fixture
+/// *sealed*, so both sides have to agree on the id domain the synthetic grants
+/// are minted in and on the actions the Realm basis grants. Making that pair
+/// explicit is what lets several fixture families share this module without
+/// silently renumbering each other's Seals.
+#[derive(Clone, Copy, Debug)]
+pub struct FixtureBasis<'a> {
+    pub id_domain: &'a str,
+    pub data_plane_actions: &'a [&'a str],
+}
+
+impl<'a> FixtureBasis<'a> {
+    /// This crate's own fixture family.
+    #[must_use]
+    pub const fn shared(data_plane_actions: &'a [&'a str]) -> Self {
+        Self {
+            id_domain: FIXTURE_BASIS_ID_DOMAIN,
+            data_plane_actions,
+        }
+    }
+
+    /// A fixture family that mints its grants in its own id domain.
+    #[must_use]
+    pub const fn in_domain(id_domain: &'a str, data_plane_actions: &'a [&'a str]) -> Self {
+        Self {
+            id_domain,
+            data_plane_actions,
+        }
+    }
+}
+
+type BasisKey = (String, String, String, String, Vec<String>);
 
 static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-fn realm_basis(
+/// The sealed genesis unit `subject` holds in `realm_id`.
+pub fn realm_basis(
     realm_id: &str,
     subject: &str,
     notary: &str,
-    data_plane_actions: &[&str],
+    basis: FixtureBasis<'_>,
 ) -> RealmBasis {
+    let actions = basis
+        .data_plane_actions
+        .iter()
+        .map(|action| (*action).to_owned())
+        .collect::<Vec<_>>();
     let key = (
         realm_id.to_owned(),
         subject.to_owned(),
         notary.to_owned(),
-        data_plane_actions
-            .iter()
-            .map(|action| (*action).to_owned())
-            .collect(),
+        basis.id_domain.to_owned(),
+        actions.clone(),
     );
     REALM_BASES
         .lock()
         .expect("fixture basis cache")
         .entry(key)
         .or_insert_with(|| {
-            let actions = data_plane_actions
-                .iter()
-                .map(|action| (*action).to_owned())
-                .collect::<Vec<_>>();
             soland_services::conformance_basis::build_realm_basis(
                 realm_id,
                 subject,
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
                     notary_authority: Some(notary),
                     data_plane_actions: &actions,
-                    fixture_id_domain: FIXTURE_BASIS_ID_DOMAIN,
+                    fixture_id_domain: basis.id_domain,
                 },
             )
             .expect("fixture Realm basis")
@@ -89,8 +127,25 @@ fn realm_basis(
 }
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
-pub fn realm_basis_seal(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> Seal {
-    realm_basis(realm_id, subject, &fixture_notary_did(), data_plane_actions).seal
+pub fn realm_basis_seal(realm_id: &str, subject: &str, basis: FixtureBasis<'_>) -> Seal {
+    realm_basis(realm_id, subject, &fixture_notary_did(), basis).seal
+}
+
+/// The fixture basis Seal an already-built Event cites.
+///
+/// Federation disclosure is keyed off the transported Event, not off its actor:
+/// a `cba_proof_bundles` entry has to be reachable from some transported
+/// `seal_ref` or `seal_basis.leaves` entry. So a fixture that re-authors an
+/// Event after the envelope was built has to disclose the Seal the envelope
+/// still names, whichever fixture family minted it.
+#[must_use]
+pub fn basis_seal_with_id(seal_id: &SealId) -> Option<Seal> {
+    REALM_BASES
+        .lock()
+        .expect("fixture basis cache")
+        .values()
+        .find(|basis| basis.seal.id == *seal_id)
+        .map(|basis| basis.seal.clone())
 }
 
 /// The service DID every fixture Realm designates as its notary.
@@ -114,10 +169,10 @@ pub async fn seed_realm_basis(
     state: &AppState,
     realm_id: &str,
     subject: &str,
-    data_plane_actions: &[&str],
+    fixture_basis: FixtureBasis<'_>,
 ) -> SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis = realm_basis(realm_id, subject, state.service_id(), data_plane_actions);
+    let basis = realm_basis(realm_id, subject, state.service_id(), fixture_basis);
     state
         .test_put_seal(&basis.seal)
         .expect("fixture basis Seal");
@@ -137,6 +192,65 @@ pub async fn seed_realm_basis(
         }
     }
     basis.seal.id
+}
+
+/// The `ak.realm.create` payload a fixture Realm's genesis Event carries.
+///
+/// `realm-and-space.md` section 2.5 makes the genesis Event the sole writer of
+/// the Realm's registered cells, and `realm_create_payload` requires every field
+/// they derive from — `reducer_profile` included, which admission then reads off
+/// `ak.component.realm.reducer_profile.v1` for every later Event in the Realm.
+/// The object carries no `id`: the Realm id is derived from the Event.
+///
+/// This is shared rather than restated per fixture because a partial payload
+/// does not fail as "this fixture is incomplete" — it fails as a 400 on the
+/// genesis submit, several layers away from whatever the test was about.
+///
+/// The `single_did` notary carries real recovery evidence: `realm.schema.json`
+/// requires `recovery_members` and `recovery_controller_organizations` to be
+/// non-empty, and the reducer requires at least one recovery controller
+/// organization to differ from `controller_organization` — a single-organization
+/// recovery setup is exactly what that rule rejects. A fixture that seeded
+/// empty arrays only got away with it because it wrote straight to persistence
+/// and never met the schema.
+#[must_use]
+pub fn realm_genesis_payload(
+    subject: &str,
+    notary_did: &str,
+    title: &str,
+    trust_domain: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "object": {
+            "schema": "ak.schema.realm.v1",
+            "title": title,
+            "summary": "Soland integration-test Realm",
+            "created_by": subject,
+            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+            "trust_domain": trust_domain,
+            "schema_refs": ["ak.schema.realm.v1"],
+            "default_discoverability": "unlisted",
+            "default_join_rule": "invite",
+            "history_visibility": "shared",
+            "encryption_profile": "none",
+            "security_class": "standard",
+            "federation_policy": "restricted",
+            "notary_profile": "single_did",
+            "digest_algorithm": "sha256",
+            "capability_action_registry_digest":
+                arkret_policy::current_capability_action_registry_digest()
+                    .expect("fixture capability action registry digest"),
+            "notary": {
+                "kind": "single_did",
+                "did": notary_did,
+                "recovery_members": [FIXTURE_NOTARY_RECOVERY_MEMBER],
+                "controller_organization": subject,
+                "recovery_controller_organizations": [FIXTURE_NOTARY_RECOVERY_ORGANIZATION]
+            },
+            "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+        }
+    })
 }
 
 /// Store the Realm's canonical `ak.realm.create`.
@@ -180,37 +294,13 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let payload = serde_json::json!({
-        "object": {
-            "schema": "ak.schema.realm.v1",
-            "title": "Fixture Realm",
-            "summary": "Soland integration-test Realm",
-            "created_by": subject,
-            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-            "trust_domain": "ak:trust_domain:soland.test",
-            "schema_refs": ["ak.schema.realm.v1"],
-            "default_discoverability": "unlisted",
-            "default_join_rule": "invite",
-            "history_visibility": "shared",
-            "encryption_profile": "none",
-            "security_class": "standard",
-            "federation_policy": "restricted",
-            "notary_profile": "single_did",
-            "digest_algorithm": "sha256",
-            "capability_action_registry_digest":
-                arkret_policy::current_capability_action_registry_digest()
-                    .expect("fixture capability action registry digest"),
-            "notary": {
-                "kind": "single_did",
-                "did": state.service_id(),
-                "recovery_members": [],
-                "controller_organization": subject,
-                "recovery_controller_organizations": []
-            },
-            "created_at": arkret_canonical::format_timestamp_canonical(created_at)
-        }
-    });
-    let mut payload = payload;
+    let mut payload = realm_genesis_payload(
+        subject,
+        state.service_id(),
+        "Fixture Realm",
+        "ak:trust_domain:soland.test",
+        created_at,
+    );
     if is_principal_control_realm {
         payload["object"]["fields"] = serde_json::json!({"purpose": "principal_control"});
     }
@@ -289,25 +379,37 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
 pub fn apply_registered_cba_plane(
     event: &mut arkret_wire::Event,
     verification_method: &str,
-    data_plane_actions: &[&str],
+    basis: FixtureBasis<'_>,
 ) {
-    let Some(descriptor) = event.kind.descriptor().filter(|row| row.reducer_input) else {
-        return;
-    };
-    if matches!(
-        event.kind.as_str(),
-        arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
-    ) {
+    if !carries_a_cba_basis(event) {
         return;
     }
-    let basis = realm_basis_seal(
-        event.realm_id.as_str(),
-        event.actor_id.as_str(),
-        data_plane_actions,
-    );
-    match descriptor.plane {
+    let seal = realm_basis_seal(event.realm_id.as_str(), event.actor_id.as_str(), basis);
+    apply_registered_cba_plane_seal(event, verification_method, seal.id);
+}
+
+/// Give `event` the CBA envelope shape its kind's registry row declares, citing
+/// a Seal this deployment already accepted.
+///
+/// A Realm bootstrapped through the real `ak.realm.create` batch has a genuine
+/// accepted Seal on its frontier, and its Moves have to cite *that* — the
+/// synthetic basis of [`realm_basis_seal`] belongs to a Realm that was stood up
+/// straight in `AppState` and covers nothing the notary ever sealed.
+pub fn apply_registered_cba_plane_seal(
+    event: &mut arkret_wire::Event,
+    verification_method: &str,
+    seal_id: SealId,
+) {
+    if !carries_a_cba_basis(event) {
+        return;
+    }
+    let plane = event
+        .kind
+        .descriptor()
+        .and_then(|descriptor| descriptor.plane);
+    match plane {
         Some("data") => {
-            event.seal_ref = Some(basis.id);
+            event.seal_ref = Some(seal_id);
             event.auth_context = Some(arkret_wire::AuthContext {
                 did: event.actor_id.clone(),
                 key_id: verification_method
@@ -319,9 +421,18 @@ pub fn apply_registered_cba_plane(
         }
         Some("control") => {
             event.seal_basis = Some(SealBasis {
-                leaves: vec![basis.id],
+                leaves: vec![seal_id],
             });
         }
         _ => {}
     }
+}
+
+/// Whether `event`'s kind owes a CBA basis field at all.
+fn carries_a_cba_basis(event: &arkret_wire::Event) -> bool {
+    event.kind.descriptor().is_some_and(|row| row.reducer_input)
+        && !matches!(
+            event.kind.as_str(),
+            arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
+        )
 }

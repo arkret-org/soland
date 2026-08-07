@@ -634,17 +634,14 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     // DataEvent's `seal_ref` has to resolve to a Seal whose covered state
     // authorizes the receiver-derived writes — so the genesis unit is sealed
     // here, per author, before the envelope names it.
-    soland_test_support::cba_basis::seed_realm_basis(
-        state,
-        realm_id,
-        actor_id,
-        &DATA_PLANE_GRANT_ACTIONS,
-    )
-    .await;
+    let fixture_basis =
+        soland_test_support::cba_basis::FixtureBasis::shared(&DATA_PLANE_GRANT_ACTIONS);
+    soland_test_support::cba_basis::seed_realm_basis(state, realm_id, actor_id, fixture_basis)
+        .await;
     soland_test_support::cba_basis::apply_registered_cba_plane(
         &mut event,
         &verification_method,
-        &DATA_PLANE_GRANT_ACTIONS,
+        fixture_basis,
     );
     let seed = if actor_id == BOB_DID.as_str() {
         [22_u8; 32]

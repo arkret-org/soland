@@ -2,6 +2,7 @@
 
 pub mod cba_basis;
 pub mod sealed_grant;
+pub mod signed_event;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;

@@ -966,8 +966,16 @@ pub(crate) async fn post_recovery_policy(
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
     seed_realm_create_proposal_policy(&state, &realm, principal_id).await;
-    soland_test_support::cba_basis::seed_realm_basis(&state, &realm_id, principal_id, &[]).await;
-    let basis = soland_test_support::cba_basis::realm_basis_seal(&realm_id, principal_id, &[]);
+    let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
+    soland_test_support::cba_basis::seed_realm_basis(
+        &state,
+        &realm_id,
+        principal_id,
+        fixture_basis,
+    )
+    .await;
+    let basis =
+        soland_test_support::cba_basis::realm_basis_seal(&realm_id, principal_id, fixture_basis);
     seed_local_notary_authority(&state, &realm, &basis);
     let prior = state
         .test_persistence()
@@ -1011,7 +1019,7 @@ pub(crate) async fn post_recovery_policy(
     soland_test_support::cba_basis::apply_registered_cba_plane(
         &mut event,
         &event_verification_method,
-        &[],
+        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
     );
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         event_signing_key.clone(),
