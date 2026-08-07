@@ -450,8 +450,8 @@ async fn persist_key_backup_idempotency(
     }
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.query.list", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.read.list", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.read.list"))]
 pub(crate) async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,

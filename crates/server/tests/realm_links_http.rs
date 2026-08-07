@@ -145,12 +145,11 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
 /// The accepted Seal a Control Move of `realm_id` cites in `seal_basis`.
 async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> SealId {
     for attempt in 0..50 {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state))
+            .await;
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {

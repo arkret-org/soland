@@ -72,7 +72,7 @@ async fn configured_cors_allows_only_explicit_origin() {
 #[tokio::test]
 async fn configured_cors_allows_query_reads_and_message_signature_headers() {
     // api-conventions.md §5 binds canonical `read` operations to RFC 10008
-    // `QUERY`, and §3 requires RFC 9421 message signatures on sensitive reads.
+    // `QUERY`, and §3 requires RFC 9421 message signatures on protected self operations.
     // A browser preflight that omits either the method or the signature
     // headers blocks the request before it ever reaches the router.
     let mut config = test_config();
@@ -399,7 +399,8 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .unwrap();
     assert_eq!(sync["service_id"], service_id);
 
-    let events: Value = TestClient::get("http://server/_arkret/self/events/describe")
+    let events: Value = TestClient::query("http://server/_arkret/self/events/describe")
+        .json(&serde_json::json!({}))
         .send(&service)
         .await
         .take_json()

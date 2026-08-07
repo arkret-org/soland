@@ -12,7 +12,7 @@ and the project tracks Arkret v1 spec revisions.
 
 ## R3.3 — Spec sync 2026-05-28 (arkret-spec @ cced4b8)
 
-- R3.3 spec sync — pin to arkret-spec @ cced4b8 (AKP-0011 shareable object addressing / `ak.find.directory.query.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
+- R3.3 spec sync — pin to arkret-spec @ cced4b8 (AKP-0011 shareable object addressing / `ak.find.directory.read.resolve_target`: N/A for this service; object-address resolution belongs to the Directory Service).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 ## R3.2 — Spec sync 2026-05-28 (arkret-spec @ b56cab1)
@@ -29,7 +29,7 @@ and the project tracks Arkret v1 spec revisions.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: protocol reason codes are emitted from concrete validation and handler paths; obsolete round-scoped grouping helpers are not part of the runtime surface.
-- PROF-1: `ak.profile.media_service_binding.v1` advertised in `ak.server.query.describe.supported_profiles` (`src/wire.rs`).
+- PROF-1: `ak.profile.media_service_binding.v1` advertised in `ak.server.read.describe.supported_profiles` (`src/wire.rs`).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 
@@ -93,8 +93,8 @@ on the reducer / federation / state-machine surfaces. See
 - **BREAKING** `ak.realm.create` reducer now captures and locks `trust_domain`
   as immutable Realm state. Subsequent mismatching events reject with
   `cross_domain_replay_rejected`.
-- **BREAKING** `ServiceDescribe` v2: `ak.server.query.describe` /
-  `ak.self.account.query.describe` / `ak.self.events.read.describe` / `ak.edge.applet.query.describe` all return
+- **BREAKING** `ServiceDescribe` v2: `ak.server.read.describe` /
+  `ak.self.account.read.describe` / `ak.self.events.read.describe` / `ak.edge.applet.read.describe` all return
   the 17-field canonical envelope (including `trust_domain`,
   `plaintext_visibility`, `claimed_profiles`, `verified_profiles`,
   `development_mode`); `development_mode=true` with non-empty

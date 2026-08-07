@@ -42,8 +42,8 @@ Operator-visible highlights:
 - **`trust_domain` is now immutable on a Realm** — captured by
   `ak.realm.create` and locked thereafter. Cross-domain replays reject
   with `cross_domain_replay_rejected`.
-- **`ServiceDescribe` v2** — `ak.server.query.describe` / `ak.self.account.query.describe` /
-  `ak.self.events.read.describe` / `ak.edge.applet.query.describe` return the 17-field
+- **`ServiceDescribe` v2** — `ak.server.read.describe` / `ak.self.account.read.describe` /
+  `ak.self.events.read.describe` / `ak.edge.applet.read.describe` return the 17-field
   canonical envelope, including `trust_domain` / `plaintext_visibility` /
   `verified_profiles` / `development_mode` and a `rate_limit` oneOf.
 - **`/events/frontier` split by role** — `peer_role` query param routes

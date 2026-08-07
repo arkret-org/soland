@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn sol_org_06_lifecycle_phase_split() {
         // SOL-ORG-06 read contract: the org-relationship projection the
-        // `ak.self.realm_organization.query.list` handler reads must expose
+        // `ak.self.realm_organization.read.list` handler reads must expose
         // BOTH the active and the revoked statement, with exactly the active,
         // in-window one classified `verified_active` (the others
         // `revoked_or_expired`). An org with a currently-verified statement is

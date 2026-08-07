@@ -90,7 +90,8 @@ fn resign_federation_event(event: Value) -> Value {
 #[tokio::test]
 async fn peer_events_describe_advertises_formal_surface() {
     let state = soland_test_support::app_state(test_config());
-    let describe: Value = TestClient::get("http://server/_arkret/peer/events/describe")
+    let describe: Value = TestClient::query("http://server/_arkret/peer/events/describe")
+        .json(&serde_json::json!({}))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -110,13 +111,13 @@ async fn peer_events_describe_advertises_formal_surface() {
             .iter()
             .any(|op| op == "ak.peer.events.read.frontier")
     );
-    // `ak.peer.snapshot.query.manifest_head` MUST NOT be declared while soland cannot
+    // `ak.peer.snapshot.read.manifest_head` MUST NOT be declared while soland cannot
     // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
     // answers `not_implemented` instead (service-surface.md §5.2).
     assert!(
         !operations
             .iter()
-            .any(|op| op == "ak.peer.snapshot.query.manifest_head")
+            .any(|op| op == "ak.peer.snapshot.read.manifest_head")
     );
 }
 
@@ -135,10 +136,19 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     resign_canonical_event(&mut event);
     put_event_record(&state, event, created_at).await;
 
-    let query_target =
-        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ak.message.create");
-    let mut query = TestClient::get(query_target.clone());
-    for (name, value) in peer_get_headers(&query_target) {
+    let read_body = serde_json::json!({
+        "filters": {"kind": "ak.message.create"},
+        "realms": [TEST_REALM_ID]
+    });
+    let query_target = "http://server/_arkret/peer/events";
+    let mut query = TestClient::query(query_target).json(&read_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        query_target,
+        &read_body,
+    ) {
         query = query.add_header(name, value, true);
     }
     let page: Value = query
@@ -165,36 +175,16 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
 
-    let read_body = serde_json::json!({
-        "filters": {"kind": "ak.message.create"},
-        "realms": [TEST_REALM_ID]
-    });
-    let query_target = "http://server/_arkret/peer/events";
-    let mut canonical_query = TestClient::query(query_target).json(&read_body);
+    let frontier_target = "http://server/_arkret/peer/events/frontier";
+    let frontier_body = serde_json::json!({"realm_id": TEST_REALM_ID});
+    let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
     for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
         SERVICE_ID,
         DESTINATION_TRUST_DOMAIN,
-        query_target,
-        &read_body,
+        frontier_target,
+        &frontier_body,
     ) {
-        canonical_query = canonical_query.add_header(name, value, true);
-    }
-    let canonical_page: Value = canonical_query
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(
-        canonical_page, page,
-        "peer QUERY and GET must share semantics"
-    );
-
-    let frontier_target =
-        format!("http://server/_arkret/peer/events/frontier?realm_id={TEST_REALM_ID}");
-    let mut frontier = TestClient::get(frontier_target.clone());
-    for (name, value) in peer_get_headers(&frontier_target) {
         frontier = frontier.add_header(name, value, true);
     }
     let frontier: Value = frontier
@@ -380,10 +370,16 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
         put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
     }
 
-    let frontier_target =
-        format!("http://server/_arkret/peer/events/frontier?realm_id={TEST_REALM_ID}");
-    let mut frontier = TestClient::get(frontier_target.clone());
-    for (name, value) in peer_get_headers(&frontier_target) {
+    let frontier_target = "http://server/_arkret/peer/events/frontier";
+    let frontier_body = serde_json::json!({"realm_id": TEST_REALM_ID});
+    let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        frontier_target,
+        &frontier_body,
+    ) {
         frontier = frontier.add_header(name, value, true);
     }
     let frontier: Value = frontier
@@ -593,10 +589,19 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     resign_canonical_event(&mut event);
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
-    let query_target =
-        format!("http://server/_arkret/peer/events?realms={TEST_REALM_ID}&kind=ak.message.create");
-    let mut query = TestClient::get(query_target.clone());
-    for (name, value) in peer_get_headers(&query_target) {
+    let query_target = "http://server/_arkret/peer/events";
+    let query_body = serde_json::json!({
+        "filters": {"kind": "ak.message.create"},
+        "realms": [TEST_REALM_ID]
+    });
+    let mut query = TestClient::query(query_target).json(&query_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        query_target,
+        &query_body,
+    ) {
         query = query.add_header(name, value, true);
     }
     let page: Value = query
@@ -620,8 +625,8 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         "event_ids": [hidden_event_id],
         "include_payload": true
     });
-    let mut resolve = TestClient::post(resolve_target).json(&resolve_body);
-    for (name, value) in signed_federation_push_headers(
+    let mut resolve = TestClient::query(resolve_target).json(&resolve_body);
+    for (name, value) in signed_federation_query_headers(
         PEER_SOURCE_DID,
         SERVICE_ID,
         DESTINATION_TRUST_DOMAIN,
@@ -938,15 +943,6 @@ async fn submit_peer_event(state: AppState, event: &Value) -> Value {
         .take_json()
         .await
         .unwrap()
-}
-
-fn peer_get_headers(target_uri: &str) -> Vec<(&'static str, String)> {
-    signed_federation_get_headers(
-        PEER_SOURCE_DID,
-        SERVICE_ID,
-        DESTINATION_TRUST_DOMAIN,
-        target_uri,
-    )
 }
 
 async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str, member_did: &str) {

@@ -262,7 +262,7 @@ pub(super) async fn mimi_room_message(
 
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ak.message.create` projection event so
-    // the message shows up in `GET /_arkret/self/events?realm_id=...`. The
+    // the message shows up in `QUERY /_arkret/self/events`. The
     // MIMI provenance metadata is preserved verbatim under
     // `payload.mimi_provenance` so audit consumers can verify the
     // message arrived through the facade.
@@ -368,11 +368,11 @@ pub(super) async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.query.group_info",
+    operation_id = "ak.open.mimi.read.group_info",
     summary = "Get MIMI group info",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.query.group_info"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.group_info"))]
 pub(super) async fn mimi_group_info(
     strand_id: PathParam<String>,
     depot: &mut Depot,
@@ -398,7 +398,7 @@ pub(super) async fn mimi_group_info(
     };
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.query.group_info",
+        "ak.open.mimi.read.group_info",
         &json!({"room_id": room_id}),
         json!({
             "truth_source": "arkret_signed_event_reducer",
@@ -699,11 +699,11 @@ pub(super) fn request_has_bearer_session(req: &Request) -> bool {
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.query.identifiers",
+    operation_id = "ak.open.mimi.read.identifiers",
     summary = "Query MIMI identifiers",
     tags("mimi")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.query.identifiers"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.identifiers"))]
 pub(super) async fn mimi_identifiers_query(
     body: JsonBody<MimiIdentifierQueryRequestBody>,
     depot: &mut Depot,
@@ -751,7 +751,7 @@ pub(super) async fn mimi_identifiers_query(
     }
     let _receipt = mimi_receipt(
         state,
-        "ak.open.mimi.query.identifiers",
+        "ak.open.mimi.read.identifiers",
         &body,
         json!({
             "contact_graph_exposed": false,

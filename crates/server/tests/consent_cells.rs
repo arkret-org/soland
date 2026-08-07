@@ -270,12 +270,11 @@ async fn realm_seal_basis(
 ) -> arkret_wire::SealBasis {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     let body = loop {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(app)
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("Authorization", format!("Bearer {token}"), true)
+            .send(app)
+            .await;
         let status = response.status_code.expect("Realm Seal frontier status");
         let body = response.take_string().await.unwrap_or_default();
         if status == StatusCode::OK {
@@ -369,15 +368,14 @@ async fn submit_event(
     payload: Value,
 ) -> Value {
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-        ))
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .send(app)
-        .await
-        .take_json()
-        .await
-        .expect("typed actor Realm frontier");
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .add_header("Authorization", format!("Bearer {token}"), true)
+            .send(app)
+            .await
+            .take_json()
+            .await
+            .expect("typed actor Realm frontier");
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {

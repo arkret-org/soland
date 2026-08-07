@@ -1,12 +1,12 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.query.private_contact_discovery",
+    operation_id = "ak.find.directory.read.private_contact_discovery",
     tags("spaces")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.find.directory.query.private_contact_discovery")
+    fields(op = "ak.find.directory.read.private_contact_discovery")
 )]
 pub(super) async fn private_contact_discovery(
     body: JsonBody<DirectoryPrivateContactDiscoveryRequestBody>,

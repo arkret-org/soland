@@ -472,7 +472,7 @@ fn method_allowed(config: &AppConfig, method: &str) -> bool {
 
 /// STA-07-002 — the canonical generic server-describe path. The resolver
 /// freshness probe targets this endpoint (operation_id
-/// `ak.server.query.describe`, schema `service-describe.schema.json`).
+/// `ak.server.read.describe`, schema `service-describe.schema.json`).
 pub const CANONICAL_DESCRIBE_PATH: &str = "/_arkret/describe";
 
 /// Probe an external webvh provider's canonical describe endpoint
@@ -569,9 +569,9 @@ fn validate_webvh_provider_describe(
     {
         return Err("webvh provider is in development_mode".to_owned());
     }
-    if !string_array_contains(body.get("supported_operations"), "ak.server.query.describe") {
+    if !string_array_contains(body.get("supported_operations"), "ak.server.read.describe") {
         return Err(
-            "webvh provider describe does not advertise ak.server.query.describe".to_owned(),
+            "webvh provider describe does not advertise ak.server.read.describe".to_owned(),
         );
     }
     Ok(())
@@ -926,7 +926,7 @@ mod tests {
             "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
-            "supported_operations": ["ak.server.query.describe"]
+            "supported_operations": ["ak.server.read.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
@@ -943,7 +943,7 @@ mod tests {
             "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
-            "supported_operations": ["ak.server.query.describe"]
+            "supported_operations": ["ak.server.read.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,

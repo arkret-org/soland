@@ -371,11 +371,11 @@ pub(crate) async fn fanout_actor_private_update(
 }
 
 #[endpoint(
-    operation_id = "ak.self.device_messages.query.list",
+    operation_id = "ak.self.device_messages.read.list",
     summary = "List pending device messages",
     tags("device_messages")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.read.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
     after: QueryParam<String, false>,

@@ -252,15 +252,14 @@ async fn submit_actor_private_event(
     payload: Value,
 ) -> Value {
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .expect("typed actor Realm frontier");
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .expect("typed actor Realm frontier");
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {

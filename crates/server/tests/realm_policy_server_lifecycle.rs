@@ -344,15 +344,14 @@ async fn delete_policy_server(
 }
 
 async fn policy_server_events(state: &AppState, token: &str, realm_id: &str) -> Vec<Value> {
-    let events: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&limit=200"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [realm_id], "limit": 200}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     events["events"]
         .as_array()
         .expect("events array")
@@ -376,12 +375,11 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 
 async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -> String {
     for attempt in 0..50 {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {

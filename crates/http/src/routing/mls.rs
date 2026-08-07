@@ -704,8 +704,8 @@ async fn peer_claim_keypackage(
     Err(peer_claim_failed())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.keypackages.query.claim", tags("mls.rs"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.query.claim"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.keypackages.read.claim", tags("mls.rs"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.read.claim"))]
 async fn peer_query_keypackage_claim(
     depot: &mut Depot,
     req: &mut Request,

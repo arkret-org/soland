@@ -107,8 +107,8 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
         )
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.query.ping", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.ping", tags("extensions"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_id = Did::new(state.service_id().clone()).map_err(|error| {
@@ -122,8 +122,8 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.query.describe", tags("extensions"))]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.describe"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.read.describe", tags("extensions"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
     json_ok(AppletProtocolDescribeOutcome {
         contract: "ak.applet.v1".to_owned(),
@@ -708,11 +708,8 @@ async fn transaction_endpoint(
     json_ok(outcome)
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.actor.query.resolve",
-    tags("extensions")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.actor.read.resolve", tags("extensions"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.read.resolve"))]
 async fn resolve_actor_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -742,11 +739,8 @@ async fn resolve_actor_endpoint(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.realm.query.resolve",
-    tags("extensions")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.realm.read.resolve", tags("extensions"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.read.resolve"))]
 async fn resolve_realm_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -790,10 +784,10 @@ async fn resolve_realm_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.query.protocol_metadata",
+    operation_id = "ak.edge.applet.read.protocol_metadata",
     tags("extensions")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.protocol_metadata"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.protocol_metadata"))]
 async fn protocol_metadata_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -852,10 +846,10 @@ async fn protocol_metadata_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.third_party_users.query.list",
+    operation_id = "ak.edge.applet.third_party_users.read.list",
     tags("extensions")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.read.list"))]
 async fn third_party_users_endpoint(
     req: &mut Request,
     depot: &mut Depot,
@@ -902,12 +896,12 @@ async fn third_party_users_endpoint(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.edge.applet.third_party_locations.query.list",
+    operation_id = "ak.edge.applet.third_party_locations.read.list",
     tags("extensions")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.edge.applet.third_party_locations.query.list")
+    fields(op = "ak.edge.applet.third_party_locations.read.list")
 )]
 async fn third_party_locations_endpoint(
     req: &mut Request,

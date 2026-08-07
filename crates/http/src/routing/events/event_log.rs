@@ -1,12 +1,12 @@
 //! Signed Event Envelope ingestion + read API (`/_arkret/self/events/*`).
 //!
 //! Surfaces:
-//! - `GET  /_arkret/self/events/describe`  — declare the active event registry, schema/reducer
+//! - `QUERY /_arkret/self/events/describe` — declare the active event registry, schema/reducer
 //!   profiles, and limits.
 //! - `POST /_arkret/self/events`           — submit one canonical Event Envelope or an `events[]`
 //!   account-client batch.
 //! - `GET  /_arkret/self/events/{event_id}` — fetch one envelope.
-//! - `POST /_arkret/self/events/resolve`    — resolve up to `MAX_EVENT_RESOLVE`.
+//! - `QUERY /_arkret/self/events/resolve`  — resolve up to `MAX_EVENT_RESOLVE`.
 //! - `GET  /_arkret/self/events`            — paginated list (filtered by actor / realm).
 //! - `GET  /_arkret/self/events/frontier`   — per-actor / per-realm frontier.
 //!

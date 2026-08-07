@@ -144,12 +144,11 @@ async fn realm_seal_frontier(
     realm_id: &str,
 ) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
     for attempt in 0..50 {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         if status == Some(StatusCode::OK) {

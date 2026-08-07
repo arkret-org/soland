@@ -12,34 +12,19 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("control-proposal-acks")
                 .post(super::control_proposal_ack_issue::issue_control_proposal_ack),
         )
-        .push(
-            Router::with_path("events/describe")
-                .query(events_describe)
-                .get(events_describe),
-        )
+        .push(Router::with_path("events/describe").query(events_describe))
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(
             Router::with_path("events")
                 .post(submit_event)
-                .query(super::super::sync::events_read_body)
-                .get(super::super::sync::events_query),
+                .query(super::super::sync::events_read_body),
         )
-        .push(Router::with_path("events/query").post(super::super::sync::events_read_body))
-        .push(
-            Router::with_path("events/resolve")
-                .query(resolve_events)
-                .post(resolve_events),
-        )
-        .push(
-            Router::with_path("events/frontier")
-                .query(events_frontier)
-                .get(events_frontier),
-        )
+        .push(Router::with_path("events/resolve").query(resolve_events))
+        .push(Router::with_path("events/frontier").query(events_frontier))
         .push(Router::with_path("events/seals").post(submit_event_seal))
         .push(
             Router::with_path("events/mls-governance-proof")
-                .query(super::governance_proof::mls_governance_proof)
-                .post(super::governance_proof::mls_governance_proof),
+                .query(super::governance_proof::mls_governance_proof),
         )
         .push(Router::with_path("events/{event_id}").get(get_event))
 }

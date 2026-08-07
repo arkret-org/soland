@@ -484,15 +484,14 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .as_str()
         .unwrap_or_else(|| panic!("event_ref missing: {msg_resp}"));
 
-    let events: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={demo_realm}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [demo_realm]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
 
     let binding_event = list
@@ -555,15 +554,14 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         "report response: {report_resp}"
     );
 
-    let events_again: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={demo_realm}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events_again: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [demo_realm]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let report_event = events_again["events"]
         .as_array()
         .unwrap()
@@ -817,15 +815,14 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
         .unwrap_or_else(|| panic!("quarantine event id: {quarantine_resp}"))
         .to_owned();
 
-    let events: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [realm_id]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&service)
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let list = events["events"].as_array().expect("events array");
     let find = |event_id: &str| {
         list.iter()

@@ -2,8 +2,8 @@
 //! `open` template). Mounted UNAUTHENTICATED under `/_arkret/open`:
 //!
 //! - `POST /_arkret/open/device-pairing/requests`         — `ak.open.device_pairing.command.stage`
-//! - `POST /_arkret/open/device-pairing/resolve`          — `ak.open.device_pairing.query.resolve`
-//! - `POST /_arkret/open/device-pairing/requests/status`  — `ak.open.device_pairing.query.status`
+//! - `POST /_arkret/open/device-pairing/resolve`          — `ak.open.device_pairing.read.resolve`
+//! - `POST /_arkret/open/device-pairing/requests/status`  — `ak.open.device_pairing.read.status`
 //!
 //! Security: the staged row is account-less and grants nothing until a verified
 //! device drives the authenticated `ak.gate.account.command.pair_device`. These
@@ -130,11 +130,11 @@ pub(super) async fn stage_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.query.resolve",
+    operation_id = "ak.open.device_pairing.read.resolve",
     summary = "Resolve a device pairing bootstrap",
     tags("device_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.resolve"))]
 pub(super) async fn resolve_device_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -214,11 +214,11 @@ pub(super) async fn resolve_device_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.open.device_pairing.query.status",
+    operation_id = "ak.open.device_pairing.read.status",
     summary = "Poll a device pairing request status",
     tags("device_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.query.status"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.device_pairing.read.status"))]
 pub(super) async fn device_pairing_status(
     depot: &mut Depot,
     req: &mut Request,

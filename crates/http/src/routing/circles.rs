@@ -345,11 +345,11 @@ fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> O
 // ── Handlers ────────────────────────────────────────────────────────────
 
 #[endpoint(
-    operation_id = "ak.self.circle.query.list",
+    operation_id = "ak.self.circle.read.list",
     summary = "List circles",
     tags("circles")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.circle.read.list"))]
 async fn list_circles(
     aa: AuthArgs,
     realm_id: QueryParam<String, true>,

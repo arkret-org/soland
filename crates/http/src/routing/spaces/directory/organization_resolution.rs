@@ -1,10 +1,10 @@
 use super::*;
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.query.search_organizations",
+    operation_id = "ak.find.directory.read.search_organizations",
     tags("spaces")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_organizations"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.search_organizations"))]
 pub(super) async fn search_organizations(
     body: JsonBody<DirectorySearchOrganizationsRequestBody>,
     depot: &mut Depot,
@@ -38,10 +38,10 @@ pub(super) async fn search_organizations(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.query.resolve_organization",
+    operation_id = "ak.find.directory.read.resolve_organization",
     tags("spaces")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_organization"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_organization"))]
 pub(super) async fn resolve_organization(
     body: JsonBody<DirectoryResolveOrganizationRequestBody>,
     depot: &mut Depot,

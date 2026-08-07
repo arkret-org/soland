@@ -813,11 +813,11 @@ pub(super) async fn renew_agent_pairing(
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.query.list",
+    operation_id = "ak.self.agent.read.list",
     summary = "List agents",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.read.list"))]
 pub(super) async fn list_agents(
     aa: AuthArgs,
     depot: &mut Depot,

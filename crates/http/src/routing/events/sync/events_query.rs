@@ -545,18 +545,6 @@ fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::Ap
     }
 }
 
-fn events_query_filters_param(
-    req: &Request,
-) -> Result<Option<Value>, soland_http::error::AppError> {
-    query_param(req, "filters")
-        .map(|value| {
-            serde_json::from_str(&value).map_err(|_| {
-                soland_http::error::AppError::invalid_param("filters must be a JSON value")
-            })
-        })
-        .transpose()
-}
-
 fn reject_events_query_filter_digest_pseudo_fields(
     filters: Option<&Value>,
 ) -> Result<(), soland_http::error::AppError> {
@@ -580,17 +568,6 @@ fn value_contains_filter_digest_pseudo_field(value: &Value) -> bool {
         Value::Array(values) => values.iter().any(value_contains_filter_digest_pseudo_field),
         _ => false,
     }
-}
-
-fn reject_events_query_filter_digest_query_params(
-    req: &Request,
-) -> Result<(), soland_http::error::AppError> {
-    if query_param(req, "_filter_digest").is_some() || query_param(req, "filter_digest").is_some() {
-        return Err(soland_http::error::AppError::invalid_param(
-            "cursor filter_digest is server-derived",
-        ));
-    }
-    Ok(())
 }
 
 fn events_query_scope_digest(
@@ -697,50 +674,6 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
         events.truncate(index);
     }
     events
-}
-
-/// GET compatibility binding for canonical `ak.self.events.read.scan`.
-/// Reads from the projection layer so callers writing through
-/// `POST /_arkret/self/events` see their messages here.
-///
-/// Selector: `realms[]` plus optional `actors[]` repeated query args.
-/// Multi-Realm queries call `projected_event_page` per Realm and merge sorted
-/// by HLC; the result paginates as a single stream.
-/// `actors[]`-only queries dispatch to the durable Event-store reader.
-///
-/// Range: `from?` + `until?` + `direction`.
-/// `direction=backward` reverses the merged stream so callers can paginate
-/// older events with the same `next_cursor` semantics.
-#[endpoint(operation_id = "ak.self.events.read.scan")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan"))]
-pub(crate) async fn events_query(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> soland_http::result::JsonResult<EventsQueryOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    reject_events_query_filter_digest_query_params(req)?;
-    let filters = events_query_filters_param(req)?;
-    let limit = query_param(req, "limit")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(100)
-        .clamp(1, 100);
-    let include_completeness = match query_param(req, "include_completeness") {
-        None => false,
-        Some(value) => value.parse::<bool>().map_err(|_| {
-            soland_http::error::AppError::invalid_param("include_completeness must be a boolean")
-        })?,
-    };
-    let parts = EventsQueryParts {
-        realms: super::super::query_param_all(req, "realms"),
-        actors: super::super::query_param_all(req, "actors"),
-        after: query_param(req, "after"),
-        before: query_param(req, "before"),
-        order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
-        limit,
-        filters,
-        include_completeness,
-    };
-    events_query_impl(state, req, parts).await
 }
 
 #[endpoint(operation_id = "ak.self.events.read.scan")]
@@ -1800,8 +1733,8 @@ async fn durable_events_query_from_parts(
     }
 }
 
-#[endpoint(operation_id = "ak.self.snapshot.query.manifest_head")]
-#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.query.manifest_head"))]
+#[endpoint(operation_id = "ak.self.snapshot.read.manifest_head")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.read.manifest_head"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,
     req: &mut Request,

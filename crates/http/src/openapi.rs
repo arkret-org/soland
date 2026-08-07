@@ -76,147 +76,49 @@ const OPENAPI_METHODS: &[&str] = &[
 
 /// salvo-oapi 0.95.2 can emit an OpenAPI 3.2 document, while its typed
 /// `PathItemType` still predates the 3.2 `query` member. Runtime routing comes
-/// from Salvo's native `Router::query`; this explicit generation step copies
-/// the live typed handler operation into the canonical 3.2 slot and marks the
-/// registered GET/POST routes as compatibility bindings without independent
-/// operation IDs.
+/// from Salvo's native `Router::query`; copy the corresponding QUERY Operation
+/// Objects from the SDK's embedded canonical OpenAPI artifact.
 fn install_event_read_query_bindings(doc: &mut Value) {
-    let dto_schema = |name: &str| {
-        json!({
-            "$ref": format!(
-                "../schemas/service-operation-dtos.schema.json#/$defs/{name}"
-            )
-        })
-    };
-    install_query_binding(
-        doc,
-        "/_arkret/self/events/describe",
-        "/_arkret/self/events/describe",
-        "get",
-        "ak.self.events.read.describe",
-        Some(dto_schema("EventsDescribeRequestBody")),
-        &[("/_arkret/self/events/describe", "get")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/self/events/frontier",
-        "/_arkret/self/events/frontier",
-        "get",
-        "ak.self.events.read.frontier",
-        Some(dto_schema("EventsFrontierRequestBody")),
-        &[("/_arkret/self/events/frontier", "get")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/self/events",
-        "/_arkret/self/events/query",
-        "post",
-        "ak.self.events.read.scan",
-        Some(dto_schema("EventsQueryPostRequestBody")),
-        &[
-            ("/_arkret/self/events", "get"),
-            ("/_arkret/self/events/query", "post"),
-        ],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/self/events/resolve",
-        "/_arkret/self/events/resolve",
-        "post",
-        "ak.self.events.read.resolve",
-        Some(dto_schema("EventsResolveRequestBody")),
-        &[("/_arkret/self/events/resolve", "post")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/self/events/mls-governance-proof",
-        "/_arkret/self/events/mls-governance-proof",
-        "post",
-        "ak.self.events.read.mls_governance_proof",
-        Some(json!({
-            "$ref": "../schemas/mls-governance-proof-bundle.schema.json#/$defs/proof_request"
-        })),
-        &[("/_arkret/self/events/mls-governance-proof", "post")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/peer/events/describe",
-        "/_arkret/peer/events/describe",
-        "get",
-        "ak.peer.events.read.describe",
-        Some(dto_schema("PeerEventsDescribeRequestBody")),
-        &[("/_arkret/peer/events/describe", "get")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/peer/events/frontier",
-        "/_arkret/peer/events/frontier",
-        "get",
-        "ak.peer.events.read.frontier",
-        Some(dto_schema("PeerEventsFrontierRequestBody")),
-        &[("/_arkret/peer/events/frontier", "get")],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/peer/events",
-        "/_arkret/peer/events/query",
-        "post",
-        "ak.peer.events.read.scan",
-        Some(dto_schema("EventsQueryPostRequestBody")),
-        &[
-            ("/_arkret/peer/events", "get"),
-            ("/_arkret/peer/events/query", "post"),
-        ],
-    );
-    install_query_binding(
-        doc,
-        "/_arkret/peer/events/resolve",
-        "/_arkret/peer/events/resolve",
-        "post",
-        "ak.peer.events.read.resolve",
-        Some(dto_schema("PeerEventsResolveRequestBody")),
-        &[("/_arkret/peer/events/resolve", "post")],
-    );
-}
-
-fn install_query_binding(
-    doc: &mut Value,
-    canonical_path: &str,
-    source_path: &str,
-    source_method: &str,
-    operation_id: &str,
-    request_schema: Option<Value>,
-    compatibility_bindings: &[(&str, &str)],
-) {
-    let mut operation = doc["paths"][source_path][source_method].clone();
-    let operation_object = operation.as_object_mut().unwrap_or_else(|| {
-        panic!("missing OpenAPI source operation {source_method} {source_path}")
-    });
-    operation_object.insert("operationId".to_owned(), json!(operation_id));
-    operation_object.remove("deprecated");
-    operation_object.remove("x-arkret-compatibility-binding-of");
-    operation_object.remove("parameters");
-    if let Some(schema) = request_schema {
-        operation_object.insert(
-            "requestBody".to_owned(),
-            json!({
-                "required": true,
-                "content": {"application/json": {"schema": schema}},
-            }),
-        );
-    }
-    doc["paths"][canonical_path]["query"] = operation;
-
-    for (path, method) in compatibility_bindings {
-        let compatibility = doc["paths"][path][method]
+    let canonical_yaml = arkret_schema::embedded_openapi_yaml()
+        .expect("embedded canonical OpenAPI artifact must load");
+    let canonical: Value = serde_saphyr::from_str(canonical_yaml)
+        .expect("embedded canonical OpenAPI artifact must parse");
+    let canonical_components = canonical["components"]
+        .as_object()
+        .expect("canonical OpenAPI components must be an object");
+    let generated_components = doc["components"]
+        .as_object_mut()
+        .expect("generated OpenAPI components must be an object");
+    for (section_name, canonical_section) in canonical_components {
+        let Some(canonical_entries) = canonical_section.as_object() else {
+            continue;
+        };
+        let generated_section = generated_components
+            .entry(section_name.clone())
+            .or_insert_with(|| json!({}))
             .as_object_mut()
-            .unwrap_or_else(|| panic!("missing compatibility binding {method} {path}"));
-        compatibility.remove("operationId");
-        compatibility.insert("deprecated".to_owned(), Value::Bool(true));
-        compatibility.insert(
-            "x-arkret-compatibility-binding-of".to_owned(),
-            json!(operation_id),
+            .expect("OpenAPI component section must be an object");
+        for (name, component) in canonical_entries {
+            generated_section.insert(name.clone(), component.clone());
+        }
+    }
+    for path in [
+        "/_arkret/self/events/describe",
+        "/_arkret/self/events/frontier",
+        "/_arkret/self/events",
+        "/_arkret/self/events/resolve",
+        "/_arkret/self/events/mls-governance-proof",
+        "/_arkret/peer/events/describe",
+        "/_arkret/peer/events/frontier",
+        "/_arkret/peer/events",
+        "/_arkret/peer/events/resolve",
+    ] {
+        let operation = canonical["paths"][path]["query"].clone();
+        assert!(
+            operation.is_object(),
+            "canonical OpenAPI missing QUERY {path}"
         );
+        doc["paths"][path]["query"] = operation;
     }
 }
 

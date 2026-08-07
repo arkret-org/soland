@@ -80,9 +80,9 @@ fn assert_required_migrated_operations(root: &Value) {
     let operation_ids = operation_ids(root);
     for expected in [
         "org.arkret.soland.system.health",
-        "ak.server.query.describe",
+        "ak.server.read.describe",
         "ak.self.events.read.scan",
-        "ak.self.snapshot.query.manifest_head",
+        "ak.self.snapshot.read.manifest_head",
         "ak.self.blob.command.presign",
         "mimi_protocol_directory",
         "org.arkret.soland.well_known.arkret",
@@ -133,32 +133,6 @@ fn assert_event_read_query_bindings(root: &Value) {
             query["requestBody"]["content"]["application/json"].is_object(),
             "canonical QUERY binding {operation_id} must expose JSON content"
         );
-    }
-
-    for (_path, operation_id, compatibility) in [
-        (
-            "/_arkret/self/events",
-            "ak.self.events.read.scan",
-            vec![
-                ("/_arkret/self/events", "get"),
-                ("/_arkret/self/events/query", "post"),
-            ],
-        ),
-        (
-            "/_arkret/peer/events",
-            "ak.peer.events.read.scan",
-            vec![
-                ("/_arkret/peer/events", "get"),
-                ("/_arkret/peer/events/query", "post"),
-            ],
-        ),
-    ] {
-        for (compat_path, method) in compatibility {
-            let compat = &root["paths"][compat_path][method];
-            assert!(compat.get("operationId").is_none());
-            assert_eq!(compat["deprecated"], true);
-            assert_eq!(compat["x-arkret-compatibility-binding-of"], operation_id);
-        }
     }
 }
 

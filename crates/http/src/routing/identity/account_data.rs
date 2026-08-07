@@ -549,11 +549,11 @@ async fn get_account_data(
 }
 
 #[endpoint(
-    operation_id = "ak.self.account_data.query.list",
+    operation_id = "ak.self.account_data.read.list",
     summary = "List account-data entries",
     tags("account_data")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account_data.read.list"))]
 async fn list_account_data(
     aa: AuthArgs,
     depot: &mut Depot,

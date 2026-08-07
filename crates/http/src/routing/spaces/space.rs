@@ -275,12 +275,12 @@ async fn destroy_realm(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.realm.moderation_policy.query.effective",
+    operation_id = "ak.self.realm.moderation_policy.read.effective",
     tags("spaces")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.self.realm.moderation_policy.query.effective")
+    fields(op = "ak.self.realm.moderation_policy.read.effective")
 )]
 async fn get_realm_effective_moderation_policy(
     aa: AuthArgs,
@@ -396,8 +396,8 @@ async fn get_space_cell(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.realm.query.export", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm.query.export"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.read.export", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm.read.export"))]
 async fn export_realm(
     aa: AuthArgs,
     depot: &mut Depot,

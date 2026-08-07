@@ -143,11 +143,11 @@ pub(crate) async fn identity_describe(
         profiles: profiles.clone(),
         supported_profiles: profiles,
         supported_operations: vec![
-            "ak.root.identity.registry.query.describe".to_owned(),
-            "ak.root.identity.query.resolve".to_owned(),
+            "ak.root.identity.registry.read.describe".to_owned(),
+            "ak.root.identity.read.resolve".to_owned(),
             "ak.root.identity.document.resource.get".to_owned(),
-            "ak.root.identity.log.query.list".to_owned(),
-            "ak.root.identity.receipts.query.list".to_owned(),
+            "ak.root.identity.log.read.list".to_owned(),
+            "ak.root.identity.receipts.read.list".to_owned(),
             "ak.root.identity.command.submit_did_operation".to_owned(),
             arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE
                 .to_owned(),
@@ -761,8 +761,8 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     res.write_body(body.into_bytes()).ok();
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.query.resolve", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.query.resolve"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.read.resolve", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.read.resolve"))]
 pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
     depot: &mut Depot,
@@ -920,8 +920,8 @@ pub(crate) async fn identity_did_document(
     json_ok(RawDidDocumentJson(record.did_document))
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.query.list", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.log.read.list", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.read.list"))]
 pub(crate) async fn identity_log(
     did: salvo::oapi::extract::QueryParam<String, true>,
     depot: &mut Depot,
@@ -977,11 +977,8 @@ pub(crate) async fn identity_log(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.root.identity.receipts.query.list",
-    tags("identity")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.root.identity.receipts.read.list", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.read.list"))]
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
     _depot: &mut Depot,

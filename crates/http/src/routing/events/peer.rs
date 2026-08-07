@@ -22,10 +22,7 @@ use soland_services::events::{
     CanonicalEventRecord, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
 
-use super::{
-    is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
-    validate_did,
-};
+use super::{is_realm_deleted, is_valid_hash_digest, now, query_param, render_error, validate_did};
 use crate::state::AppState;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
@@ -56,28 +53,14 @@ struct PeerSnapshotHeadOutcome {}
 
 pub(super) fn router() -> Router {
     Router::new()
-        .push(
-            Router::with_path("events/describe")
-                .query(peer_events_describe)
-                .get(peer_events_describe),
-        )
+        .push(Router::with_path("events/describe").query(peer_events_describe))
         .push(
             Router::with_path("events")
                 .post(peer_events_submit)
-                .query(peer_events_read_body)
-                .get(peer_events_query),
+                .query(peer_events_read_body),
         )
-        .push(Router::with_path("events/query").post(peer_events_read_body))
-        .push(
-            Router::with_path("events/resolve")
-                .query(peer_events_resolve)
-                .post(peer_events_resolve),
-        )
-        .push(
-            Router::with_path("events/frontier")
-                .query(peer_events_frontier)
-                .get(peer_events_frontier),
-        )
+        .push(Router::with_path("events/resolve").query(peer_events_resolve))
+        .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
@@ -217,16 +200,6 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
         return;
     }
     super::event_log::submit_federation_events(state, req, body_value, res).await;
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.scan"))]
-async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, false).await?;
-    let source_service_id = source_service_id_from_request(req)?;
-    let parts = PeerEventsQueryParts::from_query(req)?;
-    peer_events_query_response(state, source_service_id, parts).await
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.scan", tags("events"))]
@@ -524,7 +497,7 @@ async fn peer_events_frontier(
     })
 }
 
-/// Spec resolution (2026-06-11): `ak.peer.snapshot.query.manifest_head` returns the full
+/// Spec resolution (2026-06-11): `ak.peer.snapshot.read.manifest_head` returns the full
 /// signed `ak.schema.snapshot.v1` manifest. soland cannot produce a real
 /// Snapshot detached proof yet, and the spec forbids serving a dev-signed
 /// stand-in (`signature` / `authority_binding` / `event_set_commitment`
@@ -533,8 +506,8 @@ async fn peer_events_frontier(
 /// closed with `not_implemented` until a real signing path lands. The
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
 /// (`org.arkret.soland.sync.snapshot_chunk`).
-#[salvo::oapi::endpoint(operation_id = "ak.peer.snapshot.query.manifest_head", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.query.manifest_head"))]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.snapshot.read.manifest_head", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.read.manifest_head"))]
 async fn peer_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
@@ -543,7 +516,7 @@ async fn peer_snapshot_head(
     validate_peer_request(state, req, false).await?;
     Err(AppError::new(
         soland_http::error::ErrorCode::NotImplemented,
-        "ak.peer.snapshot.query.manifest_head is not implemented: this deployment cannot \
+        "ak.peer.snapshot.read.manifest_head is not implemented: this deployment cannot \
          produce a signed ak.schema.snapshot.v1 manifest",
     ))
 }
@@ -560,55 +533,6 @@ struct PeerEventsQueryParts {
 }
 
 impl PeerEventsQueryParts {
-    fn from_query(req: &Request) -> Result<Self, AppError> {
-        let mut realms = query_param_all(req, "realms");
-        if let Some(realm_id) = query_param(req, "realm_id")
-            && !realms.contains(&realm_id)
-        {
-            realms.push(realm_id);
-        }
-        let mut actors = query_param_all(req, "actors");
-        for key in ["actor", "actor_id"] {
-            if let Some(actor) = query_param(req, key)
-                && !actors.contains(&actor)
-            {
-                actors.push(actor);
-            }
-        }
-        let kind = query_param(req, "kind");
-        let kinds = query_param_all(req, "kinds");
-        if kinds.len() > 1 {
-            return Err(AppError::unsupported_feature(
-                "multiple peer events kind filters are not supported",
-            ));
-        }
-        if let (Some(kind), Some(kinds)) = (kind.as_deref(), kinds.first().map(String::as_str))
-            && kind != kinds
-        {
-            return Err(AppError::invalid_param(
-                "kind and kinds filters must match when both are present",
-            ));
-        }
-        let kind_filter = kind
-            .or_else(|| kinds.into_iter().next())
-            .or_else(|| query_param(req, "filters.kind"))
-            .or_else(|| query_param(req, "filters[kind]"));
-        let parts = Self {
-            realms,
-            actors,
-            after: query_param(req, "after"),
-            before: query_param(req, "before"),
-            order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
-            limit: query_param(req, "limit")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(MAX_PEER_EVENTS_READ_LIMIT)
-                .clamp(1, MAX_PEER_EVENTS_READ_LIMIT),
-            kind_filter,
-        };
-        parts.validate()?;
-        Ok(parts)
-    }
-
     fn from_body(body: EventsQueryPostRequestBody) -> Result<Self, AppError> {
         let filters = body
             .filters

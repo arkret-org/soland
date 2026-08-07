@@ -484,11 +484,8 @@ fn proof_audience_covers_expected(audience: Option<&Audience>, expected: &str) -
     }
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.query.resolve_handle",
-    tags("spaces")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_handle"))]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.resolve_handle", tags("spaces"))]
+#[tracing::instrument(skip_all, fields(op = "ak.find.directory.read.resolve_handle"))]
 pub(super) async fn resolve_handle(
     body: JsonBody<DirectoryResolveHandleRequestBody>,
     depot: &mut Depot,
@@ -708,12 +705,12 @@ pub(super) async fn signed_handle_claim(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.find.directory.query.list_handles_for_subject",
+    operation_id = "ak.find.directory.read.list_handles_for_subject",
     tags("spaces")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.find.directory.query.list_handles_for_subject")
+    fields(op = "ak.find.directory.read.list_handles_for_subject")
 )]
 pub(super) async fn list_handles_for_subject(
     body: JsonBody<DirectoryListHandlesForSubjectRequestBody>,
@@ -739,7 +736,7 @@ pub(super) async fn list_handles_for_subject(
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let filter_digest = arkret_server::cursor_filter_digest(&json!({
-        "operation": "ak.find.directory.query.list_handles_for_subject",
+        "operation": "ak.find.directory.read.list_handles_for_subject",
         "realm_id": body.realm_id.as_ref(),
         "intent": body.intent.as_deref(),
         "requester": body.requester.as_ref(),

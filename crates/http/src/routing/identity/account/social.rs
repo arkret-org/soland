@@ -167,11 +167,11 @@ pub(crate) async fn set_invite_receive_policy(
 }
 
 #[endpoint(
-    operation_id = "ak.self.contact.query.list",
+    operation_id = "ak.self.contact.read.list",
     summary = "List contacts",
     tags("contacts")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.contact.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.contact.read.list"))]
 pub(crate) async fn list_contacts(
     aa: AuthArgs,
     depot: &mut Depot,

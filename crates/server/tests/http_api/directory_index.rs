@@ -145,14 +145,14 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.find.directory.query.list_handles_for_subject")
+            .any(|operation| operation == "ak.find.directory.read.list_handles_for_subject")
     );
     assert!(
         describe["supported_operations"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|operation| operation == "ak.find.directory.query.private_contact_discovery")
+            .any(|operation| operation == "ak.find.directory.read.private_contact_discovery")
     );
 
     let subject_handles: Value =
@@ -670,14 +670,15 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .unwrap();
     assert_eq!(resolved["realm_preview"]["realm_id"], DEMO_REALM_ID);
 
-    let backfill: Value = TestClient::get(
-        "http://server/_arkret/self/events?realms=ak:realm:0196419b-0000-8000-8000-000000000000",
-    )
-    .send(&app())
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let backfill: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({
+            "realms": ["ak:realm:0196419b-0000-8000-8000-000000000000"]
+        }))
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
     // backfill pagination field is `has_more` (discovery-directory.md §9;
     // profiles-presence.md §4.1 references it and does not define `limited`).
     assert_eq!(backfill["has_more"], false);

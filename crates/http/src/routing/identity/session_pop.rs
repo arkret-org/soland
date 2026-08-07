@@ -9,9 +9,10 @@
 //!   session's `session_public_key`: covered components, `content-digest` over the body, the
 //!   `created`/`expires` window (≤300s, ±30s skew, same scale as the federation rail) and the
 //!   `keyid` binding. Any failure is rejected as `unauthenticated`.
-//! - On a high-security deployment (`sovereign_enclave_enabled`), writes and sensitive reads MUST
-//!   be PoP-presented; bare bearer is rejected. On the default profile, bare bearer remains an
-//!   accepted downgrade for low-sensitivity clients.
+//! - On a high-security deployment (`sovereign_enclave_enabled`), protected self-surface operations
+//!   are classified from the embedded operation registry and MUST be PoP-presented; unknown
+//!   operations fail closed. Explicit public-projection exceptions are treated as unauthenticated
+//!   when no valid proof is present.
 //! - The session key the signature verifies against is sourced per inbound credential: for the ②
 //!   grant+DPoP path it is the grant's `session_public_key` (read via introspection, since that
 //!   session is request-scoped and never persisted); for a dev-login bearer it is the persisted
@@ -20,6 +21,9 @@
 //!
 //! Bearer session validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the PoP layer.
+
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use arkret_signatures::http_signature::{
     Component, ContentDigest, Ed25519PublicKey, SignatureVerificationPolicy, public_key_from_bytes,
@@ -42,19 +46,13 @@ const MAX_SIGNATURE_WINDOW_SECONDS: i64 = 300;
 /// Accepted clock skew around `created` / `expires` (±30s, federation scale).
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 
-/// Path fragments whose GET reads are sensitive (member rosters, private
-/// projections, key backups, device inventory, moderation queues) and
-/// therefore require PoP on high-security deployments (api-conventions.md
-/// §3.2).
-const SENSITIVE_READ_FRAGMENTS: &[&str] = &[
-    "/members",
-    "/spaces",
-    "/strands",
-    "/morphs",
-    "/keys/backups",
-    "/devices",
-    "/moderation",
-];
+#[derive(Debug)]
+struct SessionPopPolicy {
+    bindings: Vec<(String, String, String)>,
+    public_projection_operations: BTreeSet<String>,
+}
+
+static SESSION_POP_POLICY: OnceLock<SessionPopPolicy> = OnceLock::new();
 
 /// Hoop mounted on the `self` surface. Continues the chain on success, renders
 /// the canonical error envelope and stops on PoP failure.
@@ -86,6 +84,10 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
             return Err(AppError::unauthenticated(
                 "RFC 9421 PoP signature required for this operation on this deployment",
             ));
+        }
+        if state.config().sovereign_enclave_enabled && is_public_projection_request(req) {
+            req.headers_mut().remove(salvo::http::header::AUTHORIZATION);
+            req.headers_mut().remove("dpop");
         }
         return Ok(());
     }
@@ -251,26 +253,80 @@ async fn session_signing_key_jwk(
     })
 }
 
-/// Whether a bare-bearer (unsigned) request must be rejected: only on
-/// high-security deployments, and only for writes / sensitive reads.
+/// Whether an unsigned request must be rejected on a high-security deployment.
+/// The classifier comes from the embedded operation registry; an unknown self
+/// operation fails closed.
 fn pop_required(state: &AppState, req: &Request) -> bool {
-    if !state.config().sovereign_enclave_enabled {
+    if !state.config().sovereign_enclave_enabled || req.method() == salvo::http::Method::OPTIONS {
         return false;
     }
-    is_write(req.method()) || is_sensitive_read(req.uri().path())
+    !is_public_projection_request(req)
 }
 
-fn is_write(method: &salvo::http::Method) -> bool {
-    !matches!(
-        *method,
-        salvo::http::Method::GET | salvo::http::Method::HEAD | salvo::http::Method::OPTIONS
-    )
+fn is_public_projection_request(req: &Request) -> bool {
+    let policy = session_pop_policy();
+    policy.bindings.iter().any(|(method, path, operation_id)| {
+        method == req.method().as_str()
+            && path_template_matches(path, req.uri().path())
+            && policy.public_projection_operations.contains(operation_id)
+    })
 }
 
-fn is_sensitive_read(path: &str) -> bool {
-    SENSITIVE_READ_FRAGMENTS
-        .iter()
-        .any(|fragment| path.contains(fragment))
+fn session_pop_policy() -> &'static SessionPopPolicy {
+    SESSION_POP_POLICY.get_or_init(|| {
+        let bundle = arkret_schema::SpecArtifactBundle::load_embedded()
+            .expect("embedded operation registry must load");
+        let operation_registry = bundle
+            .operation_registry
+            .as_object()
+            .expect("embedded operation registry must be an object");
+        let policy = operation_registry
+            .get("high_security_session_authentication_policy")
+            .and_then(serde_json::Value::as_object)
+            .expect("embedded operation registry must declare high-security session policy");
+        let public_projection_operations = policy
+            .get("unauthenticated_public_projection_operations")
+            .and_then(serde_json::Value::as_array)
+            .expect("high-security session policy public operation list must be an array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("public projection operation id must be a string")
+                    .to_owned()
+            })
+            .collect();
+        let bindings = operation_registry
+            .get("operations")
+            .and_then(serde_json::Value::as_array)
+            .expect("embedded operation registry operations must be an array")
+            .iter()
+            .filter_map(|row| {
+                let operation_id = row.get("operation_id")?.as_str()?;
+                if !operation_id.starts_with("ak.self.") {
+                    return None;
+                }
+                let (method, path) = row.get("http")?.as_str()?.split_once(' ')?;
+                Some((method.to_owned(), path.to_owned(), operation_id.to_owned()))
+            })
+            .collect();
+        SessionPopPolicy {
+            bindings,
+            public_projection_operations,
+        }
+    })
+}
+
+fn path_template_matches(template: &str, actual: &str) -> bool {
+    let template_segments = template.trim_matches('/').split('/').collect::<Vec<_>>();
+    let actual_segments = actual.trim_matches('/').split('/').collect::<Vec<_>>();
+    template_segments.len() == actual_segments.len()
+        && template_segments
+            .iter()
+            .zip(actual_segments)
+            .all(|(expected, observed)| {
+                (expected.starts_with('{') && expected.ends_with('}')) || *expected == observed
+            })
 }
 
 /// Parse the stored session signing key JWK into its Ed25519 public key, the
@@ -367,12 +423,38 @@ mod tests {
     }
 
     #[test]
-    fn write_and_sensitive_classification() {
-        assert!(is_write(&salvo::http::Method::POST));
-        assert!(is_write(&salvo::http::Method::DELETE));
-        assert!(!is_write(&salvo::http::Method::GET));
-        assert!(is_sensitive_read("/_arkret/self/keys/backups"));
-        assert!(is_sensitive_read("/_arkret/self/realms/r1/strands"));
-        assert!(!is_sensitive_read("/_arkret/self/realms/r1/links"));
+    fn operation_path_templates_match_only_the_registered_shape() {
+        assert!(path_template_matches(
+            "/_arkret/self/realms/{realm_id}/strands",
+            "/_arkret/self/realms/realm-1/strands"
+        ));
+        assert!(!path_template_matches(
+            "/_arkret/self/realms/{realm_id}/strands",
+            "/_arkret/self/realms/realm-1/links"
+        ));
+        assert!(!path_template_matches(
+            "/_arkret/self/realms/{realm_id}/strands",
+            "/_arkret/self/realms/realm-1/strands/extra"
+        ));
+    }
+
+    #[test]
+    fn embedded_policy_has_explicit_public_projection_exceptions() {
+        let policy = session_pop_policy();
+        assert!(
+            policy
+                .public_projection_operations
+                .contains("ak.self.events.read.describe")
+        );
+        assert!(
+            policy
+                .public_projection_operations
+                .contains("ak.self.account.read.describe")
+        );
+        assert!(
+            !policy
+                .public_projection_operations
+                .contains("ak.self.events.read.scan")
+        );
     }
 }

@@ -60,12 +60,11 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         .await
         .unwrap();
     let realm_id = drafts[0]["realm_id"].as_str().expect("draft Realm");
-    let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     let (mut actor_seq, mut previous_event_ids) = if frontier_response.status_code
         == Some(StatusCode::OK)
     {
@@ -152,12 +151,11 @@ async fn submit_direct_event_draft(
         .await
         .unwrap();
     let realm_id = draft["realm_id"].as_str().expect("binding Realm");
-    let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         frontier_response.take_json().await.unwrap();

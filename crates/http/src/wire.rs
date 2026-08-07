@@ -549,21 +549,21 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
     "ak.gate.account.command.pair_device",
     "ak.gate.account.command.logout",
     "ak.gate.account.command.revoke_session",
-    "ak.find.directory.query.describe",
-    "ak.find.directory.query.search_realms",
-    "ak.find.directory.query.resolve_realm",
-    "ak.find.directory.query.resolve_target",
-    "ak.find.directory.query.resolve_agent_selector",
-    "ak.find.directory.query.list_handles_for_subject",
+    "ak.find.directory.read.describe",
+    "ak.find.directory.read.search_realms",
+    "ak.find.directory.read.resolve_realm",
+    "ak.find.directory.read.resolve_target",
+    "ak.find.directory.read.resolve_agent_selector",
+    "ak.find.directory.read.list_handles_for_subject",
     "ak.self.blob.upload.create",
     "ak.self.blob.resource.head",
     "ak.self.blob.resource.get",
     "ak.self.keys.backups.resource.replace",
-    "ak.self.keys.backups.query.list",
+    "ak.self.keys.backups.read.list",
     "ak.self.keys.backups.command.unlock",
     "ak.self.keys.backups.resource.delete",
     "ak.peer.invites.command.submit",
-    "ak.open.invite_locator.query.resolve",
+    "ak.open.invite_locator.read.resolve",
 ];
 
 /// Spec operations soland deliberately does NOT declare even though their
@@ -683,7 +683,7 @@ fn profile_limitations() -> Vec<Value> {
         json!({
             "area": "snapshot.head",
             "status": "standard_self_supported",
-            "reason": "ak.self.snapshot.query.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
+            "reason": "ak.self.snapshot.read.manifest_head returns a signed ak.schema.snapshot.v1 manifest; the /_soland dev bundle remains a product-face compatibility surface"
         }),
         json!({
             "area": "account_auth.device_pair",
@@ -1074,7 +1074,6 @@ pub fn describe(
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
         limits: arkret_models_discovery::service_description::ServerLimits {
-            max_get_query_selectors: None,
             extensions: serde_json::from_value(serde_json::json!({
             "storage": storage,
             "max_limit": 100,
@@ -1107,13 +1106,13 @@ pub fn describe(
                 "error_mapping_source": "arkret-spec/spec/v1/artifacts/registry/operations-error-mapping.json",
                 "universal_error_codes_inherited": true,
                 "supported_operations": [
-                    "ak.self.authz.query.check",
-                    "ak.self.authz.grants.query.effective",
-                    "ak.self.authz.invites.query.list",
-                    "ak.self.policy.query.check"
+                    "ak.self.authz.read.check",
+                    "ak.self.authz.grants.read.effective",
+                    "ak.self.authz.invites.read.list",
+                    "ak.self.policy.read.check"
                 ],
                 "authz_check": {
-                    "operation_id": "ak.self.authz.query.check",
+                    "operation_id": "ak.self.authz.read.check",
                     "method": "POST",
                     "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
@@ -1134,12 +1133,12 @@ pub fn describe(
                         "dynamic_claim_or_approval": false,
                         "usable_as_policy_obligation_proof": false,
                         "cross_service_signed_authorization_fact": false,
-                        "dynamic_or_auditable_decision_operation": "ak.self.policy.query.check",
+                        "dynamic_or_auditable_decision_operation": "ak.self.policy.read.check",
                         "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
                     }
                 },
                 "effective_grants": {
-                    "operation_id": "ak.self.authz.grants.query.effective",
+                    "operation_id": "ak.self.authz.grants.read.effective",
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
                     "query": ["realm_id", "subject", "at"],
@@ -1148,7 +1147,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "invites": {
-                    "operation_id": "ak.self.authz.invites.query.list",
+                    "operation_id": "ak.self.authz.invites.read.list",
                     "method": "GET",
                     "path": "/_arkret/self/authz/invites",
                     "query": ["realm_id", "subject", "cursor"],
@@ -1157,7 +1156,7 @@ pub fn describe(
                     "operation_specific_error_codes": []
                 },
                 "policy_check": {
-                    "operation_id": "ak.self.policy.query.check",
+                    "operation_id": "ak.self.policy.read.check",
                     "method": "POST",
                     "path": "/_arkret/self/policy/check",
                     "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
@@ -1500,10 +1499,10 @@ mod tests {
         assert_eq!(
             value["limits"]["authz_policy"]["supported_operations"],
             json!([
-                "ak.self.authz.query.check",
-                "ak.self.authz.grants.query.effective",
-                "ak.self.authz.invites.query.list",
-                "ak.self.policy.query.check"
+                "ak.self.authz.read.check",
+                "ak.self.authz.grants.read.effective",
+                "ak.self.authz.invites.read.list",
+                "ak.self.policy.read.check"
             ])
         );
         assert_eq!(

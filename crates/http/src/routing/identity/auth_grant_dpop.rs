@@ -576,7 +576,7 @@ fn agent_account_service_scope(scope: &str) -> bool {
             | "ak.self.keys.keypackages.upload.create"
             | "ak.self.keys.keypackages.command.consume"
             | "ak.self.keys.keypackages.command.revoke"
-            | "ak.self.device_messages.query.list"
+            | "ak.self.device_messages.read.list"
             | "ak.self.device_messages.command.ack"
             | "ak.self.signal.command.send"
     )

@@ -111,11 +111,11 @@ pub(super) async fn set_read_cursor(
 }
 
 #[endpoint(
-    operation_id = "ak.self.read_cursor.query.list",
+    operation_id = "ak.self.read_cursor.read.list",
     summary = "List read cursors",
     tags("read_cursor")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.read.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,
     depot: &mut Depot,

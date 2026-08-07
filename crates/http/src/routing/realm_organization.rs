@@ -1,7 +1,7 @@
 //! SOL-ORG-06 — Realm organization-relationship read surface.
 //!
 //! `GET /_arkret/self/realms/{realm_id}/organizations`
-//! (`ak.self.realm_organization.query.list`) projects the accepted
+//! (`ak.self.realm_organization.read.list`) projects the accepted
 //! `ak.realm.organization` relationship statements (active / revoked / expired,
 //! latest-per-`(organization_id, relationship)`) plus the declared
 //! `owning_organizations` hints (SOL-ORG-05) that carry no verified statement.
@@ -47,11 +47,11 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_organization.query.list",
+    operation_id = "ak.self.realm_organization.read.list",
     summary = "List a realm's organization relationships",
     tags("realm_organizations")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.read.list"))]
 pub(crate) async fn list_realm_organizations(
     aa: AuthArgs,
     realm_id: PathParam<String>,

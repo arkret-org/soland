@@ -92,11 +92,11 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm_link.query.list",
+    operation_id = "ak.self.realm_link.read.list",
     summary = "List typed cross-Realm links",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.list"))]
 pub(crate) async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
@@ -384,11 +384,11 @@ async fn delete_realm_link(
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
 #[endpoint(
-    operation_id = "ak.self.realm_link.query.effective_policy",
+    operation_id = "ak.self.realm_link.read.effective_policy",
     summary = "Get a realm's merged effective policy",
     tags("realm_links")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.effective_policy"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.read.effective_policy"))]
 async fn get_effective_policy(
     aa: AuthArgs,
     realm_id: PathParam<String>,

@@ -586,15 +586,14 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         payload,
     } = input;
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .expect("typed discussion actor Realm frontier");
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .expect("typed discussion actor Realm frontier");
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {
@@ -775,15 +774,14 @@ async fn joined_history_hides_pre_join_messages_from_sync_and_events_query() {
         "{bodies:?}"
     );
 
-    let events: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&limit=20"
-    ))
-    .add_header("authorization", format!("Bearer {bob}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let bodies = event_query_bodies(&events);
     assert!(
         !bodies.contains(&"before bob joined".to_owned()),
@@ -1029,15 +1027,14 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages() {
         "{sync:?}"
     );
 
-    let events: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={realm_id}&limit=20"
-    ))
-    .add_header("authorization", format!("Bearer {bob}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     assert!(
         event_query_bodies(&events).contains(&"shared before join".to_owned()),
         "{events:?}"

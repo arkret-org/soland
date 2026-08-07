@@ -292,8 +292,8 @@ async fn database_ready(state: &AppState) -> bool {
     state.jobs().database_ready().await
 }
 
-#[endpoint(operation_id = "ak.server.query.describe")]
-#[tracing::instrument(skip_all, fields(op = "ak.server.query.describe"))]
+#[endpoint(operation_id = "ak.server.read.describe")]
+#[tracing::instrument(skip_all, fields(op = "ak.server.read.describe"))]
 async fn server_describe(
     service_kind: QueryParam<String, false>,
     depot: &mut Depot,
@@ -490,9 +490,9 @@ pub(crate) fn apply_claim_level_partition(
         "ak.self.realm.join_application.command.submit",
         "ak.self.realm.join_application.command.review",
         "ak.self.realm.join_application.command.cancel",
-        "ak.self.realm.join_application.query.list",
+        "ak.self.realm.join_application.read.list",
         "ak.self.realm.join_application.resource.get",
-        "ak.self.realm.join_application.audit.query.list",
+        "ak.self.realm.join_application.audit.read.list",
     ];
     const JOIN_FEATURES: &[&str] = &[
         "candidate_join_policy_reviewer",

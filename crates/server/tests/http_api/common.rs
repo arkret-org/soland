@@ -392,47 +392,6 @@ pub(crate) fn signed_federation_push_headers_same_trust(
     })
 }
 
-pub(crate) fn signed_federation_get_headers(
-    origin: &str,
-    destination: &str,
-    destination_trust_domain: &str,
-    target_uri: &str,
-) -> Vec<(&'static str, String)> {
-    let source_trust_domain = trust_domain_from_service_id(origin);
-    let created = chrono::Utc::now().timestamp();
-    let expires = created + 300;
-    let keyid = format!("{origin}#federation-fanout-key");
-    let signature_params = format!(
-        "(\"@method\" \"@target-uri\" \"@authority\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\");created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
-    );
-    let authority = authority_from_target_uri(target_uri);
-    let signature_base = format!(
-        "\"@method\": GET\n\
-         \"@target-uri\": {target_uri}\n\
-         \"@authority\": {authority}\n\
-         \"source-service-id\": {origin}\n\
-         \"destination-service-id\": {destination}\n\
-         \"source-trust-domain\": {source_trust_domain}\n\
-         \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"@signature-params\": {signature_params}",
-    );
-    let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
-    vec![
-        ("source-service-id", origin.to_owned()),
-        ("destination-service-id", destination.to_owned()),
-        ("source-trust-domain", source_trust_domain),
-        (
-            "destination-trust-domain",
-            destination_trust_domain.to_owned(),
-        ),
-        ("signature-input", format!("sig1={signature_params}")),
-        (
-            "signature",
-            format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
-        ),
-    ]
-}
-
 struct SignedFederationRequest<'a> {
     method: &'a str,
     origin: &'a str,
@@ -1194,15 +1153,14 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
     // the envelope builder named has to be accepted before the Event is sent.
     seed_test_realm_basis_seal(state, realm_id, actor).await;
-    let frontier_value: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .expect("typed HTTP fixture actor Realm frontier");
+    let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .expect("typed HTTP fixture actor Realm frontier");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
             panic!("invalid typed HTTP fixture actor Realm frontier: {error}; {frontier_value}")

@@ -567,7 +567,7 @@ async fn audit_body_read(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.query.list",
+    operation_id = "ak.self.realm.join_application.read.list",
     summary = "List viewer-scoped join applications",
     tags("join_applications")
 )]
@@ -666,7 +666,7 @@ async fn get_join_application(
 }
 
 #[endpoint(
-    operation_id = "ak.self.realm.join_application.audit.query.list",
+    operation_id = "ak.self.realm.join_application.audit.read.list",
     summary = "Read one join application's audit trail",
     tags("join_applications")
 )]

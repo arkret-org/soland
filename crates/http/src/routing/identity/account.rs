@@ -979,8 +979,8 @@ async fn delete_account_localpart(
     json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.account.query.viewer", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.account.query.viewer"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.account.read.viewer"))]
 pub(crate) async fn account_viewer(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1345,10 +1345,10 @@ fn actor_profile_from_account(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.direct_conversation.query.resolve",
+    operation_id = "ak.self.direct_conversation.read.resolve",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.read.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,

@@ -487,21 +487,17 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
     let method = req.method().as_str();
     let path = req.uri().path();
     match (method, path) {
-        ("QUERY" | "GET", "/_arkret/self/events/describe") => Some("ak.self.events.read.describe"),
-        ("QUERY" | "GET", "/_arkret/self/events/frontier") => Some("ak.self.events.read.frontier"),
-        ("QUERY" | "GET", "/_arkret/self/events") | ("POST", "/_arkret/self/events/query") => {
-            Some("ak.self.events.read.scan")
-        }
-        ("QUERY" | "POST", "/_arkret/self/events/resolve") => Some("ak.self.events.read.resolve"),
-        ("QUERY" | "POST", "/_arkret/self/events/mls-governance-proof") => {
+        ("QUERY", "/_arkret/self/events/describe") => Some("ak.self.events.read.describe"),
+        ("QUERY", "/_arkret/self/events/frontier") => Some("ak.self.events.read.frontier"),
+        ("QUERY", "/_arkret/self/events") => Some("ak.self.events.read.scan"),
+        ("QUERY", "/_arkret/self/events/resolve") => Some("ak.self.events.read.resolve"),
+        ("QUERY", "/_arkret/self/events/mls-governance-proof") => {
             Some("ak.self.events.read.mls_governance_proof")
         }
-        ("QUERY" | "GET", "/_arkret/peer/events/describe") => Some("ak.peer.events.read.describe"),
-        ("QUERY" | "GET", "/_arkret/peer/events/frontier") => Some("ak.peer.events.read.frontier"),
-        ("QUERY" | "GET", "/_arkret/peer/events") | ("POST", "/_arkret/peer/events/query") => {
-            Some("ak.peer.events.read.scan")
-        }
-        ("QUERY" | "POST", "/_arkret/peer/events/resolve") => Some("ak.peer.events.read.resolve"),
+        ("QUERY", "/_arkret/peer/events/describe") => Some("ak.peer.events.read.describe"),
+        ("QUERY", "/_arkret/peer/events/frontier") => Some("ak.peer.events.read.frontier"),
+        ("QUERY", "/_arkret/peer/events") => Some("ak.peer.events.read.scan"),
+        ("QUERY", "/_arkret/peer/events/resolve") => Some("ak.peer.events.read.resolve"),
         _ => None,
     }
 }
@@ -587,29 +583,17 @@ mod tests {
     }
 
     #[test]
-    fn event_read_compatibility_bindings_share_one_metrics_operation_label() {
+    fn event_read_query_bindings_use_registered_metrics_operation_labels() {
         use salvo::test::TestClient;
 
-        let requests = [
-            TestClient::query("http://localhost/_arkret/self/events").build(),
-            TestClient::get("http://localhost/_arkret/self/events?realms=ak%3Arealm%3Atest")
-                .build(),
-            TestClient::post("http://localhost/_arkret/self/events/query").build(),
-        ];
-        assert!(
-            requests
-                .iter()
-                .all(|request| request_op_label(request) == "ak.self.events.read.scan")
-        );
+        let request = TestClient::query("http://localhost/_arkret/self/events").build();
+        assert_eq!(request_op_label(&request), "ak.self.events.read.scan");
 
-        let peer_requests = [
-            TestClient::query("http://localhost/_arkret/peer/events/resolve").build(),
-            TestClient::post("http://localhost/_arkret/peer/events/resolve").build(),
-        ];
-        assert!(
-            peer_requests
-                .iter()
-                .all(|request| request_op_label(request) == "ak.peer.events.read.resolve")
+        let peer_request =
+            TestClient::query("http://localhost/_arkret/peer/events/resolve").build();
+        assert_eq!(
+            request_op_label(&peer_request),
+            "ak.peer.events.read.resolve"
         );
     }
 

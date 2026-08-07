@@ -473,15 +473,15 @@ async fn provision_agent_sdk_commit_attempt(
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
     assert_eq!(requested_scope_digest, expected_scope_digest);
-    let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={controller}&realm_id={controller_realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app)
-    .await
-    .take_json()
-    .await
-    .expect("controller actor frontier");
+    let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": controller, "realm_id": controller_realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .expect("controller actor frontier");
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(actor_frontier) =
         actor_frontier.frontier
     else {
@@ -501,12 +501,11 @@ async fn provision_agent_sdk_commit_attempt(
         controller_id,
         verification_method.clone(),
     );
-    let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={controller_realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app)
-    .await;
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"realm_id": controller_realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
     if frontier_response.status_code != Some(StatusCode::OK) {
         let body: Value = frontier_response
             .take_json()
@@ -630,12 +629,11 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
     // Cross-repository closure: SDK producer -> Soland admission/store ->
     // account query replay -> SDK model/digest/proof verifier.
     let app = app_from_state(state.clone());
-    let mut replay_response = TestClient::get(format!(
-        "http://server/_arkret/self/events?actors={controller}&limit=100"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app)
-    .await;
+    let mut replay_response = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"actors": [controller], "limit": 100}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app)
+        .await;
     assert_eq!(replay_response.status_code, Some(StatusCode::OK));
     let replay: Value = replay_response.take_json().await.unwrap();
     let provision_events = replay["events"]

@@ -502,11 +502,11 @@ async fn persist_private_invite_projection(
 }
 
 #[endpoint(
-    operation_id = "ak.open.invite_locator.query.resolve",
+    operation_id = "ak.open.invite_locator.read.resolve",
     summary = "Resolve an invite locator",
     tags("invites")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.read.resolve"))]
 async fn resolve_invite_locator(
     depot: &mut Depot,
     req: &mut Request,

@@ -115,11 +115,11 @@ async fn project_consent_revoke_operation(
 }
 
 #[endpoint(
-    operation_id = "ak.self.consent.query.list",
+    operation_id = "ak.self.consent.read.list",
     summary = "List consent cells",
     tags("consent")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.consent.query.list"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.consent.read.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
     depot: &mut Depot,

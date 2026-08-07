@@ -72,11 +72,11 @@ struct IceConfigRequestContext {
 }
 
 #[endpoint(
-    operation_id = "ak.self.media.query.ice_config",
+    operation_id = "ak.self.media.read.ice_config",
     summary = "Get media ICE configuration",
     tags("media")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.media.query.ice_config"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.media.read.ice_config"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
     body: JsonBody<MediaIceConfigRequestBody>,

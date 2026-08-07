@@ -83,12 +83,11 @@ async fn fetch_chunked_mls_governance_proof(
     Vec<arkret_models_crypto::MlsGovernanceProofBundle>,
     arkret_models_crypto::MaterializedMlsGovernanceProofBundle,
 ) {
-    let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         frontier_response
@@ -115,7 +114,7 @@ async fn fetch_chunked_mls_governance_proof(
         .expect("canonical chunk-0 proof request");
 
     let mut first_response =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+        TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
             .add_header("content-type", "application/json", true)
             .body(base_request_body)
@@ -134,7 +133,7 @@ async fn fetch_chunked_mls_governance_proof(
         let request_body = arkret_canonical::canonical_json_bytes(&request)
             .expect("canonical proof chunk request");
         let mut response =
-            TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+            TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
                 .add_header("authorization", format!("Bearer {token}"), true)
                 .add_header("content-type", "application/json", true)
                 .body(request_body)
@@ -285,12 +284,11 @@ async fn agent_session_without_query_scope_cannot_scan_events() {
     let token = "agent-local-session-query";
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.stream.subscribe"]).await;
 
-    let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events?realms={DEMO_REALM_ID}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state))
-    .await;
+    let mut response = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"realms": [DEMO_REALM_ID]}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state))
+        .await;
 
     assert_eq!(response.status_code.unwrap(), StatusCode::FORBIDDEN);
     let body: Value = response.take_json().await.unwrap();
@@ -398,7 +396,8 @@ async fn events_describe_and_single_event_submit_work() {
     // accepted before the submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
 
-    let describe: Value = TestClient::get("http://server/_arkret/self/events/describe")
+    let describe: Value = TestClient::query("http://server/_arkret/self/events/describe")
+        .json(&serde_json::json!({}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -568,7 +567,7 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
 
-    let batch: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+    let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "event_ids": ["ak:event:01904100-0000-8000-8000-f15c8ea06c11", "ak:event:01904100-0000-8000-8000-30f4e405b35e"]
@@ -589,7 +588,7 @@ async fn events_describe_and_single_event_submit_work() {
     let event_ids: Vec<String> = (0..arkret_wire::MAX_EVENT_RESOLVE)
         .map(|index| format!("ak:event:01904100-0000-8000-8000-{index:012x}"))
         .collect();
-    let mut over_budget = TestClient::post("http://server/_arkret/self/events/resolve")
+    let mut over_budget = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "event_ids": event_ids,
@@ -601,7 +600,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(over_budget_body["error"]["code"], "quota_exceeded");
 
     // The same request without the Seal selector stays inside the budget.
-    let at_budget: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+    let at_budget: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({"event_ids": event_ids}))
         .send(&app_from_state(state.clone()))
@@ -614,14 +613,14 @@ async fn events_describe_and_single_event_submit_work() {
         arkret_wire::MAX_EVENT_RESOLVE
     );
 
-    let listed: Value =
-        TestClient::get("http://server/_arkret/self/events?actors=did:web:alice.example&limit=10")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let listed: Value = TestClient::query("http://server/_arkret/self/events")
+        .json(&serde_json::json!({"actors": ["did:web:alice.example"], "limit": 10}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     // Alice authored three Events here plus the Realm's own `ak.realm.create`,
     // which the seeded genesis unit puts in her actor history.
     let listed_events = listed["events"].as_array().unwrap();
@@ -635,15 +634,14 @@ async fn events_describe_and_single_event_submit_work() {
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        TestClient::get(
-            "http://server/_arkret/self/events/frontier?actor_id=did:web:alice.example",
-        )
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": "did:web:alice.example"}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
     let arkret_models_collaboration::event_sync::EventsFrontierView::ActorAggregate(frontier) =
         frontier.frontier
     else {
@@ -671,12 +669,11 @@ async fn events_describe_and_single_event_submit_work() {
     )
     .await;
     let seeded_realm_id = seeded["realm_id"].as_str().unwrap();
-    let mut seal_view_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={seeded_realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut seal_view_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"realm_id": seeded_realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     assert_eq!(
         seal_view_response.status_code,
         Some(StatusCode::NOT_FOUND),
@@ -690,12 +687,13 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     // Inaccessible realm must read as not_found (no existence leak).
-    let mut hidden = TestClient::get(
-        "http://server/_arkret/self/events/frontier?realm_id=ak:realm:0196419b-0000-8000-8000-00000000dead",
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut hidden = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({
+            "realm_id": "ak:realm:0196419b-0000-8000-8000-00000000dead"
+        }))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     assert_eq!(hidden.status_code.unwrap(), StatusCode::NOT_FOUND);
     let hidden_body: Value = hidden.take_json().await.unwrap();
     assert_eq!(hidden_body["error"]["code"], "not_found");
@@ -1280,12 +1278,11 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 
     let genesis_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let genesis_basis = loop {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
         if response.status_code == Some(StatusCode::OK) {
             let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
                 response.take_json().await.expect("typed genesis frontier");
@@ -1340,12 +1337,11 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 
     let seal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let mut response = TestClient::get(format!(
-            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-        ))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
+        let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await;
         if response.status_code == Some(StatusCode::OK) {
             let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
                 response.take_json().await.expect("typed Control frontier");
@@ -1434,7 +1430,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     unreachable_request.trusted_anchor_seal_id =
         arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "ff".repeat(32))).unwrap();
     let mut unreachable =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+        TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&unreachable_request)
             .send(&app_from_state(state.clone()))
@@ -1451,7 +1447,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     stale_manifest_request.expected_bundle_digest =
         Some(arkret_identifiers::Hash::new(format!("sha256:{}", "ee".repeat(32))).unwrap());
     let mut stale_manifest =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+        TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&stale_manifest_request)
             .send(&app_from_state(state.clone()))
@@ -1470,7 +1466,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     out_of_range_request.chunk_index = proof_chunks[0].chunk_manifest.chunk_count;
     out_of_range_request.expected_bundle_digest = Some(bundle.bundle_digest.clone());
     let mut out_of_range =
-        TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+        TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&out_of_range_request)
             .send(&app_from_state(state.clone()))
@@ -1794,12 +1790,11 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         "managed Agent PCR Seal submit failed: {seal_body}"
     );
 
-    let mut frontier_response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     let frontier_status = frontier_response.status_code.expect("frontier status");
     let frontier_body: Value = frontier_response
         .take_json()
@@ -1897,12 +1892,11 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .await
         .unwrap();
 
-    let mut lagging_frontier = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
+    let mut lagging_frontier = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
     assert_eq!(lagging_frontier.status_code, Some(StatusCode::OK));
     let lagging_body: Value = lagging_frontier.take_json().await.unwrap();
     assert_eq!(lagging_body["frontier"]["seal_id"], seal.id.as_str());
@@ -1980,7 +1974,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         "Bob Desktop",
     )
     .await;
-    let mut denied = TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
+    let mut denied = TestClient::query("http://server/_arkret/self/events/mls-governance-proof")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .json(&denied_request)
         .send(&app_from_state(state))
@@ -2183,68 +2177,42 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         .take_json()
         .await
         .unwrap();
-    let post_page: Value = TestClient::post("http://server/_arkret/self/events/query")
+    assert!(query_page["next_cursor"].as_str().is_some());
+    assert_eq!(
+        query_page["events"].as_array().unwrap().len(),
+        1,
+        "expected one Event in the first read page: {query_page}"
+    );
+    assert_eq!(query_page["has_more"], true);
+    assert!(query_page["prev_cursor"].is_null());
+    let next_cursor = query_page["next_cursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("ak:cursor:"));
+
+    let second_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&read_body)
+        .json(&serde_json::json!({"limit": 1, "actors": [actor], "after": next_cursor}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-
-    let encoded_actor = actor.replace(':', "%3A");
-    let first_page: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?actors={encoded_actor}&limit=1"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(
-        query_page["events"], first_page["events"],
-        "QUERY and GET must return the same Events"
-    );
-    assert_eq!(query_page["has_more"], first_page["has_more"]);
-    assert_eq!(
-        post_page["events"], first_page["events"],
-        "POST and GET must return the same Events"
-    );
-    assert_eq!(post_page["has_more"], first_page["has_more"]);
-    assert!(query_page["next_cursor"].as_str().is_some());
-    assert!(post_page["next_cursor"].as_str().is_some());
-    assert_eq!(
-        first_page["events"].as_array().unwrap().len(),
-        1,
-        "expected one Event in the first read page: {first_page}"
-    );
-    assert_eq!(first_page["has_more"], true);
-    assert!(first_page["prev_cursor"].is_null());
-    let next_cursor = first_page["next_cursor"].as_str().unwrap();
-    assert!(next_cursor.starts_with("ak:cursor:"));
-
-    let second_page: Value = TestClient::get(format!(
-        "http://server/_arkret/self/events?actors={encoded_actor}&limit=1&after={next_cursor}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
     assert_eq!(second_page["prev_cursor"], next_cursor);
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
 
-    let mut invalid_cursor = TestClient::get(format!(
-        "http://server/_arkret/self/events?actors={encoded_actor}&after=ak:event:01904100-0000-8000-8000-b8ab57920a67"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(invalid_cursor.status_code.unwrap().as_u16(), 400);
+    let mut invalid_cursor = TestClient::query("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "actors": [actor],
+            "after": "ak:event:01904100-0000-8000-8000-b8ab57920a67"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        invalid_cursor.status_code.unwrap(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     let invalid_cursor_body: Value = invalid_cursor.take_json().await.unwrap();
-    assert_eq!(invalid_cursor_body["error"]["code"], "invalid_param");
+    assert_eq!(invalid_cursor_body["error"]["code"], "schema_violation");
 }
 
 #[tokio::test(start_paused = true)]

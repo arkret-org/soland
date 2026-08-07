@@ -3,11 +3,11 @@ use salvo::oapi::endpoint;
 use super::*;
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.query.resolve",
+    operation_id = "ak.open.agent_pairing.read.resolve",
     summary = "Resolve an agent pairing bootstrap",
     tags("agent_pairing")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.query.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.read.resolve"))]
 pub(super) async fn resolve_agent_pairing(
     depot: &mut Depot,
     req: &mut Request,
@@ -284,13 +284,13 @@ pub(super) async fn submit_agent_runtime_key_request(
 }
 
 #[endpoint(
-    operation_id = "ak.open.agent_pairing.query.runtime_key_request_status",
+    operation_id = "ak.open.agent_pairing.read.runtime_key_request_status",
     summary = "Get an agent runtime key request status",
     tags("agent_pairing")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "ak.open.agent_pairing.query.runtime_key_request_status")
+    fields(op = "ak.open.agent_pairing.read.runtime_key_request_status")
 )]
 pub(super) async fn agent_runtime_key_request_status(
     body: JsonBody<AgentRuntimeApprovalStatusRequestBody>,

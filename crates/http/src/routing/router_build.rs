@@ -168,8 +168,8 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         .push(
             Router::with_path("self")
                 // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification:
-                // verify any presented session signature, and require PoP for
-                // writes / sensitive reads on high-security deployments.
+                // verify any presented session signature, and use the embedded
+                // operation registry to require PoP on high-security deployments.
                 .hoop(identity::session_pop::verify_session_pop)
                 // self/events/account/snapshot/projection/keys/authz/policy etc.
                 .push(spaces::router())
@@ -187,7 +187,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::self_router())
                 // self/realms/{realm_id}/policy-server (ak.self.realm_policy_server.*).
                 .push(realm_policy::router())
-                // self/realms/{realm_id}/organizations (ak.self.realm_organization.query.list).
+                // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list).
                 .push(realm_organization::router())
                 // G3.S1: MLS / keys lifecycle — spec-canonical path is
                 // `/_arkret/self/keys/keypackages/*` (see `mls::router`).
@@ -272,7 +272,7 @@ fn soland_local_router() -> Router {
                 .push(admin::audit_ingest_router())
                 // Owner-scoped policy document storage CRUD
                 // (`/_soland/self/policies*`). Deployment-local management
-                // capability backing `ak.self.policy.query.check`; kept off
+                // capability backing `ak.self.policy.read.check`; kept off
                 // the `/_arkret/...` protocol root per
                 // `service-http-binding.md` §1007.
                 .push(access::product_router())

@@ -969,8 +969,8 @@ fn document_projection_comments(
         .collect()
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.space.query.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.space.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.space.read.list", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.space.read.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1050,8 +1050,8 @@ async fn list_space_container_projections(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.strand.query.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.strand.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.strand.read.list", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.strand.read.list"))]
 async fn list_strand_projections(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1513,8 +1513,8 @@ async fn get_document_projection(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.morph.query.list", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.morph.query.list"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.morph.read.list", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.morph.read.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,
     depot: &mut Depot,

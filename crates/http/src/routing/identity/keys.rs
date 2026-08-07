@@ -210,8 +210,8 @@ async fn keys_upload(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.keys.query.lookup", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.query.lookup"))]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.read.lookup", tags("identity"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.read.lookup"))]
 async fn keys_query(
     aa: AuthArgs,
     body: JsonBody<KeysQueryRequestBody>,

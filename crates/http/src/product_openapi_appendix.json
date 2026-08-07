@@ -15366,7 +15366,7 @@
       },
       "arkret_models_collaboration.governance.realm_governance.RealmOrganizationRelationshipList": {
         "additionalProperties": false,
-        "description": "Response DTO for `ak.self.realm_organization.query.list`\n(`realm-organization-operations.schema.json#/$defs/realm_organization_relationship_list`).",
+        "description": "Response DTO for `ak.self.realm_organization.read.list`\n(`realm-organization-operations.schema.json#/$defs/realm_organization_relationship_list`).",
         "properties": {
           "declared_organization_hints": {
             "description": "`owning_organizations` declared hints with no verified statement. These\nare unverified claims and MUST NOT be rendered as official / governed /\nendorsed.",
@@ -15394,7 +15394,7 @@
       },
       "arkret_models_collaboration.governance.realm_governance.RealmOrganizationRelationshipRow": {
         "additionalProperties": false,
-        "description": "One projected `ak.realm.organization` relationship row surfaced by\n`ak.self.realm_organization.query.list`. Mirrors the canonical\n`realm_organization_payload` field order; `lifecycle_phase` is\nreducer-derived. A row here is a projection only: an organization\nrelationship is only verified when `lifecycle_phase=verified_active`.",
+        "description": "One projected `ak.realm.organization` relationship row surfaced by\n`ak.self.realm_organization.read.list`. Mirrors the canonical\n`realm_organization_payload` field order; `lifecycle_phase` is\nreducer-derived. A row here is a projection only: an organization\nrelationship is only verified when `lifecycle_phase=verified_active`.",
         "properties": {
           "control_scopes": {
             "items": {
@@ -17675,7 +17675,7 @@
                 ]
               },
               "resource_kinds": {
-                "description": "Directory-service overlay: resource classes indexed by\n`ak.find.directory.query.describe`. Required when\n`service_kind == \"directory_service\"`.",
+                "description": "Directory-service overlay: resource classes indexed by\n`ak.find.directory.read.describe`. Required when\n`service_kind == \"directory_service\"`.",
                 "items": {
                   "$ref": "#/components/schemas/arkret_models_discovery.service_description.DirectoryResourceKind"
                 },

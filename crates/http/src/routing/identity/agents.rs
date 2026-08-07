@@ -9,7 +9,7 @@
 //! - `POST   /_arkret/gate/account/agent-key-pair`               —
 //!   `ak.gate.account.command.pair_agent_key`
 //! - `POST   /_arkret/self/agents`                             — `ak.self.agent.command.provision`
-//! - `GET    /_arkret/self/agents`                             — `ak.self.agent.query.list`
+//! - `GET    /_arkret/self/agents`                             — `ak.self.agent.read.list`
 //! - `GET    /_arkret/self/agents/{id}`                        — `ak.self.agent.resource.get`
 //! - `POST   /_arkret/self/agents/{id}/pause`                  — `ak.self.agent.command.pause`
 //! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume`
