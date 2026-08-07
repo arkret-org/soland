@@ -766,7 +766,7 @@ pub(crate) fn grant_session_binding(
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::{GrantId, RealmId};
+    use arkret_identifiers::{RealmId, SessionGrantId};
 
     use super::*;
 
@@ -874,7 +874,10 @@ mod tests {
 
     fn test_introspection_grant() -> SessionGrantIntrospectGrant {
         SessionGrantIntrospectGrant {
-            id: GrantId::new("ak:grant:0196419b-0000-8000-8000-000000000001").unwrap(),
+            id: SessionGrantId::new(
+                "ak:session_grant:0196419b-0000-8000-8000-000000000001",
+            )
+            .unwrap(),
             issuer: "did:web:coauth.local".to_owned(),
             subject: "did:web:alice.example".to_owned(),
             service_account_id: "alice".to_owned(),
@@ -916,7 +919,8 @@ mod tests {
     #[test]
     fn agent_session_binding_materializes_scope_details() {
         let mut grant = test_introspection_grant();
-        grant.id = GrantId::new("ak:grant:0196419b-0000-8000-8000-000000000002").unwrap();
+        grant.id =
+            SessionGrantId::new("ak:session_grant:0196419b-0000-8000-8000-000000000002").unwrap();
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);

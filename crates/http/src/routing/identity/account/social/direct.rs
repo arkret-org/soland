@@ -615,26 +615,52 @@ pub(crate) async fn project_canonical_direct_binding(
 
 /// Identity of one endorsement inside the or_set.
 ///
-/// §8.3 derives the element key from the payload's canonical bytes with
-/// `created_at` and the Event author/proof excluded, so two participants
-/// endorsing the same coordinates at different wall-clock times collapse to the
-/// same element. The spec calls this value `binding_digest` and requires a
-/// registered domain for it, but no registry defines that domain and the
-/// payload carries no `binding_digest` field — see the spec-open note. Until
-/// the domain is registered this stays a receiver-local identity and is never
-/// put on the wire.
+/// §8.3 derives the element key from the registered
+/// `ak.direct-conversation.binding-digest.v1` domain and the closed normalized
+/// binding object. `created_at` and Event author/proof are excluded, so two
+/// participants endorsing the same coordinates at different wall-clock times
+/// collapse to the same semantic digest. The digest remains receiver-derived
+/// and MUST NOT appear in the payload.
 fn direct_binding_endorsement_digest(
     payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
 ) -> Result<String, &'static str> {
-    let mut value =
-        serde_json::to_value(payload).map_err(|_| "direct_conversation_binding_invalid")?;
-    if let Some(object) = value.as_object_mut() {
-        object.remove("created_at");
+    payload
+        .binding_digest()
+        .map(|digest| digest.into_string())
+        .map_err(|_| "direct_conversation_binding_invalid")
+}
+
+#[cfg(test)]
+mod binding_digest_tests {
+    use super::*;
+
+    #[test]
+    fn registered_binding_digest_kat_is_used_for_projection_identity() {
+        let payload = serde_json::json!({
+            "pair_key": "sha256:e8c24c1badc48eefa472a1700e87a6597a95aedfab8cbe3173f1622b9ad427b5",
+            "participants_unordered": [
+                "did:webvh:z6mkfixture:bob.example",
+                "did:webvh:z6mkfixture:alice.example"
+            ],
+            "realm_id": "ak:realm:0196419b-0000-8000-8000-000000000101",
+            "main_strand_id": "ak:strand:0196419b-0000-8000-8000-000000000201",
+            "founding_unit_digest": format!("sha256:{}", "b".repeat(64)),
+            "authorization_basis": {
+                "kind": "accepted_contact",
+                "event_refs": [
+                    "ak:event:0196419b-0000-8000-8000-000000000308",
+                    "ak:event:0196419b-0000-8000-8000-000000000301"
+                ]
+            },
+            "initial_exact_pair_generation_ref": "ak:event:0196419b-0000-8000-8000-00000000030a",
+            "created_at": "2026-08-07T12:34:56.000Z"
+        });
+        let payload = serde_json::from_value(payload).unwrap();
+        assert_eq!(
+            direct_binding_endorsement_digest(&payload).unwrap(),
+            "sha256:bda6045ed2af5f51dc19296b3c1f906f415a329c9d65c3da40b1d063b68773a8"
+        );
     }
-    Ok(arkret_canonical::canonical::sha256_digest(
-        arkret_canonical::canonical::canonical_json_bytes(&value)
-            .map_err(|_| "direct_conversation_binding_invalid")?,
-    ))
 }
 
 /// Derive the founder basis from an accepted Contact record.
