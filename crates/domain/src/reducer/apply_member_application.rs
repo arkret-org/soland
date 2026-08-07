@@ -558,7 +558,7 @@ mod tests {
                 private_body: json!({"mode": "server_protected", "answers": []}),
                 status: "accepted".to_owned(),
                 accepted_by: Some("did:web:reviewer.example".to_owned()),
-                accepted_grant_id: Some("ak:grant:0196419b-0000-7000-8000-000000000010".to_owned()),
+                accepted_grant_id: Some("ak:grant:0196419b-0000-8000-8000-000000000010".to_owned()),
                 review_receipt_digests: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
                 required_accept_refs: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
                 invite_consumed: false,

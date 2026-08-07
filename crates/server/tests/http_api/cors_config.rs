@@ -203,7 +203,7 @@ async fn invite_create_event_surfaces_via_authz_invites() {
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
     // Submit Alice's canonical directed invite.
-    let invite_id = "ak:invite:01904100-0000-7000-8000-aa00000000ed";
+    let invite_id = "ak:invite:01904100-0000-8000-8000-aa00000000ed";
     let event_id = "ak:event:01904100-0000-8000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "invite_id": invite_id,
@@ -434,7 +434,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ak:call:01964137-0000-8000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: `mode` is a required enum

@@ -134,7 +134,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 /// admission, but Control Proposal Ack admission still resolves the accepted
 /// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
-    const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-7000-8000-000000000001";
+    const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-8000-8000-000000000001";
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
     let create = arkret_wire::Event::new(
@@ -366,7 +366,7 @@ fn signed_ghost_provision_body(
             "ak.applet.ghost.provision",
         )
     } else {
-        "ak:grant:01904100-0000-7000-8000-000000000099".to_owned()
+        "ak:grant:01904100-0000-8000-8000-000000000099".to_owned()
     };
     let verification_method = arkret_wire::DidUrl::new(package.webhook_auth.key_ref.clone())
         .expect("fixture verification method is a DID URL");

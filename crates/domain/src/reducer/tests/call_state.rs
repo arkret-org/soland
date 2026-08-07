@@ -21,8 +21,13 @@ struct CallInput {
 
 fn call_input(kind: &str, realm: &str, event_id: &str, payload: Value) -> CallInput {
     let cell_writes = projected_cell_writes(kind, realm, event_id, &payload);
+    let mut operation_payload = payload;
+    operation_payload
+        .as_object_mut()
+        .expect("call payload object")
+        .insert("event_id".to_owned(), Value::String(event_id.to_owned()));
     CallInput {
-        operation: make_operation(kind, realm, payload),
+        operation: make_operation(kind, realm, operation_payload),
         cell_writes,
     }
 }
@@ -36,11 +41,43 @@ fn call_cell(family: &str, subject: &str) -> arkret_identifiers::CellRef {
 }
 
 #[test]
+fn call_create_derives_call_id_and_establishes_initial_state() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
+    let event_id = "ak:event:01904100-0000-8000-8000-c00000000009";
+    let call_id = "ak:call:01904100-0000-8000-8000-c00000000009";
+    let input = call_input(
+        arkret_wire::EventKind::CALL_CREATE,
+        realm,
+        event_id,
+        serde_json::json!({
+            "initial_state": "ringing",
+            "focus": {"mode": "sfu", "session_focus": "fra-1"}
+        }),
+    );
+
+    assert!(matches!(
+        apply_call(&mut state, &input, &hlc),
+        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
+    ));
+    assert_eq!(
+        state
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_STATE_V1,
+                call_id
+            ))
+            .unwrap(),
+        &serde_json::json!("ringing")
+    );
+}
+
+#[test]
 fn call_state_projects_independent_state_focus_and_roster_cells() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000a";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000a";
     let event_id = "ak:event:01904100-0000-8000-8000-e00000000001";
     let participant = serde_json::json!({
         "actor_id": "did:web:bob.example",
@@ -99,7 +136,7 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000b";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000b";
     let first = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -141,7 +178,7 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000c";
     let event_id = "ak:event:01904100-0000-8000-8000-e00000000002";
     let dot = arkret_schema::or_set_dot(event_id, CALL_STATE_MODERATION_WRITE_INDEX);
     let removal = serde_json::json!({
@@ -213,7 +250,7 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000d";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000d";
     let recording_id = "capture-1";
     let subject = arkret_wire::composite_subject(&[call_id, recording_id]).unwrap();
     let event_id = "ak:event:01904100-0000-8000-8000-e00000000003";
@@ -268,7 +305,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000f";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000f";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -326,7 +363,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c00000000010";
+    let call_id = "ak:call:01904100-0000-8000-8000-c00000000010";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -408,7 +445,7 @@ fn terminal_summary_reads_the_split_state_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-8000-8000-cfc039892063";
-    let call_id = "ak:call:01904100-0000-7000-8000-c0000000000e";
+    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000e";
     for (index, (from, to)) in [
         (Value::Null, "connecting"),
         (Value::String("connecting".to_owned()), "active"),

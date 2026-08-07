@@ -108,8 +108,8 @@ mod tests {
     #[test]
     fn transport_proof_transcript_binds_security_relevant_envelope_fields() {
         let payload = serde_json::json!({
-            "grant_id": "ak:grant:01970000-0000-7000-8000-000000000001",
-            "grant_ref": "ak:grant:01970000-0000-7000-8000-000000000001",
+            "grant_id": "ak:grant:01970000-0000-8000-8000-000000000001",
+            "grant_ref": "ak:grant:01970000-0000-8000-8000-000000000001",
         });
         let transcript = |operation: &str, issuer: &str, realm: &str| {
             capability_fanout_proof_transcript(
@@ -117,7 +117,7 @@ mod tests {
                 issuer,
                 "ak.capability.revoke",
                 "ak:event:01970000-0000-8000-8000-000000000002",
-                "ak:grant:01970000-0000-7000-8000-000000000001",
+                "ak:grant:01970000-0000-8000-8000-000000000001",
                 realm,
                 &payload,
             )

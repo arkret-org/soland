@@ -19,49 +19,42 @@ impl ProjectionState {
         let Some(payload) = operation.payload.as_object() else {
             return rejected("invite_payload_not_object");
         };
-        let invite = payload.get("invite").and_then(Value::as_object);
-        let Some(invite_id) = invite_string_field(payload, invite, "invite_id", "id") else {
-            return rejected("invite_id_required");
+        if payload.get("invite").is_some() || payload.get("invite_id").is_some() {
+            return rejected("invite_id_must_be_event_derived");
+        }
+        let Some(invite_id) = payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+            .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id).to_string())
+        else {
+            return rejected("invite_create_event_id_required");
         };
-        if arkret_identifiers::InviteId::new(invite_id.clone()).is_err() {
-            return rejected("invite_id_invalid");
-        }
-        let realm_id = invite_string_field(payload, invite, "realm_id", "realm_id")
-            .unwrap_or_else(|| operation.realm_id.to_string());
-        if realm_id != operation.realm_id.as_str() {
-            return rejected("invite_realm_mismatch");
-        }
-        let Some(inviter) = invite_string_field(payload, invite, "inviter", "inviter") else {
+        let realm_id = operation.realm_id.to_string();
+        let Some(inviter) = operation.actor().map(|actor| actor.to_string()) else {
             return rejected("inviter_required");
         };
         if arkret_identifiers::Did::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
-        let Some(third_party_id) = invite_value_field(payload, invite, "third_party_id") else {
+        let Some(third_party_id) = payload.get("third_party_id") else {
             return rejected("third_party_id_required");
         };
         if let Err(reason) = validate_third_party_id(third_party_id) {
             return rejected(reason);
         }
-        let Some(expires_at) = invite_string_field(payload, invite, "expires_at", "expires_at")
-            .and_then(|value| parse_timestamp(&value))
+        let Some(expires_at) = payload
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp)
         else {
             return rejected("expires_at_required");
         };
-        let created_at = invite_string_field(payload, invite, "created_at", "created_at")
-            .and_then(|value| parse_timestamp(&value))
-            .unwrap_or(operation.created_at);
+        let created_at = operation.created_at;
         if expires_at <= admission_time || created_at > admission_time {
             return rejected("expired_invite_token");
         }
-        let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
-            .cloned()
-            .unwrap_or_else(|| json!({"join_rule": "invite"}));
-        let state = invite_string_field(payload, invite, "state", "state")
-            .unwrap_or_else(|| INVITE_STATE_PENDING.to_owned());
-        if state != INVITE_STATE_PENDING {
-            return rejected("invite_state_invalid");
-        }
+        let join_rule_snapshot = json!({"join_rule": "invite"});
 
         if let Some(existing) = self.invites.get(&invite_id) {
             return ProjectionEffect::InviteStateChanged {
@@ -262,31 +255,6 @@ fn rejected(reason: &str) -> ProjectionEffect {
     ProjectionEffect::Rejected {
         reason: reason.to_owned(),
     }
-}
-
-fn invite_string_field(
-    payload: &serde_json::Map<String, Value>,
-    invite: Option<&serde_json::Map<String, Value>>,
-    payload_field: &str,
-    invite_field: &str,
-) -> Option<String> {
-    invite
-        .and_then(|object| object.get(invite_field))
-        .or_else(|| payload.get(payload_field))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn invite_value_field<'a>(
-    payload: &'a serde_json::Map<String, Value>,
-    invite: Option<&'a serde_json::Map<String, Value>>,
-    field: &str,
-) -> Option<&'a Value> {
-    invite
-        .and_then(|object| object.get(field))
-        .or_else(|| payload.get(field))
 }
 
 fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {

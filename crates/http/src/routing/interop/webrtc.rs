@@ -1425,7 +1425,7 @@ mod tests {
         let request = MediaTokenIssueRequestBody {
             focus: &focus,
             realm_id: "ak:realm:01904100-0000-8000-8000-cfc039892063",
-            call_id: "ak:call:01904100-0000-7000-8000-c0000000000c",
+            call_id: "ak:call:01904100-0000-8000-8000-c0000000000c",
             actor_id: "did:web:alice.example",
             device_id: "ak:device:01904100-0000-7000-8000-000000000001",
             participant_identity: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",

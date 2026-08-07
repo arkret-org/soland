@@ -1275,7 +1275,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000601",
+            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000601",
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
@@ -1336,7 +1336,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000604",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000604",
+            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000604",
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example"
         }),
@@ -2584,7 +2584,7 @@ async fn call_recording_start_defaults_to_record_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
+            "call_id": "ak:call:01904100-0000-8000-8000-000000000904",
             "recording_id": "recording-904",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "recording",
@@ -2621,7 +2621,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-7000-8000-000000000905",
+            "call_id": "ak:call:01904100-0000-8000-8000-000000000905",
             "recording_id": "transcript-905",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
@@ -2668,7 +2668,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-7000-8000-000000000906",
+            "call_id": "ak:call:01904100-0000-8000-8000-000000000906",
             "recording_id": "transcript-906",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
@@ -2701,7 +2701,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
     );
     let payload = json!({
         "sender": "did:web:recorder.example",
-        "call_id": "ak:call:01904100-0000-7000-8000-000000000907",
+        "call_id": "ak:call:01904100-0000-8000-8000-000000000907",
         "recording_id": "recording-907",
         "recording_agent": "did:web:recorder.example",
         "capture_kind": "recording",

@@ -1320,8 +1320,11 @@ pub(super) async fn attach_agent_grant(
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_wire_code("agent_grant_exceeds_requested_scope"));
     }
-    let grant_id = grant.id.clone();
-    let realm_id = grant.realm_id.clone();
+    let grant_id = GrantId::from_event_id(&body.grant_event.event.event_id);
+    let realm_id = grant
+        .realm_id
+        .clone()
+        .expect("validated Agent grant requires a Realm id");
     submit_signed_agent_event(state, &session, body.grant_event).await?;
     append_audit_log(
         state,

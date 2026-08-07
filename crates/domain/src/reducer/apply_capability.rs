@@ -4,7 +4,7 @@
 //! the canonical cells declared by
 //! `event-kind-registry.json`:
 //!
-//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per `payload.grant_id`).
+//! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per GrantId).
 //!   plus its `issuer_authority_refs` chain references.
 //!
 //! Convergence rules (capabilities.md §12.1):
@@ -22,7 +22,7 @@
 //! Control Moves with effects must carry `seal_basis.leaves`. The reducer
 //! trusts that gate and does the *structural* acceptance checks reachable at
 //! the `Operation` boundary — a present
-//! `grant_id`, a parseable issuer, and (for grant) a non-empty grant body.
+//! an Event-derived `grant_id`, a parseable issuer, and (for grant) a non-empty grant body.
 //! Missing structural inputs ⇒ `Rejected` (P3 fail-closed), never a silent
 //! no-op. This mirrors `apply_capability_derived`, which likewise validates
 //! structure/causality against projected cells rather than re-running the
@@ -314,7 +314,7 @@ mod cba_capability_cell_tests {
 
     #[test]
     fn engine_grant_reads_registry_projected_wrapper() {
-        let grant_id = "ak:grant:019fa9d5-0000-7000-8000-000000000001";
+        let grant_id = "ak:grant:019fa9d5-0000-8000-8000-000000000001";
         let realm_id = "ak:realm:019fa9d5-0000-8000-8000-000000000002";
         let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let state = CellState::Value(Value::Array(vec![json!({
@@ -576,14 +576,21 @@ fn fixture_event_id_for_operation(operation_id: &str) -> String {
 }
 
 /// Pull the canonical grant body out of an `ak.capability.grant` payload.
-/// Accepts both the canonical wrapper
-/// `{grant_id, grant: {…}}` (SDK `CapabilityGrantBuilder`) and a flat
-/// payload that already *is* the grant body.
+/// Accepts the canonical genesis wrapper `{grant: {…}}` and a flat payload
+/// that already *is* the grant body.
 fn grant_body(payload: &Value) -> &Value {
     payload
         .get("grant")
         .filter(|grant| grant.is_object())
         .unwrap_or(payload)
+}
+
+fn genesis_grant_id(payload: &Value) -> Option<String> {
+    payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+        .map(|event_id| arkret_identifiers::GrantId::from_event_id(&event_id).to_string())
 }
 
 /// Extract the issuer DID from a capability grant payload (top-level or
@@ -793,6 +800,7 @@ fn grant_item_value(
     }
     if let Value::Object(map) = &mut body {
         map.insert("grant_id".to_owned(), Value::String(grant_id.to_owned()));
+        map.insert("id".to_owned(), Value::String(grant_id.to_owned()));
         map.entry("realm_id".to_owned())
             .or_insert_with(|| Value::String(operation.realm_id.to_string()));
         if revoked {
@@ -1465,14 +1473,19 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(grant_id) = operation
-            .payload
-            .get("grant_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
+        // Grant identity is the genesis Event identity with a typed prefix.
+        // Reject producer-supplied copies even at this internal boundary so a
+        // caller cannot bypass the closed wire schema and pick a cell key.
+        if operation.payload.get("grant_id").is_some()
+            || grant_body(&operation.payload).get("id").is_some()
+        {
             return ProjectionEffect::Rejected {
-                reason: "capability_grant_id_missing".to_owned(),
+                reason: "capability_grant_id_must_be_event_derived".to_owned(),
+            };
+        }
+        let Some(grant_id) = genesis_grant_id(&operation.payload) else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_grant_event_id_missing".to_owned(),
             };
         };
         // Structural acceptance: a grant MUST name its issuer (capabilities.md
@@ -1753,11 +1766,11 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let Some(grant_id) = operation.payload.get("grant_id").and_then(Value::as_str) else {
+        let Some(grant_id) = genesis_grant_id(&operation.payload) else {
             return Ok(());
         };
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-        visited.insert(grant_id.to_owned());
+        visited.insert(grant_id.clone());
         let mut pending = grant_authority_grant_refs(&operation.payload);
         while let Some(node) = pending.pop() {
             if node == grant_id {
@@ -2064,10 +2077,10 @@ mod agent_key_tests {
 
     const AGENT: &str = "did:web:agent.example";
     const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000000";
-    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a1";
-    const GRANT_2: &str = "ak:grant:01970000-0000-7000-8000-0000000000a2";
-    const GRANT_3: &str = "ak:grant:01970000-0000-7000-8000-0000000000a3";
-    const OWNER_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a0";
+    const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000a1";
+    const GRANT_2: &str = "ak:grant:01970000-0000-8000-8000-0000000000a2";
+    const GRANT_3: &str = "ak:grant:01970000-0000-8000-8000-0000000000a3";
+    const OWNER_GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000a0";
     const REALM_OWNER: &str = "did:web:alice.example";
 
     #[test]
@@ -2125,10 +2138,10 @@ mod agent_key_tests {
         actions: serde_json::Value,
         resources: serde_json::Value,
     ) -> serde_json::Value {
+        let event_id = grant_id.replacen("ak:grant:", "ak:event:", 1);
         json!({
-            "grant_id": grant_id,
+            "event_id": event_id,
             "grant": {
-                "id": grant_id,
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
                 "issuer": issuer,
@@ -2799,9 +2812,9 @@ mod authority_cycle_tests {
     use crate::reducer::{ProjectionState, SolandRealmState};
 
     const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000000";
-    const G_A: &str = "ak:grant:01970000-0000-7000-8000-00000000a001";
-    const G_B: &str = "ak:grant:01970000-0000-7000-8000-00000000b002";
-    const G_C: &str = "ak:grant:01970000-0000-7000-8000-00000000c003";
+    const G_A: &str = "ak:grant:01970000-0000-8000-8000-00000000a001";
+    const G_B: &str = "ak:grant:01970000-0000-8000-8000-00000000b002";
+    const G_C: &str = "ak:grant:01970000-0000-8000-8000-00000000c003";
 
     /// A re-grant: same `ak.capability.grant` kind as a root issue, with a
     /// `grant` authority ref instead of a `realm_root` one. That ref type is
@@ -2821,8 +2834,7 @@ mod authority_cycle_tests {
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
-                "event_id": super::fixture_event_id_for_operation(OPERATION_ID),
-                "grant_id": grant_id,
+                "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
                     "issuer": "did:web:alice.example",
                     "issuer_authority_refs": [
@@ -2852,8 +2864,7 @@ mod authority_cycle_tests {
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
-                "event_id": super::fixture_event_id_for_operation(OPERATION_ID),
-                "grant_id": grant_id,
+                "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
                     "issuer": issuer,
                     "issuer_authority_refs": [{
@@ -3071,8 +3082,8 @@ mod federation_revoke_fanout_tests {
     const OTHER_REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000001";
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_ID: &str = "did:web:beta.example";
-    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d1";
-    const OWNER_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d0";
+    const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000d1";
+    const OWNER_GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000d0";
 
     fn capability_op(operation_id: &str, kind: &str, mut payload: serde_json::Value) -> Operation {
         let object = payload.as_object_mut().expect("test payload object");
@@ -3118,9 +3129,8 @@ mod federation_revoke_fanout_tests {
             "ak:operation:01970000-0000-7000-8000-0000000000a0",
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
-                "grant_id": OWNER_GRANT,
+                "event_id": OWNER_GRANT.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
-                    "id": OWNER_GRANT,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
                     "issuer": OWNER,
@@ -3148,9 +3158,8 @@ mod federation_revoke_fanout_tests {
         let registry_digest = arkret_policy::current_capability_action_registry_digest()
             .expect("embedded capability action registry");
         json!({
-            "grant_id": GRANT,
+            "event_id": GRANT.replacen("ak:grant:", "ak:event:", 1),
             "grant": {
-                "id": GRANT,
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
                 "issuer": OWNER,
@@ -3264,10 +3273,8 @@ mod realm_owner_authority_tests {
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
-                "event_id": super::fixture_event_id_for_operation(&operation_id),
-                "grant_id": grant_id,
+                "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
-                    "id": grant_id,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
                     "issuer": issuer,
@@ -3294,7 +3301,7 @@ mod realm_owner_authority_tests {
     }
 
     fn grant_id(slot: &str) -> String {
-        format!("ak:grant:01980000-0000-7000-8000-0000000000{slot}")
+        format!("ak:grant:01980000-0000-8000-8000-0000000000{slot}")
     }
 
     /// A Realm whose `realm_states` mirror names `mirror_owner` but whose

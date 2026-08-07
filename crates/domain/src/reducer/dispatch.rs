@@ -704,6 +704,39 @@ fn apply_realm_media_service_dispatch(
     s.apply_realm_media_service(op)
 }
 
+/// Dispatch for `ak.call.create`; CallId is derived from the accepted Event.
+fn apply_call_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_call_create(op)
+}
+
+fn apply_audit_binding_create_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_audit_binding_create(op)
+}
+
+fn apply_audit_binding_state_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_audit_binding_state(op)
+}
+
+fn apply_session_grant_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_session_grant(op)
+}
+
 /// Dispatch for `ak.call.state`; cell family is
 /// `ak.component.call.state.v1` (`cell_subject = payload.call_id`).
 fn apply_call_state_dispatch(
@@ -779,7 +812,7 @@ fn apply_capability_derived_dispatch(
 
 /// P1 — dispatch for `ak.capability.grant`. Projects the grant snapshot as
 /// an or_set add into the `ak.component.capability.grant.v1` cell keyed by
-/// `payload.grant_id`.
+/// the Event-derived GrantId.
 fn apply_capability_grant_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1268,6 +1301,24 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::EventKind::REALM_MEDIA_SERVICE,
         apply_realm_media_service_dispatch,
+    );
+    // `ak.call.create` establishes the Event-derived CallId before any
+    // signaling or state event may refer to it.
+    m.insert(
+        arkret_wire::EventKind::CALL_CREATE,
+        apply_call_create_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AUDIT_APPLET_BINDING_CREATE,
+        apply_audit_binding_create_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::AUDIT_APPLET_BINDING_STATE,
+        apply_audit_binding_state_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::SESSION_GRANT,
+        apply_session_grant_dispatch,
     );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,

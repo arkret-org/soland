@@ -984,7 +984,7 @@ mod tests {
                 .unwrap(),
             arkret_wire::EventKind::INVITE_CREATE,
             json!({
-                "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
+                "invite_id": "ak:invite:01904100-0000-8000-8000-0000000000e2",
                 "invitee": "did:web:bob.example",
                 "invite_delivery_target": {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
@@ -1004,7 +1004,7 @@ mod tests {
         assert_eq!(
             projection_context_stripped_payload(&operation.payload),
             json!({
-                "invite_id": "ak:invite:01904100-0000-7000-8000-0000000000e2",
+                "invite_id": "ak:invite:01904100-0000-8000-8000-0000000000e2",
                 "invitee": "did:web:bob.example",
                 "invite_delivery_target": {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"

@@ -21,7 +21,7 @@ mod invite_create_schema_tests {
 
     fn invite_payload() -> serde_json::Value {
         json!({
-            "invite_id": "ak:invite:01904100-0000-7000-8000-000000000701",
+            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000701",
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:web:local.host",
@@ -1045,7 +1045,7 @@ mod spec_sync_validator_tests {
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.old", "ak.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ak:grant:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
                 "capability_action": "ak.morph.schema.migrate"
             }),
         );
@@ -1061,7 +1061,7 @@ mod spec_sync_validator_tests {
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ak:grant:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
                 "capability_action": "ak.morph.schema.migrate"
             }),
         );
@@ -1096,7 +1096,7 @@ mod spec_sync_validator_tests {
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "breaking",
-                "authorization_ref": "ak:grant:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
                 "capability_action": "ak.morph.schema_migrate"
             }),
         );
@@ -1111,7 +1111,7 @@ mod spec_sync_validator_tests {
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "transformation",
-                "authorization_ref": "ak:grant:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
                 "capability_action": "ak.morph.schema_migrate"
             }),
         );

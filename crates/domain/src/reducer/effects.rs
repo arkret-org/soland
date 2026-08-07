@@ -177,6 +177,17 @@ pub enum ProjectionEffect {
     CallStateProjected {
         call_id: String,
     },
+    /// Audit binding genesis/state projected. The immutable binding document
+    /// and its lifecycle live in separate cells keyed by one AuditBindingId.
+    AuditBindingProjected {
+        binding_id: String,
+        state: String,
+    },
+    /// Auth service-attested SessionGrant genesis projected under the
+    /// SessionGrantId derived from the accepted Event.
+    SessionGrantProjected {
+        session_grant_id: String,
+    },
     /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
     /// `ak.component.call.summary.v1` cas_register cell.
     CallSummaryProjected {

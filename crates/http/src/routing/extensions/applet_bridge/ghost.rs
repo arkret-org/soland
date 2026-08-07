@@ -230,7 +230,7 @@ pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result
             .iter()
             .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION)
         {
-            return Ok(payload.grant_id.to_string());
+            return Ok(arkret_identifiers::GrantId::from_event_id(&event.event_id).to_string());
         }
     }
     Err(

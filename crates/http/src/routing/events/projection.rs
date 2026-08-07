@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
-        let invite_id = "ak:invite:01904100-0000-7000-8000-000000000003";
+        let invite_id = "ak:invite:01904100-0000-8000-8000-000000000003";
         let operation = op(
             arkret_wire::EventKind::INVITE_ACCEPT,
             json!({

@@ -1178,7 +1178,7 @@ mod refs_limit_tests {
         let refs: Vec<Value> = (0..(arkret_wire::event_envelope::MAX_AUTHORIZED_BY_REFS + 1))
             .map(|index| {
                 json!({
-                    "id": format!("ak:grant:019fa9da-0000-7000-8000-{index:012x}"),
+                    "id": format!("ak:grant:019fa9da-0000-8000-8000-{index:012x}"),
                     "role": "authorized_by"
                 })
             })
@@ -1191,7 +1191,7 @@ mod refs_limit_tests {
     fn within_limits_collects_only_authorized_by_refs() {
         let refs = json!([
             {
-                "id": "ak:grant:019fa9da-0000-7000-8000-000000000001",
+                "id": "ak:grant:019fa9da-0000-8000-8000-000000000001",
                 "role": "authorized_by"
             },
             {"id": "ak:event:e2", "role": "after"}
@@ -1199,7 +1199,7 @@ mod refs_limit_tests {
         let out = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap();
         assert_eq!(
             out,
-            vec!["ak:grant:019fa9da-0000-7000-8000-000000000001".to_owned()]
+            vec!["ak:grant:019fa9da-0000-8000-8000-000000000001".to_owned()]
         );
     }
 

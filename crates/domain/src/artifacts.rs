@@ -150,17 +150,27 @@ pub fn active_durable_cell_bindings() -> &'static [EventKindCellBinding] {
                 .filter(|entry| {
                     entry.get("wire_scope").and_then(Value::as_str) == Some("durable_event")
                 })
-                .filter_map(|entry| {
-                    let event_kind = entry.get("event_kind").and_then(Value::as_str)?;
-                    let cell_family = entry.get("cell_family").and_then(Value::as_str)?;
-                    let lattice = entry.get("lattice").and_then(Value::as_str)?;
-                    let bottom = entry.get("bottom").and_then(Value::as_str)?;
-                    Some(EventKindCellBinding {
-                        event_kind: event_kind.to_owned(),
-                        cell_family: cell_family.to_owned(),
-                        lattice: lattice.to_owned(),
-                        bottom: bottom.to_owned(),
-                    })
+                .flat_map(|entry| {
+                    let Some(event_kind) = entry.get("event_kind").and_then(Value::as_str) else {
+                        return Vec::new();
+                    };
+                    entry
+                        .get("cell_writes")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|write| {
+                            Some(EventKindCellBinding {
+                                event_kind: event_kind.to_owned(),
+                                cell_family: write
+                                    .get("cell_family")
+                                    .and_then(Value::as_str)?
+                                    .to_owned(),
+                                lattice: write.get("lattice").and_then(Value::as_str)?.to_owned(),
+                                bottom: write.get("bottom").and_then(Value::as_str)?.to_owned(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect()
         })

@@ -775,7 +775,7 @@ async fn applet_registration_requires_realm_admin() {
     state
         .authorization()
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
-            grant_id: "ak:grant:01904100-0000-7000-8000-000000000a02".to_owned(),
+            grant_id: "ak:grant:01904100-0000-8000-8000-000000000a02".to_owned(),
             realm_id: realm_id.to_owned(),
             issuer: owner.to_owned(),
             subject: owner.to_owned(),
@@ -1062,7 +1062,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
             "realm_id": "ak:realm:01904100-0000-8000-8000-000000000001",
             "membership": "join",
             "reason": "invite_accept",
-            "invite_ref": "ak:invite:01904100-0000-7000-8000-000000000001",
+            "invite_ref": "ak:invite:01904100-0000-8000-8000-000000000001",
             "delivery_status": "unroutable"
         }
     });
@@ -2021,7 +2021,7 @@ fn data_event_capability_ref_must_resolve() {
     let seal_ref = insert_data_event_seal(&state, Vec::new());
     let object = data_event_object_with_refs(
         &seal_ref,
-        vec!["ak:grant:01904100-0000-7000-8000-000000000111".to_owned()],
+        vec!["ak:grant:01904100-0000-8000-8000-000000000111".to_owned()],
     );
 
     let err = validate_data_event_capability_refs(
@@ -2044,7 +2044,7 @@ fn data_event_capability_ref_must_resolve() {
 #[test]
 fn data_event_capability_must_cover_derived_cell() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000112";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000112";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -2060,7 +2060,7 @@ fn data_event_capability_must_cover_derived_cell() {
     .expect("matching grant must cover the derived DataEvent cell");
 
     let wrong_state = make_state(true);
-    let wrong_grant_id = "ak:grant:01904100-0000-7000-8000-000000000113";
+    let wrong_grant_id = "ak:grant:01904100-0000-8000-8000-000000000113";
     let wrong_seal_ref =
         insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false);
     let wrong_action_object =
@@ -2087,7 +2087,7 @@ fn data_event_capability_must_cover_derived_cell() {
 #[test]
 fn data_event_rejects_producer_selected_capability_fields() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011b";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011b";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
 
     let mut with_capability_refs = data_event_object_with_refs(&seal_ref, vec![]);
@@ -2133,7 +2133,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
 #[test]
 fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011c";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011c";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![]);
 
@@ -2153,7 +2153,7 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
 fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     const APPLET_SERVICE: &str = "did:web:bridge.example";
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011d";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011d";
     let seal_ref = insert_historical_data_event_grant_for_subject(
         &state,
         grant_id,
@@ -2182,7 +2182,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
 
     object.insert(
         "authorization_ref".to_owned(),
-        json!("ak:grant:01904100-0000-7000-8000-000000000199"),
+        json!("ak:grant:01904100-0000-8000-8000-000000000199"),
     );
     let err = validate_data_event_capability_refs(
         &state,
@@ -2201,7 +2201,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
 #[test]
 fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000114";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000114";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -2223,8 +2223,8 @@ fn data_event_capability_ref_must_not_be_revoked() {
 #[test]
 fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let state = make_state(true);
-    let authority_grant_id = "ak:grant:01904100-0000-7000-8000-000000000116";
-    let child_grant_id = "ak:grant:01904100-0000-7000-8000-000000000117";
+    let authority_grant_id = "ak:grant:01904100-0000-8000-8000-000000000116";
+    let child_grant_id = "ak:grant:01904100-0000-8000-8000-000000000117";
     let seal_ref = insert_historical_data_event_child_grant_with_revoked_authority(
         &state,
         authority_grant_id,
@@ -2251,7 +2251,7 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
 #[test]
 fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000115";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000115";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     state
         .authorization()
@@ -2273,7 +2273,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
 #[test]
 fn data_event_revocation_successor_within_window_is_stale() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011d";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011d";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 1);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -2296,7 +2296,7 @@ fn data_event_revocation_successor_within_window_is_stale() {
 #[test]
 fn data_event_revocation_successor_outside_window_is_excluded() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011e";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011e";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 25);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -2317,7 +2317,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
 #[test]
 fn high_risk_data_event_revocation_has_no_grace_window() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011f";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011f";
     let action = "ak.message.mention.broadcast";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false);
     insert_data_event_revocation_successor(&state, grant_id, action, 1);
@@ -2339,7 +2339,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
 #[test]
 fn relaxed_e2ee_data_event_keeps_independent_capability_gate() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011a";
+    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011a";
     let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 

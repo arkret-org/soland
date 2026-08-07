@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::*;
 
 const REALM: &str = "ak:realm:0196419b-0000-8000-8000-000000000001";
-const INVITE: &str = "ak:invite:0196419b-0000-7000-8000-000000000101";
+const INVITE: &str = "ak:invite:0196419b-0000-8000-8000-000000000101";
 const INVITER: &str = "did:web:alice.example";
 const SUBJECT: &str = "did:web:bob.example";
 const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";
@@ -14,27 +14,17 @@ const TOKEN_COMMITMENT: &str =
 
 fn third_party_invite(expires_at: &str) -> Value {
     json!({
-        "invite": {
-            "id": INVITE,
-            "schema": "ak.schema.invite.v1",
-            "realm_id": REALM,
-            "inviter": INVITER,
-            "join_rule_snapshot": {
-                "join_rule": "invite",
-                "role": "member"
-            },
-            "state": "pending",
-            "expires_at": expires_at,
-            "created_at": "2026-01-01T00:00:00.000Z",
-            "third_party_id": {
-                "oob_code_kind": "offline_token",
-                "token_commitment": TOKEN_COMMITMENT,
-                "token_salt_id": "salt-1",
-                "token_entropy_bits": 128,
-                "verification_service_id": SERVICE,
-                "verification_public_key": VERIFICATION_METHOD,
-                "max_claims": 1
-            }
+        "event_id": INVITE.replacen("ak:invite:", "ak:event:", 1),
+        "sender": INVITER,
+        "expires_at": expires_at,
+        "third_party_id": {
+            "oob_code_kind": "offline_token",
+            "token_commitment": TOKEN_COMMITMENT,
+            "token_salt_id": "salt-1",
+            "token_entropy_bits": 128,
+            "verification_service_id": SERVICE,
+            "verification_public_key": VERIFICATION_METHOD,
+            "max_claims": 1
         }
     })
 }

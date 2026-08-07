@@ -3,6 +3,206 @@ use serde::de::DeserializeOwned;
 use super::*;
 
 impl ProjectionState {
+    pub(crate) fn apply_audit_binding_create(&mut self, operation: &Operation) -> ProjectionEffect {
+        if operation.payload.get("binding_id").is_some() {
+            return ProjectionEffect::Rejected {
+                reason: "audit_binding_id_must_be_event_derived".to_owned(),
+            };
+        }
+        let Some(event_id) = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "audit_binding_create_event_id_required".to_owned(),
+            };
+        };
+        let binding_id = arkret_identifiers::AuditBindingId::from_event_id(&event_id).to_string();
+        let config_cell = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.audit.binding.v1:{binding_id}"
+        ))
+        .ok();
+        let state_cell = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
+        ))
+        .ok();
+        let (Some(config_cell), Some(state_cell)) = (config_cell, state_cell) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+
+        let projected = self.projected_cell_writes();
+        let config_value = projected
+            .iter()
+            .find(|write| write.cell == config_cell)
+            .and_then(ProjectedCellWrite::as_direct)
+            .filter(|direct| direct.op.op_type == arkret_wire::cba::LatticeOpType::Set)
+            .and_then(|direct| direct.op.value.clone());
+        let state_transition = projected
+            .iter()
+            .find(|write| write.cell == state_cell)
+            .and_then(ProjectedCellWrite::as_direct)
+            .map(|direct| direct.op);
+        let (Some(config_value), Some(state_transition)) = (config_value, state_transition) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if state_transition.op_type != arkret_wire::cba::LatticeOpType::Transition
+            || state_transition.from.as_ref() != Some(&Value::Null)
+            || state_transition.to.as_ref().and_then(Value::as_str) != Some("active")
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        }
+        if let Some(existing) = self.cells.get(&config_cell) {
+            if existing != &CellState::Value(config_value.clone())
+                || self.cells.get(&state_cell)
+                    != Some(&CellState::Value(Value::String("active".to_owned())))
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
+                };
+            }
+        } else {
+            if self.cells.contains_key(&state_cell) {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
+                };
+            }
+            self.cells
+                .insert(config_cell, CellState::Value(config_value));
+            self.cells.insert(
+                state_cell,
+                CellState::Value(Value::String("active".to_owned())),
+            );
+        }
+        ProjectionEffect::AuditBindingProjected {
+            binding_id,
+            state: "active".to_owned(),
+        }
+    }
+
+    pub(crate) fn apply_audit_binding_state(&mut self, operation: &Operation) -> ProjectionEffect {
+        let Some(binding_id) = operation
+            .payload
+            .get("binding_id")
+            .and_then(Value::as_str)
+            .filter(|value| arkret_identifiers::AuditBindingId::new((*value).to_owned()).is_ok())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "audit_binding_id_required".to_owned(),
+            };
+        };
+        let Ok(config_cell) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.audit.binding.v1:{binding_id}"
+        )) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let Ok(state_cell) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.audit.binding_state.v1:{binding_id}"
+        )) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if !matches!(self.cells.get(&config_cell), Some(CellState::Value(_))) {
+            return ProjectionEffect::Rejected {
+                reason: "audit_binding_unresolved".to_owned(),
+            };
+        }
+        let Some(op) = self
+            .projected_cell_writes()
+            .iter()
+            .find(|write| write.cell == state_cell)
+            .and_then(ProjectedCellWrite::as_direct)
+            .map(|direct| direct.op)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let from = op.from.as_ref().and_then(Value::as_str);
+        let to = op.to.as_ref().and_then(Value::as_str);
+        let legal = matches!(
+            (from, to),
+            (Some("active"), Some("suspended" | "revoked"))
+                | (Some("suspended"), Some("active" | "revoked"))
+        );
+        let current = self.cells.get(&state_cell).and_then(|cell| match cell {
+            CellState::Value(Value::String(value)) => Some(value.as_str()),
+            _ => None,
+        });
+        if op.op_type != arkret_wire::cba::LatticeOpType::Transition || !legal {
+            return ProjectionEffect::Rejected {
+                reason: "audit_binding_state_transition_invalid".to_owned(),
+            };
+        }
+        if current != from {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
+            };
+        }
+        let state = to.expect("legal audit transition has a target").to_owned();
+        self.cells
+            .insert(state_cell, CellState::Value(Value::String(state.clone())));
+        ProjectionEffect::AuditBindingProjected { binding_id, state }
+    }
+
+    pub(crate) fn apply_session_grant(&mut self, operation: &Operation) -> ProjectionEffect {
+        if operation.payload.get("session_grant_id").is_some()
+            || operation.payload.get("grant_id").is_some()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "session_grant_id_must_be_event_derived".to_owned(),
+            };
+        }
+        let Some(event_id) = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "session_grant_event_id_required".to_owned(),
+            };
+        };
+        let session_grant_id =
+            arkret_identifiers::SessionGrantId::from_event_id(&event_id).to_string();
+        let Ok(cell) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.session.grant.v1:{session_grant_id}"
+        )) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let Some(op) = self
+            .projected_cell_writes()
+            .iter()
+            .find(|write| write.cell == cell)
+            .and_then(ProjectedCellWrite::as_direct)
+            .map(|direct| direct.op)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let Some(next) = project_call_or_set(self.cells.get(&cell), &op) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        self.cells.insert(cell, CellState::Value(next));
+        ProjectionEffect::SessionGrantProjected { session_grant_id }
+    }
+
     fn set_realm_null_subject_cell(&mut self, realm_id: &str, family: &str, value: Value) {
         self.realm_null_subject_cells.insert(
             (realm_id.to_owned(), format!("ak:cell:{family}:null")),
@@ -388,6 +588,50 @@ impl ProjectionState {
             value,
         );
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
+    }
+
+    /// Project a validated `ak.call.create` Event. The CallId is the accepted
+    /// Event identity with a typed prefix; it is never supplied by the author.
+    pub(crate) fn apply_call_create(&mut self, operation: &Operation) -> ProjectionEffect {
+        if operation.payload.get("call_id").is_some() {
+            return ProjectionEffect::Rejected {
+                reason: "call_id_must_be_event_derived".to_owned(),
+            };
+        }
+        let Some(event_id) = operation
+            .payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "call_create_event_id_required".to_owned(),
+            };
+        };
+        let call_id = arkret_identifiers::CallId::from_event_id(&event_id).to_string();
+        let Some(initial_state) = operation
+            .payload
+            .get("initial_state")
+            .and_then(Value::as_str)
+            .filter(|state| matches!(*state, "scheduled" | "ringing" | "connecting"))
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
+            };
+        };
+
+        // The registered writes were already evaluated from the signed create
+        // payload. This private adapter only supplies the canonical subject and
+        // equivalent null→initial transition expected by the shared reducer.
+        let mut derived = operation.clone();
+        if let Some(payload) = derived.payload.as_object_mut() {
+            payload.insert("call_id".to_owned(), Value::String(call_id));
+            payload.insert(
+                "state_transition".to_owned(),
+                serde_json::json!({"from": null, "to": initial_state}),
+            );
+        }
+        self.apply_call_cell_effects(&derived, false)
     }
 
     /// Project a validated `ak.call.state` Event's exact registered effects

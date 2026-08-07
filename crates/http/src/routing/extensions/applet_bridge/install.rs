@@ -163,8 +163,7 @@ fn validate_formal_install_events(
                 .with_wire_code("applet_install_plan_mismatch")
             })?;
         let grant = payload.grant;
-        if payload.grant_id != grant.id
-            || grant.issuer.as_str() != install_actor
+        if grant.issuer.as_str() != install_actor
             || grant.realm_id.as_ref() != Some(realm_id)
             || !matches!(
                 &grant.subject,
@@ -205,7 +204,7 @@ fn validate_formal_install_events(
                 .with_wire_code("applet_install_plan_mismatch"));
             }
         }
-        grant_ids.push(payload.grant_id);
+        grant_ids.push(arkret_identifiers::GrantId::from_event_id(&event.event_id));
     }
 
     Ok(ValidatedInstallEvents {
@@ -555,14 +554,7 @@ fn install_execution_steps(
         ));
     }
     for (offset, event) in record.capability_grant_events.iter().enumerate() {
-        let payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
-            serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
-                AppError::internal(format!("capability grant Event payload failed: {error}"))
-            })?)
-            .map_err(|error| {
-                AppError::internal(format!("stored capability grant Event is invalid: {error}"))
-            })?;
-        let grant_id = payload.grant_id;
+        let grant_id = arkret_identifiers::GrantId::from_event_id(&event.event_id);
         steps.push(install_execution_step(
             offset + 1,
             arkret_wire::EventKind::CAPABILITY_GRANT,
@@ -1654,11 +1646,11 @@ mod tests {
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
                 arkret_identifiers::GrantId::new(
-                    "ak:grant:01974100-0000-7000-8000-000000000020".to_owned(),
+                    "ak:grant:01974100-0000-8000-8000-000000000020".to_owned(),
                 )
                 .unwrap(),
                 arkret_identifiers::GrantId::new(
-                    "ak:grant:01974100-0000-7000-8000-000000000021".to_owned(),
+                    "ak:grant:01974100-0000-8000-8000-000000000021".to_owned(),
                 )
                 .unwrap(),
             ],

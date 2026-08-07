@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn content_grant_is_visible_to_the_capability_engine() {
-        let grant_id = "ak:grant:019fa9d5-0000-7000-8000-000000000001";
+        let grant_id = "ak:grant:019fa9d5-0000-8000-8000-000000000001";
         let realm_id = "ak:realm:019fa9d5-0000-8000-8000-000000000002";
         let subject = "did:web:soland.example";
         let action = "ak.message.create".to_owned();

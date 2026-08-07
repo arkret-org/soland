@@ -22,7 +22,7 @@ use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState
 use soland_http::authz::SolandAuthzEngine;
 
 const REALM: &str = "ak:realm:01904100-0000-8000-8000-cccccccccccc";
-const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";
+const GRANT_ID: &str = "ak:grant:01904100-0000-8000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
 const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-eeeeeeeeeeee";

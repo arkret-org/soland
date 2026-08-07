@@ -63,7 +63,7 @@ fn seed_source_grant(
                 "tag": grant_ref,
                 "value": {
                     "event_id": grant_ref,
-                    "grant_id": "ak:grant:01904100-0000-7000-8000-111111111111",
+                    "grant_id": "ak:grant:01904100-0000-8000-8000-111111111111",
                     "realm_id": realm_id,
                     "actions": actions,
                     "resources": [{"kind": "realm", "id": realm_id}],

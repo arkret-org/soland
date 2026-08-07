@@ -716,7 +716,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "ak:call:01964137-0000-7000-8000-000000000001",
+            "call_id": "ak:call:01964137-0000-8000-8000-000000000001",
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: mode is required.

@@ -346,7 +346,7 @@ mod tests {
 
         let first = accept_review(
             "did:web:reviewer-one.example",
-            "ak:grant:0196419b-0000-7000-8000-000000000010",
+            "ak:grant:0196419b-0000-8000-8000-000000000010",
             '1',
             1,
         );
@@ -375,7 +375,7 @@ mod tests {
 
         let second = accept_review(
             "did:web:reviewer-two.example",
-            "ak:grant:0196419b-0000-7000-8000-000000000011",
+            "ak:grant:0196419b-0000-8000-8000-000000000011",
             '2',
             2,
         );
@@ -461,7 +461,7 @@ mod tests {
             .unwrap();
         let mut review_value = serde_json::to_value(accept_review(
             "did:web:reviewer.example",
-            "ak:grant:0196419b-0000-7000-8000-000000000010",
+            "ak:grant:0196419b-0000-8000-8000-000000000010",
             '3',
             1,
         ))

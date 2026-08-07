@@ -232,9 +232,9 @@ fn build_projectable_operation(
     }
     Did::new(issuer_service_id.clone())
         .map_err(|_| AppError::invalid_param("issuer_service_id must be a DID"))?;
-    EventId::new(event_id.clone())
+    let typed_event_id = EventId::new(event_id.clone())
         .map_err(|_| AppError::invalid_param("event_id must be a ak:event id"))?;
-    GrantId::new(capability_grant_id.clone())
+    let typed_grant_id = GrantId::new(capability_grant_id.clone())
         .map_err(|_| AppError::invalid_param("capability_grant_id must be a ak:grant id"))?;
     if principal_server_count > 256 {
         return Err(AppError::invalid_param("principal_servers is too large"));
@@ -255,12 +255,28 @@ fn build_projectable_operation(
     let payload_object = payload
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_param("payload must be an object"))?;
-    require_payload_grant_id(payload_object, &capability_grant_id)?;
-
     let subject = match operation_name.as_str() {
         "grant" => {
+            let derived_grant_id = GrantId::from_event_id(&typed_event_id);
+            if typed_grant_id != derived_grant_id {
+                return Err(AppError::invalid_param(
+                    "capability_grant_id must be derived from event_id",
+                ));
+            }
+            if payload_object.get("grant_id").is_some()
+                || payload_object
+                    .get("grant")
+                    .and_then(Value::as_object)
+                    .is_some_and(|grant| {
+                        grant.get("id").is_some() || grant.get("grant_id").is_some()
+                    })
+            {
+                return Err(AppError::invalid_param(
+                    "grant genesis payload must omit grant_id and grant.id",
+                ));
+            }
             let (payload_realm_id, subject) =
-                validate_grant_payload(payload_object, &capability_grant_id, &issuer_service_id)?;
+                validate_grant_payload(payload_object, &issuer_service_id)?;
             if payload_realm_id != fanout_realm_id.as_str() {
                 return Err(AppError::invalid_param(
                     "payload.grant.realm_id does not match realm_id",
@@ -269,12 +285,14 @@ fn build_projectable_operation(
             subject
         }
         "revoke" => {
+            require_payload_grant_id(payload_object, &capability_grant_id)?;
             validate_revoke_payload(payload_object)?;
             None
         }
         _ => unreachable!("operation checked above"),
     };
     let realm_id = fanout_realm_id.into_string();
+    payload_object.insert("event_id".to_owned(), Value::String(event_id.clone()));
     let operation_id = operation_id_for_event_id(&event_id)?;
     let realm = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("realm_id must be a ak:realm id"))?;
@@ -322,23 +340,12 @@ fn require_payload_grant_id(
 
 fn validate_grant_payload(
     payload: &serde_json::Map<String, Value>,
-    capability_grant_id: &str,
     issuer_service_id: &str,
 ) -> Result<(String, Option<String>), AppError> {
     let grant = payload
         .get("grant")
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::invalid_param("payload.grant must be an object"))?;
-    let grant_id = grant
-        .get("id")
-        .or_else(|| grant.get("grant_id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("payload.grant.id is required"))?;
-    if grant_id != capability_grant_id {
-        return Err(AppError::invalid_param(
-            "payload.grant.id does not match capability_grant_id",
-        ));
-    }
     match grant.get("issuer").and_then(Value::as_str) {
         Some(issuer) if issuer == issuer_service_id => {}
         Some(_) => {
@@ -523,7 +530,7 @@ mod tests {
     use super::*;
 
     const EVENT: &str = "ak:event:01970000-0000-8000-8000-000000000001";
-    const GRANT: &str = "ak:grant:01970000-0000-7000-8000-000000000002";
+    const GRANT: &str = "ak:grant:01970000-0000-8000-8000-000000000002";
     const REALM: &str = "ak:realm:01970000-0000-8000-8000-000000000003";
     const ISSUER: &str = "did:web:coauth.example";
     const SUBJECT: &str = "did:web:alice.example";
@@ -578,7 +585,7 @@ mod tests {
     #[test]
     fn grant_fanout_rejects_mismatched_grant_id() {
         let mut body = grant_body();
-        body.payload["grant"]["id"] = json!("ak:grant:01970000-0000-7000-8000-0000000000aa");
+        body.payload["grant"]["id"] = json!("ak:grant:01970000-0000-8000-8000-0000000000aa");
 
         assert!(build_projectable_operation(None, body).is_err());
     }

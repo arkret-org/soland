@@ -22,13 +22,6 @@ pub(super) fn validate_capability_grant_body(
                 )
             },
         )?;
-    if payload.grant.id != payload.grant_id {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "capability grant id does not match payload.grant_id",
-        ));
-    }
     if payload.grant.issuer.as_str() != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -48,9 +41,7 @@ mod tests {
     fn event(actor: &str) -> Value {
         json!({
             "payload": {
-                "grant_id": "ak:grant:01904100-0000-7000-8000-000000000013",
                 "grant": {
-                    "id": "ak:grant:01904100-0000-7000-8000-000000000013",
                     "schema": "ak.schema.capability.v1",
                     "realm_id": "ak:realm:01904100-0000-8000-8000-000000000012",
                     "issuer": actor,

@@ -16,6 +16,7 @@ mod read_cursor;
 mod realm_authority;
 mod realm_key_share;
 mod redaction_message;
+mod security_genesis;
 mod space_container;
 mod strand_morph;
 
@@ -44,7 +45,31 @@ pub(super) fn install_realm_authority_root(
     );
 }
 
-pub(super) fn make_operation(object_kind: &str, realm_id: &str, payload: Value) -> Operation {
+pub(super) fn make_operation(object_kind: &str, realm_id: &str, mut payload: Value) -> Operation {
+    // The production Event→Operation adapter injects the accepted event_id.
+    // Unit tests commonly construct only the create object's typed id, so
+    // mirror that adapter by retyping the same UUID when the id-kind registry
+    // declares the object Event-derived.
+    let derived_event_id = payload
+        .get("object")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("id"))
+        .and_then(Value::as_str)
+        .and_then(|object_id| object_id.rsplit_once(':'))
+        .and_then(|(kind, uuid)| {
+            let prefix = format!("{kind}:");
+            arkret_identifiers::EVENT_DERIVED_ID_KIND_PREFIXES
+                .contains(&prefix.as_str())
+                .then(|| format!("ak:event:{uuid}"))
+        });
+    if payload.get("event_id").is_none()
+        && let Some(event_id) = derived_event_id
+    {
+        payload
+            .as_object_mut()
+            .expect("operation payload object")
+            .insert("event_id".to_owned(), Value::String(event_id));
+    }
     Operation::create(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
