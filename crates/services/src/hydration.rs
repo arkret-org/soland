@@ -265,15 +265,11 @@ fn replay_projection_event(
 pub async fn hydrate_sidecar_projections(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
-    hydration_hlc: &soland_domain::hlc::ServerHlc,
+    _hydration_hlc: &soland_domain::hlc::ServerHlc,
 ) -> soland_storage::PersistenceResult<()> {
-    use soland_domain::reducer::{ProjectionEffect, SidecarProjection};
+    use soland_domain::reducer::SidecarProjection;
 
     let records = persistence.sidecars().snapshot_all().await?;
-    let backing_circle_ids = records
-        .iter()
-        .map(|record| record.backing_circle_id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
     for record in records {
         let state = match record.state.as_str() {
             "active" => arkret_models_collaboration::agent_operations::AgentSidecarState::Active,
@@ -298,7 +294,6 @@ pub async fn hydrate_sidecar_projections(
                 sidecar_id: record.sidecar_id,
                 realm_id: record.realm_id,
                 controller_id: record.controller_id,
-                backing_circle_id: record.backing_circle_id,
                 encryption_profile: arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile::MlsRfc9420,
                 state,
                 state_changed_at: record.state_changed_at,
@@ -315,59 +310,14 @@ pub async fn hydrate_sidecar_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::SIDECAR_CREATE
-            && let Some(sidecar_id) = event.payload.pointer("/object/id").and_then(Value::as_str)
-            && proj.sidecars.contains_key(sidecar_id)
-        {
-            let operation_ref = event.operation_id.clone().ok_or_else(|| {
-                soland_storage::PersistenceError::Internal(format!(
-                    "Sidecar create Event {} has no operation_id",
-                    event.event_id
-                ))
-            })?;
-            proj.sidecar_create_refs
-                .insert(sidecar_id.to_owned(), operation_ref);
-            continue;
-        }
-        let circle_id = match event.event_kind.as_str() {
-            arkret_wire::EventKind::CIRCLE_CREATE => {
-                event.payload.pointer("/object/id").and_then(Value::as_str)
+        if event.event_kind == arkret_wire::EventKind::SIDECAR_CREATE {
+            let Some(uuid) = event.event_id.strip_prefix("ak:event:") else {
+                continue;
+            };
+            let sidecar_id = format!("ak:sidecar:{uuid}");
+            if proj.sidecars.contains_key(&sidecar_id) {
+                proj.sidecar_create_refs.insert(sidecar_id, event.event_id);
             }
-            arkret_wire::EventKind::CIRCLE_MEMBER_STATE => {
-                event.payload.get("circle_id").and_then(Value::as_str)
-            }
-            _ => None,
-        };
-        if !circle_id.is_some_and(|id| backing_circle_ids.contains(id)) {
-            continue;
-        }
-        let mut operation = operation_from_projection_event(&event, "sidecar-backing-circle")?;
-        if event.event_kind == arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
-            let controller = proj
-                .sidecars
-                .values()
-                .find(|sidecar| sidecar.backing_circle_id == circle_id.unwrap())
-                .map(|sidecar| sidecar.controller_id.clone())
-                .ok_or_else(|| {
-                    soland_storage::PersistenceError::Internal(format!(
-                        "Sidecar membership Event {} has no owning Sidecar",
-                        event.event_id
-                    ))
-                })?;
-            let payload = operation.payload.as_object_mut().ok_or_else(|| {
-                soland_storage::PersistenceError::Internal(format!(
-                    "Sidecar membership Event {} has a non-object payload",
-                    event.event_id
-                ))
-            })?;
-            payload.insert("sender".to_owned(), Value::String(controller));
-            payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
-        }
-        if let ProjectionEffect::Rejected { reason } = proj.apply(&operation, hydration_hlc) {
-            return Err(soland_storage::PersistenceError::Internal(format!(
-                "Sidecar backing Circle Event {} failed deterministic hydration: {reason}",
-                event.event_id
-            )));
         }
     }
     Ok(())
@@ -378,12 +328,6 @@ pub async fn hydrate_sidecar_context_projections(
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
 ) -> soland_storage::PersistenceResult<()> {
-    let backing_circle_ids = proj
-        .sidecars
-        .values()
-        .map(|sidecar| sidecar.backing_circle_id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut sidecar_relation_ids = std::collections::BTreeSet::new();
     let mut events = persistence.projection_events().snapshot_all().await?;
     events.sort_by(|left, right| {
         left.received_at
@@ -391,51 +335,8 @@ pub async fn hydrate_sidecar_context_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
-        match event.event_kind.as_str() {
-            arkret_wire::EventKind::STRAND_CREATE => {
-                let object = event.payload.get("object").and_then(Value::as_object);
-                let is_sidecar = object
-                    .and_then(|object| object.get("scope_circle_id"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| backing_circle_ids.contains(id));
-                let strand_id = object
-                    .and_then(|object| object.get("id"))
-                    .and_then(Value::as_str);
-                if is_sidecar && !strand_id.is_some_and(|id| proj.strands.contains_key(id)) {
-                    replay_projection_event(proj, event, hydration_hlc, "sidecar-context-strand")?;
-                }
-            }
-            arkret_wire::EventKind::RELATION_CREATE => {
-                let relation = event.payload.get("relation").unwrap_or(&event.payload);
-                let is_sidecar = relation
-                    .get("scope_circle_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| backing_circle_ids.contains(id));
-                if !is_sidecar {
-                    continue;
-                }
-                if let Some(relation_id) = relation.get("id").and_then(Value::as_str) {
-                    sidecar_relation_ids.insert(relation_id.to_owned());
-                }
-                replay_projection_event(proj, event, hydration_hlc, "sidecar-context-relation")?;
-            }
-            arkret_wire::EventKind::RELATION_UPDATE
-            | arkret_wire::EventKind::RELATION_TOMBSTONE => {
-                let relation_id = event
-                    .payload
-                    .get("relation_id")
-                    .or_else(|| event.payload.get("id"))
-                    .and_then(Value::as_str);
-                if relation_id.is_some_and(|id| sidecar_relation_ids.contains(id)) {
-                    replay_projection_event(
-                        proj,
-                        event,
-                        hydration_hlc,
-                        "sidecar-context-relation",
-                    )?;
-                }
-            }
-            _ => {}
+        if event.event_kind == arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH {
+            replay_projection_event(proj, event, hydration_hlc, "sidecar-context-attach")?;
         }
     }
     Ok(())
@@ -1024,9 +925,8 @@ pub async fn hydrate_projections_from_persistence(
     }) {
         replay_projection_event(proj, event, &hydration_hlc, "strand-calendar-rsvp")?;
     }
-    // Run after object mirrors: sidecar Relation scope validation needs both
-    // endpoint projections, and Strand field restoration must not be replaced
-    // by the common-field-only Strand mirror that loaded above.
+    // Run after object mirrors because a native Sidecar attachment validates
+    // that its referenced source Relation or Strand already exists.
     hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc).await?;
     Ok(())
 }

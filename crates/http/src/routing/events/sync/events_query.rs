@@ -1374,41 +1374,38 @@ mod tests {
         let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
-        let circle_id = "ak:circle:01904100-0000-8000-8000-00000000aa41";
-        let strand_id = "ak:strand:01904100-0000-8000-8000-00000000aa42";
+        let sidecar_id = "ak:sidecar:01904100-0000-8000-8000-00000000aa41";
         let event = arkret_wire::Event::new_with_id_at(
             arkret_identifiers::EventId::new(
                 "ak:event:01904100-0000-8000-8000-00000000aa43".to_owned(),
             )
             .unwrap(),
-            arkret_wire::EventKind::STRAND_CREATE,
-            arkret_wire::ScopeRef::Circle {
+            arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+            arkret_wire::ScopeRef::Sidecar {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
-                circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
+                sidecar_id: arkret_identifiers::SidecarId::new(sidecar_id.to_owned()).unwrap(),
             },
             arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap(),
             41,
             arkret_identifiers::Hlc::new("01970e589d21-0041-a13f9c2e").unwrap(),
             json!({
-                "object": {
-                    "id": strand_id,
-                    "schema": "ak.schema.strand.v1",
-                    "realm_id": TEST_REALM,
-                    "scope_circle_id": circle_id,
-                    "created_by": TEST_ACTOR,
-                    "created_at": arkret_canonical::format_timestamp_canonical(created_at)
-                }
+                "sidecar_id": sidecar_id,
+                "source_context_ref": {
+                    "kind": "strand",
+                    "strand_id": "ak:strand:01904100-0000-8000-8000-00000000aa42"
+                },
+                "version": 1
             }),
             created_at,
         )
         .unwrap();
         let expected_digest = event.event_digest().unwrap();
         let event_envelope = serde_json::to_value(&event).unwrap();
-        assert_eq!(event_envelope["scope_ref"]["kind"], json!("circle"));
+        assert_eq!(event_envelope["scope_ref"]["kind"], json!("sidecar"));
         put_durable_event(
             &state,
             event.event_id.as_str(),
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
             event_envelope,
             created_at,
         )
@@ -1419,14 +1416,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(stored.envelope["scope_ref"]["kind"], json!("circle"));
+        assert_eq!(stored.envelope["scope_ref"]["kind"], json!("sidecar"));
         let direct = crate::routing::events::event_log::sdk_event_for_state(&state, &stored)
             .expect("full envelope");
         assert_eq!(direct.scope_ref, event.scope_ref);
         let row = soland_services::events::ProjectedEvent {
             event_id: event.event_id.to_string(),
             realm_id: TEST_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::STRAND_CREATE.to_owned(),
+            event_kind: arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH.to_owned(),
             operation_kind: "event".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-00000000aa43".to_owned()),
             sender: Some(TEST_ACTOR.to_owned()),

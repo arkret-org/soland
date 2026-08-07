@@ -32,48 +32,32 @@ use realm_circle::*;
 pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,
-    backing_circle_id: &arkret_identifiers::CircleId,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
         != Some(arkret_wire::EventKind::SIDECAR_CREATE)
     {
         return Err("sidecar_create_denied");
     }
-    let sidecar = operation
+    let payload = operation
         .payload
-        .get("object")
-        .cloned()
-        .and_then(|value| {
-            serde_json::from_value::<arkret_models_collaboration::agent_operations::AgentSidecar>(
-                value,
-            )
-            .ok()
-        })
+        .as_object()
         .ok_or("sidecar_create_denied")?;
-    if sidecar.validate().is_err()
-        || sidecar.realm_id != operation.realm_id
-        || sidecar.controller_id.as_str() != controller
-        || &sidecar.backing_circle_id != backing_circle_id
+    if operation.actor().as_ref().map(|actor| actor.as_str()) != Some(controller)
+        || payload.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
+        || payload.keys().any(|field| {
+            !matches!(
+                field.as_str(),
+                "encryption_profile" | "event_id" | "sender" | "hlc"
+            )
+        })
+        || !payload
+            .get("event_id")
+            .and_then(Value::as_str)
+            .is_some_and(|event_id| arkret_identifiers::EventId::new(event_id.to_owned()).is_ok())
     {
         return Err("sidecar_create_denied");
     }
     Ok(())
-}
-
-pub(crate) async fn validate_trusted_sidecar_member_operation(
-    state: &AppState,
-    operation: &Operation,
-    controller: &str,
-) -> Result<(), &'static str> {
-    validate_realm_lifecycle_write_gate(state, operation)?;
-    let Some(circle_id) = operation_circle_id(operation) else {
-        return Err("sidecar_create_denied");
-    };
-    if sidecar_member_state_shape_is_constrained(state, operation, controller, circle_id).await {
-        Ok(())
-    } else {
-        Err("sidecar_create_denied")
-    }
 }
 
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {

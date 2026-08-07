@@ -1054,7 +1054,6 @@ fn application_sidecar(
         sidecar_id: record.sidecar_id,
         realm_id: record.realm_id,
         controller_id: record.controller_id,
-        backing_circle_id: record.backing_circle_id,
         state: record.state,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
@@ -1068,7 +1067,6 @@ fn persistence_sidecar(
         sidecar_id: record.sidecar_id,
         realm_id: record.realm_id,
         controller_id: record.controller_id,
-        backing_circle_id: record.backing_circle_id,
         state: record.state,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
@@ -1082,8 +1080,9 @@ fn application_sidecar_context(
         sidecar_id: record.sidecar_id,
         normalized_context_ref_digest: record.normalized_context_ref_digest,
         normalized_context_ref: record.normalized_context_ref,
-        private_strand_id: record.private_strand_id,
-        private_relation_id: record.private_relation_id,
+        version: record.version,
+        predecessor_event_ref: record.predecessor_event_ref,
+        attach_event_ref: record.attach_event_ref,
         created_at: record.created_at,
     }
 }
@@ -1094,8 +1093,9 @@ fn persistence_sidecar_context(
         sidecar_id: record.sidecar_id,
         normalized_context_ref_digest: record.normalized_context_ref_digest,
         normalized_context_ref: record.normalized_context_ref,
-        private_strand_id: record.private_strand_id,
-        private_relation_id: record.private_relation_id,
+        version: record.version,
+        predecessor_event_ref: record.predecessor_event_ref,
+        attach_event_ref: record.attach_event_ref,
         created_at: record.created_at,
     }
 }

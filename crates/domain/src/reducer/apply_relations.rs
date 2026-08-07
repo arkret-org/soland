@@ -493,7 +493,7 @@ impl ProjectionState {
     ) -> Result<Option<String>, &'static str> {
         if !matches!(
             relation_kind,
-            "contains" | "belongs_to" | "agent_sidecar_of" | "confidential_discussion_of"
+            "contains" | "belongs_to" | "confidential_discussion_of"
         ) {
             return Ok(None);
         }
@@ -528,11 +528,7 @@ impl ProjectionState {
         relation_kind: &str,
     ) -> Result<(), &'static str> {
         let scope_circle_id = relation_scope_circle_id_from_payload(&operation.payload);
-        if matches!(
-            relation_kind,
-            "agent_sidecar_of" | "confidential_discussion_of"
-        ) && scope_circle_id.is_none()
-        {
+        if relation_kind == "confidential_discussion_of" && scope_circle_id.is_none() {
             return Err("relation_scope_circle_id_required");
         }
         if let Some(scope_circle_id) = scope_circle_id.as_deref() {

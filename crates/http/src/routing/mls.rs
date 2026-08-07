@@ -2280,17 +2280,19 @@ async fn validate_sidecar_keypackage_consume(
     };
     let sidecar = {
         let projection = state.projections().snapshot();
-        projection
-            .sidecars
-            .values()
-            .find(|sidecar| {
-                projection
-                    .circles
-                    .get(&sidecar.backing_circle_id)
-                    .and_then(|circle| circle.mls_group_ref.as_deref())
-                    == Some(group_id)
-            })
-            .cloned()
+        projection.mls_commit_epochs.values().find_map(|epoch| {
+            if epoch.group_id != group_id
+                || epoch.effective_scope.get("kind").and_then(Value::as_str) != Some("sidecar")
+            {
+                return None;
+            }
+            epoch
+                .effective_scope
+                .get("sidecar_id")
+                .and_then(Value::as_str)
+                .and_then(|sidecar_id| projection.sidecars.get(sidecar_id))
+                .cloned()
+        })
     };
     let Some(sidecar) = sidecar else {
         return Ok(());
@@ -2365,9 +2367,9 @@ async fn validate_sidecar_keypackage_consume(
                 && row.epoch == welcome.epoch
                 && row.effective_scope
                     == serde_json::json!({
-                        "kind": "circle",
+                        "kind": "sidecar",
                         "realm_id": sidecar.realm_id,
-                        "circle_id": sidecar.backing_circle_id,
+                        "sidecar_id": sidecar.sidecar_id,
                     })
         });
     if welcome.mls_group_id.as_str() != group_id
@@ -2383,10 +2385,10 @@ async fn validate_sidecar_keypackage_consume(
         || welcome.governance_binding.realm_id().as_str() != sidecar.realm_id
         || welcome
             .governance_binding
-            .circle_id()
+            .sidecar_id()
             .map(ToString::to_string)
             .as_deref()
-            != Some(sidecar.backing_circle_id.as_str())
+            != Some(sidecar.sidecar_id.as_str())
         || !current_epoch_matches
         || welcome.commit_ref.as_ref().is_none_or(|commit_ref| {
             !state

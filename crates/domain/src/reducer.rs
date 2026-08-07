@@ -146,10 +146,10 @@ pub use projections::{
     PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
     RealmPolicyServerConfig, RealmPolicyServerHead, RedactionCellValue, RsvpHead, RsvpProjection,
-    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
-    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
-    StrandWatchProjection, message_expiry_projection_from_value,
-    message_expiry_projection_from_value_with_anchor,
+    SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
+    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
+    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+    message_expiry_projection_from_value, message_expiry_projection_from_value_with_anchor,
 };
 pub(crate) use projections::{
     CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,

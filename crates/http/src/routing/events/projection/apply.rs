@@ -15,7 +15,7 @@ pub async fn project_accepted_operations_from_device(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    project_accepted_operations_inner(state, origin, source_device_id, operations, None).await;
+    project_accepted_operations_inner(state, origin, source_device_id, operations).await;
 }
 
 /// The registry-derived cell writes for an accepted Operation.
@@ -139,15 +139,9 @@ fn restate_accepted_event(
     .map_err(|error| format!("restated envelope: {error}"))
 }
 
-fn accepted_circle_member_reducer_operation(
-    operation: &Operation,
-    trusted_sidecar_controller: Option<&str>,
-) -> Operation {
+fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation {
     let mut contextual = operation.clone();
     if let Some(payload) = contextual.payload.as_object_mut() {
-        if let Some(controller) = trusted_sidecar_controller {
-            payload.insert("sender".to_owned(), Value::String(controller.to_owned()));
-        }
         payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));
     }
     contextual
@@ -377,7 +371,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    project_accepted_operations_inner(state, origin, "", operations, None).await;
+    project_accepted_operations_inner(state, origin, "", operations).await;
 }
 
 pub async fn mirror_join_authorisation_consumption(
@@ -445,27 +439,11 @@ pub async fn mirror_join_authorisation_consumption(
     }
 }
 
-pub async fn project_trusted_sidecar_member_operation(
-    state: &AppState,
-    controller: &str,
-    operation: &Operation,
-) {
-    project_accepted_operations_inner(
-        state,
-        controller,
-        "",
-        std::slice::from_ref(operation),
-        Some(controller),
-    )
-    .await;
-}
-
 async fn project_accepted_operations_inner(
     state: &AppState,
     origin: &str,
     source_device_id: &str,
     operations: &[Operation],
-    trusted_sidecar_member_controller: Option<&str>,
 ) {
     for operation in operations {
         tracing::debug!(
@@ -562,10 +540,7 @@ async fn project_accepted_operations_inner(
         } else {
             match kinds::canonical_kind_for_operation(operation) {
                 Some(arkret_wire::EventKind::CIRCLE_MEMBER_STATE) => {
-                    Some(accepted_circle_member_reducer_operation(
-                        operation,
-                        trusted_sidecar_member_controller,
-                    ))
+                    Some(accepted_circle_member_reducer_operation(operation))
                 }
                 Some(arkret_wire::EventKind::MEMBER_STATE)
                     if operation.payload.get("sender").is_none() =>
@@ -1294,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_circle_member_context_does_not_mutate_wire_operation() {
+    fn accepted_circle_member_context_only_adds_verified_capability() {
         let operation = Operation::create(
             arkret_identifiers::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
@@ -1312,10 +1287,7 @@ mod tests {
             }),
         );
 
-        let contextual = accepted_circle_member_reducer_operation(
-            &operation,
-            Some("did:web:controller.example"),
-        );
+        let contextual = accepted_circle_member_reducer_operation(&operation);
 
         assert!(operation.payload.get("sender").is_none());
         assert!(
@@ -1324,7 +1296,7 @@ mod tests {
                 .get("manage_capability_verified")
                 .is_none()
         );
-        assert_eq!(contextual.payload["sender"], "did:web:controller.example");
+        assert!(contextual.payload.get("sender").is_none());
         assert_eq!(contextual.payload["manage_capability_verified"], true);
     }
 }

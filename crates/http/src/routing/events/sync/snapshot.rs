@@ -1390,6 +1390,33 @@ pub(crate) async fn projection_record_visible_to_session(
         return false;
     }
     let projection = state.projections().snapshot();
+    let sidecar_id = match event.event_kind.as_str() {
+        arkret_wire::EventKind::SIDECAR_CREATE => event
+            .event_id
+            .strip_prefix("ak:event:")
+            .map(|uuid| format!("ak:sidecar:{uuid}")),
+        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH
+        | arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL => event
+            .payload
+            .get("sidecar_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => event
+            .payload
+            .get("governance_binding")
+            .or_else(|| event.payload.get("mls_governance_binding"))
+            .and_then(|binding| binding.get("sidecar_id"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    };
+    if let Some(sidecar_id) = sidecar_id {
+        return session.is_some_and(|session| {
+            projection
+                .sidecars
+                .get(&sidecar_id)
+                .is_some_and(|sidecar| sidecar.controller_id == session.actor)
+        });
+    }
     let scope_circle_id = projection_event_scope_circle_id(&projection, event);
     circle_scope_visible_to_session(
         &projection,
