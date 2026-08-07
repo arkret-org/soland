@@ -64,6 +64,7 @@ DROP TABLE IF EXISTS organization_registration_challenges CASCADE;
 DROP TABLE IF EXISTS organization_registration_outcomes CASCADE;
 DROP TABLE IF EXISTS organization_policies CASCADE;
 DROP TABLE IF EXISTS realm_organizations CASCADE;
+DROP TABLE IF EXISTS soland_schema_contract CASCADE;
 DROP TABLE IF EXISTS realm_owning_organizations CASCADE;
 DROP TABLE IF EXISTS realm_moderation_policies CASCADE;
 DROP TABLE IF EXISTS retention_policies CASCADE;

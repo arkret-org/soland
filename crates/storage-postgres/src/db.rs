@@ -10,6 +10,7 @@ use diesel_async::pooled_connection::deadpool::Pool;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+const SCHEMA_CONTRACT_VERSION: &str = "event-realm-full-digest-v1";
 
 pub type PgPool = Pool<AsyncPgConnection>;
 
@@ -100,8 +101,37 @@ async fn run_migrations(database_url: &str) -> anyhow::Result<()> {
         wrapper
             .run_pending_migrations(MIGRATIONS)
             .map_err(|error| anyhow::anyhow!("failed to run database migrations: {error}"))?;
+        verify_schema_contract(&mut wrapper)?;
         Ok(())
     })
     .await
     .map_err(|error| anyhow::anyhow!("migration task panicked: {error}"))?
+}
+
+#[derive(diesel::QueryableByName)]
+struct SchemaContractRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    contract_version: String,
+}
+
+fn verify_schema_contract(
+    connection: &mut AsyncConnectionWrapper<AsyncPgConnection>,
+) -> anyhow::Result<()> {
+    use diesel::RunQueryDsl;
+
+    let row = diesel::sql_query(
+        "SELECT contract_version FROM public.soland_schema_contract WHERE singleton = TRUE",
+    )
+    .get_result::<SchemaContractRow>(connection)
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "database schema contract fence failed; initialize a clean database for {SCHEMA_CONTRACT_VERSION}: {error}"
+        )
+    })?;
+    anyhow::ensure!(
+        row.contract_version == SCHEMA_CONTRACT_VERSION,
+        "database schema contract {:?} is incompatible; expected {SCHEMA_CONTRACT_VERSION}; initialize a clean database",
+        row.contract_version
+    );
+    Ok(())
 }

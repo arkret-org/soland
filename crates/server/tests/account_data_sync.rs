@@ -228,7 +228,7 @@ fn signed_actor_private_event_envelope(
     .expect("SDK Event signer accepts actor-private fixture");
     // `id-kind-registry.json` gives the `operation` kind `id_form:
     // producer_allocated`, so the Operation id is the producer's to mint and a
-    // receiver cannot derive one from the content-bound (UUIDv8) Event id.
+    // receiver cannot derive one from the content-bound full-digest Event id.
     // Every real submitter carries it in this slot — that is what
     // `arkret_event_draft::Operation::into_event_envelope` writes, after the
     // proofs, because `unsigned` is outside the signed canonical transcript.

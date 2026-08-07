@@ -495,8 +495,9 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // must land on the same handle or the projection would re-key on reboot.
     //
     // Retyping the Event id into `ak:operation:<uuid>` — what this used to do
-    // — cannot work: an Event id is content-bound (UUIDv8, `encoding.md`
-    // §4.0), an Operation id is producer-allocated (UUIDv7), so the retyped
+    // — cannot work: an Event id is a content-bound full-digest token
+    // (`encoding.md` §4.0), while an Operation id is producer-allocated
+    // (UUIDv7), so the retyped
     // value never validated and this function always returned `None`.
     let event_id = EventId::new(event_id.to_owned()).ok()?;
     OperationId::new(format!(
