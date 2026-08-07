@@ -737,6 +737,14 @@ fn apply_session_grant_dispatch(
     s.apply_session_grant(op)
 }
 
+fn apply_session_grant_state_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_session_grant_state(op)
+}
+
 /// Dispatch for `ak.call.state`; cell family is
 /// `ak.component.call.state.v1` (`cell_subject = payload.call_id`).
 fn apply_call_state_dispatch(
@@ -1319,6 +1327,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::EventKind::SESSION_GRANT,
         apply_session_grant_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::SESSION_GRANT_STATE,
+        apply_session_grant_state_dispatch,
     );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,

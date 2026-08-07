@@ -110,4 +110,39 @@ fn session_grant_subject_is_derived_from_event_id() {
             ))
             .is_some()
     );
+    assert_eq!(
+        state
+            .cell_value(&cell(
+                arkret_wire::CellFamilyId::SESSION_GRANT_STATE_V1,
+                session_grant_id
+            ))
+            .unwrap(),
+        &serde_json::json!("active")
+    );
+
+    let (transition, writes) = input(
+        arkret_wire::EventKind::SESSION_GRANT_STATE,
+        realm,
+        "ak:event:01904100-0000-8000-8000-a00000000022",
+        serde_json::json!({
+            "session_grant_id": session_grant_id,
+            "from": "active",
+            "to": "superseded",
+            "successor_session_grant_id": "ak:session_grant:01904100-0000-8000-8000-a00000000023"
+        }),
+    );
+    assert!(matches!(
+        state.apply_projected(&transition, &writes, &hlc),
+        ProjectionEffect::SessionGrantStateProjected { session_grant_id: id, state }
+            if id == session_grant_id && state == "superseded"
+    ));
+    assert_eq!(
+        state
+            .cell_value(&cell(
+                arkret_wire::CellFamilyId::SESSION_GRANT_STATE_V1,
+                session_grant_id
+            ))
+            .unwrap(),
+        &serde_json::json!("superseded")
+    );
 }
