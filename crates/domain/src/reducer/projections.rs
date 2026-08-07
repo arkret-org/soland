@@ -856,30 +856,6 @@ pub struct RedactionCellValue {
     pub redaction_event_id: Option<String>,
 }
 
-impl RedactionCellValue {
-    /// Render the cas-register payload as JSON for projection / wire emission.
-    pub fn to_json(&self) -> Value {
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            "redacted_at".to_owned(),
-            Value::String(arkret_canonical::format_timestamp_canonical(
-                self.redacted_at,
-            )),
-        );
-        obj.insert("by".to_owned(), Value::String(self.by.clone()));
-        if let Some(reason) = &self.reason {
-            obj.insert("reason".to_owned(), Value::String(reason.clone()));
-        }
-        if let Some(redaction_event_id) = &self.redaction_event_id {
-            obj.insert(
-                "redaction_ref".to_owned(),
-                Value::String(redaction_event_id.clone()),
-            );
-        }
-        Value::Object(obj)
-    }
-}
-
 /// Projection-layer view of a single message cell. The reducer
 /// keeps the original [`MessageState`] intact; this view is what callers
 /// see at read time after the parallel `redaction` cell is consulted.

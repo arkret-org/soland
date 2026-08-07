@@ -152,12 +152,6 @@ impl<'a> CallerSignedEvent<'a> {
         self.with_basis(CallerSignedBasis::AcceptedSeal(seal_id))
     }
 
-    #[must_use]
-    pub fn with_signing_seed(mut self, signing_seed: [u8; 32]) -> Self {
-        self.signing_seed = signing_seed;
-        self
-    }
-
     /// The verification method this envelope's proof names.
     #[must_use]
     pub fn verification_method(&self) -> DidUrl {

@@ -228,13 +228,6 @@ impl RealmDirectoryIndex {
             .collect()
     }
 
-    pub fn search_by_tag(&self, tag: &str) -> Vec<&RealmDirectoryEntry> {
-        self.entries
-            .values()
-            .filter(|entry| entry.tags.contains(tag))
-            .collect()
-    }
-
     pub fn search(&self, query: RealmDirectoryQuery) -> Vec<&RealmDirectoryEntry> {
         let mut scored =
             self.entries

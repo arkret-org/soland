@@ -41,7 +41,6 @@ use arkret_wire::{
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::SigningKey;
 use parking_lot::Mutex;
 
 use crate::config::NotarySigningKeyOrigin;
@@ -1291,14 +1290,6 @@ fn warn_once_about_ephemeral_notary_key() {
              which breaks signature-chain trust for downstream verifiers."
         );
     });
-}
-
-/// Helper exposed for `AppState::notary_signing_key` so the
-/// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`)
-/// can build a `Ed25519PayloadSigner` keyed off the same SigningKey the
-/// NotaryWorker uses, keeping all signing paths consistent.
-pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
-    SigningKey::from_bytes(seed)
 }
 
 static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());

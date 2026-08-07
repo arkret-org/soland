@@ -286,7 +286,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-util",
  "url",
 ]
 
@@ -522,7 +521,6 @@ name = "arkret-server"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
- "arkret-event-draft",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-discovery",
@@ -5277,7 +5275,6 @@ dependencies = [
 name = "soland-domain"
 version = "0.3.0"
 dependencies = [
- "arkret-bootstrap",
  "arkret-canonical",
  "arkret-event-draft",
  "arkret-hlc",
@@ -5381,7 +5378,6 @@ dependencies = [
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-identity",
- "arkret-models-integration",
  "arkret-policy",
  "arkret-schema",
  "arkret-signatures",

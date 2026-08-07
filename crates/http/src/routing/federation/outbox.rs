@@ -61,9 +61,6 @@ pub const POLL_BATCH_LIMIT: usize = 32;
 /// row over mid-flight, but short enough that a crashed worker's backlog
 /// resumes promptly.
 pub const LEASE_DURATION_SECS: i64 = 120;
-/// Per-request connect timeout — keep this short so a dead peer can't
-/// stall the entire dispatcher loop.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-request full-response timeout.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum transport attempts before the row is dead-lettered. Matches the
