@@ -1263,7 +1263,7 @@ pub fn describe(
                     "standalone_operations": SUPPORTED_STANDALONE_OPERATION_IDS
                 },
                 "local_extension_operations": local_extension_operations,
-                "local_extension_operation_source": "routing::SOLAND_EXTENSION_OPERATIONS",
+                "local_extension_operation_source": "compact_registry+served_openapi",
                 "implemented_surfaces": [
                     "principal_server",
                     "events_api_minimal",

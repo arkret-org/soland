@@ -75,7 +75,7 @@ pub(crate) use interop::{
     MAX_BLOB_UPLOAD_BYTES, TUS_EXTENSIONS, TUS_VERSIONS, push_target_privacy_derivation_claim,
 };
 // CORS handler consumed by `crate::service`.
-pub(crate) use router_build::cors_handler_for_origin_spec;
+pub(crate) use router_build::{cors_handler_for_origin_spec, openapi_surface_router};
 pub use router_build::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
 };

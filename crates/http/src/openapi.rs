@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::openapi_routes::{ArkretOpenApiDoc, populate_known_routes};
 
 static ARKRET_OPENAPI_DOC: OnceLock<Value> = OnceLock::new();
-static PRODUCT_OPENAPI_APPENDIX: OnceLock<std::result::Result<Value, String>> = OnceLock::new();
+static PRODUCT_OPERATION_IDS: OnceLock<std::result::Result<Vec<String>, String>> = OnceLock::new();
 
 /// Build (once) and return the served OpenAPI document.
 ///
@@ -124,16 +124,6 @@ fn install_event_read_query_bindings(doc: &mut Value) {
 
 type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;
 
-fn product_openapi_appendix() -> anyhow::Result<&'static Value> {
-    match PRODUCT_OPENAPI_APPENDIX.get_or_init(|| {
-        serde_json::from_str(include_str!("product_openapi_appendix.json"))
-            .map_err(|error| format!("failed to parse product OpenAPI appendix: {error}"))
-    }) {
-        Ok(appendix) => Ok(appendix),
-        Err(error) => bail!("{error}"),
-    }
-}
-
 /// Walk the live salvo router and collect every registered `path -> methods`
 /// pair. This is the single source of truth for the 404/405 known-route table
 /// and is independent of OpenAPI generation.
@@ -203,31 +193,67 @@ fn join_route_path(parent: &str, fragment: &str) -> String {
 
 /// The soland extension operationIds advertised through `*.describe`.
 ///
-/// Sourced from the product appendix registry (an operation-id catalog, not a
-/// served OpenAPI document). This remains deliberately independent of the
-/// generated OpenAPI surface because the describe response advertises the
-/// complete product contract, including transport-specialized operations.
+/// The compact registry preserves transport-specialized and conformance
+/// operations that do not contribute an OpenAPI operation. It is unioned with
+/// the generated live-router document so newly annotated operations cannot be
+/// omitted from discovery.
 pub fn soland_extension_operation_ids() -> Vec<String> {
-    let appendix = product_openapi_appendix()
-        .unwrap_or_else(|error| panic!("failed to load product OpenAPI appendix: {error:#}"));
-    appendix
-        .get("paths")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|paths| paths.values())
-        .filter_map(Value::as_object)
-        .flat_map(|path_item| {
-            path_item
-                .iter()
-                .filter(|(method, _)| OPENAPI_METHODS.contains(&method.as_str()))
-                .filter_map(|(_, operation)| operation.get("operationId"))
-                .filter_map(Value::as_str)
+    let mut operation_ids = PRODUCT_OPERATION_IDS
+        .get_or_init(|| {
+            serde_json::from_str(include_str!("product_operation_ids.json"))
+                .map_err(|error| format!("failed to parse product operation-id registry: {error}"))
         })
-        .filter(|operation_id| operation_id.starts_with("org.arkret.soland."))
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .as_ref()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let generated;
+    let document = if let Some(document) = ARKRET_OPENAPI_DOC.get() {
+        document
+    } else {
+        generated = product_openapi_surface_doc();
+        &generated
+    };
+    operation_ids.extend(
+        document
+            .get("paths")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|paths| paths.values())
+            .filter_map(Value::as_object)
+            .flat_map(|path_item| {
+                path_item
+                    .iter()
+                    .filter(|(method, _)| OPENAPI_METHODS.contains(&method.as_str()))
+                    .filter_map(|(_, operation)| operation.get("operationId"))
+                    .filter_map(Value::as_str)
+            })
+            .filter(|operation_id| operation_id.starts_with("org.arkret.soland."))
+            .map(ToOwned::to_owned),
+    );
+    operation_ids.into_iter().collect()
+}
+
+/// Generate an OpenAPI document from the state-independent portion of the
+/// production Salvo router. This is intentionally not cached: the served
+/// document has its own cache, while inventory tests should inspect a fresh
+/// router tree and detect route declaration drift.
+pub fn product_openapi_surface_doc() -> Value {
+    let router = crate::routing::openapi_surface_router();
+    let generated = OpenApi::new("Arkret Service API", env!("CARGO_PKG_VERSION"))
+        .openapi_version(OpenApiVersion::Version3_2)
+        .merge_router(&router);
+    serde_json::to_value(generated)
+        .unwrap_or_else(|error| panic!("failed to serialize product OpenAPI surface: {error:#}"))
+}
+
+/// Return the exact path/method registry from the state-independent portion of
+/// the production router, including transport-specialized handlers that do not
+/// contribute an OpenAPI operation.
+pub fn product_registered_routes() -> anyhow::Result<BTreeMap<String, BTreeSet<String>>> {
+    collect_registered_routes(&crate::routing::openapi_surface_router())
 }
 
 #[handler]

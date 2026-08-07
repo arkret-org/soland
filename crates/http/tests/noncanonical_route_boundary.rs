@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
-use serde_json::Value;
-
-const OPENAPI: &str = include_str!("../src/product_openapi_appendix.json");
 const INVENTORY: &str = include_str!("../../../noncanonical-route-inventory.jsonl");
 
 #[derive(Debug, Deserialize)]
@@ -32,27 +29,18 @@ enum InventoryRecord {
 
 #[test]
 fn inventory_tracks_every_noncanonical_product_route_once() {
-    let document: Value = serde_json::from_str(OPENAPI).expect("product OpenAPI must be JSON");
-    let paths = document["paths"]
-        .as_object()
-        .expect("product OpenAPI paths must be an object");
-    let actual = paths
-        .iter()
+    let actual = soland_http::openapi::product_registered_routes()
+        .expect("production route tree must be inspectable")
+        .into_iter()
         .filter(|(path, _)| path.starts_with("/_soland/"))
-        .map(|(path, item)| {
-            let methods = item
-                .as_object()
-                .expect("OpenAPI path item must be an object")
-                .keys()
-                .filter(|method| {
-                    matches!(
-                        method.as_str(),
-                        "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
-                    )
-                })
-                .map(|method| method.to_ascii_uppercase())
-                .collect::<BTreeSet<_>>();
-            (path.clone(), methods)
+        .map(|(path, methods)| {
+            (
+                path,
+                methods
+                    .into_iter()
+                    .map(|method| method.to_ascii_uppercase())
+                    .collect::<BTreeSet<_>>(),
+            )
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -73,10 +61,10 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
                 initial_private_path_count,
                 current_private_path_count,
             } => Some((
-                schema,
-                audit_status,
-                finding,
-                source,
+                schema.clone(),
+                audit_status.clone(),
+                finding.clone(),
+                source.clone(),
                 *initial_private_path_count,
                 *current_private_path_count,
             )),
@@ -89,10 +77,8 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
         metadata.2,
         "arkret-work/review/spec-done/2026-07-27-12-soland-noncanonical-route-boundary-audit.md"
     );
-    assert_eq!(metadata.3, "crates/http/src/product_openapi_appendix.json");
+    assert_eq!(metadata.3, "soland-http live Salvo router/OpenAPI");
     assert_eq!(metadata.4, 127);
-    assert_eq!(metadata.5, actual.len());
-
     let mut inventoried = BTreeMap::new();
     for record in records {
         let InventoryRecord::Route {
@@ -133,6 +119,7 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
 
     assert_eq!(
         actual, inventoried,
-        "the committed inventory must exactly match every current /_soland OpenAPI path and method"
+        "the committed inventory must exactly match every current /_soland route and method"
     );
+    assert_eq!(metadata.5, actual.len());
 }

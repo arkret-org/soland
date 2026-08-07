@@ -89,7 +89,35 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .hoop(affix_state::inject(error_exposure))
         .hoop(affix_state::inject(state))
         .hoop(rate_limit_middleware);
-    let router = router
+    let router = mount_application_routes(router, conformance_harness_enabled);
+    let doc = cached_arkret_openapi_doc(
+        &router,
+        serde_json::json!(soland_services::protocol_artifacts::registry_summary()),
+    );
+    router
+        .unshift(
+            Router::with_path(".well-known/arkret/openapi.yaml")
+                .hoop(affix_state::inject(ArkretOpenApiDoc(doc.clone())))
+                .get(arkret_openapi_yaml),
+        )
+        .unshift(
+            Router::with_path(".well-known/arkret/openapi.json")
+                .hoop(affix_state::inject(ArkretOpenApiDoc(doc)))
+                .get(arkret_openapi_json),
+        )
+        .unshift(Router::new().get(home_page))
+}
+
+/// Build the same state-independent application route tree used by the live
+/// service. OpenAPI inventory checks use this entry point so route coverage is
+/// derived from production router declarations instead of a committed copy of
+/// the generated document.
+pub(crate) fn openapi_surface_router() -> Router {
+    mount_application_routes(Router::new(), true)
+}
+
+fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -> Router {
+    router
         .push(system::health_router())
         .push(interop::well_known_router())
         // Spec: B.3 — `/.well-known/arkret` server-description stub.
@@ -124,23 +152,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .push(Router::with_path("admin").push(extensions::admin_router()))
                 .push(soland_local_router()),
         )
-        .push(api_v1_router(conformance_harness_enabled));
-    let doc = cached_arkret_openapi_doc(
-        &router,
-        serde_json::json!(soland_services::protocol_artifacts::registry_summary()),
-    );
-    router
-        .unshift(
-            Router::with_path(".well-known/arkret/openapi.yaml")
-                .hoop(affix_state::inject(ArkretOpenApiDoc(doc.clone())))
-                .get(arkret_openapi_yaml),
-        )
-        .unshift(
-            Router::with_path(".well-known/arkret/openapi.json")
-                .hoop(affix_state::inject(ArkretOpenApiDoc(doc)))
-                .get(arkret_openapi_json),
-        )
-        .unshift(Router::new().get(home_page))
+        .push(api_v1_router(conformance_harness_enabled))
 }
 
 /// Protocol surface, mounted under the negative-space root `/_arkret/...`.

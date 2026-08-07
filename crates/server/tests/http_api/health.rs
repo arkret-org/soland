@@ -219,7 +219,7 @@ async fn health_and_describe_work() {
     }
     assert_eq!(
         describe["limits"]["profile_status"]["local_extension_operation_source"],
-        "routing::SOLAND_EXTENSION_OPERATIONS"
+        "compact_registry+served_openapi"
     );
     assert!(
         describe["limits"]["profile_status"]["local_extension_operations"]
