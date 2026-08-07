@@ -1307,7 +1307,7 @@ impl ProjectionState {
         realm_id: &str,
         parent: &crate::capability::Grant,
     ) -> Result<(), &'static str> {
-        if parent.revoked || crate::capability::is_grant_expired(&parent, operation.created_at) {
+        if parent.revoked || crate::capability::is_grant_expired(parent, operation.created_at) {
             return Err("grant_revoked_upstream");
         }
         if issuer != parent.subject {
@@ -1316,7 +1316,7 @@ impl ProjectionState {
         if realm_id != parent.realm_id {
             return Err("grant_exceeds_issuer_authority");
         }
-        if let Some(parent_depth) = crate::capability::max_authority_depth(&parent) {
+        if let Some(parent_depth) = crate::capability::max_authority_depth(parent) {
             if parent_depth == 0 {
                 return Err("authority_depth_exceeded");
             }
@@ -1326,7 +1326,7 @@ impl ProjectionState {
             }
         }
         let child_expires_at = body_effective_expires_at(body);
-        if let Some(parent_expires_at) = crate::capability::grant_effective_expiry(&parent) {
+        if let Some(parent_expires_at) = crate::capability::grant_effective_expiry(parent) {
             let Some(child_expires_at) = child_expires_at else {
                 return Err("authority_expiry_widening");
             };
@@ -1649,7 +1649,7 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::capability_grant_cell_ref(&grant_id) else {
+        let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
             return ProjectionEffect::Rejected {
                 reason: "capability_revoke_cell_ref_invalid".to_owned(),
             };

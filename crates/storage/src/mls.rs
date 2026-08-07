@@ -297,7 +297,7 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimAttemptResult {
     Claimed(Box<MlsKeyPackageRow>),
-    Existing(PeerKeyPackageClaimLedgerRecord),
+    Existing(Box<PeerKeyPackageClaimLedgerRecord>),
     KeyPackageUnavailable,
 }
 
@@ -321,7 +321,7 @@ pub struct MlsKeyPackageClaim<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimLedgerWriteResult {
     Inserted,
-    Existing(PeerKeyPackageClaimLedgerRecord),
+    Existing(Box<PeerKeyPackageClaimLedgerRecord>),
 }
 /// G3.S1 — durable Welcome envelope row (per recipient device).
 #[derive(Clone, Debug, PartialEq, Eq)]

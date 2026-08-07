@@ -1084,7 +1084,9 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     ))
                 }
                 soland_storage::PeerKeyPackageClaimAttemptResult::Existing(row) => {
-                    crate::events::PeerKeyPackageClaimResult::Existing(application_peer_claim(row))
+                    crate::events::PeerKeyPackageClaimResult::Existing(Box::new(
+                        application_peer_claim(*row),
+                    ))
                 }
                 soland_storage::PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable => {
                     crate::events::PeerKeyPackageClaimResult::KeyPackageUnavailable
@@ -1107,9 +1109,9 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     crate::events::PeerKeyPackageClaimLedgerWriteResult::Inserted
                 }
                 soland_storage::PeerKeyPackageClaimLedgerWriteResult::Existing(row) => {
-                    crate::events::PeerKeyPackageClaimLedgerWriteResult::Existing(
-                        application_peer_claim(row),
-                    )
+                    crate::events::PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(
+                        application_peer_claim(*row),
+                    ))
                 }
             },
         )

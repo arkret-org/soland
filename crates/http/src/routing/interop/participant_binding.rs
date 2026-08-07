@@ -59,9 +59,6 @@ pub(crate) fn verify_binding_signature(
     verifying_key.verify(&signing_input, &signature).is_ok()
 }
 
-/// `media_service_binding.md` §2 — the family of the per-realm media_service
-/// epoch cell projected by `apply_realm_media_service`.
-
 /// The current-epoch issuer anchor set for one realm's media service.
 struct MediaServiceAnchors {
     service_id: String,

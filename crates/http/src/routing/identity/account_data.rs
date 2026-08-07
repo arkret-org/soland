@@ -487,14 +487,8 @@ async fn put_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some_and(|record| !record.tombstone);
 
-    admit_caller_signed_account_data_set(
-        state,
-        &session,
-        &account_data_key,
-        body.set_event,
-        false,
-    )
-    .await?;
+    admit_caller_signed_account_data_set(state, &session, &account_data_key, body.set_event, false)
+        .await?;
     let record = state
         .account_data()
         .entry(&session.actor, &account_data_key)

@@ -1183,9 +1183,8 @@ pub(super) fn plaintext_blob_data_class(
 
 /// Spec `blob.schema.json#/$defs/encrypted_attachment` carries a `scheme`
 /// discriminator. The server stores the envelope as opaque JSON and never
-/// decrypts; these constants only drive the light-touch shape validation
-/// below (which fields are required), not any cryptographic interpretation.
-
+/// decrypts, so this is a light-touch shape check (which fields are required),
+/// not any cryptographic interpretation.
 fn validate_encrypted_attachment_metadata(
     metadata: &serde_json::Value,
 ) -> Result<(), &'static str> {

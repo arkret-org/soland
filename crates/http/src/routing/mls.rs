@@ -694,7 +694,7 @@ async fn peer_claim_keypackage(
                 return json_ok(outcome);
             }
             PeerKeyPackageClaimAttemptResult::Existing(existing) => {
-                return replay_peer_claim(existing, &request_digest);
+                return replay_peer_claim(*existing, &request_digest);
             }
             PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable => continue,
         }
@@ -1640,7 +1640,7 @@ async fn claim_keypackages_for_request_inner(
                 return Ok(outcome);
             }
             PeerKeyPackageClaimAttemptResult::Existing(existing) => {
-                return replay_local_claim(existing, &request_digest);
+                return replay_local_claim(*existing, &request_digest);
             }
             PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable => continue,
         }
@@ -1693,7 +1693,7 @@ fn local_claim_ledger_record(
     outcome: &KeyPackagesClaimOutcome,
     claimed_at: i64,
 ) -> Result<PeerKeyPackageClaimLedgerRecord, AppError> {
-    let response = serde_json::to_value(&outcome)
+    let response = serde_json::to_value(outcome)
         .map_err(|error| AppError::internal(format!("local claim response serialize: {error}")))?;
     Ok(PeerKeyPackageClaimLedgerRecord {
         source_service_id: state.service_id().clone(),
@@ -1747,7 +1747,7 @@ async fn record_local_claim_terminal(
     {
         PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(outcome),
         PeerKeyPackageClaimLedgerWriteResult::Existing(existing) => {
-            replay_local_claim(existing, request_digest)
+            replay_local_claim(*existing, request_digest)
         }
     }
 }

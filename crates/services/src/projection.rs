@@ -1605,11 +1605,6 @@ impl ProjectionService {
             .into()
     }
 
-    pub fn apply_mls_keypackage_claim(&self, operation: &Operation) -> ProjectionEffectView {
-        soland_domain::reducer::mls::apply_keypackage_claim(&mut self.state.lock(), operation)
-            .into()
-    }
-
     pub fn mls_key_package_record(
         &self,
         keypackage_id: &str,

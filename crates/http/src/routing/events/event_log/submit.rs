@@ -1382,13 +1382,12 @@ pub(crate) async fn submit_federation_events(
         }
     }
     for submission in &submissions {
-        if let Some(lease) = &submission.authorization_lease {
-            if let Err(error) =
+        if let Some(lease) = &submission.authorization_lease
+            && let Err(error) =
                 validate_authorization_lease_for_event(state, None, &submission.event, lease).await
-            {
-                render_error(res, error.status, &error.code, &error.message);
-                return;
-            }
+        {
+            render_error(res, error.status, &error.code, &error.message);
+            return;
         }
         if let Err(error) =
             validate_ingress_receipt_proofs(state, &submission.ingress_receipts).await
@@ -1676,7 +1675,7 @@ pub(crate) async fn submit_federation_events(
                         rejected_item(
                             event_string_field_from_value(envelope, "event_id")
                                 .unwrap_or_else(|| "unknown".to_owned()),
-                            ReasonCode::from_wire(&rejection.code),
+                            ReasonCode::from_wire(rejection.code),
                             Some(rejection.message.clone()),
                         )
                     })
@@ -1882,7 +1881,7 @@ pub(crate) async fn submit_federation_events(
         if let Err(rejection) = profile_gate.enforce_event(&envelope) {
             rejected.push(rejected_item(
                 id,
-                ReasonCode::from_wire(&rejection.code),
+                ReasonCode::from_wire(rejection.code),
                 Some(rejection.message),
             ));
             continue;
@@ -2185,7 +2184,9 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
         arkret_wire::derive_genesis_realm_id(
             &event_id,
             &actor_id,
-            value.get("payload").and_then(|payload| payload.get("object")),
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("object")),
         )
         .into_string(),
     )
@@ -2387,7 +2388,6 @@ mod internal_event_admission_tests {
 
         assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
     }
-
 }
 
 #[cfg(test)]

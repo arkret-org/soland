@@ -632,7 +632,6 @@ pub(crate) async fn project_canonical_direct_binding(
         .await
     {
         tracing::error!(%error, %pair_key, "failed to persist canonical direct binding projection");
-        return;
     }
 }
 

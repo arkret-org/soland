@@ -5,12 +5,12 @@
 //!   ` — list the typed cross-Realm links projected from `ak.realm.link` events. Powered by
 //!   [`soland_domain::reducer::ProjectionState::realm_links_query`].
 //! - `POST /_arkret/self/realms/{realm_id}/links` — submit the caller-signed `ak.realm.link` Move
-//!   from `realm_id → target_realm_id`. The reducer runs the canonical Realm Link FSM validators;
-//!   a rejected payload comes back as HTTP 422 with the spec reason code.
+//!   from `realm_id → target_realm_id`. The reducer runs the canonical Realm Link FSM validators; a
+//!   rejected payload comes back as HTTP 422 with the spec reason code.
 //! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — submit the caller-signed
-//!   tombstoning `ak.realm.link` Move (status = `tombstoned`) for the
-//!   `(realm_id, target_realm_id, link_kind)` triple. The Move arrives in a request body, so
-//!   `link_kind` is named in the signed payload rather than a query param.
+//!   tombstoning `ak.realm.link` Move (status = `tombstoned`) for the `(realm_id, target_realm_id,
+//!   link_kind)` triple. The Move arrives in a request body, so `link_kind` is named in the signed
+//!   payload rather than a query param.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
 //!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
 //!   `ak.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
@@ -39,11 +39,10 @@ use salvo::prelude::*;
 use serde_json::Value;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{
     RealmLinkReadModel as RealmLinkState, check_realm_link_admissible, effective_policy_for_realm,
 };
-
-use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::AuthArgs;
 use crate::routing::organizations;
@@ -448,8 +447,9 @@ fn merge_organization_effective_policy(
 
 #[cfg(test)]
 mod caller_signed_link_tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
     const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
@@ -482,9 +482,13 @@ mod caller_signed_link_tests {
 
     #[test]
     fn the_edge_is_read_off_the_signed_payload() {
-        let edge =
-            caller_signed_realm_link_edge(ACTOR, REALM, None, &link_event(ACTOR, REALM, active_edge()))
-                .unwrap();
+        let edge = caller_signed_realm_link_edge(
+            ACTOR,
+            REALM,
+            None,
+            &link_event(ACTOR, REALM, active_edge()),
+        )
+        .unwrap();
         let outcome = edge.outcome();
         assert_eq!(outcome.realm_id.as_str(), REALM);
         assert_eq!(outcome.target_realm_id.as_str(), TARGET);
@@ -507,8 +511,13 @@ mod caller_signed_link_tests {
     fn a_body_naming_another_source_realm_is_rejected() {
         // The source Realm is single-sourced by `event.realm_id`; without this
         // check a caller could act on a Realm the URL never named.
-        caller_signed_realm_link_edge(ACTOR, TARGET, None, &link_event(ACTOR, REALM, active_edge()))
-            .expect_err("event.realm_id must equal the path realm_id");
+        caller_signed_realm_link_edge(
+            ACTOR,
+            TARGET,
+            None,
+            &link_event(ACTOR, REALM, active_edge()),
+        )
+        .expect_err("event.realm_id must equal the path realm_id");
     }
 
     #[test]

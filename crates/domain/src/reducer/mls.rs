@@ -695,19 +695,17 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
 
     let proposal_refs = string_array(payload.get("proposal_refs"));
     let pending_removals = matching_pending_remove_obligations(state, &effective_scope, group_id);
-    if !pending_removals.is_empty() {
-        if pending_removals.iter().any(|obligation| {
-            !commit_references_matching_remove_proposal(
-                state,
-                &proposal_refs,
-                group_id,
-                expected_prev_epoch,
-                &effective_scope,
-                obligation,
-            )
-        }) {
-            return reject(REASON_REMOVE_PROPOSAL_MISSING);
-        }
+    if pending_removals.iter().any(|obligation| {
+        !commit_references_matching_remove_proposal(
+            state,
+            &proposal_refs,
+            group_id,
+            expected_prev_epoch,
+            &effective_scope,
+            obligation,
+        )
+    }) {
+        return reject(REASON_REMOVE_PROPOSAL_MISSING);
     }
 
     // Reaching here with `expected_prev_epoch == current` is a forward advance.

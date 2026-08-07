@@ -102,18 +102,6 @@ fn fixture_notary_did() -> String {
     crate::app_state(crate::app_config()).service_id().clone()
 }
 
-/// The single-leaf `seal_basis` a Control Move of `realm_id` cites.
-pub fn realm_basis_seal_basis(
-    realm_id: &str,
-    subject: &str,
-    data_plane_actions: &[&str],
-) -> SealBasis {
-    let seal = realm_basis_seal(realm_id, subject, data_plane_actions);
-    SealBasis {
-        leaves: vec![seal.id],
-    }
-}
-
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the

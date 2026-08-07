@@ -7,7 +7,6 @@ use soland_services::operation_semantics as kinds;
 use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
 
 use super::*;
-use crate::ids;
 use crate::state::AppState;
 
 pub async fn project_accepted_operations_from_device(

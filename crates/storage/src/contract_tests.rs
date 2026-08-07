@@ -1698,7 +1698,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
             .record_peer_claim_terminal(&first)
             .await
             .expect("replay first last-resort claim"),
-        PeerKeyPackageClaimLedgerWriteResult::Existing(first.clone())
+        PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(first.clone()))
     );
     assert_eq!(
         store

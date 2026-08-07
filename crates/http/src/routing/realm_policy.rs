@@ -378,7 +378,6 @@ fn is_policy_server_tombstone(value: &serde_json::Value) -> bool {
     )
 }
 
-
 async fn require_policy_manage(
     state: &AppState,
     actor: &str,
@@ -431,8 +430,9 @@ fn policy_server_resolution_error(reason: &'static str) -> AppError {
 
 #[cfg(test)]
 mod caller_signed_policy_server_tests {
-    use super::*;
     use serde_json::{Value, json};
+
+    use super::*;
 
     const ACTOR: &str = "did:web:alice.example";
     const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
@@ -482,7 +482,10 @@ mod caller_signed_policy_server_tests {
         let RealmPolicyServerPayload::Declaration(declaration) = payload else {
             panic!("a declaration payload must not parse as the value tombstone");
         };
-        assert_eq!(declaration.policy_server_did.as_str(), "did:web:policy.example");
+        assert_eq!(
+            declaration.policy_server_did.as_str(),
+            "did:web:policy.example"
+        );
     }
 
     #[test]
@@ -515,7 +518,10 @@ mod caller_signed_policy_server_tests {
         let event = policy_server_event(ACTOR, REALM, declaration());
         let error = require_head_eq_precondition("policy_server_event", &event)
             .expect_err("a settled cell needs the caller's own head_eq");
-        assert_eq!(error.code, soland_http::error::ErrorCode::FailedPrecondition);
+        assert_eq!(
+            error.code,
+            soland_http::error::ErrorCode::FailedPrecondition
+        );
 
         require_head_eq_precondition("policy_server_event", &with_head_eq(event, declaration()))
             .expect("a caller-attached head_eq satisfies the guard");

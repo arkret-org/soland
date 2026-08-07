@@ -957,17 +957,6 @@ impl AppState {
         self.did_bindings.as_ref()
     }
 
-    /// Inject a spy / pre-seeded binding store. Tests use this to assert the
-    /// DID-P1-A03 call-count contract without reaching the network.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_set_did_binding_store(
-        &mut self,
-        store: Arc<dyn arkret_identity::VerifiedDidBindingStore>,
-    ) {
-        self.did_bindings = store;
-    }
-
     /// The §5.3 `policy_digest` every binding this deployment accepts is scoped
     /// to.
     ///
@@ -1661,15 +1650,6 @@ impl AppState {
         publish: arkret_models_identity::CrossSigningPublish,
     ) -> arkret_identity::Result<()> {
         self.identities.record_cross_signing_publish(publish)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_record_cross_signing_reset(
-        &self,
-        reset: &arkret_models_identity::CrossSigningResetPayload,
-    ) -> arkret_identity::Result<()> {
-        self.identities.record_cross_signing_reset(reset)
     }
 
     #[cfg(any(test, feature = "test-support"))]

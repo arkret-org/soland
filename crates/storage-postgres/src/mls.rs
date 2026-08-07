@@ -268,7 +268,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 )
                 .await?
                 {
-                    return Ok(PeerKeyPackageClaimAttemptResult::Existing(existing));
+                    return Ok(PeerKeyPackageClaimAttemptResult::Existing(Box::new(existing)));
                 }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \
@@ -314,7 +314,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     .get_peer_claim(&source_service_id, &claim_request_id)
                     .await?
                 {
-                    Ok(PeerKeyPackageClaimAttemptResult::Existing(existing))
+                    Ok(PeerKeyPackageClaimAttemptResult::Existing(Box::new(
+                        existing,
+                    )))
                 } else {
                     Err(error.into_persistence())
                 }
@@ -346,7 +348,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 "peer KeyPackage claim ledger conflict row disappeared".to_owned(),
             )
         })?;
-        Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(existing))
+        Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(
+            existing,
+        )))
     }
 
     async fn attach_peer_claim_terminal_receipt(

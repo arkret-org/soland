@@ -552,20 +552,24 @@ async fn policy_server_declaration_survives_restart() {
     assert_eq!(view["policy_server_did"], "did:web:org-policy.example");
     assert_eq!(view["from_org_fallback"], false);
 
-    let projection = restarted.test_projection().lock();
-    assert_eq!(
+    let restored_policy_server_did = {
+        let projection = restarted.test_projection().lock();
         projection
             .realm_null_subject_cells
             .get(&(ORG_REALM.to_owned(), POLICY_CELL.to_owned()))
             .and_then(|cell| match cell {
-                arkret_state::lattice::CellState::Value(value) =>
-                    value.get("policy_server_did").and_then(Value::as_str),
+                arkret_state::lattice::CellState::Value(value) => {
+                    value.get("policy_server_did").and_then(Value::as_str)
+                }
                 arkret_state::lattice::CellState::Bottom(_) => None,
-            }),
+            })
+            .map(ToOwned::to_owned)
+    };
+    assert_eq!(
+        restored_policy_server_did.as_deref(),
         Some("did:web:org-policy.example"),
         "the declaration cell must survive restart"
     );
-    drop(projection);
 
     // A later settled tombstone is equally durable: after a second restart it
     // remains a direct absence and does not resurrect the declaration.

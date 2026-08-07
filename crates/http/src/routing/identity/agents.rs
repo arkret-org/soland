@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     fn key_pair_rejects_wrong_pairing_request_id() {
-        let mut record = pending_pairing_record(
+        let record = pending_pairing_record(
             "did:web:agent.example",
             "did:web:controller.example",
             requested_agent_scope(),
@@ -1109,7 +1109,7 @@ mod tests {
         );
 
         let err = ensure_pairing_request_id_matches(
-            &mut record,
+            &record,
             "agent_pairing_request:01999999-0000-7000-8000-00000000bad1",
         )
         .expect_err("wrong pairing request must fail closed");

@@ -418,20 +418,16 @@ pub async fn realm_basis(
         &body.data_plane_actions,
     )
     .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;
-    for (seal, ops) in [(&basis.seal, &basis.ops)] {
-        state
-            .projections()
-            .conformance_put_seal(seal)
-            .map_err(|error| {
-                AppError::internal(format!("store conformance Realm Seal: {error}"))
-            })?;
-        state
-            .projections()
-            .conformance_append_sealed_effects(&seal.realm_id, &seal.id, ops)
-            .map_err(|error| {
-                AppError::internal(format!("store conformance sealed basis state: {error}"))
-            })?;
-    }
+    state
+        .projections()
+        .conformance_put_seal(&basis.seal)
+        .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
+    state
+        .projections()
+        .conformance_append_sealed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
+        .map_err(|error| {
+            AppError::internal(format!("store conformance sealed basis state: {error}"))
+        })?;
     json_ok(RealmBasisOutcome {
         seal_id: basis.seal.id.to_string(),
         control_event_set_root: basis.seal.control_event_set_root.to_string(),

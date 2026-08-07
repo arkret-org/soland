@@ -11,10 +11,6 @@ use serde_json::Value;
 
 use super::{DocumentVersionProjection, PushRouteCellValue, StrandProjection};
 
-/// `morph.md` §4.1 S3 — the opt-in Realm profile id that permits breaking /
-/// transformation schema migrations. Mirrors
-/// `artifacts/profiles/conformance-profiles.json#/profile_requirements`.
-
 /// `morph.md` §4.1 — the canonical transformation rule ids understood by the
 /// `ak.profile.morph.schema_migration_transformations.v1`
 /// `transformation_rules_v1_grammar` dialect. Covers the four cases the profile

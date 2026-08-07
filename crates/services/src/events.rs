@@ -1621,14 +1621,14 @@ pub struct PeerKeyPackageClaimCommand<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimResult {
     Claimed(Box<MlsKeyPackageState>),
-    Existing(PeerKeyPackageClaimLedgerState),
+    Existing(Box<PeerKeyPackageClaimLedgerState>),
     KeyPackageUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimLedgerWriteResult {
     Inserted,
-    Existing(PeerKeyPackageClaimLedgerState),
+    Existing(Box<PeerKeyPackageClaimLedgerState>),
 }
 
 #[async_trait::async_trait]

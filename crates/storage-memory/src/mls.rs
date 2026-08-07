@@ -214,7 +214,9 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             attempt.ledger.claim_request_id.clone(),
         );
         if let Some(existing) = state.peer_claims.get(&ledger_key) {
-            return Ok(PeerKeyPackageClaimAttemptResult::Existing(existing.clone()));
+            return Ok(PeerKeyPackageClaimAttemptResult::Existing(Box::new(
+                existing.clone(),
+            )));
         }
         let Some(row) = state.rows.get_mut(attempt.keypackage_id) else {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
@@ -261,9 +263,9 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             record.claim_request_id.clone(),
         );
         if let Some(existing) = state.peer_claims.get(&key) {
-            return Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(
+            return Ok(PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(
                 existing.clone(),
-            ));
+            )));
         }
         state.peer_claims.insert(key, record.clone());
         Ok(PeerKeyPackageClaimLedgerWriteResult::Inserted)
@@ -667,7 +669,7 @@ mod tests {
                 .record_peer_claim_terminal(&conflicting)
                 .await
                 .unwrap(),
-            PeerKeyPackageClaimLedgerWriteResult::Existing(first.clone())
+            PeerKeyPackageClaimLedgerWriteResult::Existing(Box::new(first.clone()))
         );
 
         assert!(

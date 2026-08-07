@@ -295,16 +295,15 @@ pub fn realm_policy_bundle_check(
         .get("media_service_decrypts")
         .and_then(Value::as_bool)
         == Some(true)
+        && !media_plaintext_service_present
     {
-        if !media_plaintext_service_present {
-            return Err((
-                ErrorCode::FailedPrecondition,
-                "media_service_decrypts=true requires the SFU/MCU service DID \
-                 to be listed in plaintext_visible_services[] with \
-                 data_classes[] containing media_plaintext"
-                    .to_owned(),
-            ));
-        }
+        return Err((
+            ErrorCode::FailedPrecondition,
+            "media_service_decrypts=true requires the SFU/MCU service DID \
+             to be listed in plaintext_visible_services[] with \
+             data_classes[] containing media_plaintext"
+                .to_owned(),
+        ));
     }
     Ok(())
 }

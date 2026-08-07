@@ -131,9 +131,9 @@ pub(super) fn validate_ghost_actor_provision_request(
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     if provision.schema != GhostActorProvisionRequestBody::SCHEMA {
-        return Err(AppError::invalid_param(format!(
-            "schema must be ak.applet.ghost_actor.provision_request.v1"
-        )));
+        return Err(AppError::invalid_param(
+            "schema must be ak.applet.ghost_actor.provision_request.v1",
+        ));
     }
     if provision.applet_id.as_str() != path_applet_id {
         return Err(AppError::invalid_param(

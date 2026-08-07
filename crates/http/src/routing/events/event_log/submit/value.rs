@@ -404,7 +404,6 @@ pub(in crate::routing) async fn submit_moderation_report_event_value(
     .await
 }
 
-
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,
