@@ -359,8 +359,14 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
     // §2 short-term replay suppression: the identical envelope is answered as
     // accepted but is not appended a second time, so it cannot be delivered
     // twice.
-    let replay = post_signal(state.clone(), &token, &envelope).await;
+    let mut replay = post_signal(state.clone(), &token, &envelope).await;
     assert_eq!(replay.status_code, Some(StatusCode::OK));
+    let replay_outcome: Value = replay.take_json().await.unwrap();
+    assert!(replay_outcome.get("envelope_digest").is_some());
+    assert!(
+        replay_outcome.get("signal_id").is_none() && replay_outcome.get("id").is_none(),
+        "the transport replay fingerprint must not be promoted to a Signal object id"
+    );
     assert_eq!(
         state
             .test_persistence()
