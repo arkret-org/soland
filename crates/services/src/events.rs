@@ -921,7 +921,6 @@ pub trait ProjectedOperationPersistencePort: Send + Sync {
         origin: &str,
         operation: &Operation,
         event_type: &str,
-        is_message_create: bool,
         is_membership_or_realm_lifecycle: bool,
     ) -> Result<(), String>;
 }

@@ -642,7 +642,6 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
         operation: &arkret_event_draft::Operation,
     ) -> crate::ServiceResult<()> {
         let event_type = soland_domain::kinds::canonical_kind_string(operation);
-        let is_message_create = soland_domain::kinds::operation_is_message_create(operation);
         let is_membership_or_realm_lifecycle =
             soland_domain::kinds::operation_is_membership(operation)
                 || soland_domain::kinds::operation_is_realm_lifecycle(operation);
@@ -651,7 +650,6 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
                 origin,
                 operation,
                 &event_type,
-                is_message_create,
                 is_membership_or_realm_lifecycle,
             )
             .await

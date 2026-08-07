@@ -1,6 +1,7 @@
+use sha2::{Digest, Sha256};
+
 use super::*;
 use crate::routing::events::event_log::DataEventQueryGrade;
-use sha2::{Digest, Sha256};
 
 /// The registry projection evaluator for a bootstrap unit.
 ///

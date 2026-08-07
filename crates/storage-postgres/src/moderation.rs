@@ -1,6 +1,6 @@
 use super::{
-    JsonPayloadRow, Jsonb, ModerationStore, Nullable, PersistenceError, PersistenceResult, PgPool,
-    RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    Binary, JsonPayloadRow, Jsonb, ModerationStore, Nullable, PersistenceError, PersistenceResult,
+    PgPool, RunQueryDsl, SqlUuid, Text, Value, async_trait, ids, pg_conn, sql_query,
 };
 pub struct PgModerationStore {
     pub pool: PgPool,
@@ -24,10 +24,15 @@ impl ModerationStore for PgModerationStore {
         let target_actor = extract("target_actor");
         let target_event_id = extract("target_event_id");
         let realm_id = extract("realm_id");
-        let report_id_uuid = ids::typed_uuid_part_expect_internal(&report_id);
-        let target_event_id_uuid: Option<Uuid> = target_event_id
+        // `report` is Event-derived and `target_event_id` names an Event, so both
+        // carry the 33-byte token rather than a UUID.
+        let report_id_token =
+            ids::event_token_part_or_schema_violation(&report_id, "report")?.to_vec();
+        let target_event_id_token = target_event_id
             .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
+            .map(|event_id| ids::event_token_part_or_schema_violation(event_id, "event"))
+            .transpose()?
+            .map(|token| token.to_vec());
         crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
         sql_query(
             "INSERT INTO moderation_reports \
@@ -35,10 +40,10 @@ impl ModerationStore for PgModerationStore {
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<SqlUuid, _>(report_id_uuid)
+        .bind::<Binary, _>(report_id_token)
         .bind::<Nullable<Text>, _>(&reporter)
         .bind::<Nullable<Text>, _>(&target_actor)
-        .bind::<Nullable<SqlUuid>, _>(target_event_id_uuid)
+        .bind::<Nullable<Binary>, _>(target_event_id_token)
         .bind::<Nullable<Text>, _>(realm_id.as_deref())
         .bind::<Jsonb, _>(&report)
         .execute(&mut *conn)
@@ -88,7 +93,7 @@ impl ModerationStore for PgModerationStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, id ASC")
+        sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, pk ASC")
             .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())

@@ -1,5 +1,5 @@
 use super::{
-    AsyncConnection, BigInt, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
+    AsyncConnection, BigInt, Binary, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
     Operation, OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
     RunQueryDsl, SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid,
@@ -7,29 +7,43 @@ use super::{
     ids, pg_conn, projected_operation_realm_discoverability, projected_operation_realm_summary,
     projected_operation_realm_title, sql_query,
 };
+
+/// Space, Strand, Morph and Circle are Event-derived kinds: their protocol id is
+/// the create Event's 33-byte token, stored raw beside the local sequential
+/// `pk` that carries the physical ordering.
+fn token_bytes(kind: &str, typed: &str) -> Vec<u8> {
+    ids::event_token_part_expect_internal(typed, kind).to_vec()
+}
+
+fn token_string(kind: &str, bytes: &[u8]) -> String {
+    let token: [u8; ids::EVENT_ID_BYTES] = bytes
+        .try_into()
+        .expect("stored Event-derived id must be 33 bytes");
+    ids::format_event_token(kind, &token)
+}
 pub struct PgSpaceContainerProjectionStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct SpaceContainerProjectionRow {
-    #[diesel(sql_type = SqlUuid)]
-    container_space_id: Uuid,
+    #[diesel(sql_type = Binary)]
+    container_space_id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    scope_circle_id: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<Text>)]
     child_scope_policy: Option<String>,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    child_scope_policy_scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    child_scope_policy_scope_circle_id: Option<Vec<u8>>,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
     title: String,
     #[diesel(sql_type = Jsonb)]
     fields: Value,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    parent_ref: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    parent_ref: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<Text>)]
     rank: Option<String>,
     #[diesel(sql_type = Text)]
@@ -50,19 +64,24 @@ struct SpaceContainerProjectionRow {
 impl From<SpaceContainerProjectionRow> for SpaceContainerProjectionRecord {
     fn from(row: SpaceContainerProjectionRow) -> Self {
         Self {
-            container_space_id: ids::format_typed_uuid("space", &row.container_space_id),
+            container_space_id: token_string("space", &row.container_space_id),
             realm_id: row.realm_id,
             kind: row.kind,
             title: row.title,
             fields: serde_json::from_value(row.fields).unwrap_or_default(),
             scope_circle_id: row
                 .scope_circle_id
-                .map(|u| ids::format_typed_uuid("circle", &u)),
+                .as_deref()
+                .map(|bytes| token_string("circle", bytes)),
             child_scope_policy: row.child_scope_policy,
             child_scope_policy_scope_circle_id: row
                 .child_scope_policy_scope_circle_id
-                .map(|u| ids::format_typed_uuid("circle", &u)),
-            parent_ref: row.parent_ref.map(|u| ids::format_typed_uuid("space", &u)),
+                .as_deref()
+                .map(|bytes| token_string("circle", bytes)),
+            parent_ref: row
+                .parent_ref
+                .as_deref()
+                .map(|bytes| token_string("space", bytes)),
             rank: row.rank,
             state: row.state,
             state_changed_at: row.state_changed_at,
@@ -90,7 +109,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(container_space_id))
+        .bind::<Binary, _>(token_bytes("space", container_space_id))
         .get_result::<SpaceContainerProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -126,29 +145,29 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.container_space_id))
+        .bind::<Binary, _>(token_bytes("space", &record.container_space_id))
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<Binary>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
+                .map(|circle_id| token_bytes("circle", circle_id)),
         )
         .bind::<Nullable<Text>, _>(&record.child_scope_policy)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<Binary>, _>(
             record
                 .child_scope_policy_scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
+                .map(|circle_id| token_bytes("circle", circle_id)),
         )
         .bind::<Text, _>(&record.kind)
         .bind::<Text, _>(&record.title)
         .bind::<Jsonb, _>(&serde_json::json!(record.fields))
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<Binary>, _>(
             record
                 .parent_ref
                 .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
+                .map(|space_id| token_bytes("space", space_id)),
         )
         .bind::<Nullable<Text>, _>(&record.rank)
         .bind::<Text, _>(&record.state)
@@ -173,7 +192,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             .map_err(PersistenceError::database)?;
         sql_query(format!(
             "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces \
-             WHERE realm_id = $1 ORDER BY id"
+             WHERE realm_id = $1 ORDER BY pk"
         ))
         .bind::<Text, _>(realm_id)
         .load::<SpaceContainerProjectionRow>(&mut *conn)
@@ -191,7 +210,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(format!(
-            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces ORDER BY id"
+            "SELECT {SPACE_CONTAINER_PROJECTION_COLUMNS} FROM projection_spaces ORDER BY pk"
         ))
         .load::<SpaceContainerProjectionRow>(&mut *conn)
         .await
@@ -208,7 +227,7 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM projection_spaces WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(container_space_id))
+            .bind::<Binary, _>(token_bytes("space", container_space_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -220,12 +239,12 @@ pub struct PgStrandProjectionStore {
 }
 #[derive(QueryableByName)]
 struct StrandProjectionRow {
-    #[diesel(sql_type = SqlUuid)]
-    strand_id: Uuid,
+    #[diesel(sql_type = Binary)]
+    strand_id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    scope_circle_id: Option<Vec<u8>>,
     #[diesel(sql_type = Jsonb)]
     tracks: serde_json::Value,
     #[diesel(sql_type = Text)]
@@ -250,11 +269,12 @@ struct StrandProjectionRow {
 impl From<StrandProjectionRow> for StrandProjectionRecord {
     fn from(row: StrandProjectionRow) -> Self {
         Self {
-            strand_id: ids::format_typed_uuid("strand", &row.strand_id),
+            strand_id: token_string("strand", &row.strand_id),
             realm_id: row.realm_id,
             scope_circle_id: row
                 .scope_circle_id
-                .map(|u| ids::format_typed_uuid("circle", &u)),
+                .as_deref()
+                .map(|bytes| token_string("circle", bytes)),
             tracks: serde_json::from_value(row.tracks).unwrap_or_default(),
             title: row.title,
             summary: row.summary,
@@ -280,7 +300,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         sql_query(format!(
             "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(strand_id))
+        .bind::<Binary, _>(token_bytes("strand", strand_id))
         .get_result::<StrandProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -312,13 +332,13 @@ impl StrandProjectionStore for PgStrandProjectionStore {
                 updated_by_id = EXCLUDED.updated_by_id, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.strand_id))
+        .bind::<Binary, _>(token_bytes("strand", &record.strand_id))
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<Binary>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
+                .map(|circle_id| token_bytes("circle", circle_id)),
         )
         .bind::<Jsonb, _>(&tracks)
         .bind::<Text, _>(&record.title)
@@ -345,7 +365,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             .map_err(PersistenceError::database)?;
         sql_query(format!(
             "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands \
-             WHERE realm_id = $1 ORDER BY id"
+             WHERE realm_id = $1 ORDER BY pk"
         ))
         .bind::<Text, _>(realm_id)
         .load::<StrandProjectionRow>(&mut *conn)
@@ -359,7 +379,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(format!(
-            "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands ORDER BY id"
+            "SELECT {STRAND_PROJECTION_COLUMNS} FROM projection_strands ORDER BY pk"
         ))
         .load::<StrandProjectionRow>(&mut *conn)
         .await
@@ -372,7 +392,7 @@ impl StrandProjectionStore for PgStrandProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM projection_strands WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(strand_id))
+            .bind::<Binary, _>(token_bytes("strand", strand_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -384,12 +404,12 @@ pub struct PgMorphProjectionStore {
 }
 #[derive(QueryableByName)]
 struct MorphProjectionRow {
-    #[diesel(sql_type = SqlUuid)]
-    morph_id: Uuid,
+    #[diesel(sql_type = Binary)]
+    morph_id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    scope_circle_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Binary>)]
+    scope_circle_id: Option<Vec<u8>>,
     #[diesel(sql_type = Text)]
     morph_kind: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -420,11 +440,12 @@ struct MorphProjectionRow {
 impl From<MorphProjectionRow> for MorphProjectionRecord {
     fn from(row: MorphProjectionRow) -> Self {
         Self {
-            morph_id: ids::format_typed_uuid("morph", &row.morph_id),
+            morph_id: token_string("morph", &row.morph_id),
             realm_id: row.realm_id,
             scope_circle_id: row
                 .scope_circle_id
-                .map(|u| ids::format_typed_uuid("circle", &u)),
+                .as_deref()
+                .map(|bytes| token_string("circle", bytes)),
             morph_kind: row.morph_kind,
             title: row.title,
             fields: row.fields,
@@ -454,7 +475,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs WHERE id = $1"
         ))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(morph_id))
+        .bind::<Binary, _>(token_bytes("morph", morph_id))
         .get_result::<MorphProjectionRow>(&mut *conn)
         .await
         .optional()
@@ -487,13 +508,13 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.morph_id))
+        .bind::<Binary, _>(token_bytes("morph", &record.morph_id))
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Nullable<SqlUuid>, _>(
+        .bind::<Nullable<Binary>, _>(
             record
                 .scope_circle_id
                 .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
+                .map(|circle_id| token_bytes("circle", circle_id)),
         )
         .bind::<Text, _>(&record.morph_kind)
         .bind::<Nullable<Text>, _>(&record.title)
@@ -523,7 +544,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             .map_err(PersistenceError::database)?;
         sql_query(format!(
             "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs \
-             WHERE realm_id = $1 ORDER BY id"
+             WHERE realm_id = $1 ORDER BY pk"
         ))
         .bind::<Text, _>(realm_id)
         .load::<MorphProjectionRow>(&mut *conn)
@@ -537,7 +558,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(format!(
-            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY id"
+            "SELECT {MORPH_PROJECTION_COLUMNS} FROM projection_morphs ORDER BY pk"
         ))
         .load::<MorphProjectionRow>(&mut *conn)
         .await
@@ -550,7 +571,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM projection_morphs WHERE id = $1")
-            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(morph_id))
+            .bind::<Binary, _>(token_bytes("morph", morph_id))
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -621,46 +642,10 @@ pub async fn persist_projected_operation_to_pg(
     origin: &str,
     operation: &Operation,
     event_type: &str,
-    is_message_create: bool,
     is_membership_or_realm_lifecycle: bool,
 ) -> PersistenceResult<()> {
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
-    if is_message_create {
-        let event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                let op_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-                ids::format_typed_uuid("event", &op_uuid)
-            });
-        let sender = operation
-            .payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .unwrap_or(origin);
-        let thread_id = operation.payload.get("thread_id").and_then(Value::as_str);
-        let event_id_uuid = ids::typed_uuid_part_or_schema_violation(&event_id)?;
-        crate::realm_identity::ensure_realm_pk(&mut conn, operation.realm_id.as_str()).await?;
-        let operation_id_uuid =
-            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-        sql_query(
-            "INSERT INTO events (id, realm_id, event_type, sender_id, thread_id, operation_id, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind::<SqlUuid, _>(event_id_uuid)
-        .bind::<Text, _>(operation.realm_id.as_str())
-        .bind::<Text, _>(event_type)
-        .bind::<Nullable<Text>, _>(Some(sender))
-        .bind::<Nullable<Text>, _>(thread_id)
-        .bind::<Nullable<SqlUuid>, _>(Some(operation_id_uuid))
-        .bind::<Jsonb, _>(&operation.payload)
-        .bind::<Timestamptz, _>(operation.created_at)
-        .execute(&mut *conn)
-        .await.map_err(PersistenceError::database)?;
-    } else if is_membership_or_realm_lifecycle {
+    if is_membership_or_realm_lifecycle {
         let title = projected_operation_realm_title(operation);
         let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
         let summary = projected_operation_realm_summary(operation);

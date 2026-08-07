@@ -832,25 +832,34 @@ fn project_invite_creation(state: &AppState, operation: &Operation, invitee: &st
         .project_invite_creation(operation, invitee);
 }
 
+/// `invite` is an Event-derived kind, so its only legitimate identity is the
+/// create Event's 33-byte token retyped. A producer-supplied `invite_id` is
+/// accepted only when it equals that derivation; nothing may be minted from the
+/// producer-allocated `operation_id`, which would fabricate an identity the
+/// creating Event never bound.
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {
+    let event_id = operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())?;
+    let derived = arkret_identifiers::InviteId::from_event_id(&event_id).to_string();
     if let Some(invite_id) = operation
         .payload
         .get("invite_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        && invite_id != derived
     {
-        if ids::parse_typed_uuid(invite_id, "invite").is_some() {
-            return Some(invite_id.to_owned());
-        }
         tracing::warn!(
             operation_id = %operation.operation_id,
             invite_id = %invite_id,
-            "ak.invite.create supplied malformed invite_id; deriving stable invite id"
+            "ak.invite.create supplied an invite_id that is not the create Event token"
         );
+        return None;
     }
-    ids::typed_uuid_part(operation.operation_id.as_str())
-        .map(|uuid| ids::format_typed_uuid("invite", &uuid))
+    Some(derived)
 }
 
 fn invite_string_field(

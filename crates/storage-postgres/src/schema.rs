@@ -139,20 +139,21 @@ diesel::table! {
 }
 
 diesel::table! {
-    agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, version) {
-        sidecar_id -> Uuid,
+    agent_sidecar_contexts (sidecar_pk, normalized_context_ref_digest, version) {
+        sidecar_pk -> Int8,
         normalized_context_ref_digest -> Text,
         version -> Int8,
         normalized_context_ref -> Jsonb,
-        predecessor_event_ref -> Nullable<Uuid>,
-        attach_event_ref -> Uuid,
+        predecessor_event_id -> Nullable<Bytea>,
+        attach_event_id -> Bytea,
         created_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    agent_sidecars (id) {
-        id -> Uuid,
+    agent_sidecars (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
         controller_id -> Text,
         state -> Text,
@@ -485,19 +486,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    events (id) {
-        id -> Uuid,
-        realm_id -> Text,
-        event_type -> Text,
-        sender_id -> Nullable<Text>,
-        thread_id -> Nullable<Text>,
-        operation_id -> Nullable<Uuid>,
-        payload -> Jsonb,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     federation_frontier_exchange (realm_id, peer_service_id) {
         realm_id -> Text,
         peer_service_id -> Text,
@@ -767,11 +755,12 @@ diesel::table! {
 }
 
 diesel::table! {
-    moderation_reports (id) {
-        id -> Uuid,
+    moderation_reports (pk) {
+        pk -> Int8,
+        id -> Bytea,
         reporter_id -> Nullable<Text>,
         target_actor_id -> Nullable<Text>,
-        target_event_id -> Nullable<Uuid>,
+        target_event_id -> Nullable<Bytea>,
         realm_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
@@ -896,9 +885,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_circle_members (id) {
-        id -> Uuid,
-        circle_id -> Uuid,
+    projection_circle_members (pk) {
+        pk -> Int8,
+        circle_pk -> Int8,
         actor_id -> Text,
         state -> Text,
         joined_at -> Timestamptz,
@@ -907,8 +896,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_circles (id) {
-        id -> Uuid,
+    projection_circles (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
         profile_ref -> Nullable<Text>,
         title -> Text,
@@ -948,8 +938,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_morphs (id) {
-        id -> Uuid,
+    projection_morphs (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
         morph_kind -> Text,
         title -> Nullable<Text>,
@@ -962,23 +953,24 @@ diesel::table! {
         schema_refs -> Jsonb,
         facets -> Jsonb,
         versions -> Jsonb,
-        scope_circle_id -> Nullable<Uuid>,
+        scope_circle_id -> Nullable<Bytea>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
 }
 
 diesel::table! {
-    projection_spaces (id) {
-        id -> Uuid,
+    projection_spaces (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
-        scope_circle_id -> Nullable<Uuid>,
+        scope_circle_id -> Nullable<Bytea>,
         child_scope_policy -> Nullable<Text>,
-        child_scope_policy_scope_circle_id -> Nullable<Uuid>,
+        child_scope_policy_scope_circle_id -> Nullable<Bytea>,
         kind -> Text,
         title -> Text,
         fields -> Jsonb,
-        parent_ref -> Nullable<Uuid>,
+        parent_ref -> Nullable<Bytea>,
         rank -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
@@ -991,9 +983,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_strand_watches (id) {
-        id -> Uuid,
-        strand_id -> Uuid,
+    projection_strand_watches (pk) {
+        pk -> Int8,
+        strand_pk -> Int8,
         actor_id -> Text,
         level -> Nullable<Text>,
         level_public -> Bool,
@@ -1002,10 +994,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_strands (id) {
-        id -> Uuid,
+    projection_strands (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
-        scope_circle_id -> Nullable<Uuid>,
+        scope_circle_id -> Nullable<Bytea>,
         tracks -> Jsonb,
         title -> Text,
         summary -> Nullable<Text>,
@@ -1052,8 +1045,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    realm_invites (id) {
-        id -> Uuid,
+    realm_invites (pk) {
+        pk -> Int8,
+        id -> Bytea,
         realm_id -> Text,
         inviter_id -> Text,
         invitee_id -> Nullable<Text>,
@@ -1437,7 +1431,7 @@ diesel::joinable!(account_localparts -> accounts (account_id));
 diesel::joinable!(agent_keys -> agent_principals (agent_id));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sessions -> agent_principals (agent_id));
-diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_id));
+diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> canonical_events (event_pk));
 diesel::joinable!(event_collision_variants -> canonical_events (event_pk));
@@ -1448,7 +1442,8 @@ diesel::joinable!(spaces -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
-diesel::joinable!(projection_circle_members -> projection_circles (circle_id));
+diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
+diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
     account_datas,
     account_lifecycle,
@@ -1481,7 +1476,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     event_batch_receipt_events,
     event_collision_variants,
     event_federation_outbox,
-    events,
     federation_frontier_exchange,
     federation_operations,
     federation_outbox,

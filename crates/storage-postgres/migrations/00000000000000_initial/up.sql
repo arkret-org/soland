@@ -169,30 +169,39 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );
 
+-- `sidecar` is an Event-derived kind, so `id` is the create Event's 33-byte
+-- token. It stays a logical unique and the physical primary key is the local
+-- sequential `pk`: a content-addressed 33-byte key arrives in random order and
+-- would turn every insert into a scattered page write.
 CREATE TABLE public.agent_sidecars (
-    id uuid PRIMARY KEY,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
     controller_id text NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
+    CONSTRAINT agent_sidecars_id_key UNIQUE (id),
     CONSTRAINT agent_sidecars_realm_controller_key UNIQUE (realm_id, controller_id),
     CONSTRAINT agent_sidecars_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'tombstoned'::text])))
 );
 
+-- `sidecar_pk` is the local FK; the two Event references keep the protocol
+-- 33-byte identity because canonical Event interning belongs to the admission
+-- unit of work, and an FK here would invert that write order.
 CREATE TABLE public.agent_sidecar_contexts (
-    sidecar_id uuid NOT NULL REFERENCES public.agent_sidecars(id) ON DELETE CASCADE,
+    sidecar_pk bigint NOT NULL REFERENCES public.agent_sidecars(pk) ON DELETE CASCADE,
     normalized_context_ref_digest text NOT NULL,
     version bigint NOT NULL CHECK (version >= 1),
     normalized_context_ref jsonb NOT NULL,
-    predecessor_event_ref uuid,
-    attach_event_ref uuid NOT NULL UNIQUE,
+    predecessor_event_id bytea CHECK (octet_length(predecessor_event_id) = 33),
+    attach_event_id bytea NOT NULL UNIQUE CHECK (octet_length(attach_event_id) = 33),
     created_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (sidecar_id, normalized_context_ref_digest, version)
+    PRIMARY KEY (sidecar_pk, normalized_context_ref_digest, version)
 );
 
-CREATE INDEX agent_sidecars_controller_idx ON public.agent_sidecars USING btree (controller_id, created_at, id);
+CREATE INDEX agent_sidecars_controller_idx ON public.agent_sidecars USING btree (controller_id, created_at, pk);
 
 CREATE TABLE public.agent_sessions (
     id uuid NOT NULL,
@@ -585,17 +594,6 @@ CREATE TABLE public.device_message_lost_watermarks (
     PRIMARY KEY (recipient, device_id)
 );
 
-CREATE TABLE public.events (
-    id uuid NOT NULL,
-    realm_id text NOT NULL,
-    event_type text NOT NULL,
-    sender_id text,
-    thread_id text,
-    operation_id uuid,
-    payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
 CREATE TABLE public.federation_operations (
     id uuid NOT NULL,
     realm_id text NOT NULL,
@@ -864,14 +862,19 @@ CREATE TABLE public.moderation_actions (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- `report` is an Event-derived kind: `id` is the create Event's 33-byte token
+-- behind a local sequential `pk`. `target_event_id` is the protocol identity of
+-- the reported Event.
 CREATE TABLE public.moderation_reports (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     reporter_id text,
     target_actor_id text,
-    target_event_id uuid,
+    target_event_id bytea CHECK (octet_length(target_event_id) = 33),
     realm_id text,
     payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT moderation_reports_id_key UNIQUE (id)
 );
 
 CREATE TABLE public.organizations (
@@ -1192,8 +1195,8 @@ CREATE TABLE public.policy_documents (
 );
 
 CREATE TABLE public.projection_circle_members (
-    id uuid NOT NULL,
-    circle_id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    circle_pk bigint NOT NULL,
     actor_id text NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
     joined_at timestamp with time zone NOT NULL,
@@ -1202,7 +1205,8 @@ CREATE TABLE public.projection_circle_members (
 );
 
 CREATE TABLE public.projection_circles (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
     profile_ref text,
     title text NOT NULL,
@@ -1247,8 +1251,8 @@ CREATE TABLE public.projection_events (
 );
 
 CREATE TABLE public.projection_strand_watches (
-    id uuid NOT NULL,
-    strand_id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    strand_pk bigint NOT NULL,
     actor_id text NOT NULL,
     level text,
     level_public boolean DEFAULT false NOT NULL,
@@ -1257,9 +1261,10 @@ CREATE TABLE public.projection_strand_watches (
 );
 
 CREATE TABLE public.projection_strands (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
-    scope_circle_id uuid,
+    scope_circle_id bytea CHECK (octet_length(scope_circle_id) = 33),
     tracks jsonb DEFAULT '{"synthesis": {}}'::jsonb NOT NULL,
     title text NOT NULL,
     summary text,
@@ -1274,7 +1279,8 @@ CREATE TABLE public.projection_strands (
 );
 
 CREATE TABLE public.projection_morphs (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
     morph_kind text NOT NULL,
     title text,
@@ -1287,22 +1293,23 @@ CREATE TABLE public.projection_morphs (
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
     versions jsonb DEFAULT '[]'::jsonb NOT NULL,
-    scope_circle_id uuid,
+    scope_circle_id bytea CHECK (octet_length(scope_circle_id) = 33),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_morphs_state_check CHECK ((state = ANY (ARRAY['active'::text, 'archived'::text, 'redacted'::text])))
 );
 
 CREATE TABLE public.projection_spaces (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
-    scope_circle_id uuid,
+    scope_circle_id bytea CHECK (octet_length(scope_circle_id) = 33),
     child_scope_policy text,
-    child_scope_policy_scope_circle_id uuid,
+    child_scope_policy_scope_circle_id bytea CHECK (octet_length(child_scope_policy_scope_circle_id) = 33),
     kind text NOT NULL,
     title text NOT NULL,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
-    parent_ref uuid,
+    parent_ref bytea CHECK (octet_length(parent_ref) = 33),
     rank text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
@@ -1345,7 +1352,8 @@ CREATE TABLE public.push_devices (
 );
 
 CREATE TABLE public.realm_invites (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
     inviter_id text NOT NULL,
     invitee_id text,
@@ -1752,9 +1760,6 @@ ALTER TABLE ONLY public.device_message_idempotency
 ALTER TABLE ONLY public.device_message_ack_tokens
     ADD CONSTRAINT device_message_ack_tokens_pkey PRIMARY KEY (ack_token);
 
-ALTER TABLE ONLY public.events
-    ADD CONSTRAINT events_pkey PRIMARY KEY (id);
-
 ALTER TABLE ONLY public.federation_operations
     ADD CONSTRAINT federation_operations_pkey PRIMARY KEY (id);
 
@@ -1802,9 +1807,6 @@ ALTER TABLE ONLY public.mls_welcomes
 ALTER TABLE ONLY public.moderation_actions
     ADD CONSTRAINT moderation_actions_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.moderation_reports
-    ADD CONSTRAINT moderation_reports_pkey PRIMARY KEY (id);
-
 ALTER TABLE ONLY public.organizations
     ADD CONSTRAINT organizations_pkey PRIMARY KEY (organization_id);
 
@@ -1839,28 +1841,22 @@ ALTER TABLE ONLY public.policy_documents
     ADD CONSTRAINT policy_documents_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.projection_circle_members
-    ADD CONSTRAINT projection_circle_members_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.projection_circle_members
-    ADD CONSTRAINT projection_circle_members_circle_id_actor_id_key UNIQUE (circle_id, actor_id);
+    ADD CONSTRAINT projection_circle_members_circle_pk_actor_id_key UNIQUE (circle_pk, actor_id);
 
 ALTER TABLE ONLY public.projection_circles
-    ADD CONSTRAINT projection_circles_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT projection_circles_id_key UNIQUE (id);
 
 ALTER TABLE ONLY public.projection_strand_watches
-    ADD CONSTRAINT projection_strand_watches_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.projection_strand_watches
-    ADD CONSTRAINT projection_strand_watches_strand_id_actor_id_key UNIQUE (strand_id, actor_id);
+    ADD CONSTRAINT projection_strand_watches_strand_pk_actor_id_key UNIQUE (strand_pk, actor_id);
 
 ALTER TABLE ONLY public.projection_strands
-    ADD CONSTRAINT projection_strands_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT projection_strands_id_key UNIQUE (id);
 
 ALTER TABLE ONLY public.projection_morphs
-    ADD CONSTRAINT projection_morphs_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT projection_morphs_id_key UNIQUE (id);
 
 ALTER TABLE ONLY public.projection_spaces
-    ADD CONSTRAINT projection_spaces_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT projection_spaces_id_key UNIQUE (id);
 
 ALTER TABLE ONLY public.push_bridge_cache
     ADD CONSTRAINT push_bridge_cache_pkey PRIMARY KEY (id);
@@ -1869,7 +1865,7 @@ ALTER TABLE ONLY public.push_devices
     ADD CONSTRAINT push_devices_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.realm_invites
-    ADD CONSTRAINT realm_invites_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT realm_invites_id_key UNIQUE (id);
 
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_pkey PRIMARY KEY (id);
@@ -2024,10 +2020,6 @@ CREATE INDEX device_messages_recipient_device_position_idx ON public.device_mess
 
 CREATE INDEX device_messages_sender_idempotency_idx ON public.device_messages USING btree (sender, idempotency_key);
 
-CREATE INDEX events_space_created_idx ON public.events USING btree (realm_id, created_at, id);
-
-CREATE INDEX events_thread_created_idx ON public.events USING btree (thread_id, created_at, id) WHERE (thread_id IS NOT NULL);
-
 CREATE INDEX federation_operations_object_type_idx ON public.federation_operations USING btree (object_kind);
 
 CREATE INDEX federation_operations_space_idx ON public.federation_operations USING btree (realm_id, created_at);
@@ -2129,7 +2121,7 @@ CREATE INDEX projection_events_realm_pk_idx ON public.projection_events USING bt
 
 CREATE INDEX projection_strand_watches_actor_idx ON public.projection_strand_watches USING btree (actor_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
 
-CREATE INDEX projection_strand_watches_strand_idx ON public.projection_strand_watches USING btree (strand_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
+CREATE INDEX projection_strand_watches_strand_idx ON public.projection_strand_watches USING btree (strand_pk) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
 
 CREATE INDEX projection_strands_realm_idx ON public.projection_strands USING btree (realm_id);
 
@@ -2220,7 +2212,10 @@ ALTER TABLE ONLY public.pending_agent_drafts
     ADD CONSTRAINT pending_agent_drafts_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.projection_circle_members
-    ADD CONSTRAINT projection_circle_members_circle_id_fkey FOREIGN KEY (circle_id) REFERENCES public.projection_circles(id) ON DELETE CASCADE;
+    ADD CONSTRAINT projection_circle_members_circle_pk_fkey FOREIGN KEY (circle_pk) REFERENCES public.projection_circles(pk) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.projection_strand_watches
+    ADD CONSTRAINT projection_strand_watches_strand_pk_fkey FOREIGN KEY (strand_pk) REFERENCES public.projection_strands(pk) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_supersedes_fkey FOREIGN KEY (supersedes) REFERENCES public.recovery_policies(id);

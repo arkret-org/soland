@@ -1356,9 +1356,16 @@ pub(super) fn timestamp_position_with_tie_breaker(timestamp: DateTime<Utc>, even
         .saturating_add(timeline_event_tie_breaker(event_id))
 }
 
+/// Deterministic subtick so two Events sharing a timestamp keep one stable
+/// order on every receiver. It is drawn from the content digest carried in the
+/// Event ID, which says nothing about time — the Event ID no longer encodes
+/// any — and only has to be a stable function of the identity.
 fn timeline_event_tie_breaker(event_id: &str) -> i64 {
-    ids::typed_uuid_part(event_id)
-        .map(|uuid| ((uuid.as_u128() >> 64) & 0x03ff) as i64)
+    arkret_identifiers::EventId::new(event_id.to_owned())
+        .map(|event_id| {
+            let token = event_id.token_bytes();
+            (i64::from(token[1]) << 2 | i64::from(token[2] >> 6)) & 0x03ff
+        })
         .unwrap_or_default()
 }
 

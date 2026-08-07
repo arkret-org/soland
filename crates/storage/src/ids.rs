@@ -1,11 +1,7 @@
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use uuid::Uuid;
 
-pub const EVENT_ID_PREFIX: &str = "ak:event:";
 pub const EVENT_ID_BYTES: usize = 33;
 pub const EVENT_DIGEST_BYTES: usize = 32;
-pub const REALM_ID_PREFIX: &str = "ak:realm:";
 pub const REALM_ID_BYTES: usize = 33;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -67,22 +63,43 @@ fn decode_lower_hex_32(value: &str) -> Option<[u8; EVENT_DIGEST_BYTES]> {
     Some(output)
 }
 
+/// Recover the 33-byte token behind any Event-derived typed id.
+///
+/// `kind` is the registry kind, not the prefix: `"circle"`, not `"ak:circle:"`.
+/// Every Event-derived kind retypes the creating Event's token unchanged, so
+/// one decoder serves all of them and the suite code plus canonical Base64URL
+/// spelling are enforced in a single place.
+pub fn parse_event_token(typed: &str, kind: &str) -> Option<[u8; EVENT_ID_BYTES]> {
+    arkret_identifiers::decode_event_token(typed, &format!("ak:{kind}:"))
+}
+
+pub fn format_event_token(kind: &str, token: &[u8; EVENT_ID_BYTES]) -> String {
+    arkret_identifiers::encode_event_token(&format!("ak:{kind}:"), *token)
+}
+
+pub fn event_token_part_expect_internal(typed: &str, kind: &str) -> [u8; EVENT_ID_BYTES] {
+    parse_event_token(typed, kind).unwrap_or_else(|| {
+        panic!("malformed typed {kind} wire ID at internal persistence boundary: {typed:?}")
+    })
+}
+
+pub fn event_token_part_or_schema_violation(
+    typed: &str,
+    kind: &str,
+) -> Result<[u8; EVENT_ID_BYTES], crate::PersistenceError> {
+    parse_event_token(typed, kind).ok_or_else(|| {
+        crate::PersistenceError::SchemaViolation(format!(
+            "malformed typed {kind} wire ID: {typed:?}"
+        ))
+    })
+}
+
 pub fn parse_event_id(typed: &str) -> Option<[u8; EVENT_ID_BYTES]> {
-    let encoded = typed.strip_prefix(EVENT_ID_PREFIX)?;
-    if encoded.len() != 44 || encoded.contains('=') {
-        return None;
-    }
-    let decoded = URL_SAFE_NO_PAD.decode(encoded).ok()?;
-    let decoded: [u8; EVENT_ID_BYTES] = decoded.try_into().ok()?;
-    if !matches!(decoded[0], 0x01 | 0x02) {
-        return None;
-    }
-    // Require the one canonical unpadded Base64URL spelling.
-    (URL_SAFE_NO_PAD.encode(decoded) == encoded).then_some(decoded)
+    parse_event_token(typed, "event")
 }
 
 pub fn format_event_id(id: &[u8; EVENT_ID_BYTES]) -> String {
-    format!("{EVENT_ID_PREFIX}{}", URL_SAFE_NO_PAD.encode(id))
+    format_event_token("event", id)
 }
 
 pub fn parse_event_digest(typed: &str) -> Option<(u8, [u8; EVENT_DIGEST_BYTES])> {

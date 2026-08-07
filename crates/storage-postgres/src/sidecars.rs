@@ -1,8 +1,20 @@
 use super::{
-    AgentSidecarContextRecord, AgentSidecarRecord, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SidecarStore,
-    SqlUuid, Text, Timestamptz, Value, async_trait, ids, pg_conn, sql_query,
+    AgentSidecarContextRecord, AgentSidecarRecord, AsyncPgConnection, BigInt, Binary, Jsonb,
+    Nullable, Object, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    QueryableByName, RunQueryDsl, SidecarStore, Text, Timestamptz, Value, async_trait, ids,
+    pg_conn, sql_query,
 };
+
+fn sidecar_id_bytes(sidecar_id: &str) -> Vec<u8> {
+    ids::event_token_part_expect_internal(sidecar_id, "sidecar").to_vec()
+}
+
+fn event_token(bytes: &[u8]) -> String {
+    let token: [u8; ids::EVENT_ID_BYTES] = bytes
+        .try_into()
+        .expect("stored Event reference must be 33 bytes");
+    ids::format_event_id(&token)
+}
 
 pub struct PgSidecarStore {
     pub pool: PgPool,
@@ -10,8 +22,8 @@ pub struct PgSidecarStore {
 
 #[derive(QueryableByName)]
 struct SidecarRow {
-    #[diesel(sql_type = SqlUuid)]
-    id: uuid::Uuid,
+    #[diesel(sql_type = Binary)]
+    id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
@@ -29,7 +41,14 @@ struct SidecarRow {
 impl From<SidecarRow> for AgentSidecarRecord {
     fn from(row: SidecarRow) -> Self {
         Self {
-            sidecar_id: ids::format_typed_uuid("sidecar", &row.id),
+            sidecar_id: {
+                let token: [u8; ids::EVENT_ID_BYTES] = row
+                    .id
+                    .as_slice()
+                    .try_into()
+                    .expect("agent_sidecars.id must be 33 bytes");
+                ids::format_event_token("sidecar", &token)
+            },
             realm_id: row.realm_id,
             controller_id: row.controller_id,
             state: row.state,
@@ -42,18 +61,18 @@ impl From<SidecarRow> for AgentSidecarRecord {
 
 #[derive(QueryableByName)]
 struct SidecarContextRow {
-    #[diesel(sql_type = SqlUuid)]
-    sidecar_id: uuid::Uuid,
+    #[diesel(sql_type = Binary)]
+    sidecar_id: Vec<u8>,
     #[diesel(sql_type = Text)]
     normalized_context_ref_digest: String,
     #[diesel(sql_type = Jsonb)]
     normalized_context_ref: Value,
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    #[diesel(sql_type = BigInt)]
     version: i64,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    predecessor_event_ref: Option<uuid::Uuid>,
-    #[diesel(sql_type = SqlUuid)]
-    attach_event_ref: uuid::Uuid,
+    #[diesel(sql_type = Nullable<Binary>)]
+    predecessor_event_id: Option<Vec<u8>>,
+    #[diesel(sql_type = Binary)]
+    attach_event_id: Vec<u8>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -61,21 +80,50 @@ struct SidecarContextRow {
 impl From<SidecarContextRow> for AgentSidecarContextRecord {
     fn from(row: SidecarContextRow) -> Self {
         Self {
-            sidecar_id: ids::format_typed_uuid("sidecar", &row.sidecar_id),
+            sidecar_id: {
+                let token: [u8; ids::EVENT_ID_BYTES] = row
+                    .sidecar_id
+                    .as_slice()
+                    .try_into()
+                    .expect("agent_sidecars.id must be 33 bytes");
+                ids::format_event_token("sidecar", &token)
+            },
             normalized_context_ref_digest: row.normalized_context_ref_digest,
             normalized_context_ref: row.normalized_context_ref,
             version: row.version,
-            predecessor_event_ref: row
-                .predecessor_event_ref
-                .map(|id| ids::format_typed_uuid("event", &id)),
-            attach_event_ref: ids::format_typed_uuid("event", &row.attach_event_ref),
+            predecessor_event_ref: row.predecessor_event_id.as_deref().map(event_token),
+            attach_event_ref: event_token(&row.attach_event_id),
             created_at: row.created_at,
         }
     }
 }
 
 const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
-const CONTEXT_SELECT: &str = "SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at FROM agent_sidecar_contexts";
+// `sidecar_pk` never leaves the database, so every context read joins back to
+// `agent_sidecars` and returns the protocol 33-byte Sidecar identity instead.
+const CONTEXT_SELECT: &str = "SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_id, c.attach_event_id, c.created_at      FROM agent_sidecar_contexts c JOIN agent_sidecars s ON s.pk = c.sidecar_pk";
+
+#[derive(QueryableByName)]
+struct SidecarPkRow {
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
+}
+
+async fn sidecar_pk(
+    conn: &mut Object<AsyncPgConnection>,
+    sidecar_id: &str,
+) -> PersistenceResult<i64> {
+    sql_query("SELECT pk FROM agent_sidecars WHERE id=$1")
+        .bind::<Binary, _>(sidecar_id_bytes(sidecar_id))
+        .get_result::<SidecarPkRow>(&mut **conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| row.pk)
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("unknown Sidecar id {sidecar_id:?}"))
+        })
+}
 
 #[async_trait]
 impl SidecarStore for PgSidecarStore {
@@ -84,7 +132,7 @@ impl SidecarStore for PgSidecarStore {
         record: AgentSidecarRecord,
     ) -> PersistenceResult<AgentSidecarRecord> {
         let mut conn = pg_conn(&self.pool).await?;
-        let id = ids::typed_uuid_part_expect_internal(&record.sidecar_id);
+        let id = sidecar_id_bytes(&record.sidecar_id);
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "WITH inserted AS (\
@@ -95,7 +143,7 @@ impl SidecarStore for PgSidecarStore {
              SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at \
              FROM agent_sidecars WHERE realm_id=$2 AND controller_id=$3 LIMIT 1",
         )
-        .bind::<SqlUuid, _>(id)
+        .bind::<Binary, _>(id)
         .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.controller_id)
         .bind::<Text, _>(&record.state)
@@ -110,9 +158,9 @@ impl SidecarStore for PgSidecarStore {
 
     async fn get(&self, sidecar_id: &str) -> PersistenceResult<Option<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let id = ids::typed_uuid_part_expect_internal(sidecar_id);
+        let id = sidecar_id_bytes(sidecar_id);
         sql_query(format!("{SIDECAR_SELECT} WHERE id=$1"))
-            .bind::<SqlUuid, _>(id)
+            .bind::<Binary, _>(id)
             .get_result::<SidecarRow>(&mut *conn)
             .await
             .optional()
@@ -145,7 +193,7 @@ impl SidecarStore for PgSidecarStore {
     ) -> PersistenceResult<Vec<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "{SIDECAR_SELECT} WHERE controller_id=$1 AND ($2 IS NULL OR realm_id=$2) ORDER BY created_at,id"
+            "{SIDECAR_SELECT} WHERE controller_id=$1 AND ($2 IS NULL OR realm_id=$2) ORDER BY created_at,pk"
         ))
         .bind::<Text, _>(controller_id)
             .bind::<Nullable<Text>, _>(realm_id)
@@ -157,7 +205,7 @@ impl SidecarStore for PgSidecarStore {
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        sql_query(format!("{SIDECAR_SELECT} ORDER BY created_at,id"))
+        sql_query(format!("{SIDECAR_SELECT} ORDER BY created_at,pk"))
             .load::<SidecarRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(AgentSidecarRecord::from).collect())
@@ -169,27 +217,30 @@ impl SidecarStore for PgSidecarStore {
         record: AgentSidecarContextRecord,
     ) -> PersistenceResult<AgentSidecarContextRecord> {
         let mut conn = pg_conn(&self.pool).await?;
-        let sidecar_id = ids::typed_uuid_part_expect_internal(&record.sidecar_id);
-        let predecessor_event_ref = record
+        let sidecar_pk = sidecar_pk(&mut conn, &record.sidecar_id).await?;
+        let predecessor_event_id = record
             .predecessor_event_ref
             .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
-        let attach_event_ref = ids::typed_uuid_part_expect_internal(&record.attach_event_ref);
+            .map(|event_id| ids::event_token_part_expect_internal(event_id, "event").to_vec());
+        let attach_event_id =
+            ids::event_token_part_expect_internal(&record.attach_event_ref, "event").to_vec();
         sql_query(
             "WITH inserted AS (\
-             INSERT INTO agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (sidecar_id, normalized_context_ref_digest, version) DO NOTHING \
-             RETURNING sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
-             SELECT * FROM inserted UNION ALL \
-             SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at \
-             FROM agent_sidecar_contexts WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2 AND version=$4 LIMIT 1",
+             INSERT INTO agent_sidecar_contexts (sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (sidecar_pk, normalized_context_ref_digest, version) DO NOTHING \
+             RETURNING sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at) \
+             SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_id, c.attach_event_id, c.created_at \
+             FROM (SELECT * FROM inserted UNION ALL \
+                   SELECT sidecar_pk, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_id, attach_event_id, created_at \
+                   FROM agent_sidecar_contexts WHERE sidecar_pk=$1 AND normalized_context_ref_digest=$2 AND version=$4) c \
+             JOIN agent_sidecars s ON s.pk = c.sidecar_pk LIMIT 1",
         )
-        .bind::<SqlUuid, _>(sidecar_id)
+        .bind::<BigInt, _>(sidecar_pk)
         .bind::<Text, _>(&record.normalized_context_ref_digest)
         .bind::<Jsonb, _>(&record.normalized_context_ref)
-        .bind::<diesel::sql_types::BigInt, _>(record.version)
-        .bind::<Nullable<SqlUuid>, _>(predecessor_event_ref)
-        .bind::<SqlUuid, _>(attach_event_ref)
+        .bind::<BigInt, _>(record.version)
+        .bind::<Nullable<Binary>, _>(predecessor_event_id)
+        .bind::<Binary, _>(attach_event_id)
         .bind::<Timestamptz, _>(record.created_at)
         .get_result::<SidecarContextRow>(&mut *conn)
         .await
@@ -203,11 +254,11 @@ impl SidecarStore for PgSidecarStore {
         normalized_context_ref_digest: &str,
     ) -> PersistenceResult<Option<AgentSidecarContextRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let sidecar_id = ids::typed_uuid_part_expect_internal(sidecar_id);
+        let sidecar_id = sidecar_id_bytes(sidecar_id);
         sql_query(format!(
-            "{CONTEXT_SELECT} WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2 ORDER BY version DESC LIMIT 1"
+            "{CONTEXT_SELECT} WHERE s.id=$1 AND c.normalized_context_ref_digest=$2 ORDER BY c.version DESC LIMIT 1"
         ))
-        .bind::<SqlUuid, _>(sidecar_id)
+        .bind::<Binary, _>(sidecar_id)
         .bind::<Text, _>(normalized_context_ref_digest)
         .get_result::<SidecarContextRow>(&mut *conn)
         .await

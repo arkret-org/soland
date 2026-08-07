@@ -1,15 +1,15 @@
 use super::{
-    Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RealmInviteRecord, RealmInviteStore, RunQueryDsl, SqlUuid, Text, Timestamptz,
-    Utc, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    Binary, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    QueryableByName, RealmInviteRecord, RealmInviteStore, RunQueryDsl, Text, Timestamptz, Utc,
+    Value, async_trait, ids, pg_conn, sql_query,
 };
 pub struct PgRealmInviteStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct RealmInviteRow {
-    #[diesel(sql_type = SqlUuid)]
-    id: Uuid,
+    #[diesel(sql_type = Binary)]
+    id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
@@ -40,7 +40,14 @@ struct RealmInviteRow {
 impl From<RealmInviteRow> for RealmInviteRecord {
     fn from(row: RealmInviteRow) -> Self {
         Self {
-            invite_id: ids::format_typed_uuid("invite", &row.id),
+            invite_id: {
+                let token: [u8; ids::EVENT_ID_BYTES] = row
+                    .id
+                    .as_slice()
+                    .try_into()
+                    .expect("realm_invites.id must be 33 bytes");
+                ids::format_event_token("invite", &token)
+            },
             realm_id: row.realm_id,
             inviter: row.inviter,
             invitee: row.invitee,
@@ -63,12 +70,13 @@ impl RealmInviteStore for PgRealmInviteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let invite_id_uuid = ids::typed_uuid_part_expect_internal(invite_id);
+        let invite_id_token =
+            ids::event_token_part_or_schema_violation(invite_id, "invite")?.to_vec();
         sql_query(
             "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(invite_id_uuid)
+        .bind::<Binary, _>(invite_id_token)
         .get_result::<RealmInviteRow>(&mut *conn)
         .await
         .optional()
@@ -80,7 +88,8 @@ impl RealmInviteStore for PgRealmInviteStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let invite_id_uuid = ids::typed_uuid_part_expect_internal(&record.invite_id);
+        let invite_id_token =
+            ids::event_token_part_or_schema_violation(&record.invite_id, "invite")?.to_vec();
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO realm_invites \
@@ -100,7 +109,7 @@ impl RealmInviteStore for PgRealmInviteStore {
                 expires_at = EXCLUDED.expires_at, \
                 updated_at = EXCLUDED.updated_at",
         )
-        .bind::<SqlUuid, _>(invite_id_uuid)
+        .bind::<Binary, _>(invite_id_token)
         .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.inviter)
         .bind::<Nullable<Text>, _>(&record.invitee)
@@ -174,7 +183,7 @@ impl RealmInviteStore for PgRealmInviteStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id, realm_id, inviter_id AS inviter, invitee_id AS invitee, invite_delivery_target, introduction_evidence_digest, third_party_id, join_rule_snapshot, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
-             FROM realm_invites ORDER BY created_at ASC, id ASC",
+             FROM realm_invites ORDER BY created_at ASC, pk ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)
         .await

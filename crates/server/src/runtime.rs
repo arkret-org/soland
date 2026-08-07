@@ -158,7 +158,6 @@ impl ProjectedOperationPersistencePort for RuntimeProjectedOperationPersistence 
         origin: &str,
         operation: &arkret_event_draft::Operation,
         event_type: &str,
-        is_message_create: bool,
         is_membership_or_realm_lifecycle: bool,
     ) -> Result<(), String> {
         let Some(pool) = self.0.as_ref() else {
@@ -169,7 +168,6 @@ impl ProjectedOperationPersistencePort for RuntimeProjectedOperationPersistence 
             origin,
             operation,
             event_type,
-            is_message_create,
             is_membership_or_realm_lifecycle,
         )
         .await

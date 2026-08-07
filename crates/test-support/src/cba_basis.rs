@@ -267,10 +267,10 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     // Event-derived class 0 can be retyped byte-for-byte to EventId. Principal
     // subject-derived class 1 cannot; that branch ignores the Event id, so any
     // well-formed content-bound Event id will do for fixture construction.
-    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
+    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .expect("fixture Realm id is canonical");
-    let is_principal_control_realm = realm_id.event_id().is_none();
-    let genesis_event_id = realm_id
+    let is_principal_control_realm = realm.event_id().is_none();
+    let genesis_event_id = realm
         .event_id()
         .map(|event_id| event_id.to_string())
         .unwrap_or_else(|| crate::fixture_content_bound_id("ak:event:"));
@@ -312,6 +312,15 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         created_at,
     )
     .expect("fixture genesis Event");
+    // Class 0 Realms retype their genesis Event token byte-for-byte, so a
+    // fixture whose authored Event does not derive this Realm would hand
+    // admission a Realm nobody can re-derive. Class 1 ignores the Event id.
+    assert!(
+        is_principal_control_realm || event.event_id.to_string() == genesis_event_id,
+        "fixture genesis Event {} does not derive Realm {}",
+        event.event_id,
+        realm
+    );
     let genesis_event_id = event.event_id.to_string();
     let canonical_digest = event.event_digest().expect("fixture genesis Event digest");
     if !genesis_is_stored {
@@ -347,7 +356,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
                 "ak:operation:",
             ))
             .expect("fixture genesis Operation id"),
-            RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+            realm.clone(),
             arkret_wire::EventKind::REALM_CREATE,
             payload,
         );

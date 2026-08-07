@@ -406,7 +406,6 @@ impl ProjectedOperationPersistencePort for NoProjectedOperationPersistence {
         _origin: &str,
         _operation: &arkret_event_draft::Operation,
         _event_type: &str,
-        _is_message_create: bool,
         _is_membership_or_realm_lifecycle: bool,
     ) -> Result<(), String> {
         Ok(())
