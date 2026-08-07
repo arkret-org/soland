@@ -20,7 +20,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
              trust_level, freshness_at, etag \
-             FROM push_bridge_cache WHERE id = $1",
+             FROM push_bridge_cache WHERE bridge_describe_url = $1",
         )
         .bind::<Text, _>(bridge_describe_url)
         .get_result::<PushBridgeCacheRow>(&mut *conn)
@@ -35,19 +35,27 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheRecord,
     ) -> PersistenceResult<()> {
+        // `bridge_describe_url` is the cache key, so a record naming a
+        // different endpoint than the one being written cannot be stored under
+        // it silently.
+        if record.bridge_describe_url != bridge_describe_url {
+            return Err(PersistenceError::Internal(format!(
+                "push bridge cache key {bridge_describe_url:?} does not match record describe URL {:?}",
+                record.bridge_describe_url
+            )));
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO push_bridge_cache \
-             (id, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             (push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
               cache_state, contract_digest, fetched_at, remote_contract, \
               trust_level, freshness_at, etag, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) \
+             ON CONFLICT (bridge_describe_url) DO UPDATE SET \
                 push_gateway_url = EXCLUDED.push_gateway_url, \
                 service_base_url = EXCLUDED.service_base_url, \
-                bridge_describe_url = EXCLUDED.bridge_describe_url, \
                 fetch_state = EXCLUDED.fetch_state, \
                 cache_state = EXCLUDED.cache_state, \
                 contract_digest = EXCLUDED.contract_digest, \
@@ -58,7 +66,6 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
                 etag = EXCLUDED.etag, \
                 updated_at = NOW()",
         )
-        .bind::<Text, _>(bridge_describe_url)
         .bind::<Text, _>(&record.push_gateway_url)
         .bind::<Text, _>(&record.service_base_url)
         .bind::<Text, _>(&record.bridge_describe_url)
@@ -80,7 +87,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM push_bridge_cache WHERE id = $1")
+        sql_query("DELETE FROM push_bridge_cache WHERE bridge_describe_url = $1")
             .bind::<Text, _>(bridge_describe_url)
             .execute(&mut *conn)
             .await
@@ -106,7 +113,7 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
             "SELECT push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
              cache_state, contract_digest, fetched_at, remote_contract, \
              trust_level, freshness_at, etag \
-             FROM push_bridge_cache ORDER BY id",
+             FROM push_bridge_cache ORDER BY bridge_describe_url",
         )
         .load::<PushBridgeCacheRow>(&mut *conn)
         .await
@@ -144,12 +151,12 @@ impl PushBridgeCacheStore for PgPushBridgeCacheStore {
         // describe-URL columns until the next live fetch fills in the contract.
         sql_query(
             "INSERT INTO push_bridge_cache \
-             (id, push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
+             (push_gateway_url, service_base_url, bridge_describe_url, fetch_state, \
               cache_state, contract_digest, fetched_at, remote_contract, \
               trust_level, freshness_at, etag, updated_at) \
-             VALUES ($1, $1, $1, $1, 'snapshot_recorded', 'snapshot_recorded', \
+             VALUES ($1, $1, $1, 'snapshot_recorded', 'snapshot_recorded', \
                      $2, NOW(), '{}'::jsonb, $4, NOW(), $3, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
+             ON CONFLICT (bridge_describe_url) DO UPDATE SET \
                 contract_digest = EXCLUDED.contract_digest, \
                 etag = EXCLUDED.etag, \
                 trust_level = EXCLUDED.trust_level, \

@@ -299,12 +299,18 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             for projection in request.projections {
-                let event_id = ids::parse_event_id(&projection.event_id).ok_or_else(|| {
-                    PersistenceError::SchemaViolation(format!(
-                        "malformed canonical Event id: {:?}",
-                        projection.event_id
-                    ))
-                })?;
+                // The projection no longer carries its own copy of the Event
+                // identity -- it is reached through `event_pk`. Admitting a
+                // projection that names a different Event than the one this
+                // unit committed would silently attach it to the wrong row, so
+                // the mismatch is rejected here instead of being dropped.
+                if projection.event_id != request.event.event_id {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: projection Event id does not match canonical Event"
+                            .to_owned(),
+                    )
+                    .into());
+                }
                 let operation_id = projection
                     .operation_id
                     .as_deref()
@@ -321,11 +327,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
                 projections_inserted += sql_query(
                     "INSERT INTO projection_events \
-                     (id, event_pk, realm_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
-                     ON CONFLICT (id) DO NOTHING",
+                     (event_pk, realm_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+                     ON CONFLICT (event_pk) DO NOTHING",
                 )
-                .bind::<Binary, _>(event_id.to_vec())
                 .bind::<BigInt, _>(event_pk)
                 .bind::<BigInt, _>(projection_realm_pk)
                 .bind::<Text, _>(&projection.realm_id)

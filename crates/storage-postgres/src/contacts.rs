@@ -200,7 +200,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT id AS subject_id, policy_payload FROM invite_receive_policies WHERE id = $1",
+            "SELECT subject_id, policy_payload FROM invite_receive_policies WHERE subject_id = $1",
         )
         .bind::<Text, _>(subject_id)
         .get_result::<InviteReceivePolicyRow>(&mut *conn)
@@ -229,9 +229,9 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO invite_receive_policies \
-             (id, policy_payload, denied_subjects, updated_at) \
+             (subject_id, policy_payload, denied_subjects, updated_at) \
              VALUES ($1, $2, $3, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
+             ON CONFLICT (subject_id) DO UPDATE SET \
                 policy_payload = EXCLUDED.policy_payload, \
                 denied_subjects = EXCLUDED.denied_subjects, \
                 updated_at = NOW()",
@@ -256,11 +256,10 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows =
-            sql_query("SELECT id AS subject_id, policy_payload FROM invite_receive_policies")
-                .get_results::<InviteReceivePolicyRow>(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
+        let rows = sql_query("SELECT subject_id, policy_payload FROM invite_receive_policies")
+            .get_results::<InviteReceivePolicyRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
         rows.into_iter()
             .map(InviteReceivePolicyRow::into_pair)
             .collect()

@@ -266,10 +266,9 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     .pk;
     sql_query(
         "INSERT INTO projection_events \
-         (id, event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
-         VALUES ($1, $2, $3, $4, $5, 'test', '{}'::jsonb, $6, $6)",
+         (event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
+         VALUES ($1, $2, $3, $4, 'test', '{}'::jsonb, $5, $5)",
     )
-    .bind::<Binary, _>(id.to_vec())
     .bind::<BigInt, _>(event_pk)
     .bind::<BigInt, _>(realm_pk)
     .bind::<Text, _>(&realm_id)

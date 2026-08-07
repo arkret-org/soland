@@ -74,9 +74,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    agent_participation_ceiling (id) {
-        id -> Text,
+    agent_participation_ceiling (scope_key) {
         scope_kind -> Text,
+        scope_key -> Text,
         realm_id -> Text,
         reply_message -> Bool,
         reaction_add -> Bool,
@@ -328,9 +328,6 @@ diesel::table! {
     event_collision_variants (pk) {
         pk -> Int8,
         event_pk -> Int8,
-        event_id -> Bytea,
-        digest_suite -> Int2,
-        digest -> Bytea,
         actor_id -> Text,
         actor_seq -> Int8,
         realm_id -> Nullable<Text>,
@@ -632,8 +629,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    invite_receive_policies (id) {
-        id -> Text,
+    invite_receive_policies (subject_id) {
+        subject_id -> Text,
         policy_payload -> Jsonb,
         denied_subjects -> Array<Nullable<Text>>,
         updated_at -> Timestamptz,
@@ -768,8 +765,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    multisig_pending (id) {
-        id -> Text,
+    multisig_pending (seal_id) {
+        seal_id -> Text,
         realm_id -> Text,
         threshold_k -> Int4,
         threshold_n -> Int4,
@@ -923,7 +920,6 @@ diesel::table! {
 diesel::table! {
     projection_events (pk) {
         pk -> Int8,
-        id -> Bytea,
         event_pk -> Int8,
         realm_pk -> Int8,
         realm_id -> Text,
@@ -1013,8 +1009,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    push_bridge_cache (id) {
-        id -> Text,
+    push_bridge_cache (bridge_describe_url) {
         push_gateway_url -> Text,
         service_base_url -> Text,
         bridge_describe_url -> Text,

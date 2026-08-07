@@ -258,17 +258,11 @@ pub(crate) async fn insert_canonical_event(
         ] {
             sql_query(
                 "INSERT INTO event_collision_variants \
-                 (event_pk, event_id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
-                 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 \
-                 WHERE NOT EXISTS ( \
-                   SELECT 1 FROM event_collision_variants \
-                   WHERE event_pk = $1 AND canonical_bytes = $10 \
-                 )",
+                 (event_pk, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 ON CONFLICT (event_pk, canonical_bytes) DO NOTHING",
             )
             .bind::<BigInt, _>(stored.pk)
-            .bind::<Binary, _>(identity.id.to_vec())
-            .bind::<SmallInt, _>(i16::from(identity.digest_suite))
-            .bind::<Binary, _>(identity.digest.to_vec())
             .bind::<Text, _>(actor_id)
             .bind::<BigInt, _>(actor_seq)
             .bind::<Nullable<Text>, _>(realm_id)
@@ -699,8 +693,12 @@ impl EventStore for PgEventStore {
             PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
         })?;
         sql_query(
-            "SELECT event_id AS id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
-             FROM event_collision_variants WHERE event_id = $1 ORDER BY pk",
+            "SELECT parent.id, parent.digest_suite, parent.digest, variant.actor_id, variant.actor_seq, \
+                    variant.realm_id, variant.kind, variant.schema_id, variant.canonical_bytes, \
+                    variant.envelope, variant.received_at \
+             FROM event_collision_variants variant \
+             JOIN canonical_events parent ON parent.pk = variant.event_pk \
+             WHERE parent.id = $1 ORDER BY variant.pk",
         )
         .bind::<Binary, _>(event_id.to_vec())
         .load::<CanonicalEventRow>(&mut *conn)

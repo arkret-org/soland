@@ -195,10 +195,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT scope_kind, id AS scope_key, realm_id, reply_message, reaction_add, \
+            "SELECT scope_kind, scope_key, realm_id, reply_message, reaction_add, \
              reaction_remove, accept_third_party_mention, act_on_behalf \
-             FROM agent_participation_ceiling WHERE id = ANY($1) \
-             ORDER BY id",
+             FROM agent_participation_ceiling WHERE scope_key = ANY($1) \
+             ORDER BY scope_key",
         )
         .bind::<Array<Text>, _>(scope_keys.to_vec())
         .load::<AgentParticipationCeilingRow>(&mut *conn)
@@ -229,10 +229,10 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &realm_id).await?;
         sql_query(
             "INSERT INTO agent_participation_ceiling \
-             (scope_kind, id, realm_id, reply_message, reaction_add, reaction_remove, \
+             (scope_kind, scope_key, realm_id, reply_message, reaction_add, reaction_remove, \
               accept_third_party_mention, act_on_behalf, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET \
+             ON CONFLICT (scope_key) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
              reply_message = EXCLUDED.reply_message, reaction_add = EXCLUDED.reaction_add, \
              reaction_remove = EXCLUDED.reaction_remove, \

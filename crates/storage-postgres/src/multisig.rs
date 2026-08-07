@@ -65,9 +65,9 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO multisig_pending \
-             (id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
+             (seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, partials, created_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (id) DO UPDATE SET \
+             ON CONFLICT (seal_id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 threshold_k = EXCLUDED.threshold_k, \
                 threshold_n = EXCLUDED.threshold_n, \
@@ -94,9 +94,9 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
-             FROM multisig_pending WHERE id = $1",
+             FROM multisig_pending WHERE seal_id = $1",
         )
         .bind::<Text, _>(seal_id)
         .get_result::<MultisigPendingRow>(&mut *conn)
@@ -118,7 +118,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET partials = jsonb_set(partials, ARRAY[$2]::text[], $3, true) \
-             WHERE id = $1",
+             WHERE seal_id = $1",
         )
         .bind::<Text, _>(seal_id)
         .bind::<Text, _>(signer_did)
@@ -142,7 +142,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending WHERE realm_id = $1 \
              ORDER BY created_at ASC",
@@ -158,7 +158,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM multisig_pending WHERE id = $1")
+        sql_query("DELETE FROM multisig_pending WHERE seal_id = $1")
             .bind::<Text, _>(seal_id)
             .execute(&mut *conn)
             .await
@@ -171,7 +171,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
+            "SELECT seal_id, realm_id, threshold_k, threshold_n, members, canonical_b64, \
              partials, created_at, expires_at, claimed_by_node_id, claimed_until, claim_seq \
              FROM multisig_pending ORDER BY created_at ASC",
         )
@@ -200,7 +200,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             "UPDATE multisig_pending \
              SET claimed_by_node_id = $2, claimed_until = $4, \
                  claim_seq = claim_seq + 1 \
-             WHERE id = $1 \
+             WHERE seal_id = $1 \
                AND (claimed_by_node_id IS NULL \
                     OR claimed_until IS NULL \
                     OR claimed_until <= $3) \
@@ -222,7 +222,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             // can log it for diagnostics. Lookup is best-effort — a missing
             // row reports `0`.
             let cur: Option<ClaimSeqRow> =
-                sql_query("SELECT claim_seq FROM multisig_pending WHERE id = $1")
+                sql_query("SELECT claim_seq FROM multisig_pending WHERE seal_id = $1")
                     .bind::<Text, _>(seal_id)
                     .get_result::<ClaimSeqRow>(&mut *conn)
                     .await
@@ -239,7 +239,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_by_node_id = NULL, claimed_until = NULL \
-             WHERE id = $1 AND claimed_by_node_id = $2",
+             WHERE seal_id = $1 AND claimed_by_node_id = $2",
         )
         .bind::<Text, _>(seal_id)
         .bind::<Text, _>(node_id)
@@ -260,7 +260,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "DELETE FROM multisig_pending \
-             WHERE id = $1 \
+             WHERE seal_id = $1 \
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
@@ -286,7 +286,7 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         sql_query(
             "UPDATE multisig_pending \
              SET claimed_until = $4 \
-             WHERE id = $1 \
+             WHERE seal_id = $1 \
                AND claimed_by_node_id = $2 \
                AND claim_seq = $3",
         )
