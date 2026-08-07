@@ -259,24 +259,14 @@ pub fn realm_genesis_payload(
 /// without one answers `quorum_unreachable` on every Control Move. A fixture
 /// that stands a Realm up out of band still owes it its genesis Event.
 pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject: &str) {
-    // The genesis Event id has to be the one this Realm id derives from, or a
-    // receiver that re-derives `realm_id` from the Event lands on a different
-    // Realm than the fixture stood up — which is exactly what admission checks.
-    //
-    // Two branches, matching `arkret_wire::derive_genesis_realm_id`. A
-    // collaboration Realm id shares the create Event's UUID payload, so retype
-    // it back. A Principal Control Realm id is subject-derived from its
-    // principal DID and carries the UUIDv7 layout — not a legal Event id at all
-    // — but that branch ignores the Event id, so any well-formed one will do.
-    let realm_uuid = realm_id
-        .strip_prefix("ak:realm:")
-        .expect("fixture Realm id is typed");
-    let is_principal_control_realm = realm_uuid.as_bytes().get(14) != Some(&b'8');
-    let genesis_event_id = if is_principal_control_realm {
-        crate::fixture_content_bound_id("ak:event:")
-    } else {
-        format!("ak:event:{realm_uuid}")
-    };
+    // Principal Control Realm ids retain the registered subject-derived UUIDv7
+    // form. Collaboration Realm ids carry their genesis Event's complete
+    // suite-tagged digest token; inspecting a UUID nibble is therefore no
+    // longer a valid branch discriminator.
+    let is_principal_control_realm = RealmId::new(realm_id.to_owned())
+        .expect("fixture Realm id is typed")
+        .subject_uuid()
+        .is_some();
     // A Realm has exactly one canonical create and the store enforces that, so
     // do not write another when this Realm already has one — whether from a
     // previous call here or from a fixture that authored its own genesis
@@ -305,8 +295,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         payload["object"]["fields"] = serde_json::json!({"purpose": "principal_control"});
     }
     let payload = payload;
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(genesis_event_id.clone()).expect("fixture genesis Event id"),
+    let event = arkret_wire::Event::new_at(
         arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::RealmGenesis,
         Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
@@ -316,8 +305,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         created_at,
     )
     .expect("fixture genesis Event");
-    event.event_id =
-        arkret_wire::EventId::new(genesis_event_id.clone()).expect("fixture genesis Event id");
+    let genesis_event_id = event.event_id.to_string();
     let canonical_digest = event.event_digest().expect("fixture genesis Event digest");
     if !genesis_is_stored {
         state

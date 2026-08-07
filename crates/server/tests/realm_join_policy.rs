@@ -50,8 +50,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
     // (`event-and-patch.md` section 2.4.2). `realm_join_rule_payload` is
     // `{"value": <enum>}` and the registered projection sets the whole payload.
     let payload = json!({"value": join_rule});
-    let event = arkret_wire::Event::new_with_id_at(
-        arkret_identifiers::EventId::new(format!("ak:event:{}", uuid::Uuid::now_v7())).unwrap(),
+    let event = arkret_wire::Event::new_at(
         arkret_wire::EventKind::REALM_JOIN_RULE,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),

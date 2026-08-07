@@ -947,7 +947,7 @@ pub(crate) fn signed_canonical_event(
     reason = "the fixture mirrors the complete canonical event envelope"
 )]
 pub(crate) fn caller_signed_event<'a>(
-    event_id: &'a str,
+    _event_id: &'a str,
     kind: &'a str,
     actor_id: &'a str,
     device_id: &'a str,
@@ -959,7 +959,6 @@ pub(crate) fn caller_signed_event<'a>(
     soland_test_support::signed_event::CallerSignedEvent::new(
         kind, actor_id, device_id, realm_id, payload,
     )
-    .with_event_id(event_id)
     .with_actor_seq(actor_seq)
     .with_prev_refs(prev_refs)
     .with_fixture_basis(HTTP_API_FIXTURE_BASIS)

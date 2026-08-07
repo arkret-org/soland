@@ -8,10 +8,12 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{AppletId, Did, EventId, GrantId, Hlc, RealmId};
-use arkret_models_collaboration::events_payloads::CapabilityGrantPayload;
+use arkret_identifiers::{AppletId, Did, EventId, Hlc, RealmId};
+use arkret_models_collaboration::events_payloads::{
+    CapabilityGrantCreateBody, CapabilityGrantPayload,
+};
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilitySubject, GrantConstraint,
+    CapabilitySubject, GrantConstraint,
 };
 use arkret_models_integration::applet::{
     AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletEndpointPolicy,
@@ -1685,9 +1687,7 @@ async fn signed_install_events(
     let mut previous_event_id = registration_event.event_id.clone();
     let mut capability_grant_events = Vec::with_capacity(approved_actions.len());
     for (offset, action) in approved_actions.iter().enumerate() {
-        let grant_id = GrantId::new(arkret_identifiers::new_prefixed_uuid7("ak:grant:")).unwrap();
-        let grant = CapabilityGrant {
-            id: grant_id.clone(),
+        let grant = CapabilityGrantCreateBody {
             schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
             realm_id: Some(realm_id.clone()),
             issuer: actor_id.clone(),
@@ -1718,12 +1718,8 @@ async fn signed_install_events(
             issued_at: now,
             not_before: None,
             expires_at: None,
-            updated_by: None,
-            updated_at: None,
-            revoked_by: None,
-            revoked_at: None,
         };
-        let payload = CapabilityGrantPayload { grant, grant_id };
+        let payload = CapabilityGrantPayload { grant };
         let counter = offset + 2;
         let mut event = Event::new(
             arkret_wire::EventKind::CAPABILITY_GRANT,

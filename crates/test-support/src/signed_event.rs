@@ -42,7 +42,6 @@ pub enum CallerSignedBasis<'a> {
 /// A caller-signed Event of any registered kind.
 #[derive(Clone, Debug)]
 pub struct CallerSignedEvent<'a> {
-    event_id: Option<&'a str>,
     kind: &'a str,
     actor_id: &'a str,
     device_id: &'a str,
@@ -68,7 +67,6 @@ impl<'a> CallerSignedEvent<'a> {
         payload: Value,
     ) -> Self {
         Self {
-            event_id: None,
             kind,
             actor_id,
             device_id,
@@ -104,13 +102,6 @@ impl<'a> CallerSignedEvent<'a> {
         event.genesis_scope = true;
         event.basis = CallerSignedBasis::AnchorUnit;
         event
-    }
-
-    /// Pin the Event id instead of minting a fresh content-bound one.
-    #[must_use]
-    pub fn with_event_id(mut self, event_id: &'a str) -> Self {
-        self.event_id = Some(event_id);
-        self
     }
 
     #[must_use]
@@ -164,12 +155,7 @@ impl<'a> CallerSignedEvent<'a> {
         let now = chrono::Utc::now();
         let actor = Did::new(self.actor_id.to_owned()).expect("fixture actor DID");
         let verification_method = self.verification_method();
-        let event_id = self.event_id.map_or_else(
-            || crate::fixture_content_bound_id("ak:event:"),
-            str::to_owned,
-        );
-        let mut event = Event::new_with_id_at(
-            EventId::new(event_id).expect("fixture Event id"),
+        let mut event = Event::new_at(
             self.kind,
             if self.genesis_scope {
                 ScopeRef::RealmGenesis

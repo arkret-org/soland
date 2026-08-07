@@ -318,8 +318,7 @@ fn signed_event_with_prev_refs(
         .expect("fixture did:key actor");
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{key}"))
         .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
+    let mut event = arkret_wire::Event::new_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())

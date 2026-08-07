@@ -807,8 +807,10 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm = bootstrap_realm(&state, &token, "events resolve derived seals").await;
-    let create_event_id =
-        arkret_identifiers::EventId::from_uuid(RealmId::new(realm.clone()).unwrap().uuid());
+    let create_event_id = RealmId::new(realm.clone())
+        .unwrap()
+        .event_id()
+        .expect("bootstrapped collaboration Realm retypes its genesis Event id");
 
     let resolved: Value = TestClient::post("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)

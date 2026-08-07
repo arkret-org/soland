@@ -180,7 +180,7 @@ async fn realm_seal_frontier(
     reason = "the fixture mirrors the complete canonical event envelope"
 )]
 fn signed_event(
-    event_id: &str,
+    _event_id: &str,
     actor_seq: u64,
     actor: &str,
     device_id: &str,
@@ -193,8 +193,7 @@ fn signed_event(
     let actor = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{}#{device_id}", actor.as_str()))
         .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
+    let mut event = arkret_wire::Event::new_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),

@@ -128,10 +128,6 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             ),
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
-            event_id: arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id(
-                "ak:event:",
-            ))
-            .unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
