@@ -65,16 +65,133 @@ pub struct ContactRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
+/// The coordinates one `ak.direct_conversation.bound` endorsement settles.
+///
+/// `contact-and-direct-conversation.md` §8.3: the binding is written once and
+/// never retired, so this carries no lifecycle state, no `supersedes` ref and
+/// no permanent `mls_group_id` — participant authority always reads the current
+/// active MLS generation instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectConversationBindingRecord {
     pub participants_unordered: Vec<String>,
     pub realm_id: String,
     pub main_strand_id: String,
-    pub binding_event_ref: String,
-    pub state: String,
-    pub authoring_context: Option<Value>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    /// One Event that endorsed these coordinates. The or_set can hold an
+    /// endorsement per participant; this is the lowest endorsing `actor_id`'s,
+    /// so every replica names the same one. It is evidence, not a head — the
+    /// binding has no successor to point at.
+    pub binding_event_ref: String,
+}
+
+/// One or_set element of `ak.component.direct_conversation.binding.v1`.
+///
+/// The element key is `(binding_digest, envelope.actor_id)` (§8.3): the same
+/// participant re-signing the same coordinates counts once, and both
+/// participants signing the same coordinates are compatible adds.
+#[derive(Clone, Debug)]
+pub struct DirectConversationEndorsement {
+    pub actor_id: String,
+    pub binding_event_ref: String,
+}
+
+/// The or_set cell resolved for one `pair_key`.
+///
+/// More than one distinct endorsement digest is
+/// `direct_conversation_pair_materialization_conflict` (§5.7 / §8.3): the pair
+/// freezes and no side is picked as canonical.
+#[derive(Clone, Debug, Default)]
+pub struct DirectConversationBindings {
+    entries: BTreeMap<
+        String,
+        (
+            DirectConversationCoordinatesRecord,
+            BTreeMap<String, String>,
+        ),
+    >,
+}
+
+/// The coordinates half of a binding, before an endorsing Event is named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectConversationCoordinatesRecord {
+    pub participants_unordered: Vec<String>,
+    pub realm_id: String,
+    pub main_strand_id: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl DirectConversationBindings {
+    /// or_set add. `digest` identifies the endorsed coordinates; re-adding the
+    /// same `(digest, actor_id)` is idempotent, never a conflict.
+    pub fn endorse(
+        &mut self,
+        digest: String,
+        coordinates: DirectConversationCoordinatesRecord,
+        endorsement: DirectConversationEndorsement,
+    ) {
+        let entry = self
+            .entries
+            .entry(digest)
+            .or_insert_with(|| (coordinates, BTreeMap::new()));
+        entry
+            .1
+            .insert(endorsement.actor_id, endorsement.binding_event_ref);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// `true` once two distinct digests coexist for the same pair.
+    pub fn is_conflicted(&self) -> bool {
+        self.entries.len() > 1
+    }
+
+    /// The settled coordinates, or `None` while the pair carries no
+    /// endorsement or carries conflicting ones.
+    pub fn settled(&self) -> Option<DirectConversationBindingRecord> {
+        (self.entries.len() == 1)
+            .then(|| self.entries.values().next())
+            .flatten()
+            .and_then(Self::resolve)
+    }
+
+    /// Coordinates to report alongside a conflict diagnosis. Any endorsed set
+    /// works: the resolver only needs a pair of coordinates to name, and §5.7
+    /// forbids treating either one as the winner.
+    pub fn any_endorsed(&self) -> Option<DirectConversationBindingRecord> {
+        self.entries.values().next().and_then(Self::resolve)
+    }
+
+    fn resolve(
+        entry: &(
+            DirectConversationCoordinatesRecord,
+            BTreeMap<String, String>,
+        ),
+    ) -> Option<DirectConversationBindingRecord> {
+        let (coordinates, endorsers) = entry;
+        // `BTreeMap` order makes the named endorsement the lowest actor id's,
+        // so two replicas holding the same or_set report the same Event.
+        let binding_event_ref = endorsers.values().next()?.clone();
+        Some(DirectConversationBindingRecord {
+            participants_unordered: coordinates.participants_unordered.clone(),
+            realm_id: coordinates.realm_id.clone(),
+            main_strand_id: coordinates.main_strand_id.clone(),
+            created_at: coordinates.created_at,
+            binding_event_ref,
+        })
+    }
+
+    /// Every distinct endorsement digest carried for this pair.
+    pub fn digests(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
+    pub fn endorsers(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .values()
+            .flat_map(|(_, endorsers)| endorsers.keys().map(String::as_str))
+    }
 }
 
 use crate::ServiceResult;
@@ -229,27 +346,10 @@ pub trait InviteReceivePolicyPort: Send + Sync {
     >;
 }
 
-#[async_trait]
-pub trait DirectConversationBindingPort: Send + Sync {
-    async fn save_binding(
-        &self,
-        pair_key: &str,
-        binding: DirectConversationBindingRecord,
-    ) -> ServiceResult<()>;
-    async fn reserve_binding(
-        &self,
-        pair_key: &str,
-        binding: DirectConversationBindingRecord,
-    ) -> ServiceResult<bool>;
-    async fn delete_binding(&self, pair_key: &str) -> ServiceResult<()>;
-    async fn bindings(&self) -> ServiceResult<Vec<(String, DirectConversationBindingRecord)>>;
-}
-
 #[derive(Clone)]
 pub struct ContactService {
     contacts: Arc<dyn ContactPort>,
     invite_policies: Arc<dyn InviteReceivePolicyPort>,
-    direct_bindings: Arc<dyn DirectConversationBindingPort>,
     runtime_invite_policies: Arc<
         Mutex<
             BTreeMap<
@@ -258,31 +358,26 @@ pub struct ContactService {
             >,
         >,
     >,
-    runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
+    /// Resolved `ak.component.direct_conversation.binding.v1` or_set per
+    /// `pair_key`. There is no durable mirror: the cell is control-plane and
+    /// sealed, so hydration rebuilds it by replaying the accepted
+    /// `ak.direct_conversation.bound` Events, which are the authority.
+    runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindings>>>,
 }
 
 impl ContactService {
     pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
         self.replace_runtime_invite_policies(self.invite_policies.policies().await?);
-        self.replace_runtime_direct_bindings(
-            self.direct_bindings
-                .bindings()
-                .await?
-                .into_iter()
-                .filter(|(_, record)| record.state == "authoring_required"),
-        );
         Ok(())
     }
 
     pub fn new(
         contacts: Arc<dyn ContactPort>,
         invite_policies: Arc<dyn InviteReceivePolicyPort>,
-        direct_bindings: Arc<dyn DirectConversationBindingPort>,
     ) -> Self {
         Self {
             contacts,
             invite_policies,
-            direct_bindings,
             runtime_invite_policies: Arc::new(Mutex::new(BTreeMap::new())),
             runtime_direct_bindings: Arc::new(Mutex::new(BTreeMap::new())),
         }
@@ -335,179 +430,85 @@ impl ContactService {
         self.runtime_invite_policies.lock().get(subject_id).cloned()
     }
 
-    pub async fn save_direct_binding(
+    /// or_set add for one accepted `ak.direct_conversation.bound` Event.
+    ///
+    /// `digest` is the endorsement identity — the canonical bytes of the
+    /// payload with `created_at` excluded, so the same coordinates endorsed by
+    /// both participants (or re-signed by one) collapse to one element per
+    /// actor. Adds never conflict; a second, different digest is what
+    /// `is_conflicted` then reports (§8.3).
+    pub fn endorse_direct_binding(
         &self,
         pair_key: &str,
-        binding: DirectConversationBindingRecord,
-    ) -> ServiceResult<()> {
-        self.direct_bindings
-            .save_binding(pair_key, binding.clone())
-            .await?;
-        self.runtime_direct_bindings
-            .lock()
-            .insert(pair_key.to_owned(), binding);
-        Ok(())
-    }
-
-    pub async fn reserve_direct_binding(
-        &self,
-        pair_key: &str,
-        binding: DirectConversationBindingRecord,
-    ) -> ServiceResult<bool> {
-        if !self
-            .direct_bindings
-            .reserve_binding(pair_key, binding.clone())
-            .await?
-        {
-            return Ok(false);
-        }
-        self.runtime_direct_bindings
-            .lock()
-            .insert(pair_key.to_owned(), binding);
-        Ok(true)
-    }
-
-    pub async fn delete_direct_binding(&self, pair_key: &str) -> ServiceResult<()> {
-        self.direct_bindings.delete_binding(pair_key).await?;
-        self.runtime_direct_bindings.lock().remove(pair_key);
-        Ok(())
-    }
-
-    pub fn replace_runtime_direct_bindings(
-        &self,
-        bindings: impl IntoIterator<Item = (String, DirectConversationBindingRecord)>,
+        digest: String,
+        coordinates: DirectConversationCoordinatesRecord,
+        endorsement: DirectConversationEndorsement,
     ) {
-        *self.runtime_direct_bindings.lock() = bindings.into_iter().collect();
+        self.runtime_direct_bindings
+            .lock()
+            .entry(pair_key.to_owned())
+            .or_default()
+            .endorse(digest, coordinates, endorsement);
     }
 
     pub fn runtime_direct_binding_count(&self) -> usize {
         self.runtime_direct_bindings.lock().len()
     }
 
-    pub fn direct_binding(&self, pair_key: &str) -> Option<DirectConversationBindingRecord> {
+    /// The full resolved or_set for one pair.
+    pub fn direct_bindings_for_pair(&self, pair_key: &str) -> Option<DirectConversationBindings> {
         self.runtime_direct_bindings.lock().get(pair_key).cloned()
     }
 
-    pub fn active_direct_binding_for_realm(
+    /// The settled coordinates for one pair: `Some` only when every
+    /// endorsement agrees on the same digest.
+    pub fn direct_binding(&self, pair_key: &str) -> Option<DirectConversationBindingRecord> {
+        self.runtime_direct_bindings
+            .lock()
+            .get(pair_key)
+            .and_then(DirectConversationBindings::settled)
+    }
+
+    /// `true` when this pair carries two distinct endorsement digests
+    /// (`direct_conversation_pair_materialization_conflict`).
+    pub fn direct_binding_is_conflicted(&self, pair_key: &str) -> bool {
+        self.runtime_direct_bindings
+            .lock()
+            .get(pair_key)
+            .is_some_and(DirectConversationBindings::is_conflicted)
+    }
+
+    pub fn settled_direct_binding_for_realm(
         &self,
         realm_id: &str,
     ) -> Option<DirectConversationBindingRecord> {
         self.runtime_direct_bindings
             .lock()
             .values()
-            .find(|binding| binding.state == "active" && binding.realm_id == realm_id)
-            .cloned()
+            .find_map(|bindings| {
+                bindings
+                    .settled()
+                    .filter(|record| record.realm_id == realm_id)
+            })
     }
 
-    pub fn pending_direct_binding_has_participant(
-        &self,
-        realm_id: &str,
-        participant: &str,
-    ) -> bool {
-        self.runtime_direct_bindings.lock().values().any(|binding| {
-            binding.state == "pending"
-                && binding.realm_id == realm_id
-                && binding.participants_unordered.len() == 2
-                && binding
-                    .participants_unordered
-                    .iter()
-                    .any(|candidate| candidate == participant)
-        })
-    }
-
+    /// Test/bootstrap seam: install a single-endorsement or_set directly.
     pub fn install_direct_binding(
         &self,
         pair_key: impl Into<String>,
-        binding: DirectConversationBindingRecord,
+        digest: impl Into<String>,
+        coordinates: DirectConversationCoordinatesRecord,
+        endorsement: DirectConversationEndorsement,
     ) {
         self.runtime_direct_bindings
             .lock()
-            .insert(pair_key.into(), binding);
+            .entry(pair_key.into())
+            .or_default()
+            .endorse(digest.into(), coordinates, endorsement);
     }
 
-    pub fn replace_direct_binding_if_current(
-        &self,
-        pair_key: &str,
-        expected_event_ref: Option<&str>,
-        binding: DirectConversationBindingRecord,
-    ) -> Result<(), Option<Box<DirectConversationBindingRecord>>> {
-        let mut bindings = self.runtime_direct_bindings.lock();
-        let current = bindings.get(pair_key);
-        let matches = match (current, expected_event_ref) {
-            (None, None) => true,
-            (Some(current), Some(expected)) => current.binding_event_ref == expected,
-            _ => false,
-        };
-        if !matches {
-            return Err(current.cloned().map(Box::new));
-        }
-        bindings.insert(pair_key.to_owned(), binding);
-        Ok(())
-    }
-
-    pub fn direct_binding_is_current(&self, pair_key: &str, event_ref: &str) -> bool {
-        self.runtime_direct_bindings
-            .lock()
-            .get(pair_key)
-            .is_some_and(|binding| binding.binding_event_ref == event_ref)
-    }
-
-    pub fn remove_direct_binding_if_current(&self, pair_key: &str, event_ref: &str) -> bool {
-        let mut bindings = self.runtime_direct_bindings.lock();
-        let matches = bindings
-            .get(pair_key)
-            .is_some_and(|binding| binding.binding_event_ref == event_ref);
-        if matches {
-            bindings.remove(pair_key);
-        }
-        matches
-    }
-
-    pub fn retire_direct_binding_if_current(
-        &self,
-        pair_key: &str,
-        event_ref: &str,
-        retired_at: DateTime<Utc>,
-    ) -> Option<DirectConversationBindingRecord> {
-        let mut bindings = self.runtime_direct_bindings.lock();
-        let binding = bindings.get_mut(pair_key)?;
-        if binding.binding_event_ref != event_ref {
-            return None;
-        }
-        binding.state = "retired".to_owned();
-        binding.updated_at = retired_at;
-        Some(binding.clone())
-    }
-
-    pub fn retire_affected_direct_bindings(
-        &self,
-        realm_id: &str,
-        member: Option<&str>,
-        archived_strand: Option<&str>,
-        realm_ended: bool,
-        retired_at: DateTime<Utc>,
-    ) -> Vec<(String, DirectConversationBindingRecord)> {
-        self.runtime_direct_bindings
-            .lock()
-            .iter_mut()
-            .filter_map(|(pair_key, binding)| {
-                let affected = binding.state == "active"
-                    && binding.realm_id == realm_id
-                    && (realm_ended
-                        || member.is_some_and(|member| {
-                            binding
-                                .participants_unordered
-                                .iter()
-                                .any(|participant| participant == member)
-                        })
-                        || archived_strand.is_some_and(|strand| strand == binding.main_strand_id));
-                affected.then(|| {
-                    binding.state = "retired".to_owned();
-                    binding.updated_at = retired_at;
-                    (pair_key.clone(), binding.clone())
-                })
-            })
-            .collect()
+    pub fn clear_runtime_direct_bindings(&self) {
+        self.runtime_direct_bindings.lock().clear();
     }
 }
 

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,20 +44,6 @@ pub struct ContactRecord {
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
     pub peer_service_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DirectConversationBindingRecord {
-    pub participants_unordered: Vec<String>,
-    pub realm_id: String,
-    pub main_strand_id: String,
-    pub binding_event_ref: String,
-    pub state: String,
-    /// Durable coordinator-only reservation data for an unfinished authoring
-    /// stage. Active canonical bindings never depend on this field.
-    pub authoring_context: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

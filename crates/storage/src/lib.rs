@@ -13,7 +13,6 @@ pub(crate) use chrono::Utc;
 pub(crate) use serde_json::Value;
 pub use soland_domain::identity::{
     ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
-    DirectConversationBindingRecord,
 };
 pub(crate) use uuid::Uuid;
 
@@ -137,7 +136,6 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn consent_cells(&self) -> &dyn ConsentCellStore;
-    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;

@@ -1,7 +1,6 @@
 use super::{
     Arc, BTreeMap, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey, ContactRecord,
-    ContactStore, DirectConversationBindingRecord, DirectConversationBindingStore,
-    InviteReceivePolicyStore, Mutex, PersistenceResult, async_trait,
+    ContactStore, InviteReceivePolicyStore, Mutex, PersistenceResult, async_trait,
 };
 pub(crate) struct MemoryContactStore {
     data: Arc<Mutex<BTreeMap<ContactKey, ContactRecord>>>,
@@ -142,66 +141,6 @@ impl ConsentCellStore for MemoryConsentCellStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
-        Ok(self
-            .data
-            .lock()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
-    }
-}
-// In-memory direct-conversation binding store
-pub(crate) struct MemoryDirectConversationBindingStore {
-    data: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
-}
-impl MemoryDirectConversationBindingStore {
-    pub(crate) fn new() -> Self {
-        Self {
-            data: Arc::new(Mutex::new(BTreeMap::new())),
-        }
-    }
-}
-#[async_trait]
-impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
-    async fn get(
-        &self,
-        participants_key: &str,
-    ) -> PersistenceResult<Option<DirectConversationBindingRecord>> {
-        Ok(self.data.lock().get(participants_key).cloned())
-    }
-
-    async fn put(
-        &self,
-        participants_key: &str,
-        record: &DirectConversationBindingRecord,
-    ) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(participants_key.to_owned(), record.clone());
-        Ok(())
-    }
-
-    async fn put_if_absent(
-        &self,
-        participants_key: &str,
-        record: &DirectConversationBindingRecord,
-    ) -> PersistenceResult<bool> {
-        let mut data = self.data.lock();
-        if data.contains_key(participants_key) {
-            return Ok(false);
-        }
-        data.insert(participants_key.to_owned(), record.clone());
-        Ok(true)
-    }
-
-    async fn delete(&self, participants_key: &str) -> PersistenceResult<()> {
-        self.data.lock().remove(participants_key);
-        Ok(())
-    }
-
-    async fn snapshot_all(
-        &self,
-    ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>> {
         Ok(self
             .data
             .lock()

@@ -431,20 +431,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    direct_conversation_bindings (participants_key) {
-        participants_key -> Text,
-        participants_unordered -> Array<Nullable<Text>>,
-        realm_id -> Uuid,
-        main_strand_id -> Uuid,
-        binding_event_ref -> Text,
-        state -> Text,
-        authoring_context -> Nullable<Jsonb>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     event_batch_receipts (id) {
         schema -> Text,
         id -> Uuid,
@@ -1430,7 +1416,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_messages,
     device_pairings,
     devices,
-    direct_conversation_bindings,
     event_batch_receipts,
     events,
     federation_frontier_exchange,

@@ -15,6 +15,16 @@ pub(super) fn validate_direct_conversation_realm_policy(
     if !is_direct_conversation_realm(state, operation.realm_id.as_str()) {
         return Ok(());
     }
+    // §8.1 — DM coordinates are permanent and successor-free, so an
+    // irreversible terminal is refused outright. Reversible `ak.realm.archive`
+    // / `ak.realm.freeze` stay available through ordinary Realm authority and
+    // only surface as resolver send blockers.
+    if matches!(
+        kinds::canonical_kind_string(operation).as_str(),
+        arkret_wire::EventKind::REALM_TOMBSTONE | arkret_wire::EventKind::REALM_DESTROY
+    ) {
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN);
+    }
     let binding = active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str());
     if kinds::operation_is_message_create(operation) && binding.is_none() {
         return Err("direct_conversation_member_count_invalid");
@@ -729,6 +739,11 @@ pub(super) fn direct_conversation_member_state_guard(
     if !is_direct_conversation_realm(state, operation.realm_id.as_str()) {
         return None;
     }
+    // A DM Realm with no settled binding yet is the founding window: §6.1's
+    // three-Event atomic unit carries the peer `ak.member.state{join}` before
+    // any `ak.direct_conversation.bound` exists, and §6.2 already pins the
+    // membership shape for that unit. The bootstrap join is admitted on that
+    // reason alone; anything else that adds a member without a binding is not.
     let Some(binding) =
         active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str())
     else {
@@ -736,13 +751,7 @@ pub(super) fn direct_conversation_member_state_guard(
             && operation.payload.get("reason").and_then(Value::as_str)
                 == Some("direct_conversation_bootstrap")
         {
-            let target = membership_target(operation)?;
-            let reserved_participant = state
-                .contacts()
-                .pending_direct_binding_has_participant(operation.realm_id.as_str(), target);
-            if reserved_participant {
-                return None;
-            }
+            return None;
         }
         return matches!(membership, "invite" | "join")
             .then_some("direct_conversation_member_count_invalid");
@@ -776,7 +785,9 @@ pub(super) fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<soland_services::identity::DirectConversationBindingRecord> {
-    let binding = state.contacts().active_direct_binding_for_realm(realm_id)?;
+    let binding = state
+        .contacts()
+        .settled_direct_binding_for_realm(realm_id)?;
     crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
         .then_some(binding)
 }

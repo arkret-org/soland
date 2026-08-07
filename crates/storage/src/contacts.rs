@@ -1,7 +1,4 @@
-use soland_domain::identity::{
-    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
-    DirectConversationBindingRecord,
-};
+use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
 use super::{BTreeMap, PersistenceResult, Value, async_trait};
 /// Trait for contact storage operations.
@@ -56,35 +53,6 @@ pub trait ConsentCellStore: Send + Sync {
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
     async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
-}
-/// Durable backing for the direct-conversation binding projection (spec
-/// `contact-and-direct-conversation.md` §5). The in-memory
-/// `AppState::direct_conversation_bindings` map keyed by the sorted, NUL-joined
-/// participant pair (`participants_key`) remains the working projection; this
-/// store hydrates it on boot and is written through on binding create/update.
-#[async_trait]
-pub trait DirectConversationBindingStore: Send + Sync {
-    async fn get(
-        &self,
-        participants_key: &str,
-    ) -> PersistenceResult<Option<DirectConversationBindingRecord>>;
-    async fn put(
-        &self,
-        participants_key: &str,
-        record: &DirectConversationBindingRecord,
-    ) -> PersistenceResult<()>;
-    /// Permanently reserve a pair slot. Returns `true` only for the first
-    /// writer; an existing pair is never overwritten by a competing
-    /// operation.
-    async fn put_if_absent(
-        &self,
-        participants_key: &str,
-        record: &DirectConversationBindingRecord,
-    ) -> PersistenceResult<bool>;
-    async fn delete(&self, participants_key: &str) -> PersistenceResult<()>;
-    async fn snapshot_all(
-        &self,
-    ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
 #[doc(hidden)]
 pub type ContactKey = (String, String);

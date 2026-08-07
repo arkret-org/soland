@@ -138,8 +138,8 @@ mod social;
 use arkret_wire::SchemaId;
 use social::*;
 pub(crate) use social::{
-    accepted_contact_for_pair, canonical_contact_digest, direct_binding_matches_projection,
-    project_canonical_direct_binding, retire_direct_bindings_for_operation,
+    accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
+    direct_binding_matches_projection, project_canonical_direct_binding,
     validate_direct_binding_operation, validate_request_receipt_cryptography,
     verify_contact_service_signature,
 };
@@ -1413,13 +1413,15 @@ async fn direct_conversation_resolve(
             send_blockers: Vec::new(),
         });
     }
-    if let Some(binding) = state.contacts().direct_binding(&pair_key)
-        && binding.state != "active"
-        && EventId::new(binding.binding_event_ref.clone()).is_ok()
+    // §5.7 — two distinct endorsement digests for one pair freeze it. No side
+    // is canonical, so the resolver names the conflict and stops.
+    if direct_binding_conflict(state, &pair_key)
+        && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
+        && let Some(record) = bindings.any_endorsed()
     {
         return json_ok(DirectConversationResolveOutcome::Suspended {
-            coordinates: direct_coordinates(pair_key_hash, &binding)?,
-            blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+            coordinates: direct_coordinates(pair_key_hash, &record)?,
+            blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
         });
     }
 

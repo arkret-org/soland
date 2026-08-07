@@ -8,9 +8,8 @@ const DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES: &[&str] = &["did:peer:",
 pub(crate) mod direct;
 
 pub(crate) use direct::{
-    active_direct_binding, direct_binding_matches_projection, direct_pair_key,
-    project_canonical_direct_binding, retire_direct_bindings_for_operation,
-    validate_direct_binding_operation,
+    active_direct_binding, direct_binding_conflict, direct_binding_matches_projection,
+    direct_pair_key, project_canonical_direct_binding, validate_direct_binding_operation,
 };
 
 mod contact_write;
@@ -303,8 +302,22 @@ async fn contact_list_rows(
             row.effective_scopes = Some(row.bidirectional_scopes.clone());
             row.direct_conversation = direct_pair_key(state, actor, row.peer.subject_id().as_str())
                 .ok()
-                .and_then(|pair_key| active_direct_binding(state, &pair_key))
-                .map(direct_summary);
+                .and_then(|pair_key| {
+                    // §5.7 — a pair holding two distinct endorsements is frozen,
+                    // and neither side may be presented as the conversation.
+                    if direct_binding_conflict(state, &pair_key) {
+                        return state
+                            .contacts()
+                            .direct_bindings_for_pair(&pair_key)
+                            .and_then(|bindings| bindings.any_endorsed())
+                            .map(|binding| {
+                                direct_summary(binding, DirectConversationSummaryState::Suspended)
+                            });
+                    }
+                    active_direct_binding(state, &pair_key).map(|binding| {
+                        direct_summary(binding, DirectConversationSummaryState::Found)
+                    })
+                });
             row
         })
         .collect::<Vec<_>>();
@@ -516,7 +529,10 @@ fn contact_failed_precondition(reason: &'static str, message: &'static str) -> A
         .with_wire_code(reason)
 }
 
-fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversationSummary {
+fn direct_summary(
+    binding: DirectConversationBindingRecord,
+    state: DirectConversationSummaryState,
+) -> DirectConversationSummary {
     DirectConversationSummary {
         realm_id: RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
         main_strand_id: StrandId::new(binding.main_strand_id)
@@ -524,13 +540,6 @@ fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversatio
         binding_event_ref: Some(
             EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
         ),
-        state: direct_conversation_binding_state(&binding.state),
-    }
-}
-
-fn direct_conversation_binding_state(state: &str) -> DirectConversationSummaryState {
-    match state {
-        "active" => DirectConversationSummaryState::Found,
-        _ => DirectConversationSummaryState::Suspended,
+        state,
     }
 }

@@ -49,17 +49,24 @@ pub(super) fn direct_pair_key_participant(
     ))
 }
 
+/// The settled coordinates for a pair.
+///
+/// `contact-and-direct-conversation.md` §8.3: the binding cell is an or_set and
+/// the binding is written once and never retired, so "settled" means every
+/// endorsement agrees on one digest. Two distinct digests are a materialization
+/// conflict, not a race to resolve — see [`direct_binding_conflict`].
 pub(crate) fn active_direct_binding(
     state: &AppState,
     pair_key: &str,
 ) -> Option<DirectConversationBindingRecord> {
-    let binding = state
-        .contacts()
-        .direct_binding(pair_key)
-        .filter(|binding| {
-            binding.state == "active" && valid_contact_event_ref(&binding.binding_event_ref)
-        })?;
+    let binding = state.contacts().direct_binding(pair_key)?;
     direct_binding_matches_projection(state, &binding).then_some(binding)
+}
+
+/// `true` when the pair carries two distinct endorsement digests
+/// (`direct_conversation_pair_materialization_conflict`, §5.7).
+pub(crate) fn direct_binding_conflict(state: &AppState, pair_key: &str) -> bool {
+    state.contacts().direct_binding_is_conflicted(pair_key)
 }
 
 pub(crate) fn direct_binding_matches_projection(
@@ -103,47 +110,6 @@ pub(crate) fn direct_binding_matches_projection(
                         discussion.enabled != Some(false) && discussion.is_primary == Some(true)
                     })
         })
-}
-
-pub(crate) async fn retire_direct_bindings_for_operation(
-    state: &AppState,
-    operation: &arkret_event_draft::Operation,
-) {
-    let kind = soland_services::operation_semantics::canonical_kind_for_operation(operation);
-    let member_ended = kind == Some(arkret_wire::EventKind::MEMBER_STATE)
-        && matches!(
-            operation.payload.get("membership").and_then(Value::as_str),
-            Some("leave" | "ban")
-        );
-    let realm_ended = matches!(
-        kind,
-        Some(arkret_wire::EventKind::REALM_TOMBSTONE | arkret_wire::EventKind::REALM_DESTROY)
-    );
-    let archived_strand = (kind == Some(arkret_wire::EventKind::STRAND_ARCHIVE))
-        .then(|| operation.payload.get("target_ref").and_then(Value::as_str))
-        .flatten();
-    if !member_ended && !realm_ended && archived_strand.is_none() {
-        return;
-    }
-    let member = member_ended
-        .then(|| crate::routing::events::operations::membership_target(operation))
-        .flatten();
-    let retired = state.contacts().retire_affected_direct_bindings(
-        operation.realm_id.as_str(),
-        member,
-        archived_strand,
-        realm_ended,
-        now(),
-    );
-    for (pair_key, binding) in retired {
-        if let Err(error) = state
-            .contacts()
-            .save_direct_binding(&pair_key, binding)
-            .await
-        {
-            tracing::error!(%error, %pair_key, "failed to persist retired direct binding");
-        }
-    }
 }
 
 fn direct_binding_payload_from_operation(
@@ -287,6 +253,29 @@ pub(crate) async fn validate_direct_binding_operation(
             );
             return Err("direct_conversation_binding_invalid");
         }
+    }
+
+    // §8.3 — the or_set element key is `(binding_digest, actor_id)`. A second
+    // *distinct* digest for the same pair is a materialization conflict and
+    // MUST be refused before projection; §9.3 forbids resolving it by picking a
+    // winner. Re-endorsing the same coordinates (either participant, any number
+    // of times) stays a compatible add and is admitted here.
+    let digest = direct_binding_endorsement_digest(&payload)?;
+    if let Some(bindings) = state
+        .contacts()
+        .direct_bindings_for_pair(payload.pair_key.as_ref())
+        && !bindings.is_empty()
+        && !bindings.digests().any(|known| known == digest)
+    {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "pair_materialization_conflict",
+            pair_key = %payload.pair_key,
+            incoming = %digest,
+            known = ?bindings.digests().collect::<Vec<_>>(),
+            "direct conversation binding validation failed"
+        );
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PAIR_MATERIALIZATION_CONFLICT);
     }
     Ok(())
 }
@@ -564,6 +553,15 @@ fn accepted_contact_authorization_refs_match(
     verified.len() == 2 && provided.len() == 2 && provided == verified
 }
 
+/// or_set add for one accepted `ak.direct_conversation.bound` Event.
+///
+/// `contact-and-direct-conversation.md` §8.3 fixes the element key at
+/// `(binding_digest, envelope.actor_id)`: the same participant re-signing the
+/// same coordinates counts once, and both participants signing the same
+/// coordinates are compatible adds that MUST NOT join to bottom. Nothing here
+/// picks a winner between two different endorsements — §9.3 forbids any such
+/// selector, and a second distinct digest is refused at admission by
+/// [`validate_direct_binding_operation`] and surfaces as `suspended`.
 pub(crate) async fn project_canonical_direct_binding(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
@@ -584,55 +582,59 @@ pub(crate) async fn project_canonical_direct_binding(
     else {
         return;
     };
-    let pair_key = payload.pair_key.to_string();
-
-    let incoming_digest = operation
-        .canonical_event_digest
-        .as_deref()
-        .unwrap_or_default();
-    if incoming_digest.is_empty() {
+    let Some(actor_id) = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
         return;
-    }
-    let current = state.contacts().direct_binding(&pair_key);
-    if let Some(current) = current.as_ref()
-        && current.binding_event_ref != event_ref
-        && direct_binding_matches_projection(state, current)
-    {
-        let current_digest = state
-            .event_queries()
-            .accepted_event(&current.binding_event_ref)
-            .await
-            .ok()
-            .flatten()
-            .map(|event| event.canonical_digest);
-        if current_digest
-            .as_deref()
-            .is_some_and(|digest| digest >= incoming_digest)
-        {
-            return;
-        }
-    }
-    let binding = DirectConversationBindingRecord {
-        participants_unordered: payload
-            .participants_unordered
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        realm_id: payload.realm_id.to_string(),
-        main_strand_id: payload.main_strand_id.to_string(),
-        binding_event_ref: event_ref.clone(),
-        state: "active".to_owned(),
-        authoring_context: None,
-        created_at: payload.created_at,
-        updated_at: now(),
     };
-    if let Err(error) = state
-        .contacts()
-        .save_direct_binding(&pair_key, binding.clone())
-        .await
-    {
-        tracing::error!(%error, %pair_key, "failed to persist canonical direct binding projection");
+    let Ok(digest) = direct_binding_endorsement_digest(&payload) else {
+        return;
+    };
+    state.contacts().endorse_direct_binding(
+        payload.pair_key.as_ref(),
+        digest,
+        soland_services::identity::DirectConversationCoordinatesRecord {
+            participants_unordered: payload
+                .participants_unordered
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            realm_id: payload.realm_id.to_string(),
+            main_strand_id: payload.main_strand_id.to_string(),
+            created_at: payload.created_at,
+        },
+        soland_services::identity::DirectConversationEndorsement {
+            actor_id,
+            binding_event_ref: event_ref,
+        },
+    );
+}
+
+/// Identity of one endorsement inside the or_set.
+///
+/// §8.3 derives the element key from the payload's canonical bytes with
+/// `created_at` and the Event author/proof excluded, so two participants
+/// endorsing the same coordinates at different wall-clock times collapse to the
+/// same element. The spec calls this value `binding_digest` and requires a
+/// registered domain for it, but no registry defines that domain and the
+/// payload carries no `binding_digest` field — see the spec-open note. Until
+/// the domain is registered this stays a receiver-local identity and is never
+/// put on the wire.
+fn direct_binding_endorsement_digest(
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+) -> Result<String, &'static str> {
+    let mut value =
+        serde_json::to_value(payload).map_err(|_| "direct_conversation_binding_invalid")?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("created_at");
     }
+    Ok(arkret_canonical::canonical::sha256_digest(
+        arkret_canonical::canonical::canonical_json_bytes(&value)
+            .map_err(|_| "direct_conversation_binding_invalid")?,
+    ))
 }
 
 /// Derive the founder basis from an accepted Contact record.

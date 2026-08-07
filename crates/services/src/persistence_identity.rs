@@ -12,7 +12,6 @@ struct PersistenceOneTimeKeys(Arc<dyn PersistenceStore>);
 struct PersistenceConsentCells(Arc<dyn PersistenceStore>);
 struct PersistenceContacts(Arc<dyn PersistenceStore>);
 struct PersistenceInviteReceivePolicies(Arc<dyn PersistenceStore>);
-struct PersistenceDirectConversationBindings(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentPairing(Arc<dyn PersistenceStore>);
@@ -436,54 +435,6 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
     }
 }
 
-#[async_trait::async_trait]
-impl crate::identity::DirectConversationBindingPort for PersistenceDirectConversationBindings {
-    async fn save_binding(
-        &self,
-        pair_key: &str,
-        binding: crate::identity::DirectConversationBindingRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .direct_conversation_bindings()
-            .put(pair_key, &storage_direct_binding(binding))
-            .await?;
-        Ok(())
-    }
-
-    async fn reserve_binding(
-        &self,
-        pair_key: &str,
-        binding: crate::identity::DirectConversationBindingRecord,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .direct_conversation_bindings()
-            .put_if_absent(pair_key, &storage_direct_binding(binding))
-            .await?)
-    }
-
-    async fn delete_binding(&self, pair_key: &str) -> crate::ServiceResult<()> {
-        self.0
-            .direct_conversation_bindings()
-            .delete(pair_key)
-            .await?;
-        Ok(())
-    }
-
-    async fn bindings(
-        &self,
-    ) -> crate::ServiceResult<Vec<(String, crate::identity::DirectConversationBindingRecord)>> {
-        Ok(self
-            .0
-            .direct_conversation_bindings()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(|(key, binding)| (key, application_direct_binding(binding)))
-            .collect())
-    }
-}
-
 fn application_consent_key(key: soland_storage::ConsentCellKey) -> crate::identity::ConsentCellKey {
     crate::identity::ConsentCellKey {
         holder: key.holder,
@@ -583,36 +534,6 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
         peer_service_id: record.peer_service_id,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-    }
-}
-
-fn application_direct_binding(
-    record: soland_storage::DirectConversationBindingRecord,
-) -> crate::identity::DirectConversationBindingRecord {
-    crate::identity::DirectConversationBindingRecord {
-        participants_unordered: record.participants_unordered,
-        realm_id: record.realm_id,
-        main_strand_id: record.main_strand_id,
-        binding_event_ref: record.binding_event_ref,
-        state: record.state,
-        authoring_context: record.authoring_context,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-    }
-}
-
-fn storage_direct_binding(
-    record: crate::identity::DirectConversationBindingRecord,
-) -> soland_storage::DirectConversationBindingRecord {
-    soland_storage::DirectConversationBindingRecord {
-        participants_unordered: record.participants_unordered,
-        realm_id: record.realm_id,
-        main_strand_id: record.main_strand_id,
-        binding_event_ref: record.binding_event_ref,
-        state: record.state,
-        authoring_context: record.authoring_context,
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
@@ -2116,7 +2037,6 @@ pub fn build_persistence_identity_services(
         contact: ContactService::new(
             Arc::new(PersistenceContacts(persistence.clone())),
             Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),
-            Arc::new(PersistenceDirectConversationBindings(persistence.clone())),
         ),
         agent_pairing: AgentPairingService::new(
             Arc::new(PersistenceAgentPairing(persistence.clone())),

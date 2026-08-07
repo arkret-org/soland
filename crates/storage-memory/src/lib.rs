@@ -21,15 +21,14 @@ pub(crate) use soland_storage::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingRecord,
-    DevicePairingStore, DirectConversationBindingRecord, DirectConversationBindingStore,
-    DriftResult, EventStore, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord,
-    IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    DevicePairingStore, DriftResult, EventStore, FederationFrontierExchangeRecord,
+    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
+    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome,
+    InviteLocatorRecord, InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
     KeyBackupDeleteChallengeRecord, KeyBackupStore, MessageRecord, MessageStore,
     MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis,
     MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
@@ -115,8 +114,7 @@ pub(crate) use applets::MemoryAppletStore;
 pub(crate) use audit::MemoryAuditStore;
 pub(crate) use blobs::MemoryBlobStore;
 pub(crate) use contacts::{
-    MemoryConsentCellStore, MemoryContactStore, MemoryDirectConversationBindingStore,
-    MemoryInviteReceivePolicyStore,
+    MemoryConsentCellStore, MemoryContactStore, MemoryInviteReceivePolicyStore,
 };
 pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use device_pairings::MemoryDevicePairingStore;

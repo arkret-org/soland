@@ -1239,24 +1239,19 @@ impl AppState {
         // the application service.
         self.consents.hydrate_runtime().await?;
 
-        let mut direct_binding_records = self
+        // `ak.component.direct_conversation.binding.v1` is an or_set, so fold
+        // order carries no meaning: every accepted endorsement is a compatible
+        // add and nothing supersedes anything (`contact-and-direct-conversation.md`
+        // §8.3). The payload is `deny_unknown_fields` and carries no
+        // `binding_state` / `supersedes_binding_ref`, so there is nothing to
+        // order on either.
+        let direct_binding_records = self
             .event_queries()
             .canonical_events()
             .await?
             .into_iter()
             .filter(|record| record.kind == arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND)
             .collect::<Vec<_>>();
-        // Fold active candidates before explicit retirements so a retirement
-        // can resolve its supersedes_binding_ref regardless of storage order.
-        direct_binding_records.sort_by_key(|record| {
-            let retired = record
-                .envelope
-                .get("payload")
-                .and_then(|payload| payload.get("binding_state"))
-                .and_then(serde_json::Value::as_str)
-                == Some("retired");
-            (retired, record.received_at, record.event_id.clone())
-        });
         for record in direct_binding_records {
             let Some(operation) =
                 crate::routing::events::event_log::projection_operation_from_canonical_record(
@@ -1802,43 +1797,6 @@ mod membership_hydration_tests {
         );
 
         assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
-    }
-
-    #[tokio::test]
-    async fn active_direct_binding_rows_are_not_boot_authority() {
-        let state = AppState::new(AppConfig::test_default(), Db { pool: None });
-        let now = chrono::Utc::now();
-        state
-            .test_persistence()
-            .direct_conversation_bindings()
-            .put(
-                "sha256:stale-private-row",
-                &soland_domain::identity::DirectConversationBindingRecord {
-                    participants_unordered: vec![
-                        "did:web:alice.example".to_owned(),
-                        "did:web:bob.example".to_owned(),
-                    ],
-                    realm_id: "ak:realm:01904100-0000-8000-8000-000000000001".to_owned(),
-                    main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000002".to_owned(),
-                    binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000003".to_owned(),
-                    state: "active".to_owned(),
-                    authoring_context: None,
-                    created_at: now,
-                    updated_at: now,
-                },
-            )
-            .await
-            .expect("seed stale materialized binding row");
-
-        state.hydrate().await.expect("hydrate application state");
-
-        assert!(
-            state
-                .contacts()
-                .direct_binding("sha256:stale-private-row")
-                .is_none(),
-            "active bindings must be rebuilt from accepted signed Events, not private rows"
-        );
     }
 
     fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {

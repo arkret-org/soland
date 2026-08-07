@@ -22,7 +22,6 @@ pub struct PgPersistenceStore {
     invite_locators: PgInviteLocatorStore,
     join_applications: PgJoinApplicationStore,
     consent_cells: PgConsentCellStore,
-    direct_conversation_bindings: PgDirectConversationBindingStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     device_pairings: PgDevicePairingStore,
@@ -88,7 +87,6 @@ impl PgPersistenceStore {
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             join_applications: PgJoinApplicationStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
-            direct_conversation_bindings: PgDirectConversationBindingStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             device_pairings: PgDevicePairingStore { pool: pool.clone() },
@@ -196,10 +194,6 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {
         &self.consent_cells
-    }
-
-    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore {
-        &self.direct_conversation_bindings
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {

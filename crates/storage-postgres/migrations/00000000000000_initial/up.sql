@@ -493,18 +493,6 @@ CREATE TABLE public.device_message_lost_watermarks (
     PRIMARY KEY (recipient, device_id)
 );
 
-CREATE TABLE public.direct_conversation_bindings (
-    participants_key text NOT NULL,
-    participants_unordered text[] NOT NULL,
-    realm_id uuid NOT NULL,
-    main_strand_id uuid NOT NULL,
-    binding_event_ref text NOT NULL,
-    state text NOT NULL,
-    authoring_context jsonb,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
 CREATE TABLE public.events (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
@@ -1676,9 +1664,6 @@ ALTER TABLE ONLY public.device_message_idempotency
 
 ALTER TABLE ONLY public.device_message_ack_tokens
     ADD CONSTRAINT device_message_ack_tokens_pkey PRIMARY KEY (ack_token);
-
-ALTER TABLE ONLY public.direct_conversation_bindings
-    ADD CONSTRAINT direct_conversation_bindings_pkey PRIMARY KEY (participants_key);
 
 ALTER TABLE ONLY public.events
     ADD CONSTRAINT events_pkey PRIMARY KEY (id);

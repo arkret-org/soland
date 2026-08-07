@@ -7,14 +7,13 @@ use super::{
     AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
     ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
-    DirectConversationBindingStore, EventStore, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxStore, HandleReleaseStore, IdempotencyStore,
-    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore,
-    MemoryAccountLifecycleStore, MemoryAccountLocalpartStore, MemoryAccountStore,
-    MemoryAgentParticipationStore, MemoryAgentStore, MemoryAppletStore, MemoryAuditStore,
-    MemoryBlobStore, MemoryConsentCellStore, MemoryContactStore, MemoryDeviceInventoryStore,
-    MemoryDeviceKeyStore, MemoryDeviceMessageStore, MemoryDevicePairingStore,
-    MemoryDirectConversationBindingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
+    EventStore, FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxStore,
+    HandleReleaseStore, IdempotencyStore, InviteLocatorStore, InviteReceivePolicyStore,
+    KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
+    MemoryAccountLocalpartStore, MemoryAccountStore, MemoryAgentParticipationStore,
+    MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore, MemoryConsentCellStore,
+    MemoryContactStore, MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
+    MemoryDevicePairingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
     MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryHandleReleaseStore,
     MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
     MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
@@ -57,7 +56,6 @@ pub struct SolandMemoryPersistenceStore {
     invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
     consent_cells: MemoryConsentCellStore,
-    direct_conversation_bindings: MemoryDirectConversationBindingStore,
     realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
@@ -143,7 +141,6 @@ impl SolandMemoryPersistenceStore {
             invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
             invite_locators: MemoryInviteLocatorStore::new(),
             consent_cells: MemoryConsentCellStore::new(),
-            direct_conversation_bindings: MemoryDirectConversationBindingStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
@@ -314,10 +311,6 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {
         &self.consent_cells
-    }
-
-    fn direct_conversation_bindings(&self) -> &dyn DirectConversationBindingStore {
-        &self.direct_conversation_bindings
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {

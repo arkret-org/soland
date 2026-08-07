@@ -2118,7 +2118,7 @@ async fn validate_direct_keypackage_consume(
     }
     let binding = state
         .contacts()
-        .active_direct_binding_for_realm(&realm_id)
+        .settled_direct_binding_for_realm(&realm_id)
         .filter(|binding| {
             crate::routing::identity::account::direct_binding_matches_projection(state, binding)
         })

@@ -4,7 +4,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
 use soland_services::events::CanonicalEventRecord;
-use soland_services::identity::DirectConversationBindingRecord;
+use soland_services::identity::{
+    DirectConversationCoordinatesRecord, DirectConversationEndorsement,
+};
 use soland_storage_postgres::Db;
 
 use super::*;
@@ -65,7 +67,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         .unwrap(),
     );
     peer_join.payload["sender"] = json!("did:web:alice.example");
-    let strand_create = op(
+    let mut strand_create = op(
         realm_id.clone(),
         "000000000693",
         arkret_wire::EventKind::STRAND_CREATE,
@@ -77,6 +79,10 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         ))
         .unwrap(),
     );
+    // `ak.strand.create` derives the Strand id from the Event
+    // (`retype(event_id)`); an Operation without `event_id` is rejected with
+    // `strand_create_missing_event_id` and the Strand never materializes.
+    strand_create.payload["event_id"] = json!("ak:event:01904100-0000-8000-8000-000000000601");
     {
         let mut projection = state.test_projection().lock();
         projection.apply(&realm_create, state.hlc());
@@ -84,19 +90,20 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         projection.apply(&strand_create, state.hlc());
     }
     state.contacts().install_direct_binding(
-        "did:web:alice.example\0did:web:bob.example".to_owned(),
-        DirectConversationBindingRecord {
+        "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
+        "sha256:0000000000000000000000000000000000000000000000000000000000000601",
+        DirectConversationCoordinatesRecord {
             participants_unordered: vec![
                 "did:web:alice.example".to_owned(),
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000601".to_owned(),
-            binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000601".to_owned(),
-            state: "active".to_owned(),
-            authoring_context: None,
             created_at: now,
-            updated_at: now,
+        },
+        DirectConversationEndorsement {
+            actor_id: "did:web:alice.example".to_owned(),
+            binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000601".to_owned(),
         },
     );
     (state, realm_id)
@@ -1322,9 +1329,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
 #[tokio::test]
 async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
     let (state, realm_id) = state_with_direct_binding();
-    state
-        .contacts()
-        .replace_runtime_direct_bindings(std::iter::empty());
+    state.contacts().clear_runtime_direct_bindings();
 
     let invite = op(
         realm_id.clone(),
@@ -1358,6 +1363,141 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
             .await
             .unwrap_err(),
         "direct_conversation_member_count_invalid"
+    );
+}
+
+/// §8.1 — DM coordinates are permanent and successor-free, so an irreversible
+/// terminal is refused. The reversible archive/freeze facets stay available.
+#[tokio::test]
+async fn direct_conversation_realm_refuses_tombstone_and_destroy() {
+    let (state, realm_id) = state_with_direct_binding();
+
+    for (seed, kind) in [
+        ("000000000606", arkret_wire::EventKind::REALM_TOMBSTONE),
+        ("000000000607", arkret_wire::EventKind::REALM_DESTROY),
+    ] {
+        let terminal = op(
+            realm_id.clone(),
+            seed,
+            kind,
+            json!({ "sender": "did:web:alice.example" }),
+        );
+        assert_eq!(
+            validate_operation_policy(&state, &[terminal])
+                .await
+                .unwrap_err(),
+            arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN,
+            "{kind} must be refused on a canonical DM Realm"
+        );
+    }
+
+    // The reversible facets are ordinary Realm authority, not a terminal.
+    let archive = op(
+        realm_id,
+        "000000000608",
+        arkret_wire::EventKind::REALM_ARCHIVE,
+        json!({ "sender": "did:web:alice.example" }),
+    );
+    assert!(
+        !matches!(
+            validate_operation_policy(&state, &[archive]).await,
+            Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN)
+        ),
+        "ak.realm.archive is reversible and must not hit the terminal guard"
+    );
+}
+
+/// §8.3 — the binding cell is an or_set keyed by `(binding_digest, actor_id)`.
+/// Both participants endorsing the same coordinates are compatible adds: the
+/// pair stays settled and MUST NOT join to bottom.
+#[tokio::test]
+async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
+    let (state, realm_id) = state_with_direct_binding();
+    let pair_key = "sha256:00000000000000000000000000000000000000000000000000000000000006a1";
+
+    state.contacts().install_direct_binding(
+        pair_key.to_owned(),
+        "sha256:0000000000000000000000000000000000000000000000000000000000000601",
+        DirectConversationCoordinatesRecord {
+            participants_unordered: vec![
+                "did:web:alice.example".to_owned(),
+                "did:web:bob.example".to_owned(),
+            ],
+            realm_id: realm_id.to_string(),
+            main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000601".to_owned(),
+            created_at: chrono::Utc::now(),
+        },
+        DirectConversationEndorsement {
+            actor_id: "did:web:bob.example".to_owned(),
+            binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000602".to_owned(),
+        },
+    );
+
+    assert!(
+        !state.contacts().direct_binding_is_conflicted(pair_key),
+        "two endorsements of one digest are compatible adds, not a conflict"
+    );
+    let settled = state
+        .contacts()
+        .direct_binding(pair_key)
+        .expect("the pair stays settled");
+    assert_eq!(settled.realm_id, realm_id.to_string());
+    assert_eq!(
+        settled.binding_event_ref, "ak:event:01904100-0000-8000-8000-000000000601",
+        "the named endorsement is the lowest actor id's, so replicas agree"
+    );
+    assert!(
+        state
+            .contacts()
+            .settled_direct_binding_for_realm(realm_id.as_ref())
+            .is_some(),
+        "the realm lookup must see the settled pair"
+    );
+    assert!(
+        crate::routing::identity::account::direct_binding_matches_projection(&state, &settled),
+        "the fixture projection must agree with the settled coordinates"
+    );
+}
+
+/// §5.7 / §8.3 — two *distinct* digests for one pair freeze it. Nothing picks a
+/// winner by digest order, arrival order or UUID.
+#[tokio::test]
+async fn two_distinct_endorsement_digests_freeze_the_pair() {
+    let (state, realm_id) = state_with_direct_binding();
+    let pair_key = "sha256:00000000000000000000000000000000000000000000000000000000000006a1";
+
+    state.contacts().install_direct_binding(
+        pair_key.to_owned(),
+        "sha256:00000000000000000000000000000000000000000000000000000000000006ff",
+        DirectConversationCoordinatesRecord {
+            participants_unordered: vec![
+                "did:web:alice.example".to_owned(),
+                "did:web:bob.example".to_owned(),
+            ],
+            realm_id: "ak:realm:01904100-0000-8000-8000-0000000006ff".to_owned(),
+            main_strand_id: "ak:strand:01904100-0000-8000-8000-0000000006ff".to_owned(),
+            created_at: chrono::Utc::now(),
+        },
+        DirectConversationEndorsement {
+            actor_id: "did:web:bob.example".to_owned(),
+            binding_event_ref: "ak:event:01904100-0000-8000-8000-0000000006ff".to_owned(),
+        },
+    );
+
+    assert!(
+        state.contacts().direct_binding_is_conflicted(pair_key),
+        "a second distinct digest is a materialization conflict"
+    );
+    assert!(
+        state.contacts().direct_binding(pair_key).is_none(),
+        "a frozen pair has no settled coordinates; neither side may be served"
+    );
+    assert!(
+        state
+            .contacts()
+            .settled_direct_binding_for_realm(realm_id.as_ref())
+            .is_none(),
+        "the realm lookup must not resurrect one side of a frozen pair"
     );
 }
 
