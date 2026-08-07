@@ -711,7 +711,8 @@ pub(super) async fn append_portal_message(
     }
     let operation_id = ids::generate_operation_id();
     let event_id = ids::generate_event_id();
-    let thread_id = strand_id_from_realm_id(realm_id);
+    let thread_id = strand_id_from_realm_id(realm_id)
+        .ok_or_else(|| AppError::invalid_param("portal realm_id is not canonical"))?;
     let created_at = chrono::Utc::now();
     let content_with_portal = enrich_content_with_portal_metadata(content, applet, ghost);
     let message_record = MessageState {

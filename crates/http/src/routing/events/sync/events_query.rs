@@ -1504,7 +1504,7 @@ mod tests {
             .with_timezone(&Utc);
         let revised_at = created_at + chrono::Duration::seconds(30);
         let redacted_at = created_at + chrono::Duration::minutes(1);
-        let strand_id = strand_id_from_realm_id(TEST_REALM);
+        let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let plaintext_payload = json!({
             "event_id": TEST_MESSAGE_EVENT,
             "message_id": TEST_MESSAGE_ID,

@@ -1,8 +1,9 @@
 //! Strand ID derivation + discussion-track projection helpers.
 //!
-//! Strand IDs are derived from Realm IDs via typed-id → `ak:strand:` re-tagging
-//! (sha256 fallback for unrecognised prefixes). v1 Message payloads expose the
-//! discussion track as the const string `discussion`.
+//! Legacy Realm companion Strand IDs are obtained only by re-tagging an already
+//! validated canonical Realm ID. Invalid input fails closed; it is never hashed
+//! into a string that merely looks like a protocol Strand ID. v1 Message
+//! payloads expose the discussion track as the const string `discussion`.
 //!
 //! All fns are `pub` because sync/projection writers consume them.
 //! This is a derivation layer the server fakes for clients that already
@@ -16,7 +17,7 @@
 use serde_json::json;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
-use super::{now, realm_discoverability, sha256_hex};
+use super::{now, realm_discoverability};
 use crate::state::AppState;
 
 pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option<String> {
@@ -25,14 +26,9 @@ pub fn retag_typed_id(value: &str, from_prefix: &str, to_prefix: &str) -> Option
         .map(|suffix| format!("{to_prefix}{suffix}"))
 }
 
-pub fn derived_strand_id(seed: &str) -> String {
-    let digest = sha256_hex(seed.as_bytes());
-    format!("ak:strand:{}", &digest[..26])
-}
-
-pub fn strand_id_from_realm_id(realm_id: &str) -> String {
-    retag_typed_id(realm_id, "ak:realm:", "ak:strand:")
-        .unwrap_or_else(|| derived_strand_id(realm_id))
+pub fn strand_id_from_realm_id(realm_id: &str) -> Option<String> {
+    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
+    retag_typed_id(realm_id.as_str(), "ak:realm:", "ak:strand:")
 }
 
 pub fn message_id_from_event_id(event_id: &str) -> String {
@@ -50,7 +46,7 @@ pub fn strand_id_for_projection_event(event: &ProjectionEventRecord) -> Option<S
         .get("strand_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
-        .or_else(|| Some(strand_id_from_realm_id(&event.realm_id)))
+        .or_else(|| strand_id_from_realm_id(&event.realm_id))
 }
 
 pub fn discussion_track_for_projection_event(
@@ -79,7 +75,8 @@ pub async fn strand_projection_for_realm(
     realm_id: &str,
     title: &str,
     summary: Option<&str>,
-) -> serde_json::Value {
+) -> Option<serde_json::Value> {
+    let strand_id = strand_id_from_realm_id(realm_id)?;
     let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     let owner = meta
         .as_ref()
@@ -98,9 +95,9 @@ pub async fn strand_projection_for_realm(
     // `kind: "room"` and `room_kind` were removed in revision 0a5ab85; Realm
     // is the v1 boundary and the Strand.kind discriminator MUST be a v1 value
     // (e.g. "discussion").
-    json!({
-        "id": strand_id_from_realm_id(realm_id),
-        "strand_id": strand_id_from_realm_id(realm_id),
+    Some(json!({
+        "id": strand_id,
+        "strand_id": strand_id,
         "type": "strand",
         "schema": "ak.schema.strand.v1",
         "realm_id": realm_id,
@@ -125,5 +122,25 @@ pub async fn strand_projection_for_realm(
         "created_at": created_at,
         "updated_by": owner,
         "updated_at": updated_at
-    })
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strand_id_from_realm_id;
+
+    #[test]
+    fn realm_companion_strand_retags_only_a_canonical_realm_id() {
+        let realm_id = "ak:realm:AfCuujQKAeVc_PA4WCk3VM9_LohZEwMUV5MMDJNVbFze";
+        assert_eq!(
+            strand_id_from_realm_id(realm_id).as_deref(),
+            Some("ak:strand:AfCuujQKAeVc_PA4WCk3VM9_LohZEwMUV5MMDJNVbFze")
+        );
+    }
+
+    #[test]
+    fn invalid_realm_never_becomes_a_strand_shaped_hash_fallback() {
+        assert_eq!(strand_id_from_realm_id("legacy-realm-row"), None);
+        assert_eq!(strand_id_from_realm_id("ak:realm:not-a-token"), None);
+    }
 }

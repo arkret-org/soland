@@ -470,12 +470,14 @@ async fn admin_realm_item_value(
     let realm_id = realm.realm_id.as_str().to_owned();
     let strand =
         strand_projection_for_realm(state, &realm_id, &realm.title, realm.description.as_deref())
-            .await;
+            .await
+            .expect("RealmDirectoryEntry contains a validated canonical RealmId");
     AdminRealmItem {
         kind: "realm".to_owned(),
         id: realm_id.clone(),
         strand,
-        strand_id: strand_id_from_realm_id(&realm_id),
+        strand_id: strand_id_from_realm_id(&realm_id)
+            .expect("RealmDirectoryEntry contains a validated canonical RealmId"),
         realm_id,
         title: realm.title,
         topic: realm.description,

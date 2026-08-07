@@ -289,7 +289,8 @@ pub(super) async fn mimi_room_message(
         .get("thread_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .unwrap_or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id));
+        .or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id))
+        .ok_or_else(|| AppError::invalid_param("MIMI binding carries a non-canonical realm_id"))?;
     let created_at = chrono::Utc::now();
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",

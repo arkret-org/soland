@@ -852,7 +852,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state.realm_directory().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -1732,7 +1732,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
     let message_event_id = "ak:event:01904100-0000-8000-8000-0000000000d1";
     let message_id = "ak:message:01904100-0000-8000-8000-0000000000d1";
     let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
@@ -1869,7 +1869,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    let strand_id = strand_id_from_realm_id(ROSTER_REALM);
+    let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
     let message_event_id = "ak:event:01904100-0000-8000-8000-0000000001d1";
     let revision_event_id = "ak:event:01904100-0000-8000-8000-0000000001d2";
     let redaction_event_id = "ak:event:01904100-0000-8000-8000-0000000001d3";

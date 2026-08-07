@@ -5,8 +5,8 @@ mod read_cursor;
 pub(super) mod space;
 
 use super::{
-    AuthArgs, accept_local_operations, authenticated_session, device_inventory_to_json,
-    handle_for_did, invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, now,
+    AuthArgs, authenticated_session, device_inventory_to_json, handle_for_did,
+    invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, now,
     realm_discoverability, realm_has_member, realm_history_visibility, realm_resolvable_to,
     realm_search_visible_to, sha256_hex,
 };
