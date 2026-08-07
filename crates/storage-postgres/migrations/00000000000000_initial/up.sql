@@ -61,7 +61,7 @@ CREATE TABLE public.canonical_realms (
 );
 
 CREATE TABLE public.account_datas (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     actor_id text NOT NULL,
     account_data_key text NOT NULL,
     payload jsonb NOT NULL,
@@ -72,13 +72,10 @@ CREATE TABLE public.account_datas (
 );
 
 ALTER TABLE ONLY public.account_datas
-    ADD CONSTRAINT account_datas_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
 CREATE TABLE public.accounts (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     principal_id text NOT NULL,
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -88,22 +85,16 @@ CREATE TABLE public.accounts (
 );
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_principal_id_key UNIQUE (principal_id);
 
 CREATE TABLE public.account_localparts (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     account_id uuid NOT NULL,
     localpart text NOT NULL,
     is_primary boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.account_localparts
-    ADD CONSTRAINT account_localparts_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_localpart_key UNIQUE (localpart);
@@ -116,7 +107,7 @@ ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 CREATE TABLE public.account_lifecycle (
-    principal_id text NOT NULL,
+    principal_id text PRIMARY KEY,
     state text NOT NULL,
     reason text,
     changed_by text,
@@ -124,21 +115,15 @@ CREATE TABLE public.account_lifecycle (
     CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
 );
 
-ALTER TABLE ONLY public.account_lifecycle
-    ADD CONSTRAINT account_lifecycle_pkey PRIMARY KEY (principal_id);
-
 CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree (state, changed_at);
 
 CREATE TABLE public.handle_releases (
-    localpart text NOT NULL,
+    localpart text PRIMARY KEY,
     released_at timestamp with time zone NOT NULL
 );
 
-ALTER TABLE ONLY public.handle_releases
-    ADD CONSTRAINT handle_releases_pkey PRIMARY KEY (localpart);
-
 CREATE TABLE public.agent_keys (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     agent_id text NOT NULL,
     verification_method text NOT NULL,
     state text DEFAULT 'authorized'::text NOT NULL,
@@ -148,15 +133,12 @@ CREATE TABLE public.agent_keys (
     CONSTRAINT agent_keys_state_check CHECK ((state = ANY (ARRAY['authorized'::text, 'revoked'::text])))
 );
 
-ALTER TABLE ONLY public.agent_keys
-    ADD CONSTRAINT agent_keys_pkey PRIMARY KEY (id);
-
 CREATE INDEX agent_keys_principal_idx ON public.agent_keys USING btree (agent_id);
 
 CREATE INDEX agent_keys_state_idx ON public.agent_keys USING btree (state);
 
 CREATE TABLE public.agent_participation (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     agent_id text NOT NULL,
     scope_kind text NOT NULL,
     scope_key text NOT NULL,
@@ -173,16 +155,13 @@ CREATE TABLE public.agent_participation (
 );
 
 ALTER TABLE ONLY public.agent_participation
-    ADD CONSTRAINT agent_participation_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.agent_participation
     ADD CONSTRAINT agent_participation_agent_id_scope_key_key UNIQUE (agent_id, scope_key);
 
 CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING btree (realm_id);
 
 CREATE TABLE public.agent_participation_ceiling (
     scope_kind text NOT NULL,
-    scope_key text NOT NULL,
+    scope_key text PRIMARY KEY,
     realm_id text NOT NULL,
     reply_message boolean DEFAULT false NOT NULL,
     reaction_add boolean DEFAULT false NOT NULL,
@@ -193,13 +172,10 @@ CREATE TABLE public.agent_participation_ceiling (
     CONSTRAINT agent_participation_ceiling_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'strand'::text])))
 );
 
-ALTER TABLE ONLY public.agent_participation_ceiling
-    ADD CONSTRAINT agent_participation_ceiling_pkey PRIMARY KEY (scope_key);
-
 CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation_ceiling USING btree (realm_id);
 
 CREATE TABLE public.agent_principals (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     controller_id text NOT NULL,
     principal_control_realm_id text NOT NULL,
     controller_authorization_ref text NOT NULL,
@@ -238,9 +214,6 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR ((char_length(agent_slug) BETWEEN 1 AND 64) AND (octet_length(agent_slug) <= 256) AND (agent_slug !~ '[[:space:][:cntrl:]]'::text) AND (strpos(agent_slug, ':'::text) = 0) AND (strpos(agent_slug, '@'::text) = 0) AND (strpos(agent_slug, '/'::text) = 0) AND (strpos(agent_slug, '#'::text) = 0) AND (strpos(agent_slug, '?'::text) = 0) AND (strpos(agent_slug, E'\\') = 0))),
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );
-
-ALTER TABLE ONLY public.agent_principals
-    ADD CONSTRAINT agent_principals_pkey PRIMARY KEY (id);
 
 CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
 
@@ -295,7 +268,7 @@ CREATE TABLE public.agent_sidecar_contexts (
 );
 
 CREATE TABLE public.agent_sessions (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     agent_id text NOT NULL,
     verification_method text NOT NULL,
     runtime_attestation jsonb,
@@ -306,9 +279,6 @@ CREATE TABLE public.agent_sessions (
     CONSTRAINT agent_sessions_state_check CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text])))
 );
 
-ALTER TABLE ONLY public.agent_sessions
-    ADD CONSTRAINT agent_sessions_pkey PRIMARY KEY (id);
-
 CREATE INDEX agent_sessions_principal_idx ON public.agent_sessions USING btree (agent_id);
 
 CREATE INDEX agent_sessions_state_idx ON public.agent_sessions USING btree (state);
@@ -317,7 +287,7 @@ ALTER TABLE ONLY public.agent_sessions
     ADD CONSTRAINT agent_sessions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 CREATE TABLE public.applet_registrations (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     namespace text NOT NULL,
     owner_actor_id text NOT NULL,
     registry_did text NOT NULL,
@@ -341,9 +311,6 @@ CREATE TABLE public.applet_registrations (
     CONSTRAINT applet_registrations_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'installed'::text, 'partially_installed'::text, 'rejected'::text, 'revoked'::text])))
 );
 
-ALTER TABLE ONLY public.applet_registrations
-    ADD CONSTRAINT applet_registrations_pkey PRIMARY KEY (id);
-
 CREATE UNIQUE INDEX applet_registrations_active_namespace_idx ON public.applet_registrations USING btree (namespace) WHERE (revoked_at IS NULL);
 
 CREATE INDEX applet_registrations_owner_idx ON public.applet_registrations USING btree (owner_actor_id);
@@ -357,16 +324,14 @@ CREATE TABLE public.applet_transactions (
     request_digest text NOT NULL,
     outcome jsonb,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
-    completed_at timestamp with time zone
+    completed_at timestamp with time zone,
+    CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_id, idempotency_key)
 );
-
-ALTER TABLE ONLY public.applet_transactions
-    ADD CONSTRAINT applet_transactions_pkey PRIMARY KEY (source_service_id, idempotency_key);
 
 CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
 
 CREATE TABLE public.audit_logs (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     actor_id text,
     request_id uuid,
     action text NOT NULL,
@@ -378,9 +343,6 @@ CREATE TABLE public.audit_logs (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.audit_logs
-    ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
-
 CREATE INDEX audit_logs_action_idx ON public.audit_logs USING btree (action);
 
 CREATE INDEX audit_logs_actor_idx ON public.audit_logs USING btree (actor_id, created_at);
@@ -388,7 +350,7 @@ CREATE INDEX audit_logs_actor_idx ON public.audit_logs USING btree (actor_id, cr
 CREATE INDEX audit_logs_space_idx ON public.audit_logs USING btree (realm_id);
 
 CREATE TABLE public.backup_series (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     actor_id text NOT NULL,
     backup_kind text NOT NULL,
     head_backup_id uuid,
@@ -401,9 +363,6 @@ CREATE TABLE public.backup_series (
     CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
 );
 
-ALTER TABLE ONLY public.backup_series
-    ADD CONSTRAINT backup_series_pkey PRIMARY KEY (id);
-
 CREATE UNIQUE INDEX backup_series_actor_class_uniq ON public.backup_series USING btree (actor_id, backup_kind) WHERE (retired_at IS NULL);
 
 CREATE INDEX backup_series_actor_idx ON public.backup_series USING btree (actor_id);
@@ -411,7 +370,7 @@ CREATE INDEX backup_series_actor_idx ON public.backup_series USING btree (actor_
 CREATE INDEX backup_series_class_idx ON public.backup_series USING btree (backup_kind);
 
 CREATE TABLE public.blobs (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     sha256 text NOT NULL,
     media_type text NOT NULL,
     filename text,
@@ -428,9 +387,6 @@ CREATE TABLE public.blobs (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text])))
 );
-
-ALTER TABLE ONLY public.blobs
-    ADD CONSTRAINT blobs_pkey PRIMARY KEY (id);
 
 CREATE INDEX blobs_sha256_idx ON public.blobs USING btree (sha256);
 
@@ -451,21 +407,18 @@ CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, crea
 -- primary key so the first receipt for a digest is the one that stands and an
 -- idempotent retry cannot re-stamp `received_at`.
 CREATE TABLE public.publication_evidence (
-    event_digest text NOT NULL,
+    event_digest text PRIMARY KEY,
     realm_id text NOT NULL,
     authorization_lease jsonb NOT NULL,
     ingress_receipt jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.publication_evidence
-    ADD CONSTRAINT publication_evidence_pkey PRIMARY KEY (event_digest);
-
 CREATE INDEX publication_evidence_realm_idx ON public.publication_evidence USING btree (realm_id);
 
 -- `signal_relay_position`.
 CREATE TABLE public.signal_relay (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     realm_id text NOT NULL,
     position bigint NOT NULL,
     scope_ref jsonb NOT NULL,
@@ -478,9 +431,6 @@ CREATE TABLE public.signal_relay (
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT signal_relay_class_check CHECK ((signal_class = ANY (ARRAY['setup'::text, 'moderation'::text, 'session'::text])))
 );
-
-ALTER TABLE ONLY public.signal_relay
-    ADD CONSTRAINT signal_relay_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.signal_relay
     ADD CONSTRAINT signal_relay_realm_position_key UNIQUE (realm_id, position);
@@ -496,13 +446,10 @@ CREATE INDEX signal_relay_realm_digest_idx ON public.signal_relay USING btree (r
 -- after the relay log is pruned, and a deliver-once watermark can never be
 -- re-crossed by a recycled position.
 CREATE TABLE public.signal_relay_position (
-    realm_id text NOT NULL,
+    realm_id text PRIMARY KEY,
     next_position bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.signal_relay_position
-    ADD CONSTRAINT signal_relay_position_pkey PRIMARY KEY (realm_id);
 
 -- Per-subscriber-device deliver-once watermark for `signal_relay`. Records the
 -- highest per-Realm `position` already delivered to a `(actor, device, realm)`
@@ -514,11 +461,9 @@ CREATE TABLE public.signal_relay_watermark (
     device_id text NOT NULL,
     realm_id text NOT NULL,
     delivered_through bigint DEFAULT 0 NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id)
 );
-
-ALTER TABLE ONLY public.signal_relay_watermark
-    ADD CONSTRAINT signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
 
 CREATE TABLE public.canonical_events (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -618,7 +563,7 @@ CREATE INDEX event_batch_receipt_events_event_pk_idx
 -- Control Move is an Event carrying `seal_basis`, so the log is keyed by the
 -- canonical control-event digest rather than by a Move id.
 CREATE TABLE public.state_control_events (
-    event_digest text NOT NULL,
+    event_digest text PRIMARY KEY,
     realm_id text NOT NULL,
     event_json jsonb NOT NULL,
     control_proposal_ack jsonb,
@@ -629,24 +574,18 @@ CREATE TABLE public.state_control_events (
     sealed_at timestamp with time zone
 );
 
-ALTER TABLE ONLY public.state_control_events
-    ADD CONSTRAINT state_control_events_pkey PRIMARY KEY (event_digest);
-
 CREATE INDEX state_control_events_pending_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest) WHERE (sealed_by IS NULL);
 
 CREATE INDEX state_control_events_sealed_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest) WHERE (sealed_by IS NOT NULL);
 
 CREATE TABLE public.state_seals (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     realm_id text NOT NULL,
     seal_json jsonb NOT NULL,
     predecessor_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     is_genesis boolean DEFAULT false NOT NULL,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.state_seals
-    ADD CONSTRAINT state_seals_pkey PRIMARY KEY (id);
 
 CREATE INDEX state_seals_realm_idx ON public.state_seals USING btree (realm_id, inserted_at, id);
 
@@ -657,14 +596,12 @@ CREATE TABLE public.state_seal_signing_leases (
     signer_slot text NOT NULL,
     holder text NOT NULL,
     lease_until_ms bigint NOT NULL,
-    fence bigint NOT NULL
+    fence bigint NOT NULL,
+    CONSTRAINT state_seal_signing_leases_pkey PRIMARY KEY (realm_id, signer_slot)
 );
 
-ALTER TABLE ONLY public.state_seal_signing_leases
-    ADD CONSTRAINT state_seal_signing_leases_pkey PRIMARY KEY (realm_id, signer_slot);
-
 CREATE TABLE public.state_cell_ops (
-    seq bigint GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+    seq bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
     realm_id text NOT NULL,
     seal_id text NOT NULL,
     op_index bigint NOT NULL,
@@ -673,9 +610,6 @@ CREATE TABLE public.state_cell_ops (
     op_json jsonb NOT NULL,
     appended_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.state_cell_ops
-    ADD CONSTRAINT state_cell_ops_pkey PRIMARY KEY (seq);
 
 ALTER TABLE ONLY public.state_cell_ops
     ADD CONSTRAINT state_cell_ops_seal_op_index_key UNIQUE (seal_id, op_index);
@@ -689,14 +623,12 @@ CREATE TABLE public.state_cell_cache (
     cell_id text NOT NULL,
     view_hash text NOT NULL,
     state_json jsonb NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT state_cell_cache_pkey PRIMARY KEY (realm_id, cell_id, view_hash)
 );
 
-ALTER TABLE ONLY public.state_cell_cache
-    ADD CONSTRAINT state_cell_cache_pkey PRIMARY KEY (realm_id, cell_id, view_hash);
-
 CREATE TABLE public.consent_cells (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     holder_id text NOT NULL,
     peer_id text NOT NULL,
     scope text NOT NULL,
@@ -709,13 +641,10 @@ CREATE TABLE public.consent_cells (
 );
 
 ALTER TABLE ONLY public.consent_cells
-    ADD CONSTRAINT consent_cells_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.consent_cells
     ADD CONSTRAINT consent_cells_holder_peer_scope_key UNIQUE (holder_id, peer_id, scope);
 
 CREATE TABLE public.contacts (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     requester_id text NOT NULL,
     target_id text NOT NULL,
     basis_id text,
@@ -737,15 +666,12 @@ CREATE TABLE public.contacts (
 );
 
 ALTER TABLE ONLY public.contacts
-    ADD CONSTRAINT contacts_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.contacts
     ADD CONSTRAINT contacts_requester_target_key UNIQUE (requester_id, target_id);
 
 CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id);
 
 CREATE TABLE public.devices (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     actor_id text NOT NULL,
     device_id text NOT NULL,
     device_key text,
@@ -755,9 +681,6 @@ CREATE TABLE public.devices (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.devices
-    ADD CONSTRAINT devices_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.devices
     ADD CONSTRAINT devices_actor_device_id_key UNIQUE (actor_id, device_id);
@@ -788,7 +711,7 @@ CREATE INDEX device_pairings_expiry_idx
     ON public.device_pairings (expires_at);
 
 CREATE TABLE public.device_messages (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     idempotency_key text NOT NULL,
     sender text NOT NULL,
     recipient text NOT NULL,
@@ -799,9 +722,6 @@ CREATE TABLE public.device_messages (
 );
 
 ALTER TABLE ONLY public.device_messages
-    ADD CONSTRAINT device_messages_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.device_messages
     ADD CONSTRAINT device_messages_recipient_device_position_key UNIQUE (recipient, device_id, position);
 
 CREATE INDEX device_messages_recipient_device_position_idx ON public.device_messages USING btree (recipient, device_id, position);
@@ -809,29 +729,23 @@ CREATE INDEX device_messages_recipient_device_position_idx ON public.device_mess
 CREATE INDEX device_messages_sender_idempotency_idx ON public.device_messages USING btree (sender, idempotency_key);
 
 CREATE TABLE public.device_message_txns (
-    key text NOT NULL,
+    key text PRIMARY KEY,
     request_digest text NOT NULL,
     outcome jsonb NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.device_message_txns
-    ADD CONSTRAINT device_message_txns_pkey PRIMARY KEY (key);
-
 CREATE TABLE public.device_message_idempotency (
-    message_key text NOT NULL,
+    message_key text PRIMARY KEY,
     intent_digest text NOT NULL,
     delivered boolean NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.device_message_idempotency
-    ADD CONSTRAINT device_message_idempotency_pkey PRIMARY KEY (message_key);
-
 CREATE TABLE public.device_message_ack_tokens (
-    ack_token text NOT NULL,
+    ack_token text PRIMARY KEY,
     recipient text NOT NULL,
     device_id text NOT NULL,
     queue_position bigint NOT NULL,
@@ -839,9 +753,6 @@ CREATE TABLE public.device_message_ack_tokens (
     expires_at timestamp with time zone NOT NULL,
     consumed_at timestamp with time zone
 );
-
-ALTER TABLE ONLY public.device_message_ack_tokens
-    ADD CONSTRAINT device_message_ack_tokens_pkey PRIMARY KEY (ack_token);
 
 CREATE INDEX device_message_ack_tokens_device_idx ON public.device_message_ack_tokens USING btree (recipient, device_id, expires_at);
 
@@ -854,7 +765,7 @@ CREATE TABLE public.device_message_lost_watermarks (
 );
 
 CREATE TABLE public.federation_operations (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     realm_id text NOT NULL,
     object_kind text NOT NULL,
     object_id text,
@@ -863,15 +774,12 @@ CREATE TABLE public.federation_operations (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.federation_operations
-    ADD CONSTRAINT federation_operations_pkey PRIMARY KEY (id);
-
 CREATE INDEX federation_operations_object_type_idx ON public.federation_operations USING btree (object_kind);
 
 CREATE INDEX federation_operations_space_idx ON public.federation_operations USING btree (realm_id, created_at);
 
 CREATE TABLE public.federation_outbox (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     event_pk bigint REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     peer_id text NOT NULL,
     peer_url text NOT NULL,
@@ -895,9 +803,6 @@ CREATE TABLE public.federation_outbox (
     CONSTRAINT federation_outbox_state_check CHECK (state IN ('pending', 'leased', 'delivered', 'policy_suppressed', 'dead_lettered', 'superseded'))
 );
 
-ALTER TABLE ONLY public.federation_outbox
-    ADD CONSTRAINT federation_outbox_pkey PRIMARY KEY (id);
-
 CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
 
 -- Claim scan: `state IN ('pending','leased') AND next_attempt_at <= now`,
@@ -910,8 +815,13 @@ CREATE INDEX federation_outbox_policy_suppressed ON public.federation_outbox USI
 
 CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_id, created_at);
 
+-- `events.rs` suppresses pending deliveries for a quarantined Event by
+-- `WHERE event_pk = $1`; without this the collision path sequential-scans the
+-- whole outbox.
+CREATE INDEX federation_outbox_event_pk_idx ON public.federation_outbox USING btree (event_pk);
+
 CREATE TABLE public.federation_outbox_dead_letter (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     outbox_id text NOT NULL,
     peer_id text NOT NULL,
     endpoint text NOT NULL,
@@ -928,10 +838,10 @@ CREATE TABLE public.federation_outbox_dead_letter (
     requeued_at bigint
 );
 
-ALTER TABLE ONLY public.federation_outbox_dead_letter
-    ADD CONSTRAINT federation_outbox_dead_letter_pkey PRIMARY KEY (id);
-
 CREATE INDEX federation_outbox_dead_letter_failed_at ON public.federation_outbox_dead_letter USING btree (failed_at, id);
+
+CREATE INDEX federation_outbox_dead_letter_outbox_id_idx
+    ON public.federation_outbox_dead_letter USING btree (outbox_id);
 
 ALTER TABLE ONLY public.federation_outbox_dead_letter
     ADD CONSTRAINT federation_outbox_dead_letter_outbox_id_fkey FOREIGN KEY (outbox_id) REFERENCES public.federation_outbox(id) ON DELETE CASCADE;
@@ -945,23 +855,18 @@ CREATE TABLE public.federation_frontier_exchange (
     last_failure_at bigint,
     last_frontier_root text,
     last_error text,
-    updated_at bigint NOT NULL
+    updated_at bigint NOT NULL,
+    CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id)
 );
-
-ALTER TABLE ONLY public.federation_frontier_exchange
-    ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id);
 
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
 
 CREATE TABLE public.invite_receive_policies (
-    subject_id text NOT NULL,
+    subject_id text PRIMARY KEY,
     policy_payload jsonb NOT NULL,
     denied_subjects text[] DEFAULT '{}'::text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.invite_receive_policies
-    ADD CONSTRAINT invite_receive_policies_pkey PRIMARY KEY (subject_id);
 
 CREATE TABLE public.invite_locators (
     locator_id text PRIMARY KEY,
@@ -1006,6 +911,9 @@ CREATE TABLE public.join_application_idempotency (
 CREATE INDEX join_application_idempotency_expiry_idx
     ON public.join_application_idempotency (expires_at);
 
+CREATE INDEX join_application_idempotency_application_idx
+    ON public.join_application_idempotency (realm_id, application_ref);
+
 -- Deployment-wide dynamic operational settings (rate limits, admin
 -- allowlist, federation peers, feature toggles). One row PER setting key:
 -- `value` is the JSON for that key only. This is an OVERLAY — env/boot config
@@ -1024,7 +932,7 @@ CREATE TABLE public.server_settings (
 );
 
 CREATE TABLE public.key_backups (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     actor_id text,
     device_id text,
     backup_kind text,
@@ -1047,9 +955,6 @@ CREATE TABLE public.key_backups (
     series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.key_backups
-    ADD CONSTRAINT key_backups_pkey PRIMARY KEY (id);
 
 -- SOL-02-004: enforce series_seq monotonicity at the storage layer. A given
 -- (actor, series) may hold at most one envelope per sequence number; the
@@ -1093,7 +998,7 @@ CREATE INDEX key_backup_delete_challenges_expiry_idx
     ON public.key_backup_delete_challenges (expires_at);
 
 CREATE TABLE public.mls_commits (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     effective_scope_kind text NOT NULL,
     realm_id text NOT NULL,
     circle_id text,
@@ -1114,15 +1019,12 @@ CREATE TABLE public.mls_commits (
     CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
 );
 
-ALTER TABLE ONLY public.mls_commits
-    ADD CONSTRAINT mls_commits_pkey PRIMARY KEY (id);
-
 CREATE UNIQUE INDEX mls_commits_circle_scope_key ON public.mls_commits USING btree (realm_id, circle_id, mls_group_id) WHERE ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL));
 
 CREATE UNIQUE INDEX mls_commits_realm_scope_key ON public.mls_commits USING btree (realm_id, mls_group_id) WHERE ((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL));
 
 CREATE TABLE public.mls_key_packages (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     keypackage_ref text NOT NULL,
     keypackage_digest text NOT NULL,
     actor_id text NOT NULL,
@@ -1154,9 +1056,6 @@ CREATE TABLE public.mls_key_packages (
 );
 
 ALTER TABLE ONLY public.mls_key_packages
-    ADD CONSTRAINT mls_key_packages_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.mls_key_packages
     ADD CONSTRAINT mls_key_packages_keypackage_ref_key UNIQUE (keypackage_ref);
 
 CREATE INDEX mls_key_packages_by_actor_device ON public.mls_key_packages USING btree (actor_id, device_id, claimed_by_mls_group_id);
@@ -1178,7 +1077,7 @@ CREATE TABLE public.peer_keypackage_claims (
 );
 
 CREATE TABLE public.mls_welcomes (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     mls_group_id text NOT NULL,
     recipient_actor_id text NOT NULL,
     recipient_device_id text NOT NULL,
@@ -1191,13 +1090,10 @@ CREATE TABLE public.mls_welcomes (
     delivered_at bigint
 );
 
-ALTER TABLE ONLY public.mls_welcomes
-    ADD CONSTRAINT mls_welcomes_pkey PRIMARY KEY (id);
-
 CREATE INDEX mls_welcomes_recipient_pending ON public.mls_welcomes USING btree (recipient_actor_id, recipient_device_id, delivered_at, enqueued_at);
 
 CREATE TABLE public.moderation_actions (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     moderator_id text,
     target_actor_id text,
     action_kind text,
@@ -1205,9 +1101,6 @@ CREATE TABLE public.moderation_actions (
     payload jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.moderation_actions
-    ADD CONSTRAINT moderation_actions_pkey PRIMARY KEY (id);
 
 CREATE INDEX moderation_actions_target_idx ON public.moderation_actions USING btree (target_actor_id);
 
@@ -1231,7 +1124,7 @@ CREATE INDEX moderation_reports_space_idx ON public.moderation_reports USING btr
 CREATE INDEX moderation_reports_target_idx ON public.moderation_reports USING btree (target_actor_id);
 
 CREATE TABLE public.organizations (
-    organization_id text NOT NULL,
+    organization_id text PRIMARY KEY,
     organization_did text NOT NULL,
     handle text,
     display_name text NOT NULL,
@@ -1244,9 +1137,6 @@ CREATE TABLE public.organizations (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
-
-ALTER TABLE ONLY public.organizations
-    ADD CONSTRAINT organizations_pkey PRIMARY KEY (organization_id);
 
 CREATE INDEX organizations_handle_idx ON public.organizations USING btree (handle) WHERE (handle IS NOT NULL);
 
@@ -1323,7 +1213,7 @@ CREATE INDEX organization_registration_states_generation_idx
     ON public.organization_registration_states (organization_id, current_generation);
 
 CREATE TABLE public.organization_policies (
-    organization_id text NOT NULL,
+    organization_id text PRIMARY KEY,
     policy_id text NOT NULL,
     payload jsonb NOT NULL,
     version bigint NOT NULL,
@@ -1331,9 +1221,6 @@ CREATE TABLE public.organization_policies (
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
 );
-
-ALTER TABLE ONLY public.organization_policies
-    ADD CONSTRAINT organization_policies_pkey PRIMARY KEY (organization_id);
 
 -- SOL-ORG-04 — verified `ak.realm.organization` relationship statements.
 -- Primary key `(realm_id, organization_id, relationship)` so owner /
@@ -1357,11 +1244,9 @@ CREATE TABLE public.realm_organizations (
     proof_digest text,
     delegation_ref text,
     issuer_role text NOT NULL,
-    updated_at timestamp with time zone NOT NULL
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT realm_organizations_pkey PRIMARY KEY (realm_id, organization_id, relationship)
 );
-
-ALTER TABLE ONLY public.realm_organizations
-    ADD CONSTRAINT realm_organizations_pkey PRIMARY KEY (realm_id, organization_id, relationship);
 
 CREATE INDEX realm_organizations_organization_idx ON public.realm_organizations USING btree (organization_id);
 
@@ -1374,34 +1259,26 @@ CREATE INDEX realm_organizations_relationship_idx ON public.realm_organizations 
 CREATE TABLE public.realm_owning_organizations (
     realm_id text NOT NULL,
     organization_id text NOT NULL,
-    linked_at timestamp with time zone DEFAULT now() NOT NULL
+    linked_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT realm_owning_organizations_pkey PRIMARY KEY (realm_id, organization_id)
 );
-
-ALTER TABLE ONLY public.realm_owning_organizations
-    ADD CONSTRAINT realm_owning_organizations_pkey PRIMARY KEY (realm_id, organization_id);
 
 CREATE INDEX realm_owning_organizations_organization_idx ON public.realm_owning_organizations USING btree (organization_id);
 
 CREATE TABLE public.realm_moderation_policies (
-    realm_id text NOT NULL,
+    realm_id text PRIMARY KEY,
     payload jsonb NOT NULL,
     updated_by text NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
 
-ALTER TABLE ONLY public.realm_moderation_policies
-    ADD CONSTRAINT realm_moderation_policies_pkey PRIMARY KEY (realm_id);
-
 CREATE TABLE public.retention_policies (
-    realm_id text NOT NULL,
+    realm_id text PRIMARY KEY,
     ttl_seconds bigint NOT NULL,
     updated_by text NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT retention_policies_ttl_seconds_check CHECK ((ttl_seconds >= 0))
 );
-
-ALTER TABLE ONLY public.retention_policies
-    ADD CONSTRAINT retention_policies_pkey PRIMARY KEY (realm_id);
 
 -- Records that retention expired an Event. Deliberately NOT an `event_pk`
 -- foreign key: this table exists to survive the erasure of the very row such a
@@ -1409,7 +1286,7 @@ ALTER TABLE ONLY public.retention_policies
 -- therefore stored directly, in the same 33-octet form `canonical_events.id`
 -- uses, so the two can be compared without a representation change.
 CREATE TABLE public.retention_tombstones (
-    event_id bytea NOT NULL CHECK (octet_length(event_id) = 33),
+    event_id bytea CHECK (octet_length(event_id) = 33) PRIMARY KEY,
     realm_id text NOT NULL,
     reason text NOT NULL,
     policy_ttl_seconds bigint NOT NULL,
@@ -1419,13 +1296,10 @@ CREATE TABLE public.retention_tombstones (
     CONSTRAINT retention_tombstones_policy_ttl_seconds_check CHECK ((policy_ttl_seconds >= 0))
 );
 
-ALTER TABLE ONLY public.retention_tombstones
-    ADD CONSTRAINT retention_tombstones_pkey PRIMARY KEY (event_id);
-
 CREATE INDEX retention_tombstones_realm_idx ON public.retention_tombstones USING btree (realm_id);
 
 CREATE TABLE public.multisig_pending (
-    seal_id text NOT NULL,
+    seal_id text PRIMARY KEY,
     realm_id text NOT NULL,
     threshold_k integer NOT NULL,
     threshold_n integer NOT NULL,
@@ -1439,9 +1313,6 @@ CREATE TABLE public.multisig_pending (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.multisig_pending
-    ADD CONSTRAINT multisig_pending_pkey PRIMARY KEY (seal_id);
-
 CREATE INDEX multisig_pending_claim_seq_idx ON public.multisig_pending USING btree (claim_seq);
 
 CREATE INDEX multisig_pending_claimed_idx ON public.multisig_pending USING btree (claimed_until);
@@ -1453,7 +1324,7 @@ CREATE INDEX multisig_pending_space_idx ON public.multisig_pending USING btree (
 CREATE SEQUENCE public.notification_projection_position_seq AS bigint;
 
 CREATE TABLE public.notifications (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     recipient_id text NOT NULL,
     realm_id text,
     -- Still `text`, and deliberately not yet an Event identity column: the
@@ -1485,9 +1356,6 @@ CREATE TABLE public.notifications (
     CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_service_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_service_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['add'::text, 'update'::text, 'remove'::text])))
 );
-
-ALTER TABLE ONLY public.notifications
-    ADD CONSTRAINT notifications_pkey PRIMARY KEY (id);
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
 
@@ -1593,7 +1461,7 @@ AFTER INSERT OR UPDATE ON public.agent_principals
 FOR EACH ROW EXECUTE FUNCTION public.project_agent_runtime_approval_notification();
 
 CREATE TABLE public.pending_agent_drafts (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     agent_id text NOT NULL,
     controller_id text NOT NULL,
     draft_payload jsonb NOT NULL,
@@ -1603,9 +1471,6 @@ CREATE TABLE public.pending_agent_drafts (
     decided_by_id text,
     CONSTRAINT pending_agent_drafts_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'expired'::text])))
 );
-
-ALTER TABLE ONLY public.pending_agent_drafts
-    ADD CONSTRAINT pending_agent_drafts_pkey PRIMARY KEY (id);
 
 CREATE INDEX pending_agent_drafts_controller_idx ON public.pending_agent_drafts USING btree (controller_id);
 
@@ -1617,7 +1482,7 @@ ALTER TABLE ONLY public.pending_agent_drafts
     ADD CONSTRAINT pending_agent_drafts_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 CREATE TABLE public.policy_documents (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     owner_id text NOT NULL,
     scope text NOT NULL,
     subject_ref text NOT NULL,
@@ -1628,9 +1493,6 @@ CREATE TABLE public.policy_documents (
     active boolean DEFAULT true NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.policy_documents
-    ADD CONSTRAINT policy_documents_pkey PRIMARY KEY (id);
 
 CREATE INDEX policy_documents_owner_idx ON public.policy_documents USING btree (owner_id);
 
@@ -1841,7 +1703,7 @@ CREATE INDEX projection_spaces_state_idx ON public.projection_spaces USING btree
 CREATE TABLE public.push_bridge_cache (
     push_gateway_url text NOT NULL,
     service_base_url text NOT NULL,
-    bridge_describe_url text NOT NULL,
+    bridge_describe_url text PRIMARY KEY,
     fetch_state text NOT NULL,
     cache_state text NOT NULL,
     contract_digest text NOT NULL,
@@ -1853,15 +1715,12 @@ CREATE TABLE public.push_bridge_cache (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.push_bridge_cache
-    ADD CONSTRAINT push_bridge_cache_pkey PRIMARY KEY (bridge_describe_url);
-
 CREATE INDEX push_bridge_cache_fetched_at_idx ON public.push_bridge_cache USING btree (fetched_at);
 
 CREATE INDEX push_bridge_cache_trust_freshness_idx ON public.push_bridge_cache USING btree (trust_level, freshness_at);
 
 CREATE TABLE public.push_devices (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     actor_id text,
     device_id text NOT NULL,
     push_gateway text NOT NULL,
@@ -1871,9 +1730,6 @@ CREATE TABLE public.push_devices (
     payload jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.push_devices
-    ADD CONSTRAINT push_devices_pkey PRIMARY KEY (id);
 
 CREATE TABLE public.realm_invites (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1903,7 +1759,7 @@ CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites
 CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);
 
 CREATE TABLE public.recovery_policies (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     principal_id text NOT NULL,
     version integer NOT NULL,
     acceptance_basis jsonb NOT NULL,
@@ -1919,9 +1775,6 @@ CREATE TABLE public.recovery_policies (
 );
 
 ALTER TABLE ONLY public.recovery_policies
-    ADD CONSTRAINT recovery_policies_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_principal_id_version_key UNIQUE (principal_id, version);
 
 CREATE INDEX recovery_policies_principal_active_idx ON public.recovery_policies USING btree (principal_id, version DESC);
@@ -1930,7 +1783,7 @@ ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_supersedes_fkey FOREIGN KEY (supersedes) REFERENCES public.recovery_policies(id);
 
 CREATE TABLE public.recovery_sessions (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     principal_id text NOT NULL,
     requesting_device_id text NOT NULL,
     trust_domain text NOT NULL,
@@ -1958,9 +1811,6 @@ CREATE TABLE public.recovery_sessions (
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT recovery_sessions_transaction_id_key UNIQUE (transaction_id)
 );
-
-ALTER TABLE ONLY public.recovery_sessions
-    ADD CONSTRAINT recovery_sessions_pkey PRIMARY KEY (id);
 
 CREATE INDEX recovery_sessions_principal_idx ON public.recovery_sessions USING btree (principal_id);
 
@@ -2018,7 +1868,7 @@ CREATE TABLE public.security_transaction_step_attempts (
 );
 
 CREATE TABLE public.sessions (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     actor_id text NOT NULL,
     device_id text NOT NULL,
     audience text NOT NULL,
@@ -2030,13 +1880,10 @@ CREATE TABLE public.sessions (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.sessions
-    ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
-
 CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id, device_id, expires_at) WHERE (revoked_at IS NULL);
 
 CREATE TABLE public.space_members (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     realm_id text NOT NULL,
     actor_id text NOT NULL,
     membership text NOT NULL,
@@ -2047,15 +1894,12 @@ CREATE TABLE public.space_members (
 );
 
 ALTER TABLE ONLY public.space_members
-    ADD CONSTRAINT space_members_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.space_members
     ADD CONSTRAINT space_members_realm_id_actor_key UNIQUE (realm_id, actor_id);
 
 CREATE INDEX space_members_actor_idx ON public.space_members USING btree (actor_id, membership, realm_id);
 
 CREATE TABLE public.space_state_events (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     realm_id text NOT NULL,
     event_type text NOT NULL,
     subject text DEFAULT ''::text NOT NULL,
@@ -2064,9 +1908,6 @@ CREATE TABLE public.space_state_events (
     payload jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
-ALTER TABLE ONLY public.space_state_events
-    ADD CONSTRAINT space_state_events_pkey PRIMARY KEY (id);
 
 CREATE INDEX space_state_events_lookup_idx ON public.space_state_events USING btree (realm_id, event_type, subject, created_at);
 
@@ -2103,7 +1944,7 @@ CREATE INDEX spaces_history_visibility_updated_idx ON public.spaces USING btree 
 CREATE INDEX spaces_preview_policy_digest_idx ON public.spaces USING btree (preview_policy_digest) WHERE (preview_policy_digest IS NOT NULL);
 
 CREATE TABLE public.sync_cursor_handles (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     principal_id text,
     device_id text,
     service_id text NOT NULL,
@@ -2116,15 +1957,12 @@ CREATE TABLE public.sync_cursor_handles (
     CONSTRAINT sync_cursor_handles_purpose_check CHECK ((purpose = ANY (ARRAY['stream'::text, 'barrier'::text])))
 );
 
-ALTER TABLE ONLY public.sync_cursor_handles
-    ADD CONSTRAINT sync_cursor_handles_pkey PRIMARY KEY (id);
-
 CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING btree (expires_at_ms);
 
 CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING btree (principal_id, device_id, filter_digest);
 
 CREATE TABLE public.sync_cursor_revocations (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     cursor_digest text NOT NULL,
     principal_id text NOT NULL,
     device_id text,
@@ -2134,9 +1972,6 @@ CREATE TABLE public.sync_cursor_revocations (
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT sync_cursor_revocations_scope_check CHECK ((scope = ANY (ARRAY['this_cursor'::text, 'same_device'::text, 'same_session'::text])))
 );
-
-ALTER TABLE ONLY public.sync_cursor_revocations
-    ADD CONSTRAINT sync_cursor_revocations_pkey PRIMARY KEY (id);
 
 CREATE INDEX sync_cursor_revocations_expiry_idx ON public.sync_cursor_revocations USING btree (expires_at);
 
@@ -2148,11 +1983,9 @@ CREATE TABLE public.websocket_auth_challenges (
     issued_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     consumed boolean NOT NULL DEFAULT false,
-    retain_until timestamp with time zone NOT NULL
+    retain_until timestamp with time zone NOT NULL,
+    CONSTRAINT websocket_auth_challenges_pkey PRIMARY KEY (connection_id, nonce)
 );
-
-ALTER TABLE ONLY public.websocket_auth_challenges
-    ADD CONSTRAINT websocket_auth_challenges_pkey PRIMARY KEY (connection_id, nonce);
 
 CREATE INDEX websocket_auth_challenges_retain_until_idx ON public.websocket_auth_challenges (retain_until);
 
@@ -2161,11 +1994,9 @@ CREATE TABLE public.websocket_auth_replay_ledger (
     jti text NOT NULL,
     proof_context text NOT NULL,
     consumed_at timestamp with time zone NOT NULL,
-    retain_until timestamp with time zone NOT NULL
+    retain_until timestamp with time zone NOT NULL,
+    CONSTRAINT websocket_auth_replay_ledger_pkey PRIMARY KEY (cnf_jkt, jti, proof_context)
 );
-
-ALTER TABLE ONLY public.websocket_auth_replay_ledger
-    ADD CONSTRAINT websocket_auth_replay_ledger_pkey PRIMARY KEY (cnf_jkt, jti, proof_context);
 
 CREATE INDEX websocket_auth_replay_ledger_retain_until_idx ON public.websocket_auth_replay_ledger (retain_until);
 
@@ -2177,11 +2008,9 @@ CREATE TABLE public.idempotency_keys (
     response_status integer NOT NULL,
     response_body jsonb NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone NOT NULL
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT idempotency_keys_pkey PRIMARY KEY (principal_id, idempotency_key)
 );
-
-ALTER TABLE ONLY public.idempotency_keys
-    ADD CONSTRAINT idempotency_keys_pkey PRIMARY KEY (principal_id, idempotency_key);
 
 CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
 
@@ -2193,7 +2022,7 @@ CREATE TABLE public.control_proposal_authority_acks (
 );
 
 CREATE TABLE public.webrtc_sessions (
-    id uuid NOT NULL,
+    id uuid PRIMARY KEY,
     realm_id text NOT NULL,
     initiator_id text NOT NULL,
     ice_config jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -2202,15 +2031,12 @@ CREATE TABLE public.webrtc_sessions (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.webrtc_sessions
-    ADD CONSTRAINT webrtc_sessions_pkey PRIMARY KEY (id);
-
 CREATE INDEX webrtc_sessions_expires_idx ON public.webrtc_sessions USING btree (expires_at);
 
 CREATE INDEX webrtc_sessions_space_idx ON public.webrtc_sessions USING btree (realm_id);
 
 CREATE TABLE public.webvh_documents (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     did_document jsonb NOT NULL,
     key_log_head text,
     seq bigint DEFAULT 0 NOT NULL,
@@ -2220,13 +2046,10 @@ CREATE TABLE public.webvh_documents (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-ALTER TABLE ONLY public.webvh_documents
-    ADD CONSTRAINT webvh_documents_pkey PRIMARY KEY (id);
-
 CREATE INDEX webvh_documents_expires_at_idx ON public.webvh_documents USING btree (expires_at);
 
 CREATE TABLE public.webvh_log_events (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     did text NOT NULL,
     seq bigint NOT NULL,
     operation jsonb NOT NULL,
@@ -2236,9 +2059,6 @@ CREATE TABLE public.webvh_log_events (
 ALTER TABLE ONLY public.webvh_log_events
     ADD CONSTRAINT webvh_log_events_did_seq_key UNIQUE (did, seq);
 
-ALTER TABLE ONLY public.webvh_log_events
-    ADD CONSTRAINT webvh_log_events_pkey PRIMARY KEY (id);
-
 CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree (did, seq);
 
 -- The deployment's own authoritative service identity (identity-did.md §3.7).
@@ -2247,12 +2067,9 @@ CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree
 -- KeyRefs. Private signing and WebVH control seeds MUST remain in the selected
 -- Secrets/KeyStore backend and MUST NOT be copied into PostgreSQL.
 CREATE TABLE public.service_identity (
-    id text NOT NULL,
+    id text PRIMARY KEY,
     identity jsonb NOT NULL
 );
-
-ALTER TABLE ONLY public.service_identity
-    ADD CONSTRAINT service_identity_pkey PRIMARY KEY (id);
 
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
@@ -2272,3 +2089,8 @@ CREATE TABLE public.event_federation_outbox (
     outbox_id text NOT NULL REFERENCES public.federation_outbox(id) ON DELETE CASCADE,
     PRIMARY KEY (event_pk, outbox_id)
 );
+
+-- `event_pk` is already the primary key prefix; `outbox_id` is the CASCADE side
+-- and needs its own index or every outbox delete scans this table.
+CREATE INDEX event_federation_outbox_outbox_id_idx
+    ON public.event_federation_outbox USING btree (outbox_id);
