@@ -605,6 +605,9 @@ async fn validate_event_envelope_with_ingress(
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
+    let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
+        .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
+    validate_content_bound_event_id(envelope, typed_digest_suite)?;
     validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
     validate_event_proofs(
         object,
@@ -654,6 +657,29 @@ async fn validate_event_envelope_with_ingress(
         canonical_bytes,
         data_event_query_grade,
     })
+}
+
+fn validate_content_bound_event_id(
+    envelope: &Value,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), EventValidationError> {
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                arkret_wire::ErrorCode::SchemaViolation.as_str(),
+                format!("Event Envelope is not structurally valid: {error}"),
+            )
+        })?;
+    event
+        .verify_event_id_matches_content_with_digest_suite(digest_suite)
+        .map_err(|_| EventValidationError {
+            status: StatusCode::BAD_REQUEST,
+            code: arkret_wire::ErrorCode::SchemaViolation.as_str(),
+            message: "carried event_id does not equal the value re-derived from the Event's canonical content"
+                .to_owned(),
+            reason_code: Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH),
+        })
 }
 
 async fn enforce_device_generation_fence(
@@ -994,6 +1020,41 @@ fn enforce_ordered_log_cell_contract(
 #[cfg(test)]
 mod security_frontier_material_tests {
     use super::*;
+
+    #[test]
+    fn content_bound_event_id_rejects_post_derivation_mutation() {
+        let realm_id =
+            arkret_wire::RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001".to_owned())
+                .unwrap();
+        let mut event = arkret_wire::Event::new(
+            "ak.message.create",
+            arkret_wire::ScopeRef::Realm { realm_id },
+            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            0,
+            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e".to_owned()).unwrap(),
+            serde_json::json!({"body": "hello"}),
+        )
+        .unwrap();
+        validate_content_bound_event_id(
+            &serde_json::to_value(&event).unwrap(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+
+        event.actor_seq = 1;
+        let error = validate_content_bound_event_id(
+            &serde_json::to_value(event).unwrap(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, arkret_wire::ErrorCode::SchemaViolation.as_str());
+        assert_eq!(
+            error.reason_code,
+            Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH)
+        );
+    }
 
     #[test]
     fn mls_commit_fails_closed_without_verified_group_state_material() {
