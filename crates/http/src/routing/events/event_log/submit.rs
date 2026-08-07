@@ -202,6 +202,67 @@ pub(in crate::routing) struct EventCommitIdempotency {
     pub request_hash: String,
 }
 
+/// Persist a collision only after the shared envelope validator has rebound the
+/// carried EventId to the digest-covered canonical preimage.  Calling the
+/// storage port is intentional: it atomically moves the previously accepted
+/// variant and this verified variant into the durable quarantine bucket.
+pub(super) async fn quarantine_verified_event_collision(
+    state: &AppState,
+    record: CanonicalEventRecord,
+) -> SubmitOneError {
+    let event_id = record.event_id.clone();
+    match state.event_queries().store_canonical_event(record).await {
+        Err(error) if error.is_conflict("event_hash_collision") => SubmitOneError::quarantine(
+            event_id,
+            "witness_disagreement",
+            "verified Event variants disagree for the same full EventId",
+        ),
+        Err(error) => SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("durable Event collision quarantine failed: {error}"),
+        ),
+        Ok(()) => SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "collision admission unexpectedly accepted a second canonical preimage",
+        ),
+    }
+}
+
+pub(super) fn map_event_hash_collision(
+    event_id: impl Into<String>,
+    error: &soland_services::ServiceError,
+) -> Option<SubmitOneError> {
+    error.is_conflict("event_hash_collision").then(|| {
+        SubmitOneError::quarantine(
+            event_id,
+            "witness_disagreement",
+            "verified Event variants disagree for the same full EventId",
+        )
+    })
+}
+
+#[cfg(test)]
+mod event_collision_reason_tests {
+    use super::*;
+
+    #[test]
+    fn storage_collision_maps_to_registered_witness_disagreement_reason() {
+        let error = map_event_hash_collision(
+            "ak:event:fixture",
+            &soland_services::ServiceError::Conflict("event_hash_collision".to_owned()),
+        )
+        .expect("storage collision must be externally quarantined");
+
+        assert_eq!(error.code, "witness_disagreement");
+        assert_eq!(
+            error.quarantine_event_id.as_deref(),
+            Some("ak:event:fixture")
+        );
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,

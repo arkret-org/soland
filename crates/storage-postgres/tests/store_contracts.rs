@@ -96,8 +96,6 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     };
     let _db_guard = DB_GUARD.lock().await;
     let now = chrono::Utc::now();
-    let event_id =
-        arkret_identifiers::EventId::new(format!("ak:event:{}", uuid::Uuid::now_v7())).unwrap();
     let realm_id =
         arkret_identifiers::RealmId::new(format!("ak:realm:{}", uuid::Uuid::now_v7())).unwrap();
     let actor_id = arkret_identifiers::Did::new(format!(
@@ -105,8 +103,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         uuid::Uuid::now_v7()
     ))
     .unwrap();
-    let event = arkret_wire::Event::new_with_id_at(
-        event_id.clone(),
+    let event = arkret_wire::Event::new_with_derived_id_at(
         arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
@@ -118,6 +115,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         now,
     )
     .unwrap();
+    let event_id = event.event_id.clone();
     assert!(event.seal_basis.is_none());
     let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
     let authority_set_ref =
@@ -147,7 +145,8 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     )
     .unwrap();
     let envelope = serde_json::to_value(&event).unwrap();
-    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
             event: CanonicalEventRecord {
@@ -181,6 +180,180 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     assert_eq!(
         count, 1,
         "basis-free Control anchor must enter pending index"
+    );
+}
+
+#[tokio::test]
+async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_conflict() {
+    use diesel::sql_types::{BigInt, Binary, Text};
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{
+        CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+        EventStore, FederationOutboxStore, PersistenceError, ids,
+    };
+
+    #[derive(QueryableByName)]
+    struct PkRow {
+        #[diesel(sql_type = BigInt)]
+        pk: i64,
+    }
+    #[derive(QueryableByName)]
+    struct StateRow {
+        #[diesel(sql_type = Text)]
+        state: String,
+    }
+    #[derive(QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = BigInt)]
+        value: i64,
+    }
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let preimage = b"validated-digest-preimage".to_vec();
+    let digest = arkret_canonical::sha256_bytes(&preimage);
+    let mut id = [0_u8; ids::EVENT_ID_BYTES];
+    id[0] = 0x01;
+    id[1..].copy_from_slice(&digest);
+    let event_id = ids::format_event_id(&id);
+    let canonical_digest = ids::format_event_digest(0x01, &digest).unwrap();
+    let now = chrono::Utc::now();
+    let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
+    let actor_id = format!("did:web:collision-{}.example", uuid::Uuid::now_v7());
+    let incoming = CanonicalEventRecord {
+        event_id: event_id.clone(),
+        actor_id: actor_id.clone(),
+        actor_seq: 0,
+        realm_id: Some(realm_id.clone()),
+        kind: "ak.test.data".to_owned(),
+        schema_id: "arkret://events/test/v1".to_owned(),
+        canonical_digest,
+        canonical_bytes: preimage,
+        envelope: serde_json::json!({"variant": "incoming", "proofs": [{"jws": "full-evidence"}]}),
+        received_at: now,
+    };
+    let mut conn = pool.get().await.unwrap();
+    let event_pk = sql_query(
+        "INSERT INTO canonical_events \
+         (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
+         VALUES ($1, 1, $2, $3, 0, $4, $5, $6, $7, $8, $9) RETURNING pk",
+    )
+    .bind::<Binary, _>(id.to_vec())
+    .bind::<Binary, _>(digest.to_vec())
+    .bind::<Text, _>(&actor_id)
+    .bind::<Text, _>(&realm_id)
+    .bind::<Text, _>(&incoming.kind)
+    .bind::<Text, _>(&incoming.schema_id)
+    .bind::<Binary, _>(b"hypothetical-colliding-preimage".to_vec())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"variant": "accepted"}))
+    .bind::<diesel::sql_types::Timestamptz, _>(now)
+    .get_result::<PkRow>(&mut conn)
+    .await
+    .unwrap()
+    .pk;
+    sql_query(
+        "INSERT INTO projection_events \
+         (id, event_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
+         VALUES ($1, $2, $3, $4, 'test', '{}'::jsonb, $5, $5)",
+    )
+    .bind::<Binary, _>(id.to_vec())
+    .bind::<BigInt, _>(event_pk)
+    .bind::<Text, _>(&realm_id)
+    .bind::<Text, _>(&incoming.kind)
+    .bind::<diesel::sql_types::Timestamptz, _>(now)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    let outbox_id = format!("collision-outbox:{}", uuid::Uuid::now_v7());
+    sql_query(
+        "INSERT INTO federation_outbox \
+         (id, event_pk, peer_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
+         VALUES ($1, $2, 'did:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
+    )
+    .bind::<Text, _>(&outbox_id)
+    .bind::<BigInt, _>(event_pk)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+
+    let store = PgEventStore { pool: pool.clone() };
+    let error = store.put(incoming.clone()).await.unwrap_err();
+    assert!(
+        matches!(error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
+    );
+    assert!(store.get(&event_id).await.unwrap().is_none());
+    assert_eq!(store.collision_variants(&event_id).await.unwrap().len(), 2);
+    let repeated = store.put(incoming.clone()).await.unwrap_err();
+    assert!(
+        matches!(repeated, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
+    );
+    assert_eq!(store.collision_variants(&event_id).await.unwrap().len(), 2);
+
+    let prefix_preimage = b"batch-prefix-must-not-land".to_vec();
+    let prefix_digest = arkret_canonical::sha256_bytes(&prefix_preimage);
+    let mut prefix_id_bytes = [0_u8; ids::EVENT_ID_BYTES];
+    prefix_id_bytes[0] = 0x01;
+    prefix_id_bytes[1..].copy_from_slice(&prefix_digest);
+    let prefix_id = ids::format_event_id(&prefix_id_bytes);
+    let prefix = CanonicalEventRecord {
+        event_id: prefix_id.clone(),
+        canonical_digest: ids::format_event_digest(0x01, &prefix_digest).unwrap(),
+        canonical_bytes: prefix_preimage,
+        envelope: serde_json::json!({"prefix": true}),
+        ..incoming.clone()
+    };
+    let batch_error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(EventBatchCommitRequest {
+            events: vec![
+                EventCommitRequest {
+                    event: prefix,
+                    control_proposal_ack: None,
+                    projections: Vec::new(),
+                    idempotency: None,
+                    outbox: Vec::new(),
+                },
+                EventCommitRequest {
+                    event: incoming,
+                    control_proposal_ack: None,
+                    projections: Vec::new(),
+                    idempotency: None,
+                    outbox: Vec::new(),
+                },
+            ],
+            applet_ghosts: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(batch_error, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
+    );
+    assert!(!store.contains(&prefix_id).await.unwrap());
+
+    let mut conn = pool.get().await.unwrap();
+    let state = sql_query("SELECT state FROM canonical_events WHERE pk = $1")
+        .bind::<BigInt, _>(event_pk)
+        .get_result::<StateRow>(&mut conn)
+        .await
+        .unwrap()
+        .state;
+    assert_eq!(state, "quarantined");
+    let projections =
+        sql_query("SELECT COUNT(*) AS value FROM projection_events WHERE event_pk = $1")
+            .bind::<BigInt, _>(event_pk)
+            .get_result::<CountRow>(&mut conn)
+            .await
+            .unwrap()
+            .value;
+    assert_eq!(projections, 0);
+    let outbox = PgFederationOutboxStore { pool };
+    let delivery = outbox.get(&outbox_id).await.unwrap().unwrap();
+    assert_eq!(
+        delivery.last_error_code.as_deref(),
+        Some("witness_disagreement")
     );
 }
 

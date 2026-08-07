@@ -121,10 +121,14 @@ impl SolandMemoryPersistenceStore {
         let devices = MemoryDeviceInventoryStore::new();
         let publication_evidence_data = Arc::new(Mutex::new(BTreeMap::new()));
         let federation_outbox = MemoryFederationOutboxStore::new();
+        let canonical_events = Arc::new(Mutex::new(BTreeMap::new()));
+        let projection_events = MemoryProjectionEventStore::new(canonical_events.clone());
         let events = MemoryEventStore::with_devices(
+            canonical_events,
             devices.shared_data(),
             publication_evidence_data.clone(),
             federation_outbox.data.clone(),
+            projection_events.data.clone(),
         );
         let recovery_sessions = MemoryRecoverySessionStore::new();
         let security_transactions =
@@ -181,7 +185,7 @@ impl SolandMemoryPersistenceStore {
             service_identity: MemoryServiceIdentityStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
             events,
-            projection_events: MemoryProjectionEventStore::new(),
+            projection_events,
             applets: MemoryAppletStore::new(),
             device_messages: MemoryDeviceMessageStore::new(),
             device_keys: MemoryDeviceKeyStore::new(),

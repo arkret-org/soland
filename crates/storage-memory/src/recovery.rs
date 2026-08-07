@@ -591,10 +591,9 @@ mod tests {
         }
     }
 
-    fn event_unit(service_id: &Did, event_id: EventId, kind: &str) -> PreparedEventUnit {
+    fn event_unit(service_id: &Did, _event_id: EventId, kind: &str) -> PreparedEventUnit {
         let authorization_lease = erase_authorization_lease();
-        let event = Event::new_with_id_at(
-            event_id,
+        let event = Event::new_with_derived_id_at(
             kind,
             authorization_lease.scope_ref.clone(),
             authorization_lease.actor_id.clone(),

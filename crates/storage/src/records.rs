@@ -399,6 +399,11 @@ pub struct CanonicalEventRecord {
     pub kind: String,
     pub schema_id: String,
     pub canonical_digest: String,
+    /// Canonical bytes of the Event digest payload (the exact hash preimage),
+    /// not canonical encoding of the whole envelope. Fields excluded from the
+    /// digest payload, such as proofs/unsigned metadata, are validated by
+    /// admission and cannot turn an otherwise identical identity into a hash
+    /// collision.
     pub canonical_bytes: Vec<u8>,
     pub envelope: Value,
     pub received_at: chrono::DateTime<chrono::Utc>,

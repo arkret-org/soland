@@ -304,32 +304,75 @@ CREATE TABLE public.signal_relay_watermark (
 );
 
 CREATE TABLE public.canonical_events (
-    id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL,
+    digest_suite smallint NOT NULL,
+    digest bytea NOT NULL,
     actor_id text NOT NULL,
     actor_seq bigint NOT NULL,
-    realm_id uuid,
+    realm_id text,
     kind text NOT NULL,
     schema_id text NOT NULL,
-    canonical_digest text NOT NULL,
     canonical_bytes bytea NOT NULL,
     envelope jsonb NOT NULL,
-    received_at timestamp with time zone DEFAULT now() NOT NULL
+    state text DEFAULT 'accepted' NOT NULL,
+    received_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT canonical_events_state_check CHECK (state IN ('accepted', 'quarantined')),
+    CONSTRAINT canonical_events_id_length_check CHECK (octet_length(id) = 33),
+    CONSTRAINT canonical_events_digest_suite_check CHECK (digest_suite IN (1, 2)),
+    CONSTRAINT canonical_events_digest_length_check CHECK (octet_length(digest) = 32),
+    CONSTRAINT canonical_events_id_digest_check CHECK (
+        id = decode(lpad(to_hex(digest_suite), 2, '0'), 'hex') || digest
+    ),
+    CONSTRAINT canonical_events_id_key UNIQUE (id),
+    CONSTRAINT canonical_events_identity_key UNIQUE (digest_suite, digest)
 );
+
+CREATE TABLE public.event_collision_variants (
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    event_id bytea NOT NULL,
+    digest_suite smallint NOT NULL,
+    digest bytea NOT NULL,
+    actor_id text NOT NULL,
+    actor_seq bigint NOT NULL,
+    realm_id text,
+    kind text NOT NULL,
+    schema_id text NOT NULL,
+    canonical_bytes bytea NOT NULL,
+    envelope jsonb NOT NULL,
+    received_at timestamp with time zone NOT NULL,
+    CONSTRAINT event_collision_variants_event_id_length_check CHECK (octet_length(event_id) = 33),
+    CONSTRAINT event_collision_variants_digest_suite_check CHECK (digest_suite IN (1, 2)),
+    CONSTRAINT event_collision_variants_digest_length_check CHECK (octet_length(digest) = 32),
+    CONSTRAINT event_collision_variants_id_digest_check CHECK (
+        event_id = decode(lpad(to_hex(digest_suite), 2, '0'), 'hex') || digest
+    )
+);
+
+CREATE INDEX event_collision_variants_event_pk_idx
+    ON public.event_collision_variants USING btree (event_pk);
 
 CREATE TABLE public.event_batch_receipts (
     schema text NOT NULL,
-    id uuid NOT NULL PRIMARY KEY,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id uuid NOT NULL UNIQUE,
     issuer text NOT NULL,
     scope jsonb NOT NULL,
     frontier jsonb NOT NULL,
     events jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    proofs jsonb NOT NULL,
-    event_ids uuid[] NOT NULL
+    proofs jsonb NOT NULL
 );
 
-CREATE INDEX event_batch_receipts_event_ids_idx
-    ON public.event_batch_receipts USING gin (event_ids);
+CREATE TABLE public.event_batch_receipt_events (
+    receipt_pk bigint NOT NULL REFERENCES public.event_batch_receipts(pk) ON DELETE CASCADE,
+    event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    PRIMARY KEY (receipt_pk, event_pk)
+);
+
+CREATE INDEX event_batch_receipt_events_event_pk_idx
+    ON public.event_batch_receipt_events USING btree (event_pk);
 
 -- Pending + sealed control-plane Events. v1 has no standalone Move object: a
 -- Control Move is an Event carrying `seal_basis`, so the log is keyed by the
@@ -516,6 +559,7 @@ CREATE TABLE public.federation_operations (
 
 CREATE TABLE public.federation_outbox (
     id text NOT NULL,
+    event_pk bigint REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     peer_id text NOT NULL,
     peer_url text NOT NULL,
     endpoint text NOT NULL,
@@ -1136,9 +1180,10 @@ CREATE TABLE public.projection_circles (
 );
 
 CREATE TABLE public.projection_events (
-    id bigint NOT NULL,
-    event_id uuid NOT NULL,
-    realm_id uuid NOT NULL,
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL,
+    event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    realm_id text NOT NULL,
     event_kind text NOT NULL,
     operation_kind text NOT NULL,
     operation_id uuid,
@@ -1146,17 +1191,10 @@ CREATE TABLE public.projection_events (
     payload jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     received_at timestamp with time zone NOT NULL DEFAULT now(),
-    CONSTRAINT projection_events_event_id_key UNIQUE (event_id)
+    CONSTRAINT projection_events_id_key UNIQUE (id),
+    CONSTRAINT projection_events_event_pk_key UNIQUE (event_pk),
+    CONSTRAINT projection_events_id_length_check CHECK (octet_length(id) = 33)
 );
-
-CREATE SEQUENCE public.projection_events_ordinal_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-ALTER SEQUENCE public.projection_events_ordinal_seq OWNED BY public.projection_events.id;
 
 CREATE TABLE public.projection_strand_watches (
     id uuid NOT NULL,
@@ -1537,8 +1575,6 @@ CREATE TABLE public.service_identity_registrations (
     CONSTRAINT service_identity_registrations_service_id_key UNIQUE (service_id)
 );
 
-ALTER TABLE ONLY public.projection_events ALTER COLUMN id SET DEFAULT nextval('public.projection_events_ordinal_seq'::regclass);
-
 ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_pkey PRIMARY KEY (id);
 
@@ -1611,9 +1647,6 @@ ALTER TABLE ONLY public.signal_relay_position
 ALTER TABLE ONLY public.signal_relay_watermark
     ADD CONSTRAINT signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
 
-ALTER TABLE ONLY public.canonical_events
-    ADD CONSTRAINT canonical_events_pkey PRIMARY KEY (id);
-
 ALTER TABLE ONLY public.state_control_events
     ADD CONSTRAINT state_control_events_pkey PRIMARY KEY (event_digest);
 
@@ -1676,6 +1709,12 @@ ALTER TABLE ONLY public.federation_outbox_dead_letter
 
 ALTER TABLE ONLY public.federation_outbox
     ADD CONSTRAINT federation_outbox_pkey PRIMARY KEY (id);
+
+CREATE TABLE public.event_federation_outbox (
+    event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    outbox_id text NOT NULL REFERENCES public.federation_outbox(id) ON DELETE CASCADE,
+    PRIMARY KEY (event_pk, outbox_id)
+);
 
 ALTER TABLE ONLY public.federation_frontier_exchange
     ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id);
@@ -1753,9 +1792,6 @@ ALTER TABLE ONLY public.projection_circle_members
 
 ALTER TABLE ONLY public.projection_circles
     ADD CONSTRAINT projection_circles_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.projection_events
-    ADD CONSTRAINT projection_events_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.projection_strand_watches
     ADD CONSTRAINT projection_strand_watches_pkey PRIMARY KEY (id);
@@ -1909,7 +1945,7 @@ CREATE INDEX canonical_events_peer_sync_endpoints_idx ON public.canonical_events
 
 CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
 
-CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ak.realm.create'::text);
+CREATE UNIQUE INDEX canonical_events_realm_create_unique_idx ON public.canonical_events USING btree (realm_id) WHERE (kind = 'ak.realm.create'::text AND state = 'accepted'::text);
 
 CREATE INDEX canonical_events_space_idx ON public.canonical_events USING btree (realm_id);
 
@@ -2034,7 +2070,7 @@ CREATE INDEX projection_events_created_at_idx ON public.projection_events USING 
 
 CREATE INDEX projection_events_received_at_idx ON public.projection_events USING btree (received_at);
 
-CREATE INDEX projection_events_stream_order_idx ON public.projection_events USING btree (received_at, event_id);
+CREATE INDEX projection_events_stream_order_idx ON public.projection_events USING btree (received_at, id);
 
 CREATE INDEX projection_events_space_idx ON public.projection_events USING btree (realm_id);
 

@@ -85,40 +85,6 @@ pub(super) async fn submit_identity_anchor_batch(
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
-    if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
-        if authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some)) {
-            let digests = event_digests(&envelopes).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    format!("identity anchor digest failed: {error}"),
-                )
-            })?;
-            let evidence = state
-                .event_queries()
-                .publication_evidence_for_digests(&digests)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("publication evidence store unavailable: {error}"),
-                    )
-                })?;
-            if evidence.len() != envelopes.len() {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "duplicate_conflict",
-                    "accepted identity anchor unit is missing its atomic publication evidence",
-                ));
-            }
-            outcome.ingress_receipts = evidence
-                .into_iter()
-                .map(|record| record.ingress_receipt)
-                .collect();
-        }
-        return Ok(outcome);
-    }
     let identity_anchor_head_context = if is_bootstrap {
         Some(validate_self_principal_pcr_bootstrap_context(&envelopes)?)
     } else {
@@ -156,8 +122,47 @@ pub(super) async fn submit_identity_anchor_batch(
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
-    validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
     let received_at = now();
+    let retry_candidates = [&first, &second]
+        .into_iter()
+        .zip(envelopes.iter().cloned())
+        .map(|(event, envelope)| canonical_record(event, envelope, received_at))
+        .collect::<Vec<_>>();
+    if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
+        if authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some)) {
+            let digests = event_digests(&envelopes).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("identity anchor digest failed: {error}"),
+                )
+            })?;
+            let evidence = state
+                .event_queries()
+                .publication_evidence_for_digests(&digests)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("publication evidence store unavailable: {error}"),
+                    )
+                })?;
+            if evidence.len() != envelopes.len() {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "duplicate_conflict",
+                    "accepted identity anchor unit is missing its atomic publication evidence",
+                ));
+            }
+            outcome.ingress_receipts = evidence
+                .into_iter()
+                .map(|record| record.ingress_receipt)
+                .collect();
+        }
+        return Ok(outcome);
+    }
+    validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
 
     let existing = state
         .event_queries()
@@ -411,6 +416,9 @@ pub(super) async fn submit_identity_anchor_batch(
         .map_err(|error| {
             if error.is_realm_already_exists() {
                 realm_already_exists_error()
+            } else if let Some(collision) = map_event_hash_collision(first.event_id.clone(), &error)
+            {
+                collision
             } else if error.is_conflict("device_reanchor_frontier_mismatch") {
                 frontier_error()
             } else if error.is_conflict("duplicate_conflict") {
@@ -577,7 +585,17 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
 
-    if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
+    let first =
+        validate_event_envelope_with_context(state, session, &envelopes[0], &[], None).await?;
+    let second =
+        validate_event_envelope_with_context(state, session, &envelopes[1], &[], None).await?;
+    let received_at = now();
+    let retry_candidates = [&first, &second]
+        .into_iter()
+        .zip(envelopes.iter().cloned())
+        .map(|(event, envelope)| canonical_record(event, envelope, received_at))
+        .collect::<Vec<_>>();
+    if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
         let digests = event_digests(&envelopes).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -609,11 +627,6 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             .collect();
         return Ok(outcome);
     }
-
-    let first =
-        validate_event_envelope_with_context(state, session, &envelopes[0], &[], None).await?;
-    let second =
-        validate_event_envelope_with_context(state, session, &envelopes[1], &[], None).await?;
     let typed_control_events = submissions
         .iter()
         .map(|submission| submission.event.clone())
@@ -721,7 +734,6 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             ));
         }
     }
-    let received_at = now();
     let records = vec![
         canonical_record(&first, envelopes[0].clone(), received_at),
         canonical_record(&second, envelopes[1].clone(), received_at),
@@ -772,11 +784,13 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         )
         .await
         .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("atomic cross-signing recovery commit failed: {error}"),
-            )
+            map_event_hash_collision(first.event_id.clone(), &error).unwrap_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("atomic cross-signing recovery commit failed: {error}"),
+                )
+            })
         })?;
     for (event, ack) in typed_control_events.iter().zip(&control_proposal_acks) {
         state
@@ -920,16 +934,12 @@ fn validate_self_principal_pcr_bootstrap_context(
 
 pub(super) async fn identical_historical_retry(
     state: &AppState,
-    envelopes: &[Value],
+    candidates: &[CanonicalEventRecord],
 ) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
-    let mut ids = Vec::with_capacity(envelopes.len());
-    let mut canonical_bytes = Vec::with_capacity(envelopes.len());
-    for envelope in envelopes {
-        let id = event_string_field_from_value(envelope, "event_id")
-            .ok_or_else(|| unit_error("identity anchor Event requires event_id"))?;
-        ids.push(id);
-        canonical_bytes.push(event_canonical_bytes(envelope)?);
-    }
+    let ids = candidates
+        .iter()
+        .map(|record| record.event_id.clone())
+        .collect::<Vec<_>>();
     let mut existing = Vec::with_capacity(ids.len());
     for id in &ids {
         existing.push(
@@ -949,15 +959,11 @@ pub(super) async fn identical_historical_retry(
     if existing.iter().all(Option::is_none) {
         return Ok(None);
     }
-    if existing
-        .iter()
-        .zip(canonical_bytes.iter())
-        .all(|(record, bytes)| {
-            record
-                .as_ref()
-                .is_some_and(|record| &record.canonical_bytes == bytes)
-        })
-    {
+    if existing.iter().zip(candidates).all(|(record, candidate)| {
+        record
+            .as_ref()
+            .is_some_and(|record| record.canonical_bytes == candidate.canonical_bytes)
+    }) {
         if ids.iter().any(|id| EventId::new(id.clone()).is_err()) {
             return Err(unit_error("stored identity anchor Event id is invalid"));
         }
@@ -1028,6 +1034,18 @@ pub(super) async fn identical_historical_retry(
         }
         state.wake_control_seal_coordinator();
         return Ok(Some(outcome));
+    }
+    if let Some(candidate) = existing
+        .iter()
+        .zip(candidates)
+        .find_map(|(record, candidate)| {
+            record
+                .as_ref()
+                .filter(|record| record.canonical_bytes != candidate.canonical_bytes)
+                .map(|_| candidate)
+        })
+    {
+        return Err(quarantine_verified_event_collision(state, candidate.clone()).await);
     }
     Err(SubmitOneError::new(
         StatusCode::CONFLICT,
@@ -2372,7 +2390,20 @@ mod tests {
         retried_reanchor["proofs"][0]["jws"] = json!("retried-transport-proof");
         let mut retried_authorize = authorize;
         retried_authorize["proofs"][0]["jws"] = json!("retried-authority-proof");
-        let outcome = identical_historical_retry(&state, &[retried_reanchor, retried_authorize])
+        let mut candidates = Vec::new();
+        for envelope in [retried_reanchor, retried_authorize] {
+            let id = event_string_field_from_value(&envelope, "event_id").unwrap();
+            let mut candidate = state
+                .event_queries()
+                .canonical_event(&id)
+                .await
+                .unwrap()
+                .unwrap();
+            candidate.canonical_bytes = event_canonical_bytes(&envelope).unwrap();
+            candidate.envelope = envelope;
+            candidates.push(candidate);
+        }
+        let outcome = identical_historical_retry(&state, &candidates)
             .await
             .unwrap()
             .expect("stored canonical unit must be returned as duplicate");

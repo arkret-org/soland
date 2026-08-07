@@ -294,14 +294,35 @@ diesel::table! {
 }
 
 diesel::table! {
-    canonical_events (id) {
-        id -> Uuid,
+    canonical_events (pk) {
+        pk -> Int8,
+        id -> Bytea,
+        digest_suite -> Int2,
+        digest -> Bytea,
         actor_id -> Text,
         actor_seq -> Int8,
-        realm_id -> Nullable<Uuid>,
+        realm_id -> Nullable<Text>,
         kind -> Text,
         schema_id -> Text,
-        canonical_digest -> Text,
+        canonical_bytes -> Bytea,
+        envelope -> Jsonb,
+        state -> Text,
+        received_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    event_collision_variants (pk) {
+        pk -> Int8,
+        event_pk -> Int8,
+        event_id -> Bytea,
+        digest_suite -> Int2,
+        digest -> Bytea,
+        actor_id -> Text,
+        actor_seq -> Int8,
+        realm_id -> Nullable<Text>,
+        kind -> Text,
+        schema_id -> Text,
         canonical_bytes -> Bytea,
         envelope -> Jsonb,
         received_at -> Timestamptz,
@@ -431,7 +452,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    event_batch_receipts (id) {
+    event_batch_receipts (pk) {
+        pk -> Int8,
         schema -> Text,
         id -> Uuid,
         issuer -> Text,
@@ -440,7 +462,13 @@ diesel::table! {
         events -> Jsonb,
         created_at -> Timestamptz,
         proofs -> Jsonb,
-        event_ids -> Array<Nullable<Uuid>>,
+    }
+}
+
+diesel::table! {
+    event_batch_receipt_events (receipt_pk, event_pk) {
+        receipt_pk -> Int8,
+        event_pk -> Int8,
     }
 }
 
@@ -486,6 +514,7 @@ diesel::table! {
 diesel::table! {
     federation_outbox (id) {
         id -> Text,
+        event_pk -> Nullable<Int8>,
         peer_id -> Text,
         peer_url -> Text,
         endpoint -> Text,
@@ -505,6 +534,13 @@ diesel::table! {
         supersedes_outbox_id -> Nullable<Text>,
         created_at -> Int8,
         completed_at -> Nullable<Int8>,
+    }
+}
+
+diesel::table! {
+    event_federation_outbox (event_pk, outbox_id) {
+        event_pk -> Int8,
+        outbox_id -> Text,
     }
 }
 
@@ -883,10 +919,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_events (id) {
-        id -> Int8,
-        event_id -> Uuid,
-        realm_id -> Uuid,
+    projection_events (pk) {
+        pk -> Int8,
+        id -> Bytea,
+        event_pk -> Int8,
+        realm_id -> Text,
         event_kind -> Text,
         operation_kind -> Text,
         operation_id -> Nullable<Uuid>,
@@ -1387,6 +1424,11 @@ diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sessions -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_id));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));
+diesel::joinable!(event_batch_receipt_events -> canonical_events (event_pk));
+diesel::joinable!(event_collision_variants -> canonical_events (event_pk));
+diesel::joinable!(event_federation_outbox -> canonical_events (event_pk));
+diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
+diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_id));
 diesel::allow_tables_to_appear_in_same_query!(
@@ -1417,6 +1459,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_pairings,
     devices,
     event_batch_receipts,
+    event_batch_receipt_events,
+    event_collision_variants,
+    event_federation_outbox,
     events,
     federation_frontier_exchange,
     federation_operations,

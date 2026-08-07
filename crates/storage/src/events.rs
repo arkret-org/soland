@@ -20,10 +20,21 @@ pub trait MessageStore: Send + Sync {
     ) -> PersistenceResult<Vec<MessageRecord>>;
     async fn delete(&self, event_id: &str) -> PersistenceResult<()>;
 }
-/// Canonical event log keyed by `event_id`.
+/// Canonical Event log keyed by the 33-byte Event id, which losslessly encodes
+/// the full `(digest_suite, digest)` identity. Implementations must never
+/// overwrite a row when identical digest bytes bind different digest-preimage
+/// canonical bytes. Envelope-only proof/unsigned differences are not hash
+/// collisions and must be handled by admission proof validation.
 #[async_trait]
 pub trait EventStore: Send + Sync {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
+    /// Full forensic evidence for an Event identity that was quarantined after
+    /// two distinct canonical byte strings claimed the same full hash.
+    /// Ordinary Event reads MUST exclude these records.
+    async fn collision_variants(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Commit one validated ordinary-Realm bootstrap unit. Implementations
     /// MUST insert every canonical Event **and every federation outbox row** in
     /// one transaction or insert none: an accepted Event whose delivery intent
@@ -94,6 +105,7 @@ pub trait EventStore: Send + Sync {
         realm_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
 }
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RealmEventStats {
     pub count: u64,
@@ -131,11 +143,18 @@ pub fn stage_identity_anchor_events(
     records: Vec<CanonicalEventRecord>,
 ) -> PersistenceResult<()> {
     for record in records {
+        crate::ids::validated_event_identity_parts(
+            &record.event_id,
+            &record.canonical_digest,
+            &record.canonical_bytes,
+        )?;
         if let Some(existing) = staged.get(&record.event_id) {
             if existing.canonical_bytes == record.canonical_bytes {
                 continue;
             }
-            return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+            return Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            ));
         }
         if record.kind == arkret_wire::EventKind::REALM_CREATE
             && record.realm_id.is_some()

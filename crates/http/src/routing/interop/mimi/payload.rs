@@ -10,11 +10,10 @@ pub(super) fn typed_body_value<T: Serialize>(
 
 pub(super) async fn persist_mimi_canonical_message_event(
     state: &AppState,
-    event_id: &str,
     realm_id: &str,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: Value,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let actor_id = state.service_id().as_str();
@@ -49,9 +48,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .unwrap_or(0);
     let service_did = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_identifiers::EventId::new(event_id.to_owned())
-            .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
+    let mut event = arkret_wire::Event::new_at(
         arkret_wire::EventKind::MESSAGE_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -109,6 +106,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
+    let event_id = event.event_id.to_string();
     let now = chrono::Utc::now();
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "mimi-provider-facade".to_owned(),
@@ -147,7 +145,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
-    Ok(())
+    Ok(event_id)
 }
 
 pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {

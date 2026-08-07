@@ -695,14 +695,13 @@ pub struct EventCommitContractStores<'a> {
 }
 
 fn canonical_wire_event_record(
-    event_id: &str,
+    _event_id: &str,
     actor_id: &str,
     realm_id: &str,
     actor_seq: u64,
     now: chrono::DateTime<Utc>,
 ) -> CanonicalEventRecord {
-    let event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(event_id.to_owned()).expect("contract event id"),
+    let event = arkret_wire::Event::new_with_derived_id_at(
         "ak.message.create",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -721,10 +720,12 @@ fn canonical_wire_event_record(
     .expect("contract wire event");
     let canonical_digest = event.event_digest().expect("contract event digest");
     let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
-    let canonical_bytes =
-        arkret_canonical::canonical_json_bytes(&envelope).expect("contract canonical bytes");
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(
+        &event.digest_payload().expect("contract digest payload"),
+    )
+    .expect("contract canonical bytes");
     CanonicalEventRecord {
-        event_id: event_id.to_owned(),
+        event_id: event.event_id.as_str().to_owned(),
         actor_id: actor_id.to_owned(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
@@ -744,13 +745,14 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let now = database_timestamp_now();
     let event_uuid = uuid::Uuid::now_v7();
     let realm_uuid = uuid::Uuid::now_v7();
-    let event_id = format!("ak:event:{event_uuid}");
     let realm_id = format!("ak:realm:{realm_uuid}");
     let principal_id = format!("did:web:{namespace}.example");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
+    let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
+    let event_id = event.event_id.clone();
     let request = EventCommitRequest {
-        event: canonical_wire_event_record(&event_id, &principal_id, &realm_id, 0, now),
+        event,
         control_proposal_ack: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),

@@ -1,18 +1,35 @@
 use async_trait::async_trait;
-use diesel::sql_query;
-use diesel::sql_types::{BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz, Uuid};
+use diesel::sql_types::{
+    BigInt, Binary, Integer, Jsonb, Nullable, SmallInt, Text, Timestamptz, Uuid,
+};
+use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use soland_storage::{
     CanonicalEventRecord, EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest,
     EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
 };
 
-use crate::events::{CanonicalEventRow, realm_actor_lock_key};
+use crate::events::{
+    CanonicalEventRow, CanonicalInsertOutcome, insert_canonical_event, realm_actor_lock_key,
+};
 use crate::{PgPool, PgTransactionError, pg_conn};
+
+#[derive(diesel::QueryableByName)]
+struct EventPreflightRow {
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    state: String,
+}
 
 #[derive(Clone)]
 pub struct PgEventCommitUnitOfWork {
     pool: PgPool,
+}
+
+enum CommitTransactionOutcome {
+    Committed(EventCommitOutcome),
+    Collision,
 }
 
 impl PgEventCommitUnitOfWork {
@@ -44,17 +61,106 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             ));
         }
         let mut conn = pg_conn(&self.pool).await?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // Inspect the whole batch before inserting any of its ordinary
+            // rows. A collision in item N may commit quarantine evidence for
+            // that identity, but must never commit items 0..N-1 as a prefix.
+            let mut ordered = request.events.iter().collect::<Vec<_>>();
+            ordered.sort_by(|left, right| left.event.event_id.cmp(&right.event.event_id));
+            for item in &ordered {
+                let identity = ids::validated_event_identity_parts(
+                    &item.event.event_id,
+                    &item.event.canonical_digest,
+                    &item.event.canonical_bytes,
+                )?;
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+                    .bind::<Binary, _>(identity.id.to_vec())
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+            }
+            let mut incoming = std::collections::BTreeMap::<
+                String,
+                &CanonicalEventRecord,
+            >::new();
+            for item in ordered {
+                let identity = ids::validated_event_identity_parts(
+                    &item.event.event_id,
+                    &item.event.canonical_digest,
+                    &item.event.canonical_bytes,
+                )?;
+                let stored = sql_query(
+                    "SELECT canonical_bytes, state FROM canonical_events WHERE id = $1",
+                )
+                .bind::<Binary, _>(identity.id.to_vec())
+                .get_result::<EventPreflightRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+                if let Some(stored) = stored {
+                    if stored.canonical_bytes != item.event.canonical_bytes {
+                        let outcome = insert_canonical_event(conn, &item.event).await?;
+                        debug_assert_eq!(outcome, CanonicalInsertOutcome::Collision);
+                        return Ok(CommitTransactionOutcome::Collision);
+                    }
+                    if stored.state == "quarantined" {
+                        return Ok(CommitTransactionOutcome::Collision);
+                    }
+                    continue;
+                }
+                if let Some(previous) = incoming.get(&item.event.event_id) {
+                    if previous.canonical_bytes != item.event.canonical_bytes {
+                        let inserted = insert_canonical_event(conn, previous).await?;
+                        debug_assert!(matches!(inserted, CanonicalInsertOutcome::Inserted(_)));
+                        let collision = insert_canonical_event(conn, &item.event).await?;
+                        debug_assert_eq!(collision, CanonicalInsertOutcome::Collision);
+                        return Ok(CommitTransactionOutcome::Collision);
+                    }
+                } else {
+                    incoming.insert(item.event.event_id.clone(), &item.event);
+                }
+            }
+            let mut event_inserted = false;
             let mut projections_inserted = 0;
             let mut outbox_inserted = 0;
             for request in request.events {
-            let event_id = ids::typed_uuid_part_or_schema_violation(&request.event.event_id)?;
-            let realm_id = request
-                .event
-                .realm_id
-                .as_deref()
-                .map(ids::typed_uuid_part_or_schema_violation)
-                .transpose()?;
+            let identity = ids::validated_event_identity_parts(
+                &request.event.event_id,
+                &request.event.canonical_digest,
+                &request.event.canonical_bytes,
+            )?;
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+                .bind::<Binary, _>(identity.id.to_vec())
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            let identity_matches = sql_query(
+                "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+                 FROM canonical_events WHERE id = $1",
+            )
+            .bind::<Binary, _>(identity.id.to_vec())
+            .load::<CanonicalEventRow>(conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            if identity_matches.iter().any(|existing| {
+                existing.digest_suite != i16::from(identity.digest_suite)
+                    || existing.digest.as_slice() != identity.digest
+            }) {
+                return Err(PersistenceError::Conflict(
+                    "event_id_digest_mismatch".to_owned(),
+                )
+                .into());
+            }
+            if identity_matches.as_slice().first().is_some() {
+                let outcome = insert_canonical_event(conn, &request.event).await?;
+                if matches!(
+                    outcome,
+                    CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined
+                ) {
+                    return Ok(CommitTransactionOutcome::Collision);
+                }
+                continue;
+            }
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
@@ -65,10 +171,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .await
                 .map_err(PersistenceError::database)?;
             let scoped = sql_query(
-                "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-                 FROM canonical_events WHERE realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+                "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+                 FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
             )
-            .bind::<Uuid, _>(realm_id.expect("realm_id checked above"))
+            .bind::<Text, _>(realm_id_value)
             .bind::<Text, _>(&request.event.actor_id)
             .load::<CanonicalEventRow>(conn)
             .await
@@ -77,24 +183,27 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .map(CanonicalEventRecord::from)
             .collect::<Vec<_>>();
             validate_actor_scope_commit(scoped.iter(), &request.event)?;
-            sql_query(
+            let event_pk = sql_query(
                 "INSERT INTO canonical_events \
-                 (id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                 (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING pk",
             )
-            .bind::<Uuid, _>(event_id)
+            .bind::<Binary, _>(identity.id.to_vec())
+            .bind::<SmallInt, _>(i16::from(identity.digest_suite))
+            .bind::<Binary, _>(identity.digest.to_vec())
             .bind::<Text, _>(&request.event.actor_id)
             .bind::<BigInt, _>(request.event.actor_seq as i64)
-            .bind::<Nullable<Uuid>, _>(realm_id)
+            .bind::<Nullable<Text>, _>(request.event.realm_id.as_deref())
             .bind::<Text, _>(&request.event.kind)
             .bind::<Text, _>(&request.event.schema_id)
-            .bind::<Text, _>(&request.event.canonical_digest)
             .bind::<Binary, _>(&request.event.canonical_bytes)
             .bind::<Jsonb, _>(&request.event.envelope)
             .bind::<Timestamptz, _>(request.event.received_at)
-            .execute(conn)
+            .get_result::<EventPkRow>(conn)
             .await
-            .map_err(PersistenceError::database)?;
+            .map_err(PersistenceError::database)?
+            .pk;
+            event_inserted = true;
 
             let typed_event = serde_json::from_value::<arkret_wire::Event>(
                 request.event.envelope.clone(),
@@ -187,8 +296,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             for projection in request.projections {
-                let event_id = ids::typed_uuid_part_or_schema_violation(&projection.event_id)?;
-                let realm_id = ids::typed_uuid_part_or_schema_violation(&projection.realm_id)?;
+                let event_id = ids::parse_event_id(&projection.event_id).ok_or_else(|| {
+                    PersistenceError::SchemaViolation(format!(
+                        "malformed canonical Event id: {:?}",
+                        projection.event_id
+                    ))
+                })?;
                 let operation_id = projection
                     .operation_id
                     .as_deref()
@@ -196,12 +309,13 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .transpose()?;
                 projections_inserted += sql_query(
                     "INSERT INTO projection_events \
-                     (event_id, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-                     ON CONFLICT (event_id) DO NOTHING",
+                     (id, event_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+                     ON CONFLICT (id) DO NOTHING",
                 )
-                .bind::<Uuid, _>(event_id)
-                .bind::<Uuid, _>(realm_id)
+                .bind::<Binary, _>(event_id.to_vec())
+                .bind::<BigInt, _>(event_pk)
+                .bind::<Text, _>(&projection.realm_id)
                 .bind::<Text, _>(&projection.event_kind)
                 .bind::<Text, _>(&projection.operation_kind)
                 .bind::<Nullable<Uuid>, _>(operation_id)
@@ -247,9 +361,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                       attempts, semantic_attempts, next_attempt_at, last_http_status, \
                       last_error_code, last_response_excerpt, lease_owner, lease_token, \
                       lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
-                      completed_at) \
+                      completed_at, event_pk) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                      $16, $17, $18, $19, $20) \
+                      $16, $17, $18, $19, $20, $21) \
                      ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
@@ -272,6 +386,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .bind::<Nullable<Text>, _>(record.supersedes_outbox_id.as_deref())
                 .bind::<BigInt, _>(record.created_at)
                 .bind::<Nullable<BigInt>, _>(record.completed_at)
+                .bind::<Nullable<BigInt>, _>(Some(event_pk))
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
@@ -301,13 +416,25 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
             }
 
-            Ok(EventCommitOutcome {
-                event_inserted: true,
+            Ok(CommitTransactionOutcome::Committed(EventCommitOutcome {
+                event_inserted,
                 projections_inserted,
                 outbox_inserted,
-            })
+            }))
         })
         .await
-        .map_err(PgTransactionError::into_persistence)
+        .map_err(PgTransactionError::into_persistence)?;
+        match transaction_outcome {
+            CommitTransactionOutcome::Committed(outcome) => Ok(outcome),
+            CommitTransactionOutcome::Collision => Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            )),
+        }
     }
+}
+
+#[derive(diesel::QueryableByName)]
+struct EventPkRow {
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
 }

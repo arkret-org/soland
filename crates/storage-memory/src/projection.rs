@@ -1,9 +1,9 @@
 use serde_json::Value;
 
 use super::{
-    Arc, BTreeMap, MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceResult,
-    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, RealmMetaRecord,
-    RealmMetaStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
+    Arc, BTreeMap, MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceError,
+    PersistenceResult, ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
+    RealmMetaRecord, RealmMetaStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
     StrandProjectionRecord, StrandProjectionStore, async_trait,
 };
 // In-memory Realm meta store
@@ -188,13 +188,18 @@ impl MorphProjectionStore for MemoryMorphProjectionStore {
         Ok(())
     }
 }
-#[derive(Default)]
 pub(crate) struct MemoryProjectionEventStore {
-    pub(crate) data: Mutex<Vec<ProjectionEventRecord>>,
+    pub(crate) data: Arc<Mutex<Vec<ProjectionEventRecord>>>,
+    accepted_events: Arc<Mutex<BTreeMap<String, soland_storage::CanonicalEventRecord>>>,
 }
 impl MemoryProjectionEventStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(
+        accepted_events: Arc<Mutex<BTreeMap<String, soland_storage::CanonicalEventRecord>>>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Mutex::new(Vec::new())),
+            accepted_events,
+        }
     }
 }
 #[async_trait]
@@ -203,9 +208,26 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
         &self,
         record: ProjectionEventRecord,
     ) -> PersistenceResult<ProjectionEventAppendOutcome> {
+        let accepted_events = self.accepted_events.lock();
+        if !accepted_events.contains_key(&record.event_id) {
+            return Err(PersistenceError::Conflict("event_not_accepted".to_owned()));
+        }
         let mut data = self.data.lock();
-        if data.iter().any(|event| event.event_id == record.event_id) {
-            return Ok(ProjectionEventAppendOutcome::AlreadyExists);
+        if let Some(existing) = data.iter().find(|event| event.event_id == record.event_id) {
+            if existing.realm_id == record.realm_id
+                && existing.event_kind == record.event_kind
+                && existing.operation_kind == record.operation_kind
+                && existing.operation_id == record.operation_id
+                && existing.sender == record.sender
+                && existing.payload == record.payload
+                && existing.created_at == record.created_at
+                && existing.received_at == record.received_at
+            {
+                return Ok(ProjectionEventAppendOutcome::AlreadyExists);
+            }
+            return Err(PersistenceError::Conflict(
+                "duplicate_conflict: projection differs for Event identity".to_owned(),
+            ));
         }
         data.push(record);
         Ok(ProjectionEventAppendOutcome::Inserted)

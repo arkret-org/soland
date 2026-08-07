@@ -243,7 +243,6 @@ pub(super) async fn mimi_room_message(
         return Err(AppError::invalid_param("unsupported MIMI content type"));
     }
     let operation_id = ids::generate_operation_id();
-    let event_id = ids::generate_event_id();
     let mimi_message_id = message
         .get("mimi_message_id")
         .and_then(|value| value.as_str())
@@ -314,8 +313,8 @@ pub(super) async fn mimi_room_message(
             "quarantine": mapped_content.quarantine.clone(),
         },
     });
-    persist_mimi_canonical_message_event(state, &event_id, &realm_id, created_at, event_payload)
-        .await?;
+    let event_id =
+        persist_mimi_canonical_message_event(state, &realm_id, created_at, event_payload).await?;
 
     let _receipt = mimi_receipt(
         state,

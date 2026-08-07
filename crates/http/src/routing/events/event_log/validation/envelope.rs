@@ -26,14 +26,22 @@ pub(super) fn event_digest_suite(
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
     let suite = if kind == arkret_wire::EventKind::REALM_CREATE {
-        realm_create_digest_algorithm(object)
+        // Genesis has no materialized Realm cell yet; omission means the
+        // protocol baseline suite and is itself covered by the signed Event.
+        realm_create_digest_algorithm(object).unwrap_or_else(|| "sha256".to_owned())
     } else {
         state
             .projections()
             .snapshot()
             .realm_digest_algorithm(realm_id)
-    }
-    .unwrap_or_else(|| "sha256".to_owned());
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::CONFLICT,
+                    arkret_wire::ErrorCode::DEPENDENCY_MISSING,
+                    "Realm digest-suite cell is not materialized; Event identity cannot be verified",
+                )
+            })?
+    };
     arkret_canonical::digest_suite(&suite)
         .map(|_| suite.clone())
         .map_err(|_| unsupported_digest_algorithm_error(&suite))

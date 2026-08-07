@@ -5,6 +5,7 @@ use soland_storage::{
 };
 
 use crate::SolandMemoryPersistenceStore;
+use crate::events::quarantine_memory_event;
 #[cfg(feature = "fault-injection")]
 use crate::{FaultPoint, FaultTiming};
 
@@ -69,6 +70,54 @@ fn stage_control_proposal_ack(
     Ok(())
 }
 
+fn stage_canonical_event(
+    staged: &mut std::collections::BTreeMap<String, soland_storage::CanonicalEventRecord>,
+    event: soland_storage::CanonicalEventRecord,
+) -> PersistenceResult<()> {
+    ids::validated_event_identity_parts(
+        &event.event_id,
+        &event.canonical_digest,
+        &event.canonical_bytes,
+    )?;
+    if let Some(existing) = staged.get(&event.event_id) {
+        let reason = if existing.canonical_bytes == event.canonical_bytes {
+            "duplicate_conflict"
+        } else {
+            "event_hash_collision"
+        };
+        return Err(PersistenceError::Conflict(reason.to_owned()));
+    }
+    staged.insert(event.event_id.clone(), event);
+    Ok(())
+}
+
+fn stage_projection_event(
+    staged: &mut Vec<soland_storage::ProjectionEventRecord>,
+    projection: soland_storage::ProjectionEventRecord,
+) -> PersistenceResult<bool> {
+    if let Some(existing) = staged
+        .iter()
+        .find(|existing| existing.event_id == projection.event_id)
+    {
+        if existing.realm_id == projection.realm_id
+            && existing.event_kind == projection.event_kind
+            && existing.operation_kind == projection.operation_kind
+            && existing.operation_id == projection.operation_id
+            && existing.sender == projection.sender
+            && existing.payload == projection.payload
+            && existing.created_at == projection.created_at
+            && existing.received_at == projection.received_at
+        {
+            return Ok(false);
+        }
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: projection differs for Event identity".to_owned(),
+        ));
+    }
+    staged.push(projection);
+    Ok(true)
+}
+
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
     async fn commit_event(
@@ -79,9 +128,12 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         self.fault_injector
             .check(FaultPoint::EventCommit, FaultTiming::Before)?;
         let mut events = self.events.data.lock();
+        let mut quarantined = self.events.quarantined.lock();
+        let mut collision_variants = self.events.collision_variants.lock();
         let mut control_proposal_acks = self.events.control_proposal_acks.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
+        let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
 
         let mut staged_events = events.clone();
@@ -90,8 +142,57 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
 
-        if staged_events.contains_key(&request.event.event_id) {
-            return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+        ids::validated_event_identity_parts(
+            &request.event.event_id,
+            &request.event.canonical_digest,
+            &request.event.canonical_bytes,
+        )?;
+        if quarantined.contains_key(&request.event.event_id) {
+            if collision_variants
+                .get(&request.event.event_id)
+                .is_some_and(|variants| {
+                    variants
+                        .iter()
+                        .any(|variant| variant.canonical_bytes == request.event.canonical_bytes)
+                })
+            {
+                return Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ));
+            }
+            quarantine_memory_event(
+                &mut events,
+                &mut quarantined,
+                &mut collision_variants,
+                &mut projections,
+                &event_outbox_ids,
+                &mut outbox,
+                request.event,
+            );
+            return Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            ));
+        }
+        if let Some(existing) = staged_events.get(&request.event.event_id) {
+            if existing.canonical_bytes != request.event.canonical_bytes {
+                quarantine_memory_event(
+                    &mut events,
+                    &mut quarantined,
+                    &mut collision_variants,
+                    &mut projections,
+                    &event_outbox_ids,
+                    &mut outbox,
+                    request.event,
+                );
+                return Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ));
+            }
+            return Ok(EventCommitOutcome {
+                event_inserted: false,
+                projections_inserted: 0,
+                outbox_inserted: 0,
+            });
         }
         if request.event.kind == arkret_wire::EventKind::REALM_CREATE
             && request.event.realm_id.is_some()
@@ -106,20 +207,27 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
-        staged_events.insert(request.event.event_id.clone(), request.event);
+        let event_id = request.event.event_id.clone();
+        stage_canonical_event(&mut staged_events, request.event)?;
 
         let mut projections_inserted = 0;
         for projection in request.projections {
-            ids::typed_uuid_part_or_schema_violation(&projection.event_id)?;
-            ids::typed_uuid_part_or_schema_violation(&projection.realm_id)?;
+            ids::parse_event_id(&projection.event_id).ok_or_else(|| {
+                PersistenceError::SchemaViolation(format!(
+                    "malformed canonical Event id: {:?}",
+                    projection.event_id
+                ))
+            })?;
+            arkret_wire::RealmId::new(projection.realm_id.clone()).map_err(|_| {
+                PersistenceError::SchemaViolation(format!(
+                    "malformed Realm id: {:?}",
+                    projection.realm_id
+                ))
+            })?;
             if let Some(operation_id) = projection.operation_id.as_deref() {
                 ids::typed_uuid_part_or_schema_violation(operation_id)?;
             }
-            if !staged_projections
-                .iter()
-                .any(|existing| existing.event_id == projection.event_id)
-            {
-                staged_projections.push(projection);
+            if stage_projection_event(&mut staged_projections, projection)? {
                 projections_inserted += 1;
             }
         }
@@ -139,6 +247,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     && existing.idempotency_key == record.idempotency_key
             });
             if !already_present {
+                event_outbox_ids
+                    .entry(event_id.clone())
+                    .or_default()
+                    .insert(record.id.clone());
                 staged_outbox.insert(record.id.clone(), record);
                 outbox_inserted += 1;
             }
@@ -174,9 +286,12 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             ));
         }
         let mut events = self.events.data.lock();
+        let mut quarantined = self.events.quarantined.lock();
+        let mut collision_variants = self.events.collision_variants.lock();
         let mut control_proposal_acks = self.events.control_proposal_acks.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
+        let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
 
@@ -185,13 +300,63 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
+        let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_applets = applets.clone();
+        let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
 
         for event_request in request.events {
-            if staged_events.contains_key(&event_request.event.event_id) {
-                return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+            ids::validated_event_identity_parts(
+                &event_request.event.event_id,
+                &event_request.event.canonical_digest,
+                &event_request.event.canonical_bytes,
+            )?;
+            if quarantined.contains_key(&event_request.event.event_id) {
+                if collision_variants
+                    .get(&event_request.event.event_id)
+                    .is_some_and(|variants| {
+                        variants.iter().any(|variant| {
+                            variant.canonical_bytes == event_request.event.canonical_bytes
+                        })
+                    })
+                {
+                    return Err(PersistenceError::Conflict(
+                        "event_hash_collision".to_owned(),
+                    ));
+                }
+                quarantine_memory_event(
+                    &mut events,
+                    &mut quarantined,
+                    &mut collision_variants,
+                    &mut projections,
+                    &event_outbox_ids,
+                    &mut outbox,
+                    event_request.event,
+                );
+                return Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ));
+            }
+            if let Some(existing) = staged_events.get(&event_request.event.event_id) {
+                if existing.canonical_bytes != event_request.event.canonical_bytes {
+                    if !events.contains_key(&event_request.event.event_id) {
+                        events.insert(event_request.event.event_id.clone(), existing.clone());
+                    }
+                    quarantine_memory_event(
+                        &mut events,
+                        &mut quarantined,
+                        &mut collision_variants,
+                        &mut projections,
+                        &event_outbox_ids,
+                        &mut outbox,
+                        event_request.event,
+                    );
+                    return Err(PersistenceError::Conflict(
+                        "event_hash_collision".to_owned(),
+                    ));
+                }
+                continue;
             }
             if event_request.event.kind == arkret_wire::EventKind::REALM_CREATE
                 && event_request.event.realm_id.is_some()
@@ -209,19 +374,27 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 &event_request.event,
             )?;
             stage_control_proposal_ack(&mut staged_control_proposal_acks, &event_request)?;
-            staged_events.insert(event_request.event.event_id.clone(), event_request.event);
+            let event_id = event_request.event.event_id.clone();
+            stage_canonical_event(&mut staged_events, event_request.event)?;
+            event_inserted = true;
 
             for projection in event_request.projections {
-                ids::typed_uuid_part_or_schema_violation(&projection.event_id)?;
-                ids::typed_uuid_part_or_schema_violation(&projection.realm_id)?;
+                ids::parse_event_id(&projection.event_id).ok_or_else(|| {
+                    PersistenceError::SchemaViolation(format!(
+                        "malformed canonical Event id: {:?}",
+                        projection.event_id
+                    ))
+                })?;
+                arkret_wire::RealmId::new(projection.realm_id.clone()).map_err(|_| {
+                    PersistenceError::SchemaViolation(format!(
+                        "malformed Realm id: {:?}",
+                        projection.realm_id
+                    ))
+                })?;
                 if let Some(operation_id) = projection.operation_id.as_deref() {
                     ids::typed_uuid_part_or_schema_violation(operation_id)?;
                 }
-                if !staged_projections
-                    .iter()
-                    .any(|existing| existing.event_id == projection.event_id)
-                {
-                    staged_projections.push(projection);
+                if stage_projection_event(&mut staged_projections, projection)? {
                     projections_inserted += 1;
                 }
             }
@@ -238,6 +411,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                         && existing.idempotency_key == record.idempotency_key
                 });
                 if !already_present {
+                    staged_event_outbox_ids
+                        .entry(event_id.clone())
+                        .or_default()
+                        .insert(record.id.clone());
                     staged_outbox.insert(record.id.clone(), record);
                     outbox_inserted += 1;
                 }
@@ -283,13 +460,14 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;
+        *event_outbox_ids = staged_event_outbox_ids;
         *applets = staged_applets;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
             .check(FaultPoint::EventCommit, FaultTiming::After)?;
         Ok(EventCommitOutcome {
-            event_inserted: true,
+            event_inserted,
             projections_inserted,
             outbox_inserted,
         })
@@ -301,7 +479,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
         AppletGhostCommit, CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest,
-        EventCommitUnitOfWork, IdempotencyRecord,
+        EventCommitUnitOfWork, IdempotencyRecord, PersistenceError,
     };
 
     use crate::SolandMemoryPersistenceStore;
@@ -311,22 +489,39 @@ mod tests {
     }
 
     fn event_request(
-        event_id: String,
+        event_seed: String,
         realm_id: String,
         actor_id: &str,
         idempotency: Option<IdempotencyRecord>,
     ) -> EventCommitRequest {
+        let event = arkret_wire::Event::new_with_derived_id_at(
+            "ak.test.data",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            },
+            arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
+            0,
+            arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
+            serde_json::json!({"seed": event_seed}),
+            Utc::now(),
+        )
+        .unwrap();
+        let event_id = event.event_id.as_str().to_owned();
+        let canonical_digest = event.event_digest().unwrap();
+        let envelope = serde_json::to_value(&event).unwrap();
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
             event: CanonicalEventRecord {
                 event_id: event_id.clone(),
                 actor_id: actor_id.to_owned(),
                 actor_seq: 0,
                 realm_id: Some(realm_id),
-                kind: arkret_wire::EventKind::PROFILE_CREATE.to_owned(),
+                kind: "ak.test.data".to_owned(),
                 schema_id: "arkret://events/profile/create/v1".to_owned(),
-                canonical_digest: format!("sha256:{event_id}"),
-                canonical_bytes: event_id.as_bytes().to_vec(),
-                envelope: serde_json::json!({"event_id": event_id}),
+                canonical_digest,
+                canonical_bytes,
+                envelope,
                 received_at: Utc::now(),
             },
             control_proposal_ack: None,
@@ -334,6 +529,36 @@ mod tests {
             idempotency,
             outbox: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn exact_replay_is_noop_but_forged_preimage_is_rejected_before_lookup() {
+        let store = SolandMemoryPersistenceStore::new();
+        let request = event_request(
+            "exact-replay".to_owned(),
+            typed_id("ak:realm:"),
+            "did:web:replay.example",
+            None,
+        );
+        store
+            .events
+            .data
+            .lock()
+            .insert(request.event.event_id.clone(), request.event.clone());
+
+        let replay = store.commit_event(request.clone()).await.unwrap();
+        assert_eq!(replay, soland_storage::EventCommitOutcome::default());
+
+        let event_id = request.event.event_id.clone();
+        let mut collision = request;
+        collision.event.canonical_bytes.push(0);
+        let error = store.commit_event(collision).await.unwrap_err();
+        assert!(matches!(
+            error,
+            PersistenceError::Conflict(reason) if reason == "event_id_digest_mismatch"
+        ));
+        assert!(store.events.data.lock().contains_key(&event_id));
+        assert!(store.events.quarantined.lock().is_empty());
     }
 
     #[tokio::test]

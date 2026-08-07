@@ -1,10 +1,10 @@
 use super::{
-    BigInt, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable, Operation,
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, ProjectionEventAppendOutcome,
-    ProjectionEventRecord, ProjectionEventStore, QueryableByName, RunQueryDsl,
-    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid, StrandProjectionRecord,
-    StrandProjectionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
-    projected_operation_realm_discoverability, projected_operation_realm_summary,
+    AsyncConnection, BigInt, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
+    Operation, OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
+    RunQueryDsl, SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid,
+    StrandProjectionRecord, StrandProjectionStore, Text, Timestamptz, Uuid, Value, async_trait,
+    ids, pg_conn, projected_operation_realm_discoverability, projected_operation_realm_summary,
     projected_operation_realm_title, sql_query,
 };
 pub struct PgSpaceContainerProjectionStore {
@@ -557,18 +557,20 @@ impl MorphProjectionStore for PgMorphProjectionStore {
 // ── Pg-backed projection_events store ────────────────────────────────────
 // Append-only mirror of the in-memory ProjectionEventRecord stream
 // stamped down by `routing::events::projection::append_projection_event`.
-// `event_id` is unique so retries cannot create duplicate stream positions;
-// the surrogate ordinal remains the storage primary key.
+// `id` is the full suite-tagged digest identity. A true hash collision must be
+// rejected/quarantined by the canonical commit before materialization; this
+// table must never choose a variant with first-row-wins semantics. The
+// surrogate `pk` is only a local stream position.
 
 pub struct PgProjectionEventStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct ProjectionEventRow {
-    #[diesel(sql_type = SqlUuid)]
-    event_id: Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    realm_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Binary)]
+    event_id: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
     #[diesel(sql_type = Text)]
     event_kind: String,
     #[diesel(sql_type = Text)]
@@ -584,11 +586,20 @@ struct ProjectionEventRow {
     #[diesel(sql_type = Timestamptz)]
     received_at: chrono::DateTime<chrono::Utc>,
 }
+#[derive(QueryableByName)]
+struct ProjectionEventPkRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pk: i64,
+}
 impl From<ProjectionEventRow> for ProjectionEventRecord {
     fn from(row: ProjectionEventRow) -> Self {
+        let event_id: [u8; ids::EVENT_ID_BYTES] = row
+            .event_id
+            .try_into()
+            .expect("projection_events.id must be 33 bytes");
         Self {
-            event_id: ids::format_typed_uuid("event", &row.event_id),
-            realm_id: ids::format_typed_uuid("realm", &row.realm_id),
+            event_id: ids::format_event_id(&event_id),
+            realm_id: row.realm_id,
             event_kind: row.event_kind,
             operation_kind: row.operation_kind,
             operation_id: row
@@ -751,14 +762,36 @@ impl ProjectionEventStore for PgProjectionEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
+        let event_id = ids::parse_event_id(&record.event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed projection Event id: {:?}",
+                record.event_id
+            ))
+        })?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+            .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        let event_pk =
+            sql_query("SELECT pk FROM canonical_events WHERE state = 'accepted' AND id = $1")
+                .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+                .get_result::<ProjectionEventPkRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?
+                .ok_or_else(|| PersistenceError::Conflict("event_not_accepted".to_owned()))?
+                .pk;
+        let inserted = sql_query(
             "INSERT INTO projection_events \
-             (event_id, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (event_id) DO NOTHING",
+             (id, event_pk, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (id) DO NOTHING",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.event_id))
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
+        .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+        .bind::<diesel::sql_types::BigInt, _>(event_pk)
+        .bind::<Text, _>(&record.realm_id)
         .bind::<Text, _>(&record.event_kind)
         .bind::<Text, _>(&record.operation_kind)
         .bind::<Nullable<SqlUuid>, _>(
@@ -773,14 +806,39 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .bind::<Timestamptz, _>(record.received_at)
         .execute(&mut *conn)
         .await
-        .map(|inserted| {
-            if inserted == 0 {
-                ProjectionEventAppendOutcome::AlreadyExists
-            } else {
-                ProjectionEventAppendOutcome::Inserted
-            }
+        .map_err(PersistenceError::database)?;
+        if inserted == 1 {
+            return Ok(ProjectionEventAppendOutcome::Inserted);
+        }
+        let existing = sql_query(
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, \
+                    sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
+        .get_result::<ProjectionEventRow>(&mut *conn)
+        .await
+        .map(ProjectionEventRecord::from)
+        .map_err(PersistenceError::database)?;
+        if existing.event_id == record.event_id
+            && existing.realm_id == record.realm_id
+            && existing.event_kind == record.event_kind
+            && existing.operation_kind == record.operation_kind
+            && existing.operation_id == record.operation_id
+            && existing.sender == record.sender
+            && existing.payload == record.payload
+            && existing.created_at == record.created_at
+            && existing.received_at == record.received_at
+        {
+            Ok(ProjectionEventAppendOutcome::AlreadyExists)
+        } else {
+            Err(PersistenceError::Conflict(
+                "duplicate_conflict: projection differs for Event identity".to_owned(),
+            ).into())
+        }
         })
-        .map_err(PersistenceError::database)
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<ProjectionEventRecord>> {
@@ -788,8 +846,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events ORDER BY id",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events ORDER BY pk",
         )
         .load::<ProjectionEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
@@ -804,8 +862,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events WHERE event_kind = $1 ORDER BY id",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE event_kind = $1 ORDER BY pk",
         )
         .bind::<Text, _>(event_kind)
         .load::<ProjectionEventRow>(&mut *conn)
@@ -818,11 +876,16 @@ impl ProjectionEventStore for PgProjectionEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed projection Event id: {event_id:?}"
+            ))
+        })?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events WHERE event_id = $1 LIMIT 1",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE id = $1",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(event_id))
+        .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
         .get_result::<ProjectionEventRow>(&mut *conn)
         .await
         .optional()
@@ -838,8 +901,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events WHERE operation_id = $1 ORDER BY id DESC LIMIT 1",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE operation_id = $1 ORDER BY pk DESC LIMIT 1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(operation_id))
         .get_result::<ProjectionEventRow>(&mut *conn)
@@ -857,10 +920,10 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events WHERE realm_id = $1 ORDER BY id",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE realm_id = $1 ORDER BY pk",
         )
-        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(realm_id))
+        .bind::<Text, _>(realm_id)
         .load::<ProjectionEventRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
@@ -875,11 +938,11 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events \
              WHERE sender_id = $1 OR payload ->> 'sender' = $1 OR payload ->> 'actor_id' = $1 \
                 OR payload ->> 'actor' = $1 OR payload -> 'object' ->> 'created_by' = $1 \
-             ORDER BY id",
+             ORDER BY pk",
         )
         .bind::<Text, _>(actor_id)
         .load::<ProjectionEventRow>(&mut *conn)
@@ -893,8 +956,8 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
-             FROM projection_events ORDER BY id LIMIT $1",
+            "SELECT id AS event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events ORDER BY pk LIMIT $1",
         )
         .bind::<BigInt, _>(limit as i64)
         .load::<ProjectionEventRow>(&mut *conn).await

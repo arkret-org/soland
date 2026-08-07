@@ -164,6 +164,31 @@ async fn validate_event_envelope_with_ingress(
             "actor_id must be a DID",
         ));
     }
+    let actor_seq = object
+        .get("actor_seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "missing_param",
+                "actor_seq is required",
+            )
+        })?;
+    validate_event_time_fields(state, object)?;
+    let realm_id = event_realm_id(object)?;
+
+    // Identity verification is deliberately the last purely local gate before
+    // any admission lookup. The suite comes from the trusted Realm projection
+    // (or the signed Realm-create payload), then the shared storage verifier
+    // recomputes the exact digest preimage and binds the complete EventId.
+    let canonical_bytes = event_canonical_bytes(envelope)?;
+    let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
+    let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
+    validate_prelookup_event_identity(&event_id, &canonical_digest, &canonical_bytes)?;
+    let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
+        .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
+    validate_content_bound_event_id(envelope, typed_digest_suite)?;
+
     // A closed internal adapter (policy-server self-management, moderation
     // report, MIMI ingress, ...) authors the Event on behalf of the
     // authenticated caller under the service's own session, so its
@@ -261,19 +286,6 @@ async fn validate_event_envelope_with_ingress(
         }
     }
 
-    let actor_seq = object
-        .get("actor_seq")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "missing_param",
-                "actor_seq is required",
-            )
-        })?;
-    validate_event_time_fields(state, object)?;
-
-    let realm_id = event_realm_id(object)?;
     let is_applet_delegated = object.get("applet_id").is_some();
     // The closed applet provisioning adapter has already verified the installed
     // registration, ghost namespace and provision request before constructing
@@ -602,12 +614,6 @@ async fn validate_event_envelope_with_ingress(
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
-    let canonical_bytes = event_canonical_bytes(envelope)?;
-    let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
-    let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
-    let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
-        .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
-    validate_content_bound_event_id(envelope, typed_digest_suite)?;
     validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
     validate_event_proofs(
         object,
@@ -659,6 +665,27 @@ async fn validate_event_envelope_with_ingress(
     })
 }
 
+fn event_id_digest_mismatch_error() -> EventValidationError {
+    EventValidationError {
+        status: StatusCode::BAD_REQUEST,
+        code: arkret_wire::ErrorCode::SchemaViolation.as_str(),
+        message:
+            "carried event_id does not equal the digest re-derived from the canonical Event preimage"
+                .to_owned(),
+        reason_code: Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH),
+    }
+}
+
+fn validate_prelookup_event_identity(
+    event_id: &str,
+    canonical_digest: &str,
+    canonical_bytes: &[u8],
+) -> Result<(), EventValidationError> {
+    soland_storage::ids::validated_event_identity_parts(event_id, canonical_digest, canonical_bytes)
+        .map(|_| ())
+        .map_err(|_| event_id_digest_mismatch_error())
+}
+
 fn validate_content_bound_event_id(
     envelope: &Value,
     digest_suite: arkret_canonical::DigestSuite,
@@ -673,13 +700,7 @@ fn validate_content_bound_event_id(
         })?;
     event
         .verify_event_id_matches_content_with_digest_suite(digest_suite)
-        .map_err(|_| EventValidationError {
-            status: StatusCode::BAD_REQUEST,
-            code: arkret_wire::ErrorCode::SchemaViolation.as_str(),
-            message: "carried event_id does not equal the value re-derived from the Event's canonical content"
-                .to_owned(),
-            reason_code: Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH),
-        })
+        .map_err(|_| event_id_digest_mismatch_error())
 }
 
 async fn enforce_device_generation_fence(
@@ -1023,9 +1044,10 @@ mod security_frontier_material_tests {
 
     #[test]
     fn content_bound_event_id_rejects_post_derivation_mutation() {
-        let realm_id =
-            arkret_wire::RealmId::new("ak:realm:01904100-0000-8000-8000-000000000001".to_owned())
-                .unwrap();
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
+        )
+        .unwrap();
         let mut event = arkret_wire::Event::new(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
@@ -1050,6 +1072,42 @@ mod security_frontier_material_tests {
 
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.code, arkret_wire::ErrorCode::SchemaViolation.as_str());
+        assert_eq!(
+            error.reason_code,
+            Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn forged_carried_id_is_rejected_by_storage_verifier_before_admission_lookup() {
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
+        )
+        .unwrap();
+        let mut event = arkret_wire::Event::new(
+            "ak.message.create",
+            arkret_wire::ScopeRef::Realm { realm_id },
+            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            0,
+            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e".to_owned()).unwrap(),
+            serde_json::json!({"body": "accepted"}),
+        )
+        .unwrap();
+        let carried_id = event.event_id.to_string();
+
+        // Change digest-covered content while retaining an accepted Event's
+        // carried id. The lookup layer must never see this candidate.
+        event
+            .payload
+            .insert("body".to_owned(), serde_json::json!("forged"));
+        let envelope = serde_json::to_value(event).unwrap();
+        let canonical_bytes = event_canonical_bytes(&envelope).unwrap();
+        let canonical_digest = event_digest_for_suite(&canonical_bytes, "sha256").unwrap();
+        let error =
+            validate_prelookup_event_identity(&carried_id, &canonical_digest, &canonical_bytes)
+                .unwrap_err();
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             error.reason_code,
             Some(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH)

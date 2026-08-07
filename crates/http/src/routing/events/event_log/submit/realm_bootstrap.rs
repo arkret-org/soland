@@ -83,11 +83,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
 
     let actor_lock = actor_submit_lock(&unit.realm_id, &unit.actor_id);
     let _guard = actor_lock.lock().await;
-    if authorization_leases.is_none_or(|leases| leases.iter().all(Option::is_none))
-        && let Some(outcome) = identical_historical_retry(state, &envelopes).await?
-    {
-        return Ok(outcome);
-    }
     let context = RealmBootstrapBatchContext {
         realm_id: unit.realm_id.clone(),
         actor_id: unit.actor_id.clone(),
@@ -128,10 +123,15 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ingress_receipts
                 .push(mint_and_store_ingress_receipt(state, parsed, lease, received_at).await?);
         }
-        if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
-            outcome.ingress_receipts = ingress_receipts;
-            return Ok(outcome);
-        }
+    }
+    let retry_candidates = validated
+        .iter()
+        .zip(envelopes.iter().cloned())
+        .map(|(event, envelope)| canonical_record(event, envelope, received_at))
+        .collect::<Vec<_>>();
+    if let Some(mut outcome) = identical_historical_retry(state, &retry_candidates).await? {
+        outcome.ingress_receipts = ingress_receipts;
+        return Ok(outcome);
     }
 
     let existing = state
@@ -291,6 +291,14 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .map_err(|error| {
             if error.is_realm_already_exists() {
                 realm_already_exists_error()
+            } else if let Some(collision) = map_event_hash_collision(
+                validated
+                    .first()
+                    .map(|event| event.event_id.clone())
+                    .unwrap_or_default(),
+                &error,
+            ) {
+                collision
             } else if error.is_conflict("duplicate_conflict") {
                 SubmitOneError::new(
                     StatusCode::CONFLICT,

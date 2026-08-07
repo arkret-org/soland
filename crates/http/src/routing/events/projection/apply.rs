@@ -26,7 +26,9 @@ pub async fn project_accepted_operations_from_device(
 /// service-authored admin/circle/realm projections never had one — so the
 /// Operation is restated in the shape the single evaluator reads: `kind`,
 /// `event_id`, `actor_id` and the wire payload with the projection-context
-/// fields this crate injected stripped back out. Nothing here decides what an
+/// fields this crate injected stripped back out. Its temporary evaluator Event
+/// receives a content-derived id; no accepted id is ever forced onto a
+/// different reconstructed preimage. Nothing here decides what an
 /// Event writes; the registry still does.
 ///
 /// An unprojectable Operation yields no writes, which is fail-closed: the
@@ -45,15 +47,6 @@ fn accepted_operation_cell_writes(
     {
         return Vec::new();
     }
-    let event_id = super::event_json::operation_event_id(operation);
-    let event_id = if event_id.starts_with("ak:event:") {
-        event_id
-    } else {
-        match event_id.strip_prefix("ak:operation:") {
-            Some(suffix) => format!("ak:event:{suffix}"),
-            None => return Vec::new(),
-        }
-    };
     let actor_id = operation
         .payload
         .get("sender")
@@ -64,8 +57,7 @@ fn accepted_operation_cell_writes(
     // derives the Realm id from the Event. Giving it the `realm` scope every
     // other kind uses fails `realm_id_not_event_derived`, and the failure is
     // silent — the Operation yields no cell writes and the Realm's founding
-    // writes are simply lost. The id restated here is the accepted Event's own,
-    // so the derivation reproduces the Realm id this Operation already carries.
+    // writes are simply lost.
     let scope_ref = if kind == arkret_wire::EventKind::REALM_CREATE {
         arkret_wire::ScopeRef::RealmGenesis
     } else {
@@ -73,7 +65,7 @@ fn accepted_operation_cell_writes(
             realm_id: operation.realm_id.clone(),
         }
     };
-    let event = match restate_accepted_event(operation, event_id, actor_id, kind, scope_ref) {
+    let event = match restate_accepted_event(operation, actor_id, kind, scope_ref) {
         Ok(event) => event,
         Err(error) => {
             tracing::error!(
@@ -108,13 +100,10 @@ fn accepted_operation_cell_writes(
 /// second place for its shape to drift from the one the SDK owns.
 fn restate_accepted_event(
     operation: &Operation,
-    event_id: String,
     actor_id: &str,
     kind: &str,
     scope_ref: arkret_wire::ScopeRef,
 ) -> Result<arkret_wire::Event, String> {
-    let event_id = arkret_identifiers::EventId::new(event_id)
-        .map_err(|error| format!("restated event id: {error}"))?;
     let actor_id = arkret_identifiers::Did::new(actor_id.to_owned())
         .map_err(|error| format!("restated actor id: {error}"))?;
     // The Operation's own HLC, read before the projection context is stripped
@@ -126,8 +115,7 @@ fn restate_accepted_event(
         .ok_or_else(|| "operation carries no hlc".to_owned())?;
     let hlc = arkret_identifiers::Hlc::new(hlc.to_owned())
         .map_err(|error| format!("restated hlc: {error}"))?;
-    arkret_wire::Event::new_with_id_at(
-        event_id,
+    arkret_wire::Event::new_at(
         kind,
         scope_ref,
         actor_id,

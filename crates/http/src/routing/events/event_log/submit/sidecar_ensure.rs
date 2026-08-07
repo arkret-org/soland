@@ -16,16 +16,6 @@ async fn validate_and_prepare(
     accepted_batch_predecessor: Option<(&str, u64)>,
 ) -> Result<PreparedSidecarEvent, SubmitOneError> {
     let envelope = typed_event_to_canonical_value(event.clone())?;
-    let cell_writes = state
-        .projections()
-        .project_accepted_cell_writes(&event)
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("Sidecar cell projection is invalid: {error}"),
-            )
-        })?;
     let admission = InternalEventAdmission::sidecar_ensure(
         event.realm_id.to_string(),
         event.actor_id.to_string(),
@@ -48,17 +38,26 @@ async fn validate_and_prepare(
             )
         })?
     {
-        let code = if existing.canonical_bytes == parsed.canonical_bytes {
-            "duplicate"
-        } else {
-            "duplicate_conflict"
-        };
-        return Err(SubmitOneError::new(
-            StatusCode::CONFLICT,
-            code,
-            "Sidecar Event id is already accepted",
-        ));
+        if existing.canonical_bytes == parsed.canonical_bytes {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "duplicate",
+                "Sidecar Event id is already accepted",
+            ));
+        }
+        let record = super::identity_anchor::canonical_record(&parsed, envelope.clone(), now());
+        return Err(quarantine_verified_event_collision(state, record).await);
     }
+    let cell_writes = state
+        .projections()
+        .project_accepted_cell_writes(&event)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("Sidecar cell projection is invalid: {error}"),
+            )
+        })?;
 
     let records = state
         .event_queries()
@@ -261,6 +260,15 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         })
         .await
         .map_err(|error| {
+            if let Some(collision) = map_event_hash_collision(
+                prepared
+                    .first()
+                    .map(|event| event.command.event.event_id.clone())
+                    .unwrap_or_default(),
+                &error,
+            ) {
+                return collision;
+            }
             SubmitOneError::new(
                 if error.is_conflict_kind() {
                     StatusCode::CONFLICT

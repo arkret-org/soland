@@ -47,16 +47,15 @@ async fn prepare_ghost_event(
             )
         })?
     {
-        let code = if existing.canonical_bytes == parsed.canonical_bytes {
-            "duplicate"
-        } else {
-            "duplicate_conflict"
-        };
-        return Err(SubmitOneError::new(
-            StatusCode::CONFLICT,
-            code,
-            "ghost provisioning Event already exists",
-        ));
+        if existing.canonical_bytes == parsed.canonical_bytes {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "duplicate",
+                "ghost provisioning Event already exists",
+            ));
+        }
+        let record = super::identity_anchor::canonical_record(&parsed, envelope.clone(), now());
+        return Err(quarantine_verified_event_collision(state, record).await);
     }
     let scoped_actor_records = service
         .canonical_events_for_realm_actor(&parsed.realm_id, &parsed.actor_id)
@@ -418,6 +417,15 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         })
         .await
         .map_err(|error| {
+            if let Some(collision) = map_event_hash_collision(
+                prepared
+                    .first()
+                    .map(|event| event.command.event.event_id.clone())
+                    .unwrap_or_default(),
+                &error,
+            ) {
+                return collision;
+            }
             let detail = error.detail();
             let code = if error.is_conflict_kind() {
                 if detail.contains("duplicate") {

@@ -1,11 +1,11 @@
 use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    EventStore, FederationOutboxRecord, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
-    PersistenceError, PersistenceResult, PublicationEvidenceRecord, RealmEventStats, async_trait,
-    event_position_cmp, identity_anchor_slot_conflicts, peer_page_record_after_cursor,
-    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
-    stage_identity_anchor_events,
+    EventStore, FederationOutboxRecord, FederationOutboxState, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex,
+    PeerEventsPageQuery, PersistenceError, PersistenceResult, ProjectionEventRecord,
+    PublicationEvidenceRecord, RealmEventStats, async_trait, event_position_cmp,
+    identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
+    receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -71,7 +71,9 @@ impl MessageStore for MemoryMessageStore {
     }
 }
 pub(crate) struct MemoryEventStore {
-    pub(crate) data: Mutex<BTreeMap<String, CanonicalEventRecord>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<String, CanonicalEventRecord>>>,
+    pub(crate) quarantined: Mutex<BTreeMap<String, CanonicalEventRecord>>,
+    pub(crate) collision_variants: Mutex<BTreeMap<String, Vec<CanonicalEventRecord>>>,
     pub(crate) control_proposal_acks: Mutex<BTreeMap<String, arkret_wire::ControlProposalAck>>,
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
@@ -80,22 +82,141 @@ pub(crate) struct MemoryEventStore {
     /// commit their delivery intents in the same staged mutation as the Events,
     /// mirroring the single PostgreSQL transaction.
     federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
+    pub(crate) projections: Arc<Mutex<Vec<ProjectionEventRecord>>>,
+    pub(crate) event_outbox_ids: Mutex<BTreeMap<String, BTreeSet<String>>>,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
+        data: Arc<Mutex<BTreeMap<String, CanonicalEventRecord>>>,
         devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
         publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
         federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
+        projections: Arc<Mutex<Vec<ProjectionEventRecord>>>,
     ) -> Self {
         Self {
-            data: Mutex::new(BTreeMap::new()),
+            data,
+            quarantined: Mutex::new(BTreeMap::new()),
+            collision_variants: Mutex::new(BTreeMap::new()),
             control_proposal_acks: Mutex::new(BTreeMap::new()),
             devices,
             receipts: Mutex::new(BTreeMap::new()),
             publication_evidence,
             federation_outbox,
+            projections,
+            event_outbox_ids: Mutex::new(BTreeMap::new()),
         }
     }
+}
+
+pub(crate) fn quarantine_memory_event(
+    accepted: &mut BTreeMap<String, CanonicalEventRecord>,
+    quarantined: &mut BTreeMap<String, CanonicalEventRecord>,
+    variants: &mut BTreeMap<String, Vec<CanonicalEventRecord>>,
+    projections: &mut Vec<ProjectionEventRecord>,
+    event_outbox_ids: &BTreeMap<String, BTreeSet<String>>,
+    outbox: &mut BTreeMap<String, FederationOutboxRecord>,
+    incoming: CanonicalEventRecord,
+) {
+    let event_id = incoming.event_id.clone();
+    let original = accepted
+        .remove(&event_id)
+        .or_else(|| quarantined.get(&event_id).cloned());
+    if let Some(original) = original {
+        quarantined.insert(event_id.clone(), original.clone());
+        let evidence = variants.entry(event_id.clone()).or_default();
+        if !evidence
+            .iter()
+            .any(|variant| variant.canonical_bytes == original.canonical_bytes)
+        {
+            evidence.push(original);
+        }
+        if !evidence
+            .iter()
+            .any(|variant| variant.canonical_bytes == incoming.canonical_bytes)
+        {
+            evidence.push(incoming);
+        }
+    }
+    projections.retain(|projection| projection.event_id != event_id);
+    if let Some(ids) = event_outbox_ids.get(&event_id) {
+        for id in ids {
+            if let Some(delivery) = outbox.get_mut(id)
+                && matches!(
+                    delivery.state,
+                    FederationOutboxState::Pending | FederationOutboxState::Leased
+                )
+            {
+                delivery.state = FederationOutboxState::PolicySuppressed;
+                delivery.last_error_code = Some("witness_disagreement".to_owned());
+                delivery.lease_owner = None;
+                delivery.lease_token = None;
+                delivery.lease_expires_at = None;
+                delivery.completed_at = Some(delivery.created_at);
+            }
+        }
+    }
+}
+
+fn preflight_memory_events(
+    records: &[CanonicalEventRecord],
+    accepted: &mut BTreeMap<String, CanonicalEventRecord>,
+    quarantined: &mut BTreeMap<String, CanonicalEventRecord>,
+    variants: &mut BTreeMap<String, Vec<CanonicalEventRecord>>,
+    projections: &mut Vec<ProjectionEventRecord>,
+    event_outbox_ids: &BTreeMap<String, BTreeSet<String>>,
+    outbox: &mut BTreeMap<String, FederationOutboxRecord>,
+) -> PersistenceResult<()> {
+    let mut seen = accepted.clone();
+    for record in records {
+        ids::validated_event_identity_parts(
+            &record.event_id,
+            &record.canonical_digest,
+            &record.canonical_bytes,
+        )?;
+        if quarantined.contains_key(&record.event_id) {
+            let known = variants.get(&record.event_id).is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.canonical_bytes == record.canonical_bytes)
+            });
+            if !known {
+                quarantine_memory_event(
+                    accepted,
+                    quarantined,
+                    variants,
+                    projections,
+                    event_outbox_ids,
+                    outbox,
+                    record.clone(),
+                );
+            }
+            return Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            ));
+        }
+        if let Some(existing) = seen.get(&record.event_id) {
+            if existing.canonical_bytes != record.canonical_bytes {
+                if !accepted.contains_key(&record.event_id) {
+                    accepted.insert(record.event_id.clone(), existing.clone());
+                }
+                quarantine_memory_event(
+                    accepted,
+                    quarantined,
+                    variants,
+                    projections,
+                    event_outbox_ids,
+                    outbox,
+                    record.clone(),
+                );
+                return Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ));
+            }
+        } else {
+            seen.insert(record.event_id.clone(), record.clone());
+        }
+    }
+    Ok(())
 }
 
 /// Stage outbox rows with exactly the uniqueness PostgreSQL enforces:
@@ -179,8 +300,60 @@ fn stage_control_proposal_acks(
 #[async_trait]
 impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
-        let id = record.event_id.clone();
+        ids::validated_event_identity_parts(
+            &record.event_id,
+            &record.canonical_digest,
+            &record.canonical_bytes,
+        )?;
         let mut data = self.data.lock();
+        let mut quarantined = self.quarantined.lock();
+        let mut variants = self.collision_variants.lock();
+        let mut projections = self.projections.lock();
+        let event_outbox_ids = self.event_outbox_ids.lock();
+        let mut outbox = self.federation_outbox.lock();
+        if let Some(existing) = quarantined.get(&record.event_id) {
+            return if variants.get(&record.event_id).is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.canonical_bytes == record.canonical_bytes)
+            }) || existing.canonical_bytes == record.canonical_bytes
+            {
+                Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ))
+            } else {
+                quarantine_memory_event(
+                    &mut data,
+                    &mut quarantined,
+                    &mut variants,
+                    &mut projections,
+                    &event_outbox_ids,
+                    &mut outbox,
+                    record,
+                );
+                Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ))
+            };
+        }
+        if let Some(existing) = data.get(&record.event_id) {
+            return if existing.canonical_bytes == record.canonical_bytes {
+                Ok(())
+            } else {
+                quarantine_memory_event(
+                    &mut data,
+                    &mut quarantined,
+                    &mut variants,
+                    &mut projections,
+                    &event_outbox_ids,
+                    &mut outbox,
+                    record,
+                );
+                Err(PersistenceError::Conflict(
+                    "event_hash_collision".to_owned(),
+                ))
+            };
+        }
         if record.kind == "ak.realm.create"
             && record.realm_id.is_some()
             && data.values().any(|existing| {
@@ -191,8 +364,23 @@ impl EventStore for MemoryEventStore {
                 "realm_already_exists".to_owned(),
             ));
         }
-        data.insert(id, record);
+        data.insert(record.event_id.clone(), record);
         Ok(())
+    }
+
+    async fn collision_variants(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        Ok(self
+            .collision_variants
+            .lock()
+            .get(event_id)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn put_realm_bootstrap_batch_atomic(
@@ -202,8 +390,29 @@ impl EventStore for MemoryEventStore {
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
+        let mut quarantined = self.quarantined.lock();
+        let mut variants = self.collision_variants.lock();
         let mut stored_control_proposal_acks = self.control_proposal_acks.lock();
+        let mut projections = self.projections.lock();
+        let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        preflight_memory_events(
+            &records,
+            &mut data,
+            &mut quarantined,
+            &mut variants,
+            &mut projections,
+            &event_outbox_ids,
+            &mut federation_outbox,
+        )?;
+        let event_ids = records
+            .iter()
+            .map(|record| record.event_id.clone())
+            .collect::<Vec<_>>();
+        let outbox_ids = outbox
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
         let mut staged = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
@@ -218,6 +427,12 @@ impl EventStore for MemoryEventStore {
         *data = staged;
         *stored_control_proposal_acks = staged_control_proposal_acks;
         *federation_outbox = staged_outbox;
+        for event_id in event_ids {
+            event_outbox_ids
+                .entry(event_id)
+                .or_default()
+                .extend(outbox_ids.iter().cloned());
+        }
         Ok(())
     }
 
@@ -233,11 +448,32 @@ impl EventStore for MemoryEventStore {
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut data = self.data.lock();
+        let mut quarantined = self.quarantined.lock();
+        let mut variants = self.collision_variants.lock();
         let mut stored_control_proposal_acks = self.control_proposal_acks.lock();
         let mut devices = self.devices.lock();
         let mut receipts = self.receipts.lock();
         let mut evidence = self.publication_evidence.lock();
+        let mut projections = self.projections.lock();
+        let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        preflight_memory_events(
+            &records,
+            &mut data,
+            &mut quarantined,
+            &mut variants,
+            &mut projections,
+            &event_outbox_ids,
+            &mut federation_outbox,
+        )?;
+        let event_ids = records
+            .iter()
+            .map(|record| record.event_id.clone())
+            .collect::<Vec<_>>();
+        let outbox_ids = outbox
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
         let mut staged_events = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_devices = devices.clone();
@@ -285,6 +521,14 @@ impl EventStore for MemoryEventStore {
         *receipts = staged_receipts;
         *evidence = staged_evidence;
         *federation_outbox = staged_outbox;
+        if !reanchor_conflict {
+            for event_id in event_ids {
+                event_outbox_ids
+                    .entry(event_id)
+                    .or_default()
+                    .extend(outbox_ids.iter().cloned());
+            }
+        }
         Ok(IdentityAnchorCommitOutcome { reanchor_conflict })
     }
 
@@ -309,10 +553,16 @@ impl EventStore for MemoryEventStore {
     }
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
+        ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
         Ok(self.data.lock().get(event_id).cloned())
     }
 
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool> {
+        ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
         Ok(self.data.lock().contains_key(event_id))
     }
 
@@ -456,15 +706,20 @@ mod tests {
 
     use super::*;
 
-    fn record(event_id: &str, canonical_bytes: &[u8]) -> CanonicalEventRecord {
+    fn record(canonical_bytes: &[u8]) -> CanonicalEventRecord {
+        let digest = arkret_canonical::sha256_bytes(canonical_bytes);
+        let mut id = [0_u8; ids::EVENT_ID_BYTES];
+        id[0] = 0x01;
+        id[1..].copy_from_slice(&digest);
+        let event_id = ids::format_event_id(&id);
         CanonicalEventRecord {
-            event_id: event_id.to_owned(),
+            event_id: event_id.clone(),
             actor_id: "did:web:founder.example".to_owned(),
             actor_seq: 1,
             realm_id: Some("ak:realm:019f9000-0000-8000-8000-000000000001".to_owned()),
             kind: "ak.realm.join_rule".to_owned(),
             schema_id: "arkret://events/realm/join-rule/v1".to_owned(),
-            canonical_digest: format!("sha256:{}", "0".repeat(64)),
+            canonical_digest: ids::format_event_digest(0x01, &digest).unwrap(),
             canonical_bytes: canonical_bytes.to_vec(),
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: Utc::now(),
@@ -472,23 +727,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn realm_bootstrap_batch_rolls_back_every_prior_insert_on_late_conflict() {
+    async fn realm_bootstrap_batch_rejects_forged_preimage_without_committing_prefix() {
         let outbox = Arc::new(Mutex::new(BTreeMap::new()));
         let store = MemoryEventStore::with_devices(
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
             outbox.clone(),
+            Arc::new(Mutex::new(Vec::new())),
         );
-        let conflict_id = "ak:event:019f9000-0000-8000-8000-000000000002";
-        store.put(record(conflict_id, b"existing")).await.unwrap();
+        let existing = record(b"existing");
+        let conflict_id = existing.event_id.clone();
+        store.put(existing).await.unwrap();
 
-        let first_id = "ak:event:019f9000-0000-8000-8000-000000000001";
+        let first = record(b"first");
+        let first_id = first.event_id.clone();
+        let mut forged = store.get(&conflict_id).await.unwrap().unwrap();
+        forged.canonical_bytes = b"different".to_vec();
         let error = store
             .put_realm_bootstrap_batch_atomic(
-                vec![
-                    record(first_id, b"first"),
-                    record(conflict_id, b"different"),
-                ],
+                vec![first, forged],
                 Vec::new(),
                 vec![FederationOutboxRecord::pending(
                     "outbox:rollback".to_owned(),
@@ -504,21 +762,138 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+            PersistenceError::Conflict(reason) if reason == "event_id_digest_mismatch"
         ));
-        assert!(!store.contains(first_id).await.unwrap());
+        assert!(!store.contains(&first_id).await.unwrap());
         assert!(
             outbox.lock().is_empty(),
             "a rolled-back genesis unit leaves no delivery intent behind"
         );
         assert_eq!(
             store
-                .get(conflict_id)
+                .get(&conflict_id)
                 .await
                 .unwrap()
                 .unwrap()
                 .canonical_bytes,
             b"existing"
+        );
+    }
+
+    #[tokio::test]
+    async fn collision_state_machine_quarantines_all_variants_and_withdraws_unfinal_writes() {
+        let store = MemoryEventStore::with_devices(
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let first = record(b"first");
+        let mut colliding = first.clone();
+        colliding.canonical_bytes = b"hypothetical-second-preimage".to_vec();
+        colliding.envelope = serde_json::json!({"variant": 2});
+        store
+            .data
+            .lock()
+            .insert(first.event_id.clone(), first.clone());
+        store.projections.lock().push(ProjectionEventRecord {
+            event_id: first.event_id.clone(),
+            realm_id: first.realm_id.clone().unwrap(),
+            event_kind: first.kind.clone(),
+            operation_kind: "test".to_owned(),
+            operation_id: None,
+            sender: None,
+            payload: serde_json::json!({}),
+            created_at: first.received_at,
+            received_at: first.received_at,
+        });
+        let outbox_id = "outbox:collision".to_owned();
+        store
+            .event_outbox_ids
+            .lock()
+            .entry(first.event_id.clone())
+            .or_default()
+            .insert(outbox_id.clone());
+        store.federation_outbox.lock().insert(
+            outbox_id.clone(),
+            FederationOutboxRecord::pending(
+                outbox_id.clone(),
+                "did:web:peer.example".to_owned(),
+                "https://peer.example".to_owned(),
+                "/_arkret/peer/events".to_owned(),
+                "collision".to_owned(),
+                "{}".to_owned(),
+                1,
+            ),
+        );
+
+        quarantine_memory_event(
+            &mut store.data.lock(),
+            &mut store.quarantined.lock(),
+            &mut store.collision_variants.lock(),
+            &mut store.projections.lock(),
+            &store.event_outbox_ids.lock(),
+            &mut store.federation_outbox.lock(),
+            colliding.clone(),
+        );
+        assert!(store.get(&first.event_id).await.unwrap().is_none());
+        assert_eq!(
+            store
+                .collision_variants(&first.event_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(store.projections.lock().is_empty());
+        let delivery = store.federation_outbox.lock()[&outbox_id].clone();
+        assert_eq!(delivery.state, FederationOutboxState::PolicySuppressed);
+        assert_eq!(
+            delivery.last_error_code.as_deref(),
+            Some("witness_disagreement")
+        );
+
+        quarantine_memory_event(
+            &mut store.data.lock(),
+            &mut store.quarantined.lock(),
+            &mut store.collision_variants.lock(),
+            &mut store.projections.lock(),
+            &store.event_outbox_ids.lock(),
+            &mut store.federation_outbox.lock(),
+            colliding,
+        );
+        assert_eq!(
+            store
+                .collision_variants(&first.event_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn envelope_only_proof_difference_is_an_idempotent_replay() {
+        let store = MemoryEventStore::with_devices(
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let first = record(b"digest-covered-preimage");
+        let mut replay = first.clone();
+        replay.envelope = serde_json::json!({"proofs": [{"jws": "different"}]});
+        store.put(first.clone()).await.unwrap();
+        store.put(replay).await.unwrap();
+        assert!(store.contains(&first.event_id).await.unwrap());
+        assert!(
+            store
+                .collision_variants(&first.event_id)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 }

@@ -63,6 +63,7 @@ serde_json.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 soland-services.workspace = true
+soland-storage.workspace = true
 soland-domain.workspace = true
 soland-contracts = { workspace = true, features = ["openapi"] }
 subtle.workspace = true
@@ -78,7 +79,6 @@ rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-services = { workspace = true, features = ["test-support"] }
 soland-domain.workspace = true
-soland-storage.workspace = true
 soland-storage-memory.workspace = true
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use diesel::sql_types::SmallInt;
+
 use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
     DeviceInventoryRecord, EventBatchReceipt, EventStore, ExistsRow, FederationOutboxRecord,
@@ -21,30 +23,39 @@ fn map_canonical_event_put_error(error: diesel::result::Error) -> PersistenceErr
         return PersistenceError::Conflict("realm_already_exists".to_owned());
     }
     if let DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, info) = &error
-        && info.constraint_name() == Some("canonical_events_pkey")
+        && matches!(
+            info.constraint_name(),
+            Some(
+                "canonical_events_id_key"
+                    | "canonical_events_identity_key"
+                    | "canonical_events_id_digest_check"
+            )
+        )
     {
-        return PersistenceError::Conflict("duplicate_conflict".to_owned());
+        return PersistenceError::Conflict("event_hash_collision".to_owned());
     }
     PersistenceError::database(error)
 }
 #[derive(QueryableByName)]
 pub(crate) struct CanonicalEventRow {
-    #[diesel(sql_type = SqlUuid)]
-    id: Uuid,
+    #[diesel(sql_type = Binary)]
+    id: Vec<u8>,
+    #[diesel(sql_type = SmallInt)]
+    pub(crate) digest_suite: i16,
+    #[diesel(sql_type = Binary)]
+    pub(crate) digest: Vec<u8>,
     #[diesel(sql_type = Text)]
     actor_id: String,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
-    #[diesel(sql_type = Nullable<SqlUuid>)]
-    realm_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    realm_id: Option<String>,
     #[diesel(sql_type = Text)]
     kind: String,
     #[diesel(sql_type = Text)]
     schema_id: String,
-    #[diesel(sql_type = Text)]
-    canonical_digest: String,
     #[diesel(sql_type = Binary)]
-    canonical_bytes: Vec<u8>,
+    pub(crate) canonical_bytes: Vec<u8>,
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
     #[diesel(sql_type = Timestamptz)]
@@ -56,6 +67,64 @@ struct RealmEventStatsRow {
     event_count: i64,
     #[diesel(sql_type = BigInt)]
     canonical_bytes: i64,
+}
+#[derive(QueryableByName)]
+struct PkRow {
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
+}
+#[derive(QueryableByName)]
+struct TextIdRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+}
+#[derive(QueryableByName)]
+struct StoredEventIdentityRow {
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
+    #[diesel(sql_type = SmallInt)]
+    digest_suite: i16,
+    #[diesel(sql_type = Binary)]
+    digest: Vec<u8>,
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    state: String,
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = BigInt)]
+    actor_seq: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    realm_id: Option<String>,
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = Text)]
+    schema_id: String,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+    #[diesel(sql_type = Timestamptz)]
+    received_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanonicalInsertOutcome {
+    Inserted(i64),
+    Replay(i64),
+    Quarantined,
+    Collision,
+}
+
+enum StoreTransactionOutcome<T> {
+    Committed(T),
+    Collision,
+}
+
+#[derive(QueryableByName)]
+struct EventPreflightRow {
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    state: String,
 }
 #[derive(QueryableByName)]
 struct EventBatchReceiptRow {
@@ -120,34 +189,243 @@ async fn lock_realm_actor(conn: &mut AsyncPgConnection, lock_key: &str) -> Persi
         .map_err(PersistenceError::database)
 }
 
-async fn insert_canonical_event(
+pub(crate) async fn insert_canonical_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
-) -> PersistenceResult<()> {
-    let event_id_uuid = ids::typed_uuid_part_expect_internal(&record.event_id);
-    let realm_id_uuid = record
-        .realm_id
-        .as_deref()
-        .map(ids::typed_uuid_part_expect_internal);
+) -> PersistenceResult<CanonicalInsertOutcome> {
+    let identity = ids::validated_event_identity_parts(
+        &record.event_id,
+        &record.canonical_digest,
+        &record.canonical_bytes,
+    )?;
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+        .bind::<Binary, _>(identity.id.to_vec())
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let existing = sql_query(
+        "SELECT pk, digest_suite, digest, canonical_bytes, state, actor_id, actor_seq, realm_id, kind, schema_id, envelope, received_at FROM canonical_events WHERE id = $1",
+    )
+    .bind::<Binary, _>(identity.id.to_vec())
+    .load::<StoredEventIdentityRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    for stored in existing {
+        if stored.digest_suite != i16::from(identity.digest_suite)
+            || stored.digest != identity.digest
+        {
+            return Err(PersistenceError::Conflict(
+                "event_id_digest_mismatch".to_owned(),
+            ));
+        }
+        if stored.canonical_bytes == record.canonical_bytes {
+            return Ok(if stored.state == "accepted" {
+                CanonicalInsertOutcome::Replay(stored.pk)
+            } else {
+                CanonicalInsertOutcome::Quarantined
+            });
+        }
+        for (
+            canonical_bytes,
+            actor_id,
+            actor_seq,
+            realm_id,
+            kind,
+            schema_id,
+            envelope,
+            received_at,
+        ) in [
+            (
+                stored.canonical_bytes,
+                stored.actor_id,
+                stored.actor_seq,
+                stored.realm_id,
+                stored.kind,
+                stored.schema_id,
+                stored.envelope,
+                stored.received_at,
+            ),
+            (
+                record.canonical_bytes.clone(),
+                record.actor_id.clone(),
+                record.actor_seq as i64,
+                record.realm_id.clone(),
+                record.kind.clone(),
+                record.schema_id.clone(),
+                record.envelope.clone(),
+                record.received_at,
+            ),
+        ] {
+            sql_query(
+                "INSERT INTO event_collision_variants \
+                 (event_pk, event_id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
+                 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 \
+                 WHERE NOT EXISTS ( \
+                   SELECT 1 FROM event_collision_variants \
+                   WHERE event_pk = $1 AND canonical_bytes = $10 \
+                 )",
+            )
+            .bind::<BigInt, _>(stored.pk)
+            .bind::<Binary, _>(identity.id.to_vec())
+            .bind::<SmallInt, _>(i16::from(identity.digest_suite))
+            .bind::<Binary, _>(identity.digest.to_vec())
+            .bind::<Text, _>(actor_id)
+            .bind::<BigInt, _>(actor_seq)
+            .bind::<Nullable<Text>, _>(realm_id)
+            .bind::<Text, _>(kind)
+            .bind::<Text, _>(schema_id)
+            .bind::<Binary, _>(canonical_bytes)
+            .bind::<Jsonb, _>(envelope)
+            .bind::<Timestamptz, _>(received_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        }
+        sql_query("UPDATE canonical_events SET state = 'quarantined' WHERE pk = $1")
+            .bind::<BigInt, _>(stored.pk)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "DELETE FROM projection_events WHERE event_pk = $1 AND NOT EXISTS ( \
+               SELECT 1 FROM state_control_events \
+               WHERE event_digest = $2 AND sealed_by IS NOT NULL \
+             )",
+        )
+        .bind::<BigInt, _>(stored.pk)
+        .bind::<Text, _>(&record.canonical_digest)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE federation_outbox SET state = 'policy_suppressed', \
+             last_error_code = 'witness_disagreement', lease_owner = NULL, lease_token = NULL, \
+             lease_expires_at = NULL, completed_at = COALESCE(completed_at, created_at) \
+             WHERE (event_pk = $1 OR id IN ( \
+               SELECT outbox_id FROM event_federation_outbox WHERE event_pk = $1 \
+             )) AND state IN ('pending', 'leased')",
+        )
+        .bind::<BigInt, _>(stored.pk)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM state_control_events WHERE event_digest = $1 AND sealed_by IS NULL")
+            .bind::<Text, _>(&record.canonical_digest)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        return Ok(CanonicalInsertOutcome::Collision);
+    }
     sql_query(
         "INSERT INTO canonical_events \
-         (id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         (id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING pk",
     )
-    .bind::<SqlUuid, _>(event_id_uuid)
+    .bind::<Binary, _>(identity.id.to_vec())
+    .bind::<SmallInt, _>(i16::from(identity.digest_suite))
+    .bind::<Binary, _>(identity.digest.to_vec())
     .bind::<Text, _>(&record.actor_id)
     .bind::<BigInt, _>(record.actor_seq as i64)
-    .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
+    .bind::<Nullable<Text>, _>(record.realm_id.as_deref())
     .bind::<Text, _>(&record.kind)
     .bind::<Text, _>(&record.schema_id)
-    .bind::<Text, _>(&record.canonical_digest)
     .bind::<Binary, _>(&record.canonical_bytes)
     .bind::<Jsonb, _>(&record.envelope)
     .bind::<Timestamptz, _>(record.received_at)
-    .execute(conn)
+    .get_result::<PkRow>(conn)
     .await
-    .map(|_| ())
+    .map(|row| CanonicalInsertOutcome::Inserted(row.pk))
     .map_err(map_canonical_event_put_error)
+}
+
+async fn preflight_canonical_events(
+    conn: &mut AsyncPgConnection,
+    records: &[CanonicalEventRecord],
+) -> PersistenceResult<bool> {
+    let mut ordered = records.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.event_id.cmp(&right.event_id));
+    for record in &ordered {
+        let identity = ids::validated_event_identity_parts(
+            &record.event_id,
+            &record.canonical_digest,
+            &record.canonical_bytes,
+        )?;
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+            .bind::<Binary, _>(identity.id.to_vec())
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+    }
+    let mut incoming = BTreeMap::<String, &CanonicalEventRecord>::new();
+    for record in ordered {
+        let identity = ids::validated_event_identity_parts(
+            &record.event_id,
+            &record.canonical_digest,
+            &record.canonical_bytes,
+        )?;
+        let stored = sql_query("SELECT canonical_bytes, state FROM canonical_events WHERE id = $1")
+            .bind::<Binary, _>(identity.id.to_vec())
+            .get_result::<EventPreflightRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+        if let Some(stored) = stored {
+            if stored.canonical_bytes != record.canonical_bytes {
+                debug_assert_eq!(
+                    insert_canonical_event(conn, record).await?,
+                    CanonicalInsertOutcome::Collision
+                );
+                return Ok(true);
+            }
+            if stored.state == "quarantined" {
+                return Ok(true);
+            }
+            continue;
+        }
+        if let Some(previous) = incoming.get(&record.event_id) {
+            if previous.canonical_bytes != record.canonical_bytes {
+                debug_assert!(matches!(
+                    insert_canonical_event(conn, previous).await?,
+                    CanonicalInsertOutcome::Inserted(_)
+                ));
+                debug_assert_eq!(
+                    insert_canonical_event(conn, record).await?,
+                    CanonicalInsertOutcome::Collision
+                );
+                return Ok(true);
+            }
+        } else {
+            incoming.insert(record.event_id.clone(), record);
+        }
+    }
+    Ok(false)
+}
+
+async fn bind_event_outbox_rows(
+    conn: &mut AsyncPgConnection,
+    event_pks: &[i64],
+    delivery: &FederationOutboxRecord,
+) -> PersistenceResult<()> {
+    let outbox_id =
+        sql_query("SELECT id FROM federation_outbox WHERE peer_id = $1 AND idempotency_key = $2")
+            .bind::<Text, _>(&delivery.peer_did)
+            .bind::<Text, _>(&delivery.idempotency_key)
+            .get_result::<TextIdRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?
+            .id;
+    for event_pk in event_pks {
+        sql_query(
+            "INSERT INTO event_federation_outbox (event_pk, outbox_id) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind::<BigInt, _>(*event_pk)
+        .bind::<Text, _>(&outbox_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    }
+    Ok(())
 }
 
 async fn insert_pending_control_event(
@@ -281,19 +559,10 @@ async fn insert_event_batch_receipt(
     let proofs = serde_json::to_value(&receipt.proofs).map_err(|error| {
         PersistenceError::Internal(format!("Event Batch Receipt proofs encode failed: {error}"))
     })?;
-    let event_ids = receipt
-        .events
-        .iter()
-        .filter_map(|event| match event {
-            arkret_wire::EventBatchReceiptEvent::Item(item) => Some(item.event_id.as_str()),
-            arkret_wire::EventBatchReceiptEvent::Digest(_) => None,
-        })
-        .map(ids::typed_uuid_part_expect_internal)
-        .collect::<Vec<_>>();
-    sql_query(
+    let receipt_pk = sql_query(
         "INSERT INTO event_batch_receipts \
-         (schema, id, issuer, scope, frontier, events, created_at, proofs, event_ids) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         (schema, id, issuer, scope, frontier, events, created_at, proofs) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING pk",
     )
     .bind::<Text, _>(&receipt.schema)
     .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
@@ -307,25 +576,72 @@ async fn insert_event_batch_receipt(
         receipt.created_at,
     ))
     .bind::<Jsonb, _>(proofs)
-    .bind::<Array<SqlUuid>, _>(event_ids)
-    .execute(conn)
+    .get_result::<PkRow>(&mut *conn)
     .await
-    .map(|_| ())
-    .map_err(PersistenceError::database)
+    .map_err(PersistenceError::database)?
+    .pk;
+    for event in &receipt.events {
+        let (digest_suite, digest) = match event {
+            arkret_wire::EventBatchReceiptEvent::Item(item) => {
+                let identity =
+                    ids::event_identity_parts(item.event_id.as_str(), item.event_digest.as_str())?;
+                (identity.digest_suite, identity.digest)
+            }
+            arkret_wire::EventBatchReceiptEvent::Digest(digest) => {
+                ids::parse_event_digest(digest.as_str()).ok_or_else(|| {
+                    PersistenceError::SchemaViolation(format!(
+                        "malformed Event Batch Receipt digest: {:?}",
+                        digest.as_str()
+                    ))
+                })?
+            }
+        };
+        let event_pk =
+            sql_query("SELECT pk FROM canonical_events WHERE state = 'accepted' AND digest_suite = $1 AND digest = $2")
+                .bind::<SmallInt, _>(i16::from(digest_suite))
+                .bind::<Binary, _>(digest.to_vec())
+                .get_result::<PkRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?
+                .ok_or_else(|| {
+                    PersistenceError::Conflict(
+                "schema_violation: Event Batch Receipt references an unknown Event identity"
+                    .to_owned(),
+            )
+                })?
+                .pk;
+        sql_query(
+            "INSERT INTO event_batch_receipt_events (receipt_pk, event_pk) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind::<BigInt, _>(receipt_pk)
+        .bind::<BigInt, _>(event_pk)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    }
+    Ok(())
 }
 impl From<CanonicalEventRow> for CanonicalEventRecord {
     fn from(row: CanonicalEventRow) -> Self {
+        let id: [u8; ids::EVENT_ID_BYTES] = row
+            .id
+            .try_into()
+            .expect("canonical_events.id must be 33 bytes");
+        let digest: [u8; ids::EVENT_DIGEST_BYTES] = row
+            .digest
+            .try_into()
+            .expect("canonical_events.digest must be 32 bytes");
         Self {
-            event_id: ids::format_typed_uuid("event", &row.id),
+            event_id: ids::format_event_id(&id),
             actor_id: row.actor_id,
             actor_seq: row.actor_seq.max(0) as u64,
-            realm_id: row
-                .realm_id
-                .as_ref()
-                .map(|u| ids::format_typed_uuid("realm", u)),
+            realm_id: row.realm_id,
             kind: row.kind,
             schema_id: row.schema_id,
-            canonical_digest: row.canonical_digest,
+            canonical_digest: ids::format_event_digest(row.digest_suite as u8, &digest)
+                .expect("canonical_events.digest_suite must be active"),
             canonical_bytes: row.canonical_bytes,
             envelope: row.envelope,
             received_at: row.received_at,
@@ -351,30 +667,43 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let event_id_uuid = ids::typed_uuid_part_expect_internal(&record.event_id);
-        let realm_id_uuid: Option<Uuid> = record
-            .realm_id
-            .as_deref()
-            .map(ids::typed_uuid_part_expect_internal);
+        let outcome = conn
+            .transaction::<_, PgTransactionError, _>(async move |conn| {
+                insert_canonical_event(conn, &record)
+                    .await
+                    .map_err(PgTransactionError::from)
+            })
+            .await
+            .map_err(PgTransactionError::into_persistence)?;
+        if matches!(
+            outcome,
+            CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined
+        ) {
+            Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn collision_variants(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
         sql_query(
-            "INSERT INTO canonical_events \
-             (id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (id) DO NOTHING",
+            "SELECT event_id AS id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM event_collision_variants WHERE event_id = $1 ORDER BY pk",
         )
-        .bind::<SqlUuid, _>(event_id_uuid)
-        .bind::<Text, _>(&record.actor_id)
-        .bind::<BigInt, _>(record.actor_seq as i64)
-        .bind::<Nullable<SqlUuid>, _>(realm_id_uuid)
-        .bind::<Text, _>(&record.kind)
-        .bind::<Text, _>(&record.schema_id)
-        .bind::<Text, _>(&record.canonical_digest)
-        .bind::<Binary, _>(&record.canonical_bytes)
-        .bind::<Jsonb, _>(&record.envelope)
-        .bind::<Timestamptz, _>(record.received_at)
-        .execute(&mut *conn).await
-        .map(|_| ())
-        .map_err(map_canonical_event_put_error)
+        .bind::<Binary, _>(event_id.to_vec())
+        .load::<CanonicalEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::database)
     }
 
     async fn put_realm_bootstrap_batch_atomic(
@@ -403,26 +732,46 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            for record in records {
-                insert_canonical_event(conn, &record).await?;
-                let control_proposal_ack = acks.get(&record.canonical_digest).ok_or_else(|| {
-                    PersistenceError::Conflict(
+        let transaction_outcome = conn
+            .transaction::<_, PgTransactionError, _>(async move |conn| {
+                if preflight_canonical_events(conn, &records).await? {
+                    return Ok(StoreTransactionOutcome::Collision);
+                }
+                let mut event_pks = Vec::with_capacity(records.len());
+                for record in records {
+                    let event_pk = match insert_canonical_event(conn, &record).await? {
+                        CanonicalInsertOutcome::Inserted(pk)
+                        | CanonicalInsertOutcome::Replay(pk) => pk,
+                        CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                            unreachable!("batch collision was handled by preflight")
+                        }
+                    };
+                    event_pks.push(event_pk);
+                    let control_proposal_ack =
+                        acks.get(&record.canonical_digest).ok_or_else(|| {
+                            PersistenceError::Conflict(
                         "schema_violation: Realm bootstrap Event is missing Control Proposal Ack"
                             .to_owned(),
                     )
-                })?;
-                insert_pending_control_event(conn, &record, Some(control_proposal_ack)).await?;
-            }
-            // Same transaction as the Events: the delivery intent for a Realm
-            // genesis unit is not a post-commit best-effort follow-up.
-            for delivery in outbox {
-                insert_federation_outbox_row(conn, &delivery).await?;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(PgTransactionError::into_persistence)
+                        })?;
+                    insert_pending_control_event(conn, &record, Some(control_proposal_ack)).await?;
+                }
+                // Same transaction as the Events: the delivery intent for a Realm
+                // genesis unit is not a post-commit best-effort follow-up.
+                for delivery in outbox {
+                    insert_federation_outbox_row(conn, &delivery).await?;
+                    bind_event_outbox_rows(conn, &event_pks, &delivery).await?;
+                }
+                Ok(StoreTransactionOutcome::Committed(()))
+            })
+            .await
+            .map_err(PgTransactionError::into_persistence)?;
+        match transaction_outcome {
+            StoreTransactionOutcome::Committed(()) => Ok(()),
+            StoreTransactionOutcome::Collision => Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            )),
+        }
     }
 
     async fn put_identity_anchor_batch_atomic(
@@ -451,7 +800,11 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+                if preflight_canonical_events(conn, &records).await? {
+                    return Ok(StoreTransactionOutcome::Collision);
+                }
+                let mut event_pks = Vec::with_capacity(records.len());
                 // Own every Realm/actor stream this unit writes before reading
                 // it back. `commit_event_batch` takes the same keys, so the two
                 // commit paths exclude each other exactly where they touch the
@@ -486,8 +839,8 @@ impl EventStore for PgEventStore {
                     // The replacement digest comparison reads the paired
                     // authorize Event, so both unit kinds must be loaded.
                     let existing = sql_query(
-                        "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-                         FROM canonical_events WHERE actor_id = $1 AND kind IN ('ak.device.reanchor', 'ak.device.authorize')",
+                        "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+                         FROM canonical_events WHERE state = 'accepted' AND actor_id = $1 AND kind IN ('ak.device.reanchor', 'ak.device.authorize')",
                     )
                     .bind::<Text, _>(&slot.actor_id)
                     .load::<CanonicalEventRow>(&mut *conn)
@@ -514,7 +867,13 @@ impl EventStore for PgEventStore {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
                 }
                 for record in records {
-                    insert_canonical_event(conn, &record).await.map_err(PersistenceError::database)?;
+                    let event_pk = match insert_canonical_event(conn, &record).await? {
+                        CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
+                        CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                            unreachable!("batch collision was handled by preflight")
+                        }
+                    };
+                    event_pks.push(event_pk);
                     if !reanchor_conflict {
                         insert_pending_control_event(
                             conn,
@@ -579,14 +938,21 @@ impl EventStore for PgEventStore {
                     // its delivery intents right here.
                     for delivery in outbox {
                         insert_federation_outbox_row(conn, &delivery).await?;
+                        bind_event_outbox_rows(conn, &event_pks, &delivery).await?;
                     }
                 }
-            Ok(IdentityAnchorCommitOutcome {
+            Ok(StoreTransactionOutcome::Committed(IdentityAnchorCommitOutcome {
                 reanchor_conflict,
-            })
+            }))
         })
         .await
-        .map_err(PgTransactionError::into_persistence)
+        .map_err(PgTransactionError::into_persistence)?;
+        match transaction_outcome {
+            StoreTransactionOutcome::Committed(outcome) => Ok(outcome),
+            StoreTransactionOutcome::Collision => Err(PersistenceError::Conflict(
+                "event_hash_collision".to_owned(),
+            )),
+        }
     }
 
     async fn batch_receipts_for_event(
@@ -596,12 +962,27 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let event_id = ids::typed_uuid_part_expect_internal(event_id);
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        let event_pk =
+            sql_query("SELECT pk FROM canonical_events WHERE state = 'accepted' AND id = $1")
+                .bind::<Binary, _>(event_id.to_vec())
+                .get_result::<PkRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+        let Some(event_pk) = event_pk.map(|row| row.pk) else {
+            return Ok(Vec::new());
+        };
         let rows = sql_query(
-            "SELECT schema, id, issuer, scope, frontier, events, created_at, proofs \
-             FROM event_batch_receipts WHERE event_ids @> ARRAY[$1]::uuid[] ORDER BY created_at, id",
+            "SELECT receipt.schema, receipt.id, receipt.issuer, receipt.scope, receipt.frontier, \
+                    receipt.events, receipt.created_at, receipt.proofs \
+             FROM event_batch_receipts receipt \
+             JOIN event_batch_receipt_events binding ON binding.receipt_pk = receipt.pk \
+             WHERE binding.event_pk = $1 ORDER BY receipt.created_at, receipt.pk",
         )
-        .bind::<SqlUuid, _>(event_id)
+        .bind::<BigInt, _>(event_pk)
         .load::<EventBatchReceiptRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -612,13 +993,16 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let event_id_uuid = ids::typed_uuid_part_expect_internal(event_id);
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE id = $1",
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' AND id = $1",
         )
-        .bind::<SqlUuid, _>(event_id_uuid)
-        .get_result::<CanonicalEventRow>(&mut *conn).await
+        .bind::<Binary, _>(event_id.to_vec())
+        .get_result::<CanonicalEventRow>(&mut *conn)
+        .await
         .optional()
         .map(|row| row.map(CanonicalEventRecord::from))
         .map_err(PersistenceError::database)
@@ -628,9 +1012,11 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let event_id_uuid = ids::typed_uuid_part_expect_internal(event_id);
-        sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE id = $1) AS present")
-            .bind::<SqlUuid, _>(event_id_uuid)
+        let event_id = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        sql_query("SELECT EXISTS(SELECT 1 FROM canonical_events WHERE state = 'accepted' AND id = $1) AS present")
+            .bind::<Binary, _>(event_id.to_vec())
             .get_result::<ExistsRow>(&mut *conn)
             .await
             .map(|row| row.present)
@@ -641,7 +1027,7 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE actor_id = $1")
+        sql_query("SELECT MAX(actor_seq) AS max_seq FROM canonical_events WHERE state = 'accepted' AND actor_id = $1")
             .bind::<Text, _>(actor_id)
             .get_result::<MaxSeqRow>(&mut *conn)
             .await
@@ -654,8 +1040,8 @@ impl EventStore for PgEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events ORDER BY received_at ASC, id ASC",
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' ORDER BY received_at ASC, id ASC",
         )
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
@@ -666,13 +1052,12 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
             "SELECT COUNT(*)::bigint AS event_count, \
              COALESCE(SUM(OCTET_LENGTH(canonical_bytes)), 0)::bigint AS canonical_bytes \
-             FROM canonical_events WHERE realm_id = $1",
+             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .get_result::<RealmEventStatsRow>(&mut *conn)
         .await
         .map(|row| RealmEventStats {
@@ -687,8 +1072,8 @@ impl EventStore for PgEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE actor_id = $1 ORDER BY actor_seq ASC, received_at ASC, id ASC",
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' AND actor_id = $1 ORDER BY actor_seq ASC, received_at ASC, id ASC",
         )
         .bind::<Text, _>(actor_id)
         .load::<CanonicalEventRow>(&mut *conn)
@@ -705,12 +1090,11 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .bind::<Text, _>(actor_id)
         .load::<CanonicalEventRow>(&mut *conn)
         .await
@@ -723,12 +1107,13 @@ impl EventStore for PgEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE kind IN ('ak.member.state', 'ak.circle.member.state', 'ak.invite.create', 'ak.invite.accept') \
+             WHERE state = 'accepted' AND ( \
+                kind IN ('ak.member.state', 'ak.circle.member.state', 'ak.invite.create', 'ak.invite.accept') \
                 OR (envelope #> '{payload,sync_endpoints}') IS NOT NULL \
                 OR (envelope #> '{payload,object,sync_endpoints}') IS NOT NULL \
-                OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL \
+                OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL) \
              ORDER BY received_at ASC, id ASC",
         )
         .load::<CanonicalEventRow>(&mut *conn).await
@@ -740,57 +1125,56 @@ impl EventStore for PgEventStore {
         &self,
         query: &PeerEventsPageQuery,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        if let Some(cursor) = query.cursor_event_id.as_deref()
+            && self.get(cursor).await?.is_none()
+        {
+            return Ok(Vec::new());
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_ids = query
-            .realms
-            .iter()
-            .map(|realm_id| {
-                ids::parse_typed_uuid(realm_id, "realm").ok_or_else(|| {
-                    PersistenceError::Internal(format!("invalid peer events realm id: {realm_id}"))
-                })
-            })
-            .collect::<PersistenceResult<Vec<_>>>()?;
+        let realm_ids = query.realms.clone();
         let cursor_id = match query.cursor_event_id.as_deref() {
-            Some(event_id) => ids::parse_typed_uuid(event_id, "event").ok_or_else(|| {
-                PersistenceError::Internal(format!(
-                    "invalid peer events cursor event id: {event_id}"
-                ))
-            })?,
-            None => Uuid::nil(),
+            Some(event_id) => ids::parse_event_id(event_id)
+                .ok_or_else(|| {
+                    PersistenceError::Internal(format!(
+                        "invalid peer events cursor event id: {event_id}"
+                    ))
+                })?
+                .to_vec(),
+            None => vec![0_u8; ids::EVENT_ID_BYTES],
         };
         let no_cursor = query.cursor_event_id.is_none();
         let kind_filter = query.kind_filter.as_deref().unwrap_or_default();
         let limit = query.limit.min(i64::MAX as usize) as i64;
         let page_sql = if query.backward {
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE ($1 OR realm_id = ANY($2)) \
+             WHERE state = 'accepted' AND ($1 OR realm_id = ANY($2)) \
                AND ($3 OR actor_id = ANY($4)) \
                AND ($5 OR kind = $6) \
-               AND ($7 OR (received_at, id) < (SELECT received_at, id FROM canonical_events WHERE id = $8)) \
+               AND ($7 OR (received_at, id) < (SELECT received_at, id FROM canonical_events WHERE state = 'accepted' AND id = $8)) \
              ORDER BY received_at DESC, id DESC \
              LIMIT $9"
         } else {
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE ($1 OR realm_id = ANY($2)) \
+             WHERE state = 'accepted' AND ($1 OR realm_id = ANY($2)) \
                AND ($3 OR actor_id = ANY($4)) \
                AND ($5 OR kind = $6) \
-               AND ($7 OR (received_at, id) > (SELECT received_at, id FROM canonical_events WHERE id = $8)) \
+               AND ($7 OR (received_at, id) > (SELECT received_at, id FROM canonical_events WHERE state = 'accepted' AND id = $8)) \
              ORDER BY received_at ASC, id ASC \
              LIMIT $9"
         };
         sql_query(page_sql)
             .bind::<Bool, _>(realm_ids.is_empty())
-            .bind::<Array<SqlUuid>, _>(realm_ids)
+            .bind::<Array<Text>, _>(realm_ids)
             .bind::<Bool, _>(query.actors.is_empty())
             .bind::<Array<Text>, _>(query.actors.clone())
             .bind::<Bool, _>(query.kind_filter.is_none())
             .bind::<Text, _>(kind_filter)
             .bind::<Bool, _>(no_cursor)
-            .bind::<SqlUuid, _>(cursor_id)
+            .bind::<Binary, _>(cursor_id)
             .bind::<BigInt, _>(limit)
             .load::<CanonicalEventRow>(&mut *conn)
             .await
@@ -805,12 +1189,11 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id_uuid = ids::typed_uuid_part_expect_internal(realm_id);
         sql_query(
-            "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
-             FROM canonical_events WHERE realm_id = $1 ORDER BY received_at DESC, id DESC",
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' AND realm_id = $1 ORDER BY received_at DESC, id DESC",
         )
-        .bind::<SqlUuid, _>(realm_id_uuid)
+        .bind::<Text, _>(realm_id)
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::database)

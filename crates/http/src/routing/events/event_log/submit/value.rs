@@ -16,7 +16,19 @@ pub(super) fn stored_prev_frontier_digest(
 }
 
 pub(super) fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    arkret_wire::event_envelope::prev_frontier_digest(prev_refs).map_err(|error| {
+    let prev_refs = prev_refs
+        .iter()
+        .cloned()
+        .map(EventId::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("prev_refs contains an invalid EventId: {error}"),
+            )
+        })?;
+    arkret_wire::event_envelope::prev_frontier_digest(&prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -796,17 +808,15 @@ pub(super) async fn submit_event_value_with_context(
             "events.submit",
             json!({
                 "event_id": parsed.event_id,
-                "reason": "duplicate_conflict",
+                "reason": "witness_disagreement",
                 "canonical_digest": parsed.canonical_digest
             }),
-            "duplicate_conflict",
+            "witness_disagreement",
         )
         .await;
-        return Err(SubmitOneError::new(
-            StatusCode::CONFLICT,
-            "duplicate_conflict",
-            "event_id already exists with different canonical bytes",
-        ));
+        let record =
+            super::identity_anchor::canonical_record(&parsed, envelope.clone(), received_at);
+        return Err(quarantine_verified_event_collision(state, record).await);
     }
     if parsed.kind == arkret_wire::EventKind::REALM_CREATE
         && service
@@ -1909,6 +1919,9 @@ pub(super) async fn submit_event_value_with_context(
                     "event_id already exists with different canonical bytes",
                 ));
             }
+        }
+        if let Some(collision) = map_event_hash_collision(parsed.event_id.clone(), &error) {
+            return Err(collision);
         }
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(
