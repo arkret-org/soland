@@ -216,25 +216,6 @@ async fn accept_local_operations_with_policy_context(
     Ok(())
 }
 
-pub async fn accept_trusted_sidecar_member_operation(
-    state: &AppState,
-    controller: &str,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(
-        std::slice::from_ref(operation),
-    )
-    .await;
-    validate_operation_semantics(state, std::slice::from_ref(operation))?;
-    validate_content_encryption_floor(state, std::slice::from_ref(operation)).await?;
-    crate::routing::events::operations::validate_trusted_sidecar_member_operation(
-        state, operation, controller,
-    )
-    .await?;
-    project_trusted_sidecar_member_operation(state, controller, operation).await;
-    Ok(())
-}
-
 pub async fn persist_projected_operation(
     state: &AppState,
     origin: &str,

@@ -473,7 +473,7 @@ pub struct SolandAccountRegisterOutcome {
 // `agent_projection`; the `agent_key_pair` outcome is
 // `{ok, authorized_event_ref}`; grant attach/detach outcomes are
 // `{ok, grant_id}` / `{ok, revoked_at}`; Sidecar ensure carries the typed
-// `sidecar_id`/`private_strand_id`/`private_relation_id`. The lifecycle
+// event-derived `sidecar_id` and native `source_context_ref`. The lifecycle
 // outcome (`agent_lifecycle_state` = `operation_status_outcome` =
 // `{ok: true, status}`) has no struct mirror in the SDK and is emitted as a
 // spec-exact JSON object by the agents handler. `AgentProvisionRequestBody` /

@@ -1473,7 +1473,6 @@ pub struct AgentSidecarState {
     pub sidecar_id: String,
     pub realm_id: String,
     pub controller_id: String,
-    pub backing_circle_id: String,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -1485,8 +1484,9 @@ pub struct AgentSidecarContextState {
     pub sidecar_id: String,
     pub normalized_context_ref_digest: String,
     pub normalized_context_ref: Value,
-    pub private_strand_id: String,
-    pub private_relation_id: String,
+    pub version: i64,
+    pub predecessor_event_ref: Option<String>,
+    pub attach_event_ref: String,
     pub created_at: DateTime<Utc>,
 }
 

@@ -1,5 +1,3 @@
-use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-
 use super::*;
 
 pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
@@ -228,73 +226,6 @@ pub(super) async fn validate_circle_management_policy(
     Err(reason)
 }
 
-pub(super) async fn sidecar_member_state_shape_is_constrained(
-    state: &AppState,
-    operation: &Operation,
-    controller: &str,
-    circle_id: &str,
-) -> bool {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::CIRCLE_MEMBER_STATE)
-    {
-        return false;
-    }
-    if operation.payload.get("membership").and_then(Value::as_str) != Some("join") {
-        return false;
-    }
-    let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
-        return false;
-    };
-    let realm_id = operation.realm_id.as_str();
-    {
-        let projection = state.projections().snapshot();
-        let Some(circle) = projection.circle(circle_id) else {
-            return false;
-        };
-        if circle.realm_id != realm_id
-            || circle.profile_ref.is_some()
-            || circle.title != "Agent Sidecar Scope"
-            || circle.created_by != controller
-            || !circle
-                .display
-                .pointer("/short_name")
-                .and_then(Value::as_str)
-                .is_some_and(|short_name| short_name.starts_with("SC-"))
-        {
-            return false;
-        }
-    }
-    if !policy_realm_member_joined(state, realm_id, target) {
-        return false;
-    }
-    if target == controller {
-        return true;
-    }
-    let Ok(records) = state
-        .agent_pairings()
-        .agents_for_controller(controller)
-        .await
-    else {
-        return false;
-    };
-    let record_matches = records.iter().any(|record| {
-        record.id == target
-            && record.controller_id == controller
-            && record.state == AgentLifecycleState::Active
-    });
-    if !record_matches {
-        return false;
-    }
-    let projection = state.projections().snapshot();
-    !matches!(
-        projection.agent_lifecycles.get(target),
-        Some(
-            arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused
-                | arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated
-        )
-    ) && projection.agent_has_authorized_key(target)
-}
-
 /// Policy-layer acting-principal accessor.
 ///
 /// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
@@ -379,66 +310,9 @@ pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor
 }
 
 pub(super) fn sidecar_circle_object_shape_is_constrained(
-    operation: &Operation,
-    actor: &str,
-    sidecar_id: &str,
+    _operation: &Operation,
+    _actor: &str,
+    _sidecar_id: &str,
 ) -> bool {
-    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::CIRCLE_CREATE)
-    {
-        return false;
-    }
-    let payload = &operation.payload;
-    let Some(object) = payload.get("object").and_then(Value::as_object) else {
-        return false;
-    };
-    let realm_id = operation.realm_id.as_str();
-    if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return false;
-    }
-    if object.get("created_by").and_then(Value::as_str) != Some(actor) {
-        return false;
-    }
-    if object.get("profile_ref").is_some() {
-        return false;
-    }
-    if object.get("directory_visibility").and_then(Value::as_str) != Some("members") {
-        return false;
-    }
-    if object.get("join_rule").and_then(Value::as_str) != Some("invite") {
-        return false;
-    }
-    if object.get("history_visibility").and_then(Value::as_str) != Some("restricted") {
-        return false;
-    }
-    // Sidecars are never a plaintext escape hatch. The reserved aggregate is
-    // stricter than an ordinary Circle: both floors and the profile are fixed
-    // to MLS E2EE even when the parent principal-control Realm permits
-    // plaintext. `ensure` may only return after this exact shape is projected,
-    // which lets clients select the encrypted composer without a downgrade.
-    if object
-        .get("content_encryption_floor")
-        .and_then(Value::as_str)
-        != Some("e2ee_required")
-        || object
-            .get("metadata_encryption_floor")
-            .and_then(Value::as_str)
-            != Some("e2ee_required")
-        || object.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
-    {
-        return false;
-    }
-    let expected_short_name =
-        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id);
-    object.get("title").and_then(Value::as_str) == Some("Agent Sidecar Scope")
-        && object.get("summary").is_none()
-        && object
-            .get("display")
-            .and_then(|display| display.get("short_name"))
-            .and_then(Value::as_str)
-            == Some(expected_short_name.as_str())
-        && object
-            .get("display")
-            .and_then(|display| display.pointer("/symbol/glyph"))
-            .and_then(Value::as_str)
-            == Some("lock")
+    false
 }

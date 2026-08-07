@@ -173,6 +173,8 @@ pub struct ProjectionState {
     pub circles: BTreeMap<String, CircleProjection>,
     /// First-class Sidecars keyed by `sidecar_id`.
     pub sidecars: BTreeMap<String, SidecarProjection>,
+    /// Native source-context mappings keyed by `(sidecar_id, kind:id)`.
+    pub sidecar_contexts: BTreeMap<(String, String), SidecarContextProjection>,
     /// Accepted control ref that created each Sidecar.
     pub sidecar_create_refs: BTreeMap<String, String>,
     /// Current accepted join ref for each active Circle member.

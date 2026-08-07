@@ -912,21 +912,12 @@ async fn validate_sidecar_mention_subjects(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let strand_id = operation
-        .payload
-        .get("strand_id")
-        .or_else(|| operation.payload.get("target_ref"))
-        .and_then(Value::as_str);
-    let Some((controller_id, realm_id)) = strand_id.and_then(|strand_id| {
+    let sidecar_id = operation.payload.get("sidecar_id").and_then(Value::as_str);
+    let Some((controller_id, realm_id)) = sidecar_id.and_then(|sidecar_id| {
         let projection = state.projections().snapshot();
-        let circle_id = projection
-            .strands
-            .get(strand_id)
-            .and_then(|strand| strand.scope_circle_id.as_deref())?;
         projection
             .sidecars
-            .values()
-            .find(|sidecar| sidecar.backing_circle_id == circle_id)
+            .get(sidecar_id)
             .map(|sidecar| (sidecar.controller_id.clone(), sidecar.realm_id.clone()))
     }) else {
         return Ok(());

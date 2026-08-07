@@ -16,8 +16,6 @@ struct SidecarRow {
     realm_id: uuid::Uuid,
     #[diesel(sql_type = Text)]
     controller_id: String,
-    #[diesel(sql_type = SqlUuid)]
-    backing_circle_id: uuid::Uuid,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -34,7 +32,6 @@ impl From<SidecarRow> for AgentSidecarRecord {
             sidecar_id: ids::format_typed_uuid("sidecar", &row.id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             controller_id: row.controller_id,
-            backing_circle_id: ids::format_typed_uuid("circle", &row.backing_circle_id),
             state: row.state,
             state_changed_at: row.state_changed_at,
             created_at: row.created_at,
@@ -51,10 +48,12 @@ struct SidecarContextRow {
     normalized_context_ref_digest: String,
     #[diesel(sql_type = Jsonb)]
     normalized_context_ref: Value,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    version: i64,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    predecessor_event_ref: Option<uuid::Uuid>,
     #[diesel(sql_type = SqlUuid)]
-    private_strand_id: uuid::Uuid,
-    #[diesel(sql_type = SqlUuid)]
-    private_relation_id: uuid::Uuid,
+    attach_event_ref: uuid::Uuid,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -65,15 +64,18 @@ impl From<SidecarContextRow> for AgentSidecarContextRecord {
             sidecar_id: ids::format_typed_uuid("sidecar", &row.sidecar_id),
             normalized_context_ref_digest: row.normalized_context_ref_digest,
             normalized_context_ref: row.normalized_context_ref,
-            private_strand_id: ids::format_typed_uuid("strand", &row.private_strand_id),
-            private_relation_id: ids::format_typed_uuid("relation", &row.private_relation_id),
+            version: row.version,
+            predecessor_event_ref: row
+                .predecessor_event_ref
+                .map(|id| ids::format_typed_uuid("event", &id)),
+            attach_event_ref: ids::format_typed_uuid("event", &row.attach_event_ref),
             created_at: row.created_at,
         }
     }
 }
 
-const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_id, backing_circle_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
-const CONTEXT_SELECT: &str = "SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, private_strand_id, private_relation_id, created_at FROM agent_sidecar_contexts";
+const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
+const CONTEXT_SELECT: &str = "SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at FROM agent_sidecar_contexts";
 
 #[async_trait]
 impl SidecarStore for PgSidecarStore {
@@ -84,20 +86,18 @@ impl SidecarStore for PgSidecarStore {
         let mut conn = pg_conn(&self.pool).await?;
         let id = ids::typed_uuid_part_expect_internal(&record.sidecar_id);
         let realm_id = ids::typed_uuid_part_expect_internal(&record.realm_id);
-        let backing_circle_id = ids::typed_uuid_part_expect_internal(&record.backing_circle_id);
         sql_query(
             "WITH inserted AS (\
-             INSERT INTO agent_sidecars (id, realm_id, controller_id, backing_circle_id, state, state_changed_at, created_at, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (realm_id, controller_id) DO NOTHING \
-             RETURNING id, realm_id, controller_id, backing_circle_id, state, state_changed_at, created_at, updated_at) \
+             INSERT INTO agent_sidecars (id, realm_id, controller_id, state, state_changed_at, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (realm_id, controller_id) DO NOTHING \
+             RETURNING id, realm_id, controller_id, state, state_changed_at, created_at, updated_at) \
              SELECT * FROM inserted UNION ALL \
-             SELECT id, realm_id, controller_id, backing_circle_id, state, state_changed_at, created_at, updated_at \
+             SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at \
              FROM agent_sidecars WHERE realm_id=$2 AND controller_id=$3 LIMIT 1",
         )
         .bind::<SqlUuid, _>(id)
         .bind::<SqlUuid, _>(realm_id)
         .bind::<Text, _>(&record.controller_id)
-        .bind::<SqlUuid, _>(backing_circle_id)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Timestamptz, _>(record.created_at)
@@ -172,22 +172,26 @@ impl SidecarStore for PgSidecarStore {
     ) -> PersistenceResult<AgentSidecarContextRecord> {
         let mut conn = pg_conn(&self.pool).await?;
         let sidecar_id = ids::typed_uuid_part_expect_internal(&record.sidecar_id);
-        let private_strand_id = ids::typed_uuid_part_expect_internal(&record.private_strand_id);
-        let private_relation_id = ids::typed_uuid_part_expect_internal(&record.private_relation_id);
+        let predecessor_event_ref = record
+            .predecessor_event_ref
+            .as_deref()
+            .map(ids::typed_uuid_part_expect_internal);
+        let attach_event_ref = ids::typed_uuid_part_expect_internal(&record.attach_event_ref);
         sql_query(
             "WITH inserted AS (\
-             INSERT INTO agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, normalized_context_ref, private_strand_id, private_relation_id, created_at) \
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (sidecar_id, normalized_context_ref_digest) DO NOTHING \
-             RETURNING sidecar_id, normalized_context_ref_digest, normalized_context_ref, private_strand_id, private_relation_id, created_at) \
+             INSERT INTO agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (sidecar_id, normalized_context_ref_digest, version) DO NOTHING \
+             RETURNING sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at) \
              SELECT * FROM inserted UNION ALL \
-             SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, private_strand_id, private_relation_id, created_at \
-             FROM agent_sidecar_contexts WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2 LIMIT 1",
+             SELECT sidecar_id, normalized_context_ref_digest, normalized_context_ref, version, predecessor_event_ref, attach_event_ref, created_at \
+             FROM agent_sidecar_contexts WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2 AND version=$4 LIMIT 1",
         )
         .bind::<SqlUuid, _>(sidecar_id)
         .bind::<Text, _>(&record.normalized_context_ref_digest)
         .bind::<Jsonb, _>(&record.normalized_context_ref)
-        .bind::<SqlUuid, _>(private_strand_id)
-        .bind::<SqlUuid, _>(private_relation_id)
+        .bind::<diesel::sql_types::BigInt, _>(record.version)
+        .bind::<Nullable<SqlUuid>, _>(predecessor_event_ref)
+        .bind::<SqlUuid, _>(attach_event_ref)
         .bind::<Timestamptz, _>(record.created_at)
         .get_result::<SidecarContextRow>(&mut *conn)
         .await
@@ -203,7 +207,7 @@ impl SidecarStore for PgSidecarStore {
         let mut conn = pg_conn(&self.pool).await?;
         let sidecar_id = ids::typed_uuid_part_expect_internal(sidecar_id);
         sql_query(format!(
-            "{CONTEXT_SELECT} WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2"
+            "{CONTEXT_SELECT} WHERE sidecar_id=$1 AND normalized_context_ref_digest=$2 ORDER BY version DESC LIMIT 1"
         ))
         .bind::<SqlUuid, _>(sidecar_id)
         .bind::<Text, _>(normalized_context_ref_digest)

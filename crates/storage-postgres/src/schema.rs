@@ -139,12 +139,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest) {
+    agent_sidecar_contexts (sidecar_id, normalized_context_ref_digest, version) {
         sidecar_id -> Uuid,
         normalized_context_ref_digest -> Text,
         normalized_context_ref -> Jsonb,
-        private_strand_id -> Uuid,
-        private_relation_id -> Uuid,
+        version -> Int8,
+        predecessor_event_ref -> Nullable<Uuid>,
+        attach_event_ref -> Uuid,
         created_at -> Timestamptz,
     }
 }
@@ -154,7 +155,6 @@ diesel::table! {
         id -> Uuid,
         realm_id -> Uuid,
         controller_id -> Text,
-        backing_circle_id -> Uuid,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,

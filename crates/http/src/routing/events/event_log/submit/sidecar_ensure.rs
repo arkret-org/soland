@@ -200,28 +200,9 @@ pub(crate) async fn submit_sidecar_ensure_batch(
             ));
         }
         let event = validate_and_prepare(state, session, create_event, None).await?;
-        let object = event
-            .operation
-            .payload
-            .get("object")
-            .cloned()
-            .and_then(|value| {
-                serde_json::from_value::<
-                    arkret_models_collaboration::agent_operations::AgentSidecar,
-                >(value)
-                .ok()
-            })
-            .ok_or_else(|| {
-                SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    "Sidecar create payload is invalid",
-                )
-            })?;
         crate::routing::events::operations::validate_trusted_sidecar_create_operation(
             &event.operation,
             session.actor.as_str(),
-            &object.backing_circle_id,
         )
         .map_err(|reason| {
             SubmitOneError::new(StatusCode::FORBIDDEN, "sidecar_create_denied", reason)

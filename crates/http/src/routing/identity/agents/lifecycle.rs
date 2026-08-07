@@ -1035,7 +1035,7 @@ pub(super) async fn lifecycle_transition(
         // replacement handle keeps running across resume and closes only on
         // consumption or expiry.
         let paused_at = Some(record.updated_at);
-        let new_sidecar_ids = controller_sidecar_circles_since(state, &session.actor, paused_at);
+        let new_sidecar_ids = controller_sidecars_since(state, &session.actor, paused_at);
         if !new_sidecar_ids.is_empty() {
             let acked: std::collections::BTreeSet<String> = sidecar_exposure_ack
                 .as_ref()
@@ -1134,10 +1134,10 @@ pub(super) async fn lifecycle_transition(
     })
 }
 
-/// Active Sidecar backing Circles owned by `controller` created strictly
+/// Active native Sidecars owned by `controller` created strictly
 /// after `since`. `since=None` fails closed by treating every Sidecar as new,
 /// forcing an explicit acknowledgement.
-fn controller_sidecar_circles_since(
+fn controller_sidecars_since(
     state: &AppState,
     controller: &str,
     since: Option<chrono::DateTime<chrono::Utc>>,
@@ -1152,7 +1152,7 @@ fn controller_sidecar_circles_since(
                     == arkret_models_collaboration::agent_operations::AgentSidecarState::Active
                 && since.is_none_or(|since| sidecar.created_at > since)
         })
-        .map(|sidecar| sidecar.backing_circle_id.clone())
+        .map(|sidecar| sidecar.sidecar_id.clone())
         .collect()
 }
 

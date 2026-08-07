@@ -6,7 +6,7 @@ use super::{
 #[derive(Default)]
 pub(crate) struct MemorySidecarStore {
     sidecars: Mutex<BTreeMap<String, AgentSidecarRecord>>,
-    contexts: Mutex<BTreeMap<(String, String), AgentSidecarContextRecord>>,
+    contexts: Mutex<BTreeMap<(String, String, i64), AgentSidecarContextRecord>>,
 }
 
 impl MemorySidecarStore {
@@ -76,6 +76,7 @@ impl SidecarStore for MemorySidecarStore {
         let key = (
             record.sidecar_id.clone(),
             record.normalized_context_ref_digest.clone(),
+            record.version,
         );
         let mut contexts = self.contexts.lock();
         Ok(contexts.entry(key).or_insert(record).clone())
@@ -89,10 +90,12 @@ impl SidecarStore for MemorySidecarStore {
         Ok(self
             .contexts
             .lock()
-            .get(&(
-                sidecar_id.to_owned(),
-                normalized_context_ref_digest.to_owned(),
-            ))
+            .values()
+            .rev()
+            .find(|record| {
+                record.sidecar_id == sidecar_id
+                    && record.normalized_context_ref_digest == normalized_context_ref_digest
+            })
             .cloned())
     }
 }
@@ -101,12 +104,11 @@ impl SidecarStore for MemorySidecarStore {
 mod tests {
     use super::*;
 
-    fn record(sidecar_id: &str, circle_id: &str) -> AgentSidecarRecord {
+    fn record(sidecar_id: &str) -> AgentSidecarRecord {
         AgentSidecarRecord {
             sidecar_id: sidecar_id.to_owned(),
             realm_id: "ak:realm:01964137-0000-8000-8000-000000000030".to_owned(),
             controller_id: "did:web:example.com:users:alice".to_owned(),
-            backing_circle_id: circle_id.to_owned(),
             state: "active".to_owned(),
             state_changed_at: None,
             created_at: chrono::Utc::now(),
@@ -117,36 +119,49 @@ mod tests {
     #[tokio::test]
     async fn singleton_insert_reuses_realm_controller_record() {
         let store = MemorySidecarStore::new();
-        let first = record(
-            "ak:sidecar:01964137-0000-7000-8000-000000000031",
-            "ak:circle:01964137-0000-8000-8000-000000000032",
-        );
-        let second = record(
-            "ak:sidecar:01964137-0000-7000-8000-000000000033",
-            "ak:circle:01964137-0000-8000-8000-000000000034",
-        );
+        let first = record("ak:sidecar:01964137-0000-8000-8000-000000000031");
+        let second = record("ak:sidecar:01964137-0000-8000-8000-000000000033");
         assert_eq!(store.insert_or_get(first.clone()).await.unwrap(), first);
         assert_eq!(store.insert_or_get(second).await.unwrap(), first);
         assert_eq!(store.snapshot_all().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn context_insert_is_idempotent_by_sidecar_and_digest() {
+    async fn context_insert_is_idempotent_by_version_and_reads_latest() {
         let store = MemorySidecarStore::new();
         let first = AgentSidecarContextRecord {
-            sidecar_id: "ak:sidecar:01964137-0000-7000-8000-000000000031".to_owned(),
+            sidecar_id: "ak:sidecar:01964137-0000-8000-8000-000000000031".to_owned(),
             normalized_context_ref_digest: "sha256:context".to_owned(),
-            normalized_context_ref: serde_json::json!({"strand_id": "one"}),
-            private_strand_id: "ak:strand:01964137-0000-8000-8000-000000000032".to_owned(),
-            private_relation_id: "ak:relation:01964137-0000-8000-8000-000000000033".to_owned(),
+            normalized_context_ref: serde_json::json!({"kind": "strand", "strand_id": "ak:strand:01964137-0000-8000-8000-000000000032"}),
+            version: 1,
+            predecessor_event_ref: None,
+            attach_event_ref: "ak:event:01964137-0000-8000-8000-000000000033".to_owned(),
             created_at: chrono::Utc::now(),
         };
-        let mut second = first.clone();
-        second.private_strand_id = "ak:strand:01964137-0000-8000-8000-000000000034".to_owned();
+        let mut duplicate = first.clone();
+        duplicate.attach_event_ref = "ak:event:01964137-0000-8000-8000-000000000034".to_owned();
         assert_eq!(
             store.insert_or_get_context(first.clone()).await.unwrap(),
             first
         );
-        assert_eq!(store.insert_or_get_context(second).await.unwrap(), first);
+        assert_eq!(store.insert_or_get_context(duplicate).await.unwrap(), first);
+
+        let second = AgentSidecarContextRecord {
+            version: 2,
+            predecessor_event_ref: Some(first.attach_event_ref.clone()),
+            attach_event_ref: "ak:event:01964137-0000-8000-8000-000000000035".to_owned(),
+            ..first.clone()
+        };
+        assert_eq!(
+            store.insert_or_get_context(second.clone()).await.unwrap(),
+            second
+        );
+        assert_eq!(
+            store
+                .get_context(&first.sidecar_id, &first.normalized_context_ref_digest)
+                .await
+                .unwrap(),
+            Some(second)
+        );
     }
 }
