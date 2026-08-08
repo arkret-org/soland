@@ -1142,6 +1142,21 @@ impl ProjectionService {
             .append_sealed_effects(realm_id, seal_id, new_ops)
     }
 
+    /// Mirror the synthetic Realm genesis cell into the application read
+    /// model used by normal admission. The conformance fixture has no accepted
+    /// `ak.realm.create` Event for the reducer to project, so persisting its
+    /// sealed cell effects alone cannot populate this cache.
+    #[doc(hidden)]
+    pub fn conformance_install_realm_genesis(&self, realm_id: &RealmId, genesis: Value) {
+        self.state.lock().realm_null_subject_cells.insert(
+            (
+                realm_id.to_string(),
+                arkret_wire::REALM_GENESIS_CELL.to_owned(),
+            ),
+            CellState::Value(genesis),
+        );
+    }
+
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {

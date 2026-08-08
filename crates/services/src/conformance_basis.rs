@@ -41,6 +41,10 @@ pub struct ConformanceRealmBasis {
     /// The closed authorization basis Seal cited by Events.
     pub seal: Seal,
     pub ops: Vec<(CellRef, IssuedOp)>,
+    /// Realm genesis value covered by `ops`. The development adapter mirrors
+    /// this value into the application projection cache after the sealed cell
+    /// effects are persisted.
+    pub genesis: Value,
     /// Exact grant bodies covered by the governance Seal. Test adapters use
     /// these to update derived indexes without reconstructing protocol state.
     pub grants: Vec<ConformanceGrant>,
@@ -99,6 +103,13 @@ pub fn build_realm_basis(
     } = options;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
     let issuer = Did::new(subject.to_owned()).map_err(|error| error.to_string())?;
+    let genesis_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "genesis",
+    )?;
     let authority_root_move = fixture_move_id(
         fixture_id_domain,
         realm_id,
@@ -151,8 +162,30 @@ pub fn build_realm_basis(
         .filter(|action| !OWNER_BOOTSTRAP_GRANT_ACTIONS.contains(&action.as_str()))
         .cloned()
         .collect::<Vec<_>>();
+    let genesis = serde_json::json!({"digest_algorithm": "sha256"});
     let mut ops = Vec::new();
     let mut grants = Vec::new();
+    // Synthetic fixture Realms have no accepted `ak.realm.create`, but every
+    // post-genesis Event still resolves its digest suite from the registered
+    // genesis cell. Materialize the protocol baseline explicitly so the
+    // conformance rail exercises the same fail-closed lookup as a real Realm.
+    ops.push((
+        CellRef::new(arkret_wire::REALM_GENESIS_CELL.to_owned())
+            .map_err(|error| error.to_string())?,
+        issued_op(
+            &issuer,
+            &genesis_move,
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Set,
+                tag: None,
+                value: Some(genesis.clone()),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    ));
     // The registered genesis authority root: its controller is the Realm owner.
     ops.push((
         CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
@@ -246,7 +279,11 @@ pub fn build_realm_basis(
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .map_err(|error| error.to_string())?,
     );
-    let mut delta = vec![authority_root_move.clone(), owner_move.clone()];
+    let mut delta = vec![
+        genesis_move,
+        authority_root_move.clone(),
+        owner_move.clone(),
+    ];
     if !explicit_content_actions.is_empty() {
         delta.push(content_move.clone());
     }
@@ -264,7 +301,12 @@ pub fn build_realm_basis(
     )
     .map_err(|error| error.to_string())?;
 
-    Ok(ConformanceRealmBasis { seal, ops, grants })
+    Ok(ConformanceRealmBasis {
+        seal,
+        ops,
+        genesis,
+        grants,
+    })
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {
@@ -430,6 +472,13 @@ mod tests {
 
         assert_ne!(first.seal.id, second.seal.id);
         assert_eq!(first.grants.len(), 2);
+        assert!(
+            first
+                .ops
+                .iter()
+                .any(|(cell, _)| { cell.as_str() == arkret_wire::REALM_GENESIS_CELL })
+        );
+        assert_eq!(first.genesis["digest_algorithm"], "sha256");
         assert!(build("soland:test:first:", Some("not a DID")).is_err());
     }
 

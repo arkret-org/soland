@@ -428,6 +428,9 @@ pub async fn realm_basis(
         .map_err(|error| {
             AppError::internal(format!("store conformance sealed basis state: {error}"))
         })?;
+    state
+        .projections()
+        .conformance_install_realm_genesis(&basis.seal.realm_id, basis.genesis);
     json_ok(RealmBasisOutcome {
         seal_id: basis.seal.id.to_string(),
         control_event_set_root: basis.seal.control_event_set_root.to_string(),
