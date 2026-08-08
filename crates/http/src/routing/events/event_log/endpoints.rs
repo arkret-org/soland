@@ -913,9 +913,28 @@ async fn events_frontier(
             )
             .await
             .is_some();
+        // The combined Realm+actor selector is the authoring surface. A
+        // caller must be able to recover its own already-established actor
+        // chain even when the discardable Realm directory/membership mirror
+        // is not yet rebuilt (notably immediately after an atomic bootstrap
+        // commit). This does not synthesize an empty frontier: an unknown
+        // Realm still has no canonical records and therefore remains 404.
+        let authored_realm_history = if actor == session.actor {
+            !state
+                .event_queries()
+                .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("actor frontier unavailable: {error}"))
+                })?
+                .is_empty()
+        } else {
+            false
+        };
         if !own_actor_pcr
             && !managed_actor_pcr
             && !invited_actor
+            && !authored_realm_history
             && !crate::routing::spaces::space::realm_id_accessible(
                 state,
                 realm_id.as_str(),
