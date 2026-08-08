@@ -86,6 +86,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let context = RealmBootstrapBatchContext {
         realm_id: unit.realm_id.clone(),
         actor_id: unit.actor_id.clone(),
+        digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
         identity_anchor_event_id: None,
         self_principal_pcr_bootstrap: false,
         authority_root: Some(unit.authority_root.clone()),

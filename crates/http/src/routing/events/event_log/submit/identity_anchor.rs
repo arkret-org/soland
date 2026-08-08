@@ -91,6 +91,7 @@ pub(super) async fn submit_identity_anchor_batch(
         Some(RealmBootstrapBatchContext {
             realm_id: lock_realm.clone(),
             actor_id: lock_actor.clone(),
+            digest_algorithm: None,
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
             self_principal_pcr_bootstrap: false,
             authority_root: None,
@@ -105,6 +106,7 @@ pub(super) async fn submit_identity_anchor_batch(
         identity_anchor_head_context.unwrap_or(RealmBootstrapBatchContext {
             realm_id: first.realm_id.clone(),
             actor_id: first.actor_id.clone(),
+            digest_algorithm: None,
             identity_anchor_event_id: Some(first.event_id.clone()),
             self_principal_pcr_bootstrap: false,
             authority_root: None,
@@ -926,6 +928,7 @@ fn validate_self_principal_pcr_bootstrap_context(
     Ok(RealmBootstrapBatchContext {
         realm_id: create.realm_id.to_string(),
         actor_id: create.actor_id.to_string(),
+        digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
         authority_root: None,

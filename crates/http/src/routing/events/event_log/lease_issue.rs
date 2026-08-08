@@ -406,6 +406,15 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         bootstrap_context: RealmBootstrapBatchContext {
             realm_id,
             actor_id,
+            digest_algorithm: Some(super::submit::staged_realm_digest_algorithm(
+                &serde_json::to_value(&events[0]).map_err(|error| {
+                    AppError::new(
+                        ErrorCode::SchemaViolation,
+                        format!("anchor Realm-create Event cannot be encoded: {error}"),
+                    )
+                    .with_status(StatusCode::BAD_REQUEST)
+                })?,
+            )),
             identity_anchor_event_id: if self_principal_pcr_bootstrap {
                 Some(events[0].event_id.as_str().to_owned())
             } else {
@@ -692,23 +701,68 @@ mod tests {
             EventKind::REALM_CREATE,
             0,
             json!({"object": {
-                "created_by": ACTOR,
+                "schema": "ak.schema.realm_genesis.v1",
+                "purpose": "collaboration",
+                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "trust_domain": "ak:trust_domain:example.net",
+                "schema_refs": ["ak.schema.realm.v1"],
+                "reducer_profile": "ak.reducer.core.v1",
+                "digest_algorithm": "sha256",
+                "security_class": "standard",
+                "encryption_profile": "none",
+                "notary_profile": "single_did",
+                "notary": {"kind": "single_did", "did": ACTOR},
                 "capability_action_registry_digest": REGISTRY_DIGEST
             }}),
         );
-        let mut followup = event(
-            EventKind::REALM_HISTORY_SHARING_POLICY,
-            1,
-            json!({"value": {"version": 1}}),
-        );
-        followup.prev_refs = vec![create.event_id.clone()];
-        followup.authorization_ref = Some(
-            arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
-        );
+        let events = vec![
+            create,
+            event(
+                EventKind::REALM_PROFILE,
+                1,
+                json!({"schema": "ak.schema.realm_profile.v1", "title": "Realm"}),
+            ),
+            event(
+                EventKind::REALM_POLICY_BUNDLE,
+                2,
+                json!({"policy_revision": 1}),
+            ),
+            event(EventKind::REALM_JOIN_RULE, 3, json!({"value": "invite"})),
+            event(
+                EventKind::REALM_HISTORY_VISIBILITY,
+                4,
+                json!({"value": "shared"}),
+            ),
+            event(
+                EventKind::REALM_DISCOVERY,
+                5,
+                json!({"value": "invite_only"}),
+            ),
+            event(
+                EventKind::REALM_DELIVERY_BINDING_POLICY,
+                6,
+                json!({"allow_unroutable_members": true}),
+            ),
+            event(
+                EventKind::MEMBER_STATE,
+                7,
+                json!({
+                    "realm_id": REALM,
+                    "actor_id": ACTOR,
+                    "membership": "join",
+                    "delivery_status": "unroutable"
+                }),
+            ),
+        ];
 
-        let context = anchor_context(&[create, followup])
+        let context = anchor_context(&events)
             .expect("ordinary Realm anchor unit is valid")
             .expect("ordinary Realm anchor unit has a lease context");
+        assert_eq!(
+            context.bootstrap_context.digest_algorithm.as_deref(),
+            Some("sha256"),
+            "lease pre-admission must stage the genesis digest suite for follow-ups",
+        );
         let root = context
             .bootstrap_context
             .authority_root

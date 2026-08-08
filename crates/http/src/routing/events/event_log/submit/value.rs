@@ -256,6 +256,7 @@ fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrap
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
                 realm_id,
                 actor_id,
+                digest_algorithm: Some(staged_realm_digest_algorithm(envelope)),
                 identity_anchor_event_id: None,
                 self_principal_pcr_bootstrap: false,
                 authority_root: None,
@@ -607,6 +608,7 @@ pub(super) async fn submit_event_value_with_context(
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
                 realm_id,
                 actor_id,
+                digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                 identity_anchor_event_id: None,
                 self_principal_pcr_bootstrap: false,
                 authority_root: None,

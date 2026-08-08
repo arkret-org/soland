@@ -24,6 +24,7 @@ pub(super) fn event_digest_suite(
     kind: &str,
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<String, EventValidationError> {
     let suite = if kind == arkret_wire::EventKind::REALM_CREATE {
         // Genesis has no materialized Realm cell yet; omission means the
@@ -34,6 +35,12 @@ pub(super) fn event_digest_suite(
             .projections()
             .snapshot()
             .realm_digest_algorithm(realm_id)
+            .or_else(|| {
+                realm_bootstrap_contexts
+                    .iter()
+                    .find(|context| context.realm_id == realm_id)
+                    .and_then(|context| context.digest_algorithm.clone())
+            })
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::CONFLICT,

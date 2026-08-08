@@ -182,7 +182,8 @@ async fn validate_event_envelope_with_ingress(
     // (or the signed Realm-create payload), then the shared storage verifier
     // recomputes the exact digest preimage and binds the complete EventId.
     let canonical_bytes = event_canonical_bytes(envelope)?;
-    let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;
+    let digest_suite =
+        event_digest_suite(state, &kind, &realm_id, object, realm_bootstrap_contexts)?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
     validate_prelookup_event_identity(&event_id, &canonical_digest, &canonical_bytes)?;
     let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
@@ -645,7 +646,14 @@ async fn validate_event_envelope_with_ingress(
         arkret_schema::EventCellContractContext::Standard
     };
     enforce_registered_cell_contract(envelope, &kind, cba_context)?;
-    enforce_ordered_log_cell_contract(state, envelope, &kind, &realm_id, object)?;
+    enforce_ordered_log_cell_contract(
+        state,
+        envelope,
+        &kind,
+        &realm_id,
+        object,
+        realm_bootstrap_contexts,
+    )?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
 
@@ -997,6 +1005,7 @@ fn enforce_ordered_log_cell_contract(
     kind: &str,
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<(), EventValidationError> {
     let event_kind = arkret_wire::EventKind::from(kind);
     let Some(descriptor) = event_kind.descriptor() else {
@@ -1021,7 +1030,7 @@ fn enforce_ordered_log_cell_contract(
         })?;
     // device-lifecycle.md 13.0.1 pins the material digest to the Realm's active
     // digest_algorithm, so the contract cannot be checked without it.
-    let suite_name = event_digest_suite(state, kind, realm_id, object)?;
+    let suite_name = event_digest_suite(state, kind, realm_id, object, realm_bootstrap_contexts)?;
     let suite = arkret_canonical::digest_suite(&suite_name)
         .map_err(|_| unsupported_digest_algorithm_error(&suite_name))?;
     // v1 has no producer `effects[]` to compare an append against: the single

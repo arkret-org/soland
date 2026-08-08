@@ -210,6 +210,7 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             arkret_wire::EventKind::STRAND_WATCH_SET,
             realm_id,
             object,
+            &[],
         )?;
         let canonical_bytes = event_canonical_bytes(envelope)?;
         event_digest_for_suite(&canonical_bytes, &suite)

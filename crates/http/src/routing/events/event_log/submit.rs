@@ -267,6 +267,12 @@ mod event_collision_reason_tests {
 pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,
     pub(in crate::routing) actor_id: String,
+    /// Digest suite staged by the leading Realm-create Event.
+    ///
+    /// Follow-up Events in an atomic bootstrap unit are validated before the
+    /// Realm projection exists, so their content-bound identities must resolve
+    /// the suite from the same signed unit rather than from durable state.
+    pub(in crate::routing) digest_algorithm: Option<String>,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
     /// The genesis authority-root value this unit's `ak.realm.create` derives.
@@ -277,6 +283,22 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     /// Seal covers the cell yet (`realm-and-space.md` section 2.5).
     pub(in crate::routing) authority_root:
         Option<arkret_policy::realm_bootstrap::RealmAuthorityRootValue>,
+}
+
+pub(in crate::routing::events::event_log) fn staged_realm_digest_algorithm(
+    envelope: &Value,
+) -> String {
+    envelope
+        .get("payload")
+        .and_then(|payload| {
+            payload
+                .get("object")
+                .and_then(|object| object.get("digest_algorithm"))
+                .or_else(|| payload.get("digest_algorithm"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("sha256")
+        .to_owned()
 }
 
 /// Closed authorization context for trusted internal protocol adapters. This
@@ -938,6 +960,7 @@ async fn submit_event_batch_outcome_with_leases(
         realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
             realm_id,
             actor_id,
+            digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
             identity_anchor_event_id: None,
             self_principal_pcr_bootstrap: false,
             authority_root: None,
@@ -991,6 +1014,7 @@ async fn submit_event_batch_outcome_with_leases(
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
                         realm_id,
                         actor_id,
+                        digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
                         authority_root: None,
