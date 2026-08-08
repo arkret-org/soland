@@ -1,80 +1,34 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, RealmId};
+use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_wire::{
     AuthoritySetRef, ControlProposalAck, ControlProposalAckKind, ControlProposalAuthorityAck,
     ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalDeferReason,
     ControlProposalRejectReason, Event, PayloadSignature,
 };
-use chrono::Duration;
-use serde::Deserialize;
 
 use crate::state::AppState;
 
-#[derive(Deserialize)]
-struct RealmCreateProposalPolicyPayload {
-    object: RealmCreateProposalPolicy,
-}
-
-#[derive(Deserialize)]
-struct RealmCreateProposalPolicy {
-    #[serde(default)]
-    proposal_intake_sla_ms: Option<u64>,
-    #[serde(default)]
-    proposal_decision_window_ms: Option<u64>,
-    #[serde(default)]
-    proposal_absolute_deadline_ms: Option<u64>,
-    #[serde(default)]
-    max_proposal_defers: Option<u8>,
-}
-
-fn policy_from_realm_create(
+fn policy_from_realm_policy_bundle(
     realm_id: &RealmId,
     event: &Event,
 ) -> Result<Option<ControlProposalDecisionPolicy>, String> {
-    if event.kind != arkret_wire::EventKind::REALM_CREATE {
+    if event.kind != arkret_wire::EventKind::REALM_POLICY_BUNDLE {
         return Ok(None);
     }
-    // A Control Proposal Ack acknowledges ingress before semantic admission. Read
-    // only the create-locked decision-policy fields here; full Realm schema
-    // validation belongs to admission and must not turn a Control Proposal Ack request into
-    // a quorum failure because the payload carries an unrelated extension.
-    let payload: RealmCreateProposalPolicyPayload = serde_json::from_value(
-        serde_json::Value::Object(event.payload.clone().into_iter().collect()),
-    )
-    .map_err(|error| format!("Realm create policy payload is invalid: {error}"))?;
-    // The create payload carries no object id (spec `zh/models/common-fields.md`
-    // section 6.0): the Realm id is derived from this genesis Event. The binding
-    // is therefore the Event's own resolved `realm_id`, not a payload field an
-    // attacker could point somewhere else.
+    let payload: RealmPolicyBundlePayload = serde_json::from_value(serde_json::Value::Object(
+        event.payload.clone().into_iter().collect(),
+    ))
+    .map_err(|error| format!("Realm policy-bundle payload is invalid: {error}"))?;
     if event.realm_id != *realm_id {
-        return Err("Realm create policy does not bind the proposal Realm".to_owned());
+        return Err("Realm policy bundle does not bind the proposal Realm".to_owned());
     }
-    let duration_from_ms = |value: u64, field: &str| {
-        i64::try_from(value)
-            .map(Duration::milliseconds)
-            .map_err(|_| format!("{field} exceeds the signed duration range"))
-    };
-    let policy = ControlProposalDecisionPolicy {
-        proposal_intake_sla: duration_from_ms(
-            payload.object.proposal_intake_sla_ms.unwrap_or(86_400_000),
-            "proposal_intake_sla_ms",
-        )?,
-        decision_window: duration_from_ms(
-            payload.object.proposal_decision_window_ms.unwrap_or(30_000),
-            "proposal_decision_window_ms",
-        )?,
-        absolute_horizon: duration_from_ms(
-            payload
-                .object
-                .proposal_absolute_deadline_ms
-                .unwrap_or(90_000),
-            "proposal_absolute_deadline_ms",
-        )?,
-        max_defers: payload.object.max_proposal_defers.unwrap_or(2),
-    };
-    policy.validate().map_err(|error| error.to_string())?;
-    Ok(Some(policy))
+    payload.validate().map_err(|error| error.to_string())?;
+    payload
+        .control_proposal_decision_policy()
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn control_proposal_policy(
@@ -83,7 +37,7 @@ pub(crate) async fn control_proposal_policy(
     submitted_events: &[Event],
 ) -> Result<ControlProposalDecisionPolicy, String> {
     for event in submitted_events {
-        if let Some(policy) = policy_from_realm_create(realm_id, event)? {
+        if let Some(policy) = policy_from_realm_policy_bundle(realm_id, event)? {
             return Ok(policy);
         }
     }
@@ -92,19 +46,18 @@ pub(crate) async fn control_proposal_policy(
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| format!("Realm proposal policy is unavailable: {error}"))?;
-    let mut resolved = None;
-    for record in records
+    if let Some(record) = records
         .into_iter()
-        .filter(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
     {
-        if resolved.is_some() {
-            return Err("Realm has more than one canonical create policy".to_owned());
-        }
         let event: Event = serde_json::from_value(record.envelope)
-            .map_err(|error| format!("canonical Realm create Event is invalid: {error}"))?;
-        resolved = policy_from_realm_create(realm_id, &event)?;
+            .map_err(|error| format!("canonical Realm policy-bundle Event is invalid: {error}"))?;
+        return policy_from_realm_policy_bundle(realm_id, &event)?
+            .ok_or_else(|| "canonical Realm policy bundle has the wrong kind".to_owned());
     }
-    resolved.ok_or_else(|| "Realm has no canonical proposal decision policy".to_owned())
+    // Managed-agent PCR genesis has no ordinary bootstrap policy bundle. Its
+    // Control Proposal timing therefore uses the protocol defaults.
+    Ok(ControlProposalDecisionPolicy::default())
 }
 
 pub(crate) fn mint_control_proposal_ack(

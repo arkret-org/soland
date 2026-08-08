@@ -1153,7 +1153,6 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
 fn event_payload_validator_enforces_patch_family_schema() {
     let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let patch_kinds = [
-        "ak.realm.update",
         "ak.strand.update",
         "ak.morph.update",
         "ak.space.update",
@@ -1166,17 +1165,6 @@ fn event_payload_validator_enforces_patch_family_schema() {
     );
 
     let payloads = [
-        (
-            "ak.realm.update",
-            json!({
-                "target_ref": "ak:realm:ATpmLCkyXzQ4QbOteQnAI0RmxU7NAwyl6mRU7evDrgBU",
-                "patch": { "title": { "$op": "set", "value": "Roadmap" } }
-            }),
-            json!({
-                "target_ref": "ak:realm:ATpmLCkyXzQ4QbOteQnAI0RmxU7NAwyl6mRU7evDrgBU",
-                "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
-            }),
-        ),
         (
             "ak.strand.update",
             json!({

@@ -197,40 +197,30 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "space create",
             kind: arkret_wire::EventKind::REALM_CREATE,
             payload: json!({"object": {
-                "id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
-                "schema": "ak.schema.realm.v1",
-                "title": "Launch",
+                "schema": "ak.schema.realm_genesis.v1",
+                "purpose": "collaboration",
+                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "trust_domain": "ak:trust_domain:local",
-                "created_by": "did:web:alice.example",
                 "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "schema_refs": ["ak.schema.realm.v1"],
-                "default_discoverability": "invite_only",
-                "default_join_rule": "invite",
-                "history_visibility": "joined",
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 "encryption_profile": "mls_rfc9420",
                 "security_class": "standard",
-                "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
                 "notary": {
                     "kind": "single_did",
-                    "did": "did:web:alice.example",
-                    "recovery_members": ["did:web:recovery.example"],
-                    "controller_organization": "did:web:organization.primary.example",
-                    "recovery_controller_organizations": ["did:web:organization.recovery.example"]
-                },
-                "created_at": "2026-05-20T00:00:00.000Z"
+                    "did": "did:web:alice.example"
+                }
             }}),
             valid: true,
         },
         OperationVector {
-            name: "space update",
-            kind: arkret_wire::EventKind::REALM_UPDATE,
+            name: "realm profile",
+            kind: arkret_wire::EventKind::REALM_PROFILE,
             payload: json!({
-                "target_ref": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-                "patch": {
-                    "title": "Launch 2"
-                }
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "Launch 2"
             }),
             valid: true,
         },

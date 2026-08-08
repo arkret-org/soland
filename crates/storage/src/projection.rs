@@ -324,14 +324,13 @@ mod tests {
     }
 
     #[test]
-    fn realm_update_metadata_is_still_projected() {
+    fn realm_profile_is_projected() {
         let operation = operation(
-            arkret_wire::EventKind::REALM_UPDATE,
+            arkret_wire::EventKind::REALM_PROFILE,
             json!({
-                "patch": {
-                    "title": {"$op": "set", "value": "Realm"},
-                    "summary": {"$op": "set", "value": "Realm summary"}
-                }
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "Realm",
+                "summary": "Realm summary"
             }),
         );
 

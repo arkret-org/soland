@@ -525,6 +525,18 @@ impl ProjectionState {
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
+        let Ok(bundle) = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload,
+        >(value.clone()) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        if bundle.validate().is_err() {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
         let Some(incoming_revision) = value.get("policy_revision").and_then(Value::as_u64) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),

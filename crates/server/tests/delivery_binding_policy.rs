@@ -55,17 +55,16 @@ fn join_op(member: &str, binding: Value) -> Operation {
 }
 
 fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) {
-    let realm_id = arkret_identifiers::RealmId::new(REALM_A).unwrap();
     let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
-        realm_id,
-        creator.clone(),
+        arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(creator),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
-    );
+    )
+    .unwrap();
     let effect = state.apply(
         &op(
             arkret_wire::EventKind::REALM_CREATE,

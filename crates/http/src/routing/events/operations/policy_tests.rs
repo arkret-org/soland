@@ -43,15 +43,14 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         "000000000691",
         arkret_wire::EventKind::REALM_CREATE,
         serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
-            realm_id.clone(),
-            alice.clone(),
+            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
             arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
                 .unwrap(),
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(alice.clone()),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
-        ))
+        ).unwrap())
         .unwrap(),
     );
     let mut peer_join = op(
@@ -145,102 +144,6 @@ fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::V
             "jws": "AAAA.BBBB.CCCC"
         }
     })
-}
-
-fn realm_with_proposal_policy(
-    realm_id: arkret_identifiers::RealmId,
-    decision_ms: u64,
-    absolute_ms: u64,
-    max_defers: u8,
-) -> arkret_models_collaboration::objects::realm::Realm {
-    let owner = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
-    let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
-        realm_id,
-        "Proposal policy test",
-        owner.clone(),
-        arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:test".to_owned()).unwrap(),
-        arkret_wire::CORE_REDUCER_PROFILE,
-        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(owner),
-        arkret_policy::current_capability_action_registry_digest().unwrap(),
-    );
-    realm.proposal_decision_window_ms = Some(decision_ms);
-    realm.proposal_absolute_deadline_ms = Some(absolute_ms);
-    realm.max_proposal_defers = Some(max_defers);
-    realm
-}
-
-#[test]
-fn realm_create_proposal_policy_uses_sdk_cross_field_validator() {
-    let state = test_state();
-    let cases = [
-        (91_000, 90_000, 0, false),
-        (90_000, 90_000, 0, true),
-        (90_000, 90_000, 1, false),
-    ];
-    for (index, (decision, absolute, defers, expected_valid)) in cases.into_iter().enumerate() {
-        let realm_id = arkret_identifiers::RealmId::new(format!(
-            "ak:realm:01904100-0000-8000-8000-0000000007b{index}"
-        ))
-        .unwrap();
-        let operation = op(
-            realm_id.clone(),
-            &format!("0000000007b{index}"),
-            arkret_wire::EventKind::REALM_CREATE,
-            json!({
-                "object": realm_with_proposal_policy(realm_id, decision, absolute, defers)
-            }),
-        );
-        assert_eq!(
-            validate_operation_semantics(&state, &[operation]).is_ok(),
-            expected_valid
-        );
-    }
-}
-
-#[test]
-fn realm_update_validates_the_complete_candidate_before_projection() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:Adk5nmwn2NtFILQAjHi23NsqxsoHqn4N1fPTOVUPNXXX".to_owned(),
-    )
-    .unwrap();
-    let create = op(
-        realm_id.clone(),
-        "0000000007b3",
-        arkret_wire::EventKind::REALM_CREATE,
-        json!({
-            "object": realm_with_proposal_policy(realm_id.clone(), 30_000, 90_000, 2)
-        }),
-    );
-    state.test_projection().lock().apply(&create, state.hlc());
-    let mut invalid_update = op(
-        realm_id,
-        "0000000007b4",
-        arkret_wire::EventKind::REALM_UPDATE,
-        json!({
-            "patch": {
-                "proposal_decision_window_ms": 90_000,
-                "proposal_absolute_deadline_ms": 90_000,
-                "max_proposal_defers": 1
-            }
-        }),
-    );
-    invalid_update.canonical_event_digest = Some(format!("sha256:{}", "a".repeat(64)));
-
-    assert_eq!(
-        validate_operation_semantics(&state, &[invalid_update]),
-        Err("Realm control proposal decision policy is invalid")
-    );
-    assert_eq!(
-        state
-            .test_projection()
-            .lock()
-            .realm_metadata_cell_value("ak:realm:Adk5nmwn2NtFILQAjHi23NsqxsoHqn4N1fPTOVUPNXXX")
-            .and_then(|value| value.get("proposal_decision_window_ms"))
-            .and_then(serde_json::Value::as_u64),
-        Some(30_000)
-    );
 }
 
 #[test]

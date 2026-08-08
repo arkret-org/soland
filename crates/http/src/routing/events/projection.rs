@@ -260,14 +260,12 @@ mod tests {
     }
 
     #[test]
-    fn realm_update_reads_patch_title_without_realm_id_fallback() {
+    fn realm_profile_reads_title_without_realm_id_fallback() {
         let operation = op(
-            arkret_wire::EventKind::REALM_UPDATE,
+            arkret_wire::EventKind::REALM_PROFILE,
             json!({
-                "action": "update",
-                "patch": {
-                    "title": { "$op": "set", "value": "Renamed Room" }
-                }
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "Renamed Room"
             }),
         );
 

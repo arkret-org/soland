@@ -940,20 +940,19 @@ async fn dynamic_peer_event_targets(
 
     // Realm-level `sync_endpoints` are the canonical replication binding for
     // mirrors and shared sync services. They are independent of member-level
-    // delivery bindings and are available from the accepted Realm-create
-    // Event even before any remote member joins.
+    // delivery bindings and are carried by the current accepted policy bundle.
     let mut endpoint_urls = BTreeMap::new();
     let mut realm_sync_endpoint_service_ids = BTreeSet::new();
     if let Ok(records) = state
         .event_queries()
         .realm_events_newest_first(&parsed.realm_id)
         .await
-        && let Some(create) = records
+        && let Some(policy_bundle) = records
             .iter()
-            .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
-        && let Some(endpoints) = create
+            .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+        && let Some(endpoints) = policy_bundle
             .envelope
-            .pointer("/payload/object/sync_endpoints")
+            .pointer("/payload/sync_endpoints")
             .and_then(Value::as_array)
     {
         for endpoint in endpoints {
@@ -977,8 +976,8 @@ async fn dynamic_peer_event_targets(
                 continue;
             };
             let entry = service_frontiers.entry(service_id.to_owned()).or_default();
-            entry.0.insert(create.event_id.clone());
-            entry.1.insert(create.event_id.clone());
+            entry.0.insert(policy_bundle.event_id.clone());
+            entry.1.insert(policy_bundle.event_id.clone());
             endpoint_urls.insert(service_id.to_owned(), url.to_owned());
             realm_sync_endpoint_service_ids.insert(service_id.to_owned());
         }

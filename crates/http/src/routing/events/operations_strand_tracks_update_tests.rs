@@ -154,7 +154,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
 #[test]
 fn create_locked_encryption_profile_detector_matches_update_shapes() {
     let direct_patch = strand_position_op(
-        arkret_wire::EventKind::REALM_UPDATE,
+        arkret_wire::EventKind::CIRCLE_UPDATE,
         json!({
             "patch": {
                 "encryption_profile": "none"
@@ -178,7 +178,7 @@ fn create_locked_encryption_profile_detector_matches_update_shapes() {
     assert!(operation_touches_encryption_profile(&pointer_patch));
 
     let metadata_patch = strand_position_op(
-        arkret_wire::EventKind::REALM_UPDATE,
+        arkret_wire::EventKind::REALM_PROFILE,
         json!({
             "patch": {
                 "title": "Still mutable"

@@ -736,14 +736,14 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .realm_events_newest_first(realm_id)
         .await
         .unwrap_or_default();
-    if let Some(create) = records
+    if let Some(policy_bundle) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
     {
-        let source_ref = EventId::new(create.event_id.clone()).ok();
-        if let Some(endpoints) = create
+        let source_ref = EventId::new(policy_bundle.event_id.clone()).ok();
+        if let Some(endpoints) = policy_bundle
             .envelope
-            .pointer("/payload/object/sync_endpoints")
+            .pointer("/payload/sync_endpoints")
             .and_then(Value::as_array)
         {
             for endpoint in endpoints {

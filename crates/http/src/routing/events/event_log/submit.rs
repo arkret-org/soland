@@ -2334,34 +2334,26 @@ mod managed_agent_pcr_batch_tests {
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
                 .unwrap();
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
-        let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
-            realm_id.clone(),
-            "Managed Agent principal control",
-            agent_id.clone(),
-            arkret_identifiers::TypedTrustDomainId::new(
-                "ak:trust_domain:managed-agent-pcr".to_owned(),
+        let genesis =
+            arkret_models_collaboration::events_payloads::RealmGenesis::principal_control(
+                arkret_identifiers::TypedTrustDomainId::new(
+                    "ak:trust_domain:managed-agent-pcr".to_owned(),
+                )
+                .unwrap(),
+                vec!["ak.profile.principal_control_realm.v1".to_owned()],
+                arkret_wire::CORE_REDUCER_PROFILE,
+                arkret_canonical::DigestSuite::Sha256,
+                arkret_wire::SecurityClass::HighAssurance,
+                arkret_wire::EncryptionProfile::MlsRfc9420,
+                arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+                arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
             )
-            .unwrap(),
-            arkret_wire::CORE_REDUCER_PROFILE,
-            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
-        );
-        realm.fields.insert(
-            "purpose".to_owned(),
-            Value::String("principal_control".to_owned()),
-        );
-        realm.schema_refs = vec!["ak.profile.principal_control_realm.v1".to_owned()];
-        realm.history_visibility = arkret_wire::HistoryVisibility::Restricted;
-        realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
-        realm.content_encryption_floor =
-            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
-        realm.metadata_encryption_floor =
-            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
-        realm.security_class = Some(arkret_wire::SecurityClass::HighAssurance);
-        let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(realm)
-            .to_value()
             .unwrap();
+        let payload =
+            arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+                .to_value()
+                .unwrap();
         let mut event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
@@ -2498,42 +2490,41 @@ mod federation_delivery_binding_tests {
     }
 
     #[test]
-    fn realm_sync_endpoint_binding_requires_declared_destination_and_create_frontier() {
-        let create_event_id = event_id(1);
+    fn realm_sync_endpoint_binding_requires_declared_destination_and_policy_bundle_frontier() {
+        let policy_bundle_event_id = event_id(1);
         let binding = FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
             realm_policy_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
-            membership_frontier: vec![create_event_id.clone()],
-            delivery_binding_frontier: vec![create_event_id.clone()],
+            membership_frontier: vec![policy_bundle_event_id.clone()],
+            delivery_binding_frontier: vec![policy_bundle_event_id.clone()],
             destination_service_kind: "principal_server".to_owned(),
         };
-        let create_envelope = json!({
+        let policy_bundle_envelope = json!({
             "payload": {
-                "object": {
-                    "sync_endpoints": [{
-                        "did": "did:web:mirror.example",
-                        "endpoint": "https://mirror.example",
-                        "role": "mirror",
-                        "service_kind": "principal_server",
-                        "plaintext_visible": true,
-                        "visibility_scope": "plaintext_events"
-                    }]
-                }
+                "policy_revision": 1,
+                "sync_endpoints": [{
+                    "did": "did:web:mirror.example",
+                    "endpoint": "https://mirror.example",
+                    "role": "mirror",
+                    "service_kind": "principal_server",
+                    "plaintext_visible": true,
+                    "visibility_scope": "plaintext_events"
+                }]
             }
         });
 
         assert!(realm_sync_endpoint_authorizes_destination(
             "did:web:mirror.example",
             &binding,
-            create_event_id.as_str(),
-            &create_envelope,
+            policy_bundle_event_id.as_str(),
+            &policy_bundle_envelope,
         ));
         assert!(!realm_sync_endpoint_authorizes_destination(
             "did:web:other.example",
             &binding,
-            create_event_id.as_str(),
-            &create_envelope,
+            policy_bundle_event_id.as_str(),
+            &policy_bundle_envelope,
         ));
 
         let mut stale_binding = binding;
@@ -2541,8 +2532,8 @@ mod federation_delivery_binding_tests {
         assert!(!realm_sync_endpoint_authorizes_destination(
             "did:web:mirror.example",
             &stale_binding,
-            create_event_id.as_str(),
-            &create_envelope,
+            policy_bundle_event_id.as_str(),
+            &policy_bundle_envelope,
         ));
     }
 

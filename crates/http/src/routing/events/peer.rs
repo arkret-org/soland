@@ -1064,15 +1064,20 @@ impl PeerReadAuthz {
     }
 
     fn apply_realm_endpoint_record(&mut self, record: &CanonicalEventRecord) {
+        if record.kind != arkret_wire::EventKind::REALM_POLICY_BUNDLE {
+            return;
+        }
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
             return;
         };
+        // The policy bundle is a complete CAS-register restatement. Omission
+        // in a newer revision clears the preceding endpoint set.
+        self.realm_endpoints.remove(&realm_id);
         let Some(sync_endpoints) =
             record_payload_field(record, "sync_endpoints").and_then(Value::as_array)
         else {
             return;
         };
-        self.realm_endpoints.remove(&realm_id);
         let mut endpoints = Vec::new();
         for endpoint in sync_endpoints {
             let Some(object) = endpoint.as_object() else {
