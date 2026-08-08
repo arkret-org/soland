@@ -787,9 +787,9 @@ pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
 }
 
 /// `morph.md` §4.1 S3 — collect the opt-in conformance profile ids a Realm
-/// lifecycle event declares. Reads canonical `schema_refs[]` plus profile
-/// arrays used by other registered object families. Only well-formed
-/// `ak.profile.*` strings are returned.
+/// lifecycle event declares. Only canonical `schema_refs[]` values are
+/// carriers; the removed `active_profiles[]` / `profiles[]` update spellings
+/// must not remain as hidden fallback inputs.
 pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
     let mut profiles = Vec::new();
     let mut push_array = |value: Option<&Value>| {
@@ -804,15 +804,13 @@ pub(crate) fn realm_declared_profiles(operation: &Operation) -> Vec<String> {
             }
         }
     };
-    for field in ["schema_refs", "active_profiles", "profiles"] {
-        push_array(operation.payload.get(field));
-        push_array(
-            operation
-                .payload
-                .get("object")
-                .and_then(|object| object.get(field)),
-        );
-    }
+    push_array(operation.payload.get("schema_refs"));
+    push_array(
+        operation
+            .payload
+            .get("object")
+            .and_then(|object| object.get("schema_refs")),
+    );
     profiles
 }
 
@@ -1092,6 +1090,41 @@ mod policy_bundle_component_tests {
             Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
         );
         validate_mls_send_pause(&json!({"policy_revision": 1}), &[]).unwrap();
+    }
+
+    #[test]
+    fn realm_profile_declarations_ignore_removed_update_spellings() {
+        let operation = |payload| {
+            Operation::create(
+                arkret_identifiers::OperationId::new(
+                    "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+                )
+                .unwrap(),
+                arkret_identifiers::RealmId::new(
+                    "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw",
+                )
+                .unwrap(),
+                arkret_wire::EventKind::REALM_CREATE,
+                payload,
+            )
+        };
+        let canonical = operation(json!({
+            "object": {
+                "schema_refs": ["ak.profile.core.v1"],
+                "active_profiles": ["ak.profile.legacy-active.v1"],
+                "profiles": ["ak.profile.legacy-profiles.v1"]
+            }
+        }));
+        assert_eq!(
+            realm_declared_profiles(&canonical),
+            vec!["ak.profile.core.v1".to_owned()]
+        );
+
+        let legacy_only = operation(json!({
+            "active_profiles": ["ak.profile.legacy-active.v1"],
+            "profiles": ["ak.profile.legacy-profiles.v1"]
+        }));
+        assert!(realm_declared_profiles(&legacy_only).is_empty());
     }
 
     #[test]

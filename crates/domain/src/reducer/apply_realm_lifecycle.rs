@@ -1117,7 +1117,7 @@ impl ProjectionState {
             };
         }
 
-        // `realm-and-space.md` §2.5 — genesis registers six cell writes and
+        // `realm-and-space.md` §2.5 — genesis registers five cell writes and
         // the authority root is one of them. Derive it before any structured
         // cache mutation so a create that cannot establish an authority root
         // rejects the whole atomic bootstrap unit instead of materializing a
@@ -1178,9 +1178,10 @@ impl ProjectionState {
                 active_profiles: Vec::new(),
             });
         // `morph.md` §4.1 S3 — merge any declared opt-in conformance profile
-        // ids from this event (create or update) into the Realm's growing
-        // profile set. Both `active_profiles[]` and the legacy `profiles[]`
-        // spelling are accepted; the set only grows.
+        // ids from canonical genesis `schema_refs[]` into the Realm's growing
+        // profile set. Later declarations have the dedicated `ak.realm.schema`
+        // carrier; this lifecycle path never infers them from the removed
+        // monolithic Realm update payload.
         for profile in realm_declared_profiles(operation) {
             if !realm.active_profiles.contains(&profile) {
                 realm.active_profiles.push(profile);
