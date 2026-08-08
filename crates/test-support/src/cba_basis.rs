@@ -263,22 +263,76 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     // well-formed content-bound Event id will do for fixture construction.
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .expect("fixture Realm id is canonical");
-    if let Some(existing) = state
+    let is_principal_control_realm = realm.event_id().is_none();
+    let existing_records = state
         .test_persistence()
         .events()
         .realm_events_newest_first(realm_id)
         .await
-        .expect("fixture Realm genesis lookup")
-        .into_iter()
+        .expect("fixture Realm genesis lookup");
+    if let Some(existing) = existing_records
+        .iter()
         .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
-        let event: arkret_wire::Event =
-            serde_json::from_value(existing.envelope).expect("stored fixture genesis envelope");
+        let event: arkret_wire::Event = serde_json::from_value(existing.envelope.clone())
+            .expect("stored fixture genesis envelope");
         let payload = serde_json::to_value(&event.payload).expect("stored fixture genesis payload");
-        persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+        let has_complete_ordinary_bootstrap = [
+            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::REALM_JOIN_RULE,
+            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+            arkret_wire::EventKind::REALM_DISCOVERY,
+            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            arkret_wire::EventKind::MEMBER_STATE,
+        ]
+        .into_iter()
+        .all(|kind| existing_records.iter().any(|record| record.kind == kind));
+        if is_principal_control_realm || has_complete_ordinary_bootstrap {
+            project_fixture_genesis_event(state, &realm, event, payload).await;
+            return;
+        }
+        let genesis_actor = event.actor_id.to_string();
+        persist_and_project_realm_genesis_event(
+            state,
+            &realm,
+            &genesis_actor,
+            "Fixture Realm",
+            event,
+            payload,
+        )
+        .await;
         return;
     }
-    let is_principal_control_realm = realm.event_id().is_none();
+    if is_principal_control_realm {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .expect("fixture PCR genesis timestamp")
+            .with_timezone(&chrono::Utc);
+        let event = arkret_bootstrap::build_self_principal_pcr_create(
+            arkret_bootstrap::SelfPrincipalPcrCreateInput {
+                principal_id: Did::new(subject.to_owned()).expect("fixture PCR principal DID"),
+                realm_id: realm.clone(),
+                trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+                    "ak:trust_domain:soland.test".to_owned(),
+                )
+                .expect("fixture PCR trust domain"),
+                did_inception_ref: arkret_wire::EventRef::new(
+                    format!("sha256:{}", "1".repeat(64)),
+                    arkret_bootstrap::DID_INCEPTION_REF_ROLE,
+                ),
+                capability_action_registry_digest:
+                    arkret_policy::current_capability_action_registry_digest()
+                        .expect("fixture capability action registry digest"),
+                created_at,
+                hlc: Hlc::new(FIXTURE_BASIS_HLC).expect("fixture PCR genesis HLC"),
+            },
+            &fixture_registered_projection,
+        )
+        .expect("fixture closed PCR genesis Event");
+        let payload = serde_json::to_value(&event.payload).expect("fixture PCR genesis payload");
+        project_fixture_genesis_event(state, &realm, event, payload).await;
+        return;
+    }
     let genesis_event_id = realm
         .event_id()
         .map(|event_id| event_id.to_string())
@@ -292,17 +346,13 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let mut payload = realm_genesis_payload(
+    let payload = realm_genesis_payload(
         subject,
         state.service_id(),
         "Fixture Realm",
         "ak:trust_domain:soland.test",
         created_at,
     );
-    if is_principal_control_realm {
-        payload["object"]["fields"] = serde_json::json!({"purpose": "principal_control"});
-    }
-    let payload = payload;
     let event = arkret_wire::Event::new_at(
         arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::RealmGenesis,
@@ -313,16 +363,98 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         created_at,
     )
     .expect("fixture genesis Event");
-    // Class 0 Realms retype their genesis Event token byte-for-byte, so a
+    // Event-derived Realms retype their genesis Event token byte-for-byte, so a
     // fixture whose authored Event does not derive this Realm would hand
-    // admission a Realm nobody can re-derive. Class 1 ignores the Event id.
+    // admission a Realm nobody can re-derive.
     assert!(
-        is_principal_control_realm || event.event_id.to_string() == genesis_event_id,
+        event.event_id.to_string() == genesis_event_id,
         "fixture genesis Event {} does not derive Realm {}",
         event.event_id,
         realm
     );
-    persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+    persist_and_project_realm_genesis_event(
+        state,
+        &realm,
+        subject,
+        "Fixture Realm",
+        event,
+        payload,
+    )
+    .await;
+}
+
+fn fixture_registered_projection(
+    event: &arkret_wire::Event,
+) -> Result<Vec<arkret_wire::ProjectedCellWrite>, String> {
+    arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| error.to_string())
+}
+
+async fn project_fixture_genesis_event(
+    state: &AppState,
+    realm: &RealmId,
+    event: arkret_wire::Event,
+    payload: serde_json::Value,
+) {
+    let realm_id = realm.as_str();
+    if state
+        .test_persistence()
+        .events()
+        .get(event.event_id.as_str())
+        .await
+        .expect("fixture PCR genesis lookup")
+        .is_none()
+    {
+        state
+            .test_persistence()
+            .events()
+            .put(soland_storage::CanonicalEventRecord {
+                event_id: event.event_id.to_string(),
+                actor_id: event.actor_id.to_string(),
+                actor_seq: event.actor_seq,
+                realm_id: Some(realm_id.to_owned()),
+                kind: event.kind.to_string(),
+                schema_id: "ak.schema.event.v1".to_owned(),
+                canonical_digest: event.event_digest().expect("fixture PCR Event digest"),
+                canonical_bytes: arkret_canonical::canonical_json_bytes(
+                    &event
+                        .digest_payload()
+                        .expect("fixture PCR Event digest payload"),
+                )
+                .expect("fixture PCR Event canonical bytes"),
+                envelope: serde_json::to_value(&event).expect("fixture PCR envelope"),
+                received_at: chrono::Utc::now(),
+            })
+            .await
+            .expect("fixture PCR genesis Event");
+    }
+
+    let projection = state.test_projection();
+    let mut projection = projection.lock();
+    if projection.realm_genesis_cell_value(realm_id).is_none() {
+        let writes = fixture_registered_projection(&event)
+            .expect("fixture PCR genesis registered projection");
+        let operation = arkret_event_draft::Operation::create(
+            arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+                "ak:operation:",
+            ))
+            .expect("fixture PCR genesis Operation id"),
+            realm.clone(),
+            arkret_wire::EventKind::REALM_CREATE,
+            payload,
+        );
+        let effect = projection.apply_projected(&operation, &writes, state.test_hlc());
+        assert!(
+            projection.realm_authority_root(realm_id).is_some(),
+            "fixture PCR genesis must project its authority root, got {effect:?}"
+        );
+        assert_eq!(
+            projection.realm_digest_algorithm(realm_id).as_deref(),
+            Some("sha256"),
+            "fixture PCR genesis must project its digest suite; genesis={:?}, effect={effect:?}",
+            projection.realm_genesis_cell_value(realm_id),
+        );
+    }
 }
 
 /// Author a canonical genesis Event first and derive its Realm identity from
@@ -336,12 +468,17 @@ pub async fn seed_event_derived_realm_genesis_event(
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let payload = realm_genesis_payload(
+    let mut payload = realm_genesis_payload(
         subject,
         state.service_id(),
         title,
         "ak:trust_domain:soland.test",
         created_at,
+    );
+    payload["object"]["genesis_salt"] = serde_json::json!(
+        arkret_wire::GenesisSalt::generate()
+            .expect("fixture Realm genesis salt")
+            .into_string()
     );
     let event = arkret_wire::Event::new_at(
         arkret_wire::EventKind::REALM_CREATE,
@@ -354,7 +491,7 @@ pub async fn seed_event_derived_realm_genesis_event(
     )
     .expect("fixture genesis Event");
     let realm = RealmId::from_event_id(&event.event_id);
-    persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+    persist_and_project_realm_genesis_event(state, &realm, subject, title, event, payload).await;
     realm.to_string()
 }
 
@@ -362,6 +499,7 @@ async fn persist_and_project_realm_genesis_event(
     state: &AppState,
     realm: &RealmId,
     subject: &str,
+    profile_title: &str,
     event: arkret_wire::Event,
     payload: serde_json::Value,
 ) {
@@ -379,7 +517,7 @@ async fn persist_and_project_realm_genesis_event(
     let followups = [
         (
             arkret_wire::EventKind::REALM_PROFILE,
-            serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": "Fixture Realm"}),
+            serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": profile_title}),
         ),
         (
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,

@@ -222,7 +222,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // control plane).
     for reference in data_event_authorized_by_refs(object)? {
         let grant_id = reference.as_str();
-        if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
+        if arkret_identifiers::GrantId::new(grant_id.to_owned()).is_err() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -603,7 +603,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
         let Some(grant_id) = cell_ref.as_str().strip_prefix(CAPABILITY_GRANT_CELL_PREFIX) else {
             continue;
         };
-        if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
+        if arkret_identifiers::GrantId::new(grant_id.to_owned()).is_err() {
             continue;
         }
         if let Some(grant) = soland_services::projection::engine_grant_from_capability_cell_state(

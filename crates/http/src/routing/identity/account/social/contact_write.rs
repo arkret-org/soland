@@ -27,6 +27,7 @@ enum ContactReservationBranch {
     Request {
         peer: ContactPeer,
         granted_to_peer_scopes: Vec<ContactScope>,
+        previous_terminal_basis_id: Option<Hash>,
     },
     Response {
         request_receipt: RequestAcceptanceReceipt,
@@ -1287,6 +1288,7 @@ pub(super) async fn request(
                 ContactReservationBranch::Request {
                     peer: body.peer,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
+                    previous_terminal_basis_id: body.previous_terminal_basis_id,
                 },
                 payload,
                 arkret_wire::EventKind::CONTACT_REQUESTED,

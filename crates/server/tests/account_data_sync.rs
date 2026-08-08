@@ -437,11 +437,9 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
     let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
-    // The REST surface authors its `ak.account_data.set` into the owner's
-    // Principal Control Realm (`persist_account_data_event`), and dev-login
-    // registers an account without standing that Realm up. It owes the same
-    // canonical genesis as any other Realm, or admission rightly refuses every
-    // Event in it for an unmaterialized reducer-profile cell.
+    // Principal Control Realms use their distinct subject-derived bootstrap
+    // path. Materialize its create-locked reducer cells through the SDK's PCR
+    // genesis builder rather than through an ordinary Realm bootstrap.
     soland_test_support::cba_basis::seed_realm_genesis_event(
         &state,
         &soland_test_support::principal_control_realm_for_did(&actor),

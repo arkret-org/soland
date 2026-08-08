@@ -1279,31 +1279,18 @@ fn applet_service_signing_key(verification_method: &str) -> SigningKey {
 /// literal digest that no Event backs.
 async fn seed_applet_message_grant_basis(
     state: &AppState,
-    package: &AppletPackage,
+    _package: &AppletPackage,
     realm_id: &str,
     grant_id: &str,
 ) -> arkret_identifiers::SealId {
-    let actions = ["ak.message.create"];
-    let fixture = soland_test_support::sealed_grant::CapabilityGrantFixture {
+    soland_test_support::sealed_grant::seal_accepted_capability_grant(
+        state,
         realm_id,
         grant_id,
-        issuer: "did:web:alice.example",
-        subject: package.service_id.as_str(),
-        actions: &actions,
-        resources: json!([{"kind": "realm", "realm_id": realm_id}]),
-        constraints: json!([{
-            "constraint_kind": "authority_control",
-            "constraint_subkind": "applet_authority",
-            "effect": "allow",
-            "evaluation_class": "grant_local",
-            "applet_id": package.applet_id,
-            "executed_by": package.service_id,
-            "registration_epoch": package.registration_epoch
-        }]),
-    };
-    soland_test_support::sealed_grant::seed_sealed_capability_grant(state, fixture, Vec::new())
-        .await
-        .seal_id
+        Vec::new(),
+    )
+    .await
+    .seal_id
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -1805,7 +1792,9 @@ async fn signed_install_events(
                 }))
                 .unwrap(),
             ],
-            capability_action_registry_digest: None,
+            capability_action_registry_digest: Some(
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
+            ),
             constraints: vec![GrantConstraint::applet_authority(
                 AppletId::new(package.applet_id.clone()).unwrap(),
                 package.service_id.clone(),

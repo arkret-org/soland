@@ -952,6 +952,25 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             "only the founder derived from the root basis may submit this unit",
         ));
     }
+    submission
+        .source_service_binding
+        .validate_shape()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "direct_conversation_founding_unit_invalid",
+                format!("source service binding is invalid: {error}"),
+            )
+        })?;
+    if submission.source_service_binding.principal_id != founder_id
+        || submission.source_service_binding.service_id.as_str() != state.service_id()
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "direct_conversation_founding_unit_invalid",
+            "source service binding does not bind the founder to this service",
+        ));
+    }
     if let Some(stored) = state
         .event_queries()
         .direct_conversation_founding_slot(

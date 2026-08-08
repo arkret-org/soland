@@ -574,6 +574,10 @@ async fn verify_mimi_consent_actor_proof(
     state: &AppState,
     body: &MimiUpdateConsentRequestBody,
 ) -> Result<(), AppError> {
+    body.validate_consent_event().map_err(|error| {
+        AppError::invalid_param(format!("MIMI consent Event carrier is invalid: {error}"))
+            .with_wire_code("invalid_consent_event")
+    })?;
     let proof = &body.signature;
     if proof.domain.as_deref() != Some(state.config().trust_domain.as_str()) {
         return Err(AppError::invalid_param(
@@ -1009,4 +1013,133 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
     AppError::capability_denied("MIMI proxy download asset_ref is denied by egress policy")
         .with_wire_code("egress_policy_denied")
         .with_reason_detail(error)
+}
+#[cfg(test)]
+mod consent_proof_tests {
+    use arkret_identifiers::{ConsentId, Did, Hash, Hlc, RealmId};
+    use arkret_models_collaboration::http_bodies::MimiConsentDecision;
+    use arkret_wire::{
+        Audience, Event, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
+    };
+    use soland_http::error::ErrorCode;
+    use soland_storage_postgres::Db;
+
+    use super::*;
+
+    fn state() -> AppState {
+        let mut config = crate::config::AppConfig::test_default();
+        config.development_mode = true;
+        AppState::new(config, Db { pool: None })
+    }
+
+    fn request(state: &AppState) -> MimiUpdateConsentRequestBody {
+        let actor_id = Did::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
+        let verification_method = format!("{actor_id}#cotest");
+        let consent_id =
+            ConsentId::new("ak:consent:01964137-0000-7000-8000-000000000777".to_owned()).unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".to_owned())
+                .unwrap();
+        let consent_event = Event::new_at(
+            EventKind::ConsentGrant.as_str(),
+            ScopeRef::Realm { realm_id },
+            actor_id.clone(),
+            1,
+            Hlc::new(state.hlc().now()).unwrap(),
+            json!({
+                "consent_id": consent_id,
+                "peer": "did:web:mimi-peer-test.invalid",
+                "consent_scope": "direct_message"
+            }),
+            now(),
+        )
+        .unwrap();
+        let mut request = MimiUpdateConsentRequestBody {
+            consent_id,
+            decision: MimiConsentDecision::Accept,
+            actor_id,
+            consent_event: EventInitialSubmission::online(consent_event),
+            signature: PayloadProof {
+                kind: proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: arkret_wire::DidUrl::new(verification_method.clone()).unwrap(),
+                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                created_at: now(),
+                domain: Some(state.config().trust_domain.clone()),
+                audience: Some(Audience::Single(state.service_id().to_owned())),
+                proof_purpose: None,
+                jws: "pending".to_owned(),
+            },
+            reason: None,
+            expires_at: None,
+        };
+        request.signature.payload_digest = request.payload_digest().unwrap();
+        let binding = request.signature_binding_bytes().unwrap();
+        let signing_key = arkret_signatures::development_signing_key(&verification_method);
+        request.signature.jws =
+            arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
+        request
+    }
+
+    #[tokio::test]
+    async fn consent_actor_proof_is_verified_and_consumed_once() {
+        let state = state();
+        let request = request(&state);
+        let binding = request.signature_binding_bytes().unwrap();
+        let direct_verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            &binding,
+            &request.signature.jws,
+            &request.signature.verification_method,
+            request.actor_id.as_str(),
+            &state,
+        )
+        .await;
+        assert!(
+            direct_verification.is_ok(),
+            "direct proof verification failed: {direct_verification:?}"
+        );
+
+        verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect("first proof presentation");
+        let replay = verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect_err("proof replay must fail");
+
+        assert_eq!(replay.code, ErrorCode::Conflict);
+        assert_eq!(
+            replay.wire_code_override.as_deref(),
+            Some("duplicate_conflict")
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_actor_proof_rejects_decision_carrier_mismatch() {
+        let state = state();
+        let mut request = request(&state);
+        request.decision = MimiConsentDecision::Revoke;
+
+        let error = verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect_err("tampered body must fail");
+
+        assert_eq!(error.code, ErrorCode::InvalidParam);
+        assert_eq!(
+            error.wire_code_override.as_deref(),
+            Some("invalid_consent_event")
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_actor_proof_rejects_wrong_destination_binding() {
+        let state = state();
+        let mut request = request(&state);
+        request.signature.domain = Some("ak:trust_domain:other.example".to_owned());
+
+        let error = verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect_err("cross-domain proof must fail");
+
+        assert_eq!(error.code, ErrorCode::InvalidParam);
+        assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
+    }
 }

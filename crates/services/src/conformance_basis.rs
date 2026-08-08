@@ -357,14 +357,13 @@ fn fixture_grant_id(
     slot: &str,
 ) -> String {
     let hex = fixture_basis_digest_hex(fixture_id_domain, realm_id, subject, actions, slot);
-    format!(
-        "ak:grant:{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    let digest: [u8; 32] = hex::decode(hex)
+        .expect("fixture basis digest is hex")
+        .try_into()
+        .expect("fixture basis digest is 256 bits");
+    let event_id =
+        arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest);
+    arkret_identifiers::GrantId::from_event_id(&event_id).to_string()
 }
 
 fn fixture_basis_digest_hex(

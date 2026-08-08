@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, Did, EventId, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{CellRef, Did, EventId, GrantId, Hash, Hlc, RealmId, SealId};
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
@@ -160,6 +160,98 @@ pub async fn seed_sealed_capability_grant(
     SealedCapabilityGrant {
         grant_id: fixture.grant_id.to_owned(),
         event_id: event.event_id.clone(),
+        move_id,
+        seal_id: seal.id.clone(),
+        seal_basis: seal.seal_basis(),
+    }
+}
+
+/// Seal the canonical create Event that already produced `grant_id`.
+///
+/// Formal install/admission paths have already authored and accepted the
+/// capability Event. A test that needs a frozen CBA view must seal that exact
+/// Move; authoring a second Event with the same object id creates two OR-set
+/// variants and correctly makes the grant conflict/inactive.
+pub async fn seal_accepted_capability_grant(
+    state: &AppState,
+    realm_id: &str,
+    grant_id: &str,
+    predecessors: Vec<SealId>,
+) -> SealedCapabilityGrant {
+    let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let grant = GrantId::new(grant_id.to_owned()).expect("fixture grant id");
+    let event_id = EventId::from_token_bytes(grant.token_bytes())
+        .expect("Event-derived grant token retypes as an Event id");
+    let record = state
+        .test_persistence()
+        .events()
+        .get(event_id.as_str())
+        .await
+        .expect("fixture canonical Event lookup")
+        .expect("accepted capability grant producer Event");
+    let event: arkret_wire::Event =
+        serde_json::from_value(record.envelope).expect("accepted capability grant envelope");
+    assert_eq!(
+        event.kind.as_str(),
+        arkret_wire::EventKind::CAPABILITY_GRANT
+    );
+    assert_eq!(event.realm_id, realm);
+    assert_eq!(event.event_id, event_id);
+
+    let canonical_digest = event
+        .event_digest()
+        .expect("accepted capability grant Event digest");
+    assert_eq!(canonical_digest, record.canonical_digest);
+    let move_id = Hash::new(canonical_digest).expect("fixture Move digest");
+    let writes = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("accepted capability grant registered projection");
+    let [write] = writes.as_slice() else {
+        panic!("capability grant must project exactly one cell write");
+    };
+    let direct = write
+        .as_direct()
+        .expect("capability grant projection is a direct cell write");
+    let expected_cell = CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+    ))
+    .expect("capability grant cell ref");
+    assert_eq!(direct.cell, expected_cell);
+    let op = IssuedOp {
+        issuer: event.actor_id.clone(),
+        op: arkret_state::lattice::SealedOp::new(move_id.clone(), direct.op.clone()),
+    };
+    let state_root = state_root_for(&realm, &expected_cell, &op);
+
+    let signer = Ed25519PayloadSigner::from_did_key_seed(
+        FIXTURE_NOTARY_SEED,
+        Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
+        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
+            .expect("fixture notary verification method"),
+    );
+    let seal = Seal::sign_single(
+        realm.clone(),
+        predecessors,
+        vec![move_id.clone()],
+        state_root,
+        fixture_hlc_after(event.created_at, &format!("{grant_id}:accepted-seal")),
+        &signer,
+    )
+    .expect("fixture accepted grant Seal");
+
+    state
+        .test_put_seal(&seal)
+        .expect("fixture accepted grant Seal put");
+    state
+        .test_append_sealed_effects(&realm, &seal.id, &[(expected_cell, op)])
+        .expect("fixture accepted grant sealed effects");
+    state.test_refresh_grant_from_sealed_cells(&realm, grant_id);
+
+    SealedCapabilityGrant {
+        grant_id: grant_id.to_owned(),
+        event_id,
         move_id,
         seal_id: seal.id.clone(),
         seal_basis: seal.seal_basis(),
@@ -309,6 +401,20 @@ fn fixture_hlc(seed: &str) -> Hlc {
         u32::from_be_bytes([digest[2], digest[3], digest[4], digest[5]]),
     ))
     .expect("fixture HLC")
+}
+
+/// A deterministic HLC whose physical component is strictly after an
+/// already-authored Event. Historical capability evaluation uses the Seal's
+/// timestamp, so a fixed epoch before the grant's `issued_at` would make an
+/// otherwise valid grant correctly appear inactive.
+fn fixture_hlc_after(created_at: chrono::DateTime<chrono::Utc>, seed: &str) -> Hlc {
+    let digest = Sha256::digest(seed.as_bytes());
+    let unix_ms = created_at.timestamp_millis().max(0) as u64 + 1;
+    Hlc::new(format!(
+        "{unix_ms:012x}-0000-{:08x}",
+        u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]),
+    ))
+    .expect("fixture post-Event HLC")
 }
 
 /// The historical-view Move digest. It is derived from the grant id rather than
