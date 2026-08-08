@@ -535,9 +535,30 @@ impl ProjectionState {
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
+        let mut wire_value = value.clone();
+        if let Some(object) = wire_value.as_object_mut() {
+            for field in [
+                "event_id",
+                "sender",
+                "hlc",
+                "executed_by",
+                "authorization_ref",
+                "seal_ref",
+                "seal_basis",
+                "preconditions",
+                "effects",
+                "accepted_event_id",
+                "accepted_scope_ref",
+                "envelope_causal_refs",
+                "canonical_event_digest",
+                "query_grade",
+            ] {
+                object.remove(field);
+            }
+        }
         let Ok(bundle) = serde_json::from_value::<
             arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload,
-        >(value.clone()) else {
+        >(wire_value) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };

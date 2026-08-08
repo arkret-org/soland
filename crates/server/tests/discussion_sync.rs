@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use arkret_identifiers::{Did, RealmId, new_prefixed_uuid7};
+use arkret_identifiers::{Did, EventId, InviteId, RealmId, new_prefixed_uuid7};
 use arkret_wire::PlaintextDataClassKind;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -81,15 +81,18 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-/// Seed a Realm directly via AppState so the tests can focus on downstream
-/// sync behaviour through the canonical `POST /_arkret/self/events` path.
+/// Author the Realm genesis Event, then seed local read projections so the
+/// tests can focus on downstream sync behaviour through the canonical
+/// `POST /_arkret/self/events` path.
 async fn seed_realm(
     state: &AppState,
     owner: &str,
     title: &str,
     history_visibility: &str,
 ) -> String {
-    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
+    let realm_id =
+        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
+            .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -222,7 +225,9 @@ async fn seed_pending_invite(
     invitee: &str,
 ) -> String {
     let now = chrono::Utc::now();
-    let invite_id = new_prefixed_uuid7("ak:invite:");
+    let invite_event_id = EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
+        .expect("fixture invite producer Event id");
+    let invite_id = InviteId::from_event_id(&invite_event_id).to_string();
     state
         .test_persistence()
         .realm_invites()
@@ -277,6 +282,7 @@ async fn accept_invite(
 ) {
     let payload = json!({
         "invite_id": invite_id,
+        "delivery_status": "unroutable",
     });
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {
@@ -455,7 +461,7 @@ async fn send_circle_scoped_encrypted_message(
             "version": "1.0",
             "group_id": soland_test_support::cba_basis::FIXTURE_MLS_GROUP_ID,
             "epoch": 1,
-            "content_type": "application/json",
+            "content_type": "application/vnd.arkret.message+json",
             "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",
             "aad_visibility_event_id": "hidden",
             "aad": {
@@ -517,6 +523,10 @@ async fn submit_projection_event(
         payload,
     })
     .await;
+    let accepted_event_id = event["event_id"]
+        .as_str()
+        .expect("signed projection Event id")
+        .to_owned();
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&event)
@@ -526,10 +536,10 @@ async fn submit_projection_event(
         .await
         .unwrap();
     assert!(
-        sent["accepted"][0].as_str() == Some(event_id.as_str()),
+        sent["accepted"][0].as_str() == Some(accepted_event_id.as_str()),
         "{kind} submit failed: {sent:?}"
     );
-    event_id
+    accepted_event_id
 }
 
 async fn submit_projection_event_status(

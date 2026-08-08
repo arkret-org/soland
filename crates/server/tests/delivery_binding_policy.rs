@@ -40,9 +40,13 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 }
 
 fn join_op(member: &str, binding: Value) -> Operation {
+    join_op_for_realm(REALM_A, member, binding)
+}
+
+fn join_op_for_realm(realm_id: &str, member: &str, binding: Value) -> Operation {
     op(
         arkret_wire::EventKind::MEMBER_STATE,
-        REALM_A,
+        realm_id,
         json!({
             "actor_id": member,
             "sender": "did:web:admin.example",
@@ -54,29 +58,54 @@ fn join_op(member: &str, binding: Value) -> Operation {
     )
 }
 
-fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) {
+fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> String {
     let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(creator),
+        arkret_wire::notary::NotaryValue::single_did(creator.clone()),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
     .unwrap();
-    let effect = state.apply(
-        &op(
-            arkret_wire::EventKind::REALM_CREATE,
-            REALM_A,
-            serde_json::to_value(payload).unwrap(),
-        ),
-        hlc,
+    let payload = serde_json::to_value(payload).unwrap();
+    let event = arkret_wire::Event::new_at(
+        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::RealmGenesis,
+        creator,
+        0,
+        arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
+        payload.clone(),
+        chrono::DateTime::parse_from_rfc3339("2026-07-25T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
     );
+    let event = event.unwrap();
+    let realm_id = arkret_identifiers::RealmId::from_event_id(&event.event_id);
+    let writes = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let create = Operation::create(
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        realm_id.clone(),
+        arkret_wire::EventKind::REALM_CREATE,
+        payload,
+    );
+    let effect = state.apply_projected(&create, &writes, hlc);
     assert!(matches!(
         effect,
         ProjectionEffect::RealmLifecycle { action, .. } if action == "create"
     ));
+    assert!(
+        state.realm_is_direct_conversation(realm_id.as_str()),
+        "projected Realm genesis was not recognized as Direct Conversation: {:?}",
+        state.realm_genesis_cell_value(realm_id.as_str())
+    );
+    realm_id.to_string()
 }
 
 // ── 1. delivery_binding_policy_member_join_test ─────────────────────────
@@ -354,11 +383,11 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
 fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    create_direct_conversation(&mut state, &hlc);
+    let realm_id = create_direct_conversation(&mut state, &hlc);
 
     let founding_peer = op(
         arkret_wire::EventKind::MEMBER_STATE,
-        REALM_A,
+        &realm_id,
         json!({
             "actor_id": "did:web:bob.example",
             "sender": "did:web:alice.example",
@@ -382,7 +411,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
 
     let third_member = op(
         arkret_wire::EventKind::MEMBER_STATE,
-        REALM_A,
+        &realm_id,
         json!({
             "actor_id": "did:web:carol.example",
             "sender": "did:web:alice.example",
@@ -408,9 +437,10 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
 fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    create_direct_conversation(&mut state, &hlc);
+    let realm_id = create_direct_conversation(&mut state, &hlc);
 
-    let ordinary_join = join_op(
+    let ordinary_join = join_op_for_realm(
+        &realm_id,
         "did:web:bob.example",
         json!({
             "binding_source": "explicit",

@@ -135,14 +135,21 @@ pub fn event_identity_parts(
             "malformed canonical Event digest: {event_digest:?}"
         ))
     })?;
-    if id[0] != digest_suite || id[1..] != digest {
+    let reserved_nibble = id[0] >> 4;
+    if reserved_nibble != arkret_identifiers::EVENT_RESERVED_HIGH_NIBBLE {
+        return Err(crate::PersistenceError::SchemaViolation(format!(
+            "Event reserved header nibble must be zero, got 0x{reserved_nibble:x}"
+        )));
+    }
+    let id_digest_suite = id[0] & 0x0f;
+    if id_digest_suite != digest_suite || id[1..] != digest {
         return Err(crate::PersistenceError::Conflict(
             "event_id_digest_mismatch".to_owned(),
         ));
     }
     Ok(EventIdentityParts {
         id,
-        digest_suite,
+        digest_suite: id_digest_suite,
         digest,
     })
 }
@@ -241,6 +248,12 @@ mod tests {
 
         id[0] = 0x03;
         assert!(parse_event_id(&format_event_id(&id)).is_none());
+
+        id[0] = 0x11;
+        assert!(
+            parse_event_id(&format_event_id(&id)).is_none(),
+            "an active low-nibble suite must not make a non-zero Event reserved nibble valid"
+        );
     }
 
     #[test]
@@ -269,9 +282,9 @@ mod tests {
         assert_eq!(principal_parts.digest_suite, 1);
         assert_eq!(principal_parts.id[0], 0x11);
 
-        assert!(
-            realm_identity_parts("ak:realm:AWWQbbVm7_aLCY4FtbZaoYwiVLRoobQrJ_EabRKx-X0T").is_err()
-        );
+        let mut unknown_class = event_parts.id;
+        unknown_class[0] = 0x21;
+        assert!(realm_identity_parts(&format_event_token("realm", &unknown_class)).is_err());
     }
 
     #[test]

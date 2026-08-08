@@ -9,7 +9,6 @@ use soland_services::events::RealmInviteState as RealmInviteRecord;
 use soland_services::operation_semantics as kinds;
 
 use super::*;
-use crate::ids;
 use crate::state::AppState;
 
 /// Spec invite-addressing.md / event-kind-registry — project an accepted
@@ -650,7 +649,7 @@ pub(super) fn invite_acceptance_ref_for_operation(operation: &Operation) -> Opti
         .or_else(|| operation.payload.get("invite_id"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| ids::parse_typed_uuid(value, "invite").is_some())
+        .filter(|value| arkret_identifiers::InviteId::new((*value).to_owned()).is_ok())
         .map(str::to_owned)
 }
 

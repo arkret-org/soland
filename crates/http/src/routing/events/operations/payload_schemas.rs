@@ -141,6 +141,12 @@ pub(crate) const REALM_INHERITANCE_POLICY_REQUIREMENTS: &[PayloadRequirement] = 
     PayloadRequirement::Required("mode", "ak.realm.inheritance_policy requires mode"),
 ];
 pub(crate) const CAPABILITY_GRANT_ID_FIELDS: &[&str] = &["grant_id"];
+pub(crate) const CAPABILITY_GRANT_CREATE_ID_FIELDS: &[&str] = &["event_id"];
+pub(crate) const CAPABILITY_GRANT_CREATE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::AnyOf(
+        CAPABILITY_GRANT_CREATE_ID_FIELDS,
+        "capability grant create operation requires producer Event id",
+    )];
 pub(crate) const CAPABILITY_GRANT_REQUIREMENTS: &[PayloadRequirement] =
     &[PayloadRequirement::AnyOf(
         CAPABILITY_GRANT_ID_FIELDS,
@@ -159,7 +165,10 @@ pub(crate) const MEMBERSHIP_REQUIREMENTS: &[PayloadRequirement] = &[
     ),
 ];
 pub(crate) const INVITE_CREATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("invite_id", "ak.invite.create operation requires invite_id"),
+    PayloadRequirement::Required(
+        "event_id",
+        "ak.invite.create operation requires producer Event id",
+    ),
     PayloadRequirement::AnyOf(
         INVITE_CREATE_TARGET_FIELDS,
         "ak.invite.create operation requires invitee",

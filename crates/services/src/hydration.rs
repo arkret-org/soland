@@ -468,8 +468,8 @@ async fn hydrate_canonical_realm_bootstraps(
             match effect {
                 ProjectionEffect::Rejected { reason } => {
                     return Err(soland_storage::PersistenceError::Internal(format!(
-                        "Realm bootstrap Event {} failed deterministic hydration: {reason}",
-                        record.event_id
+                        "Realm bootstrap Event {} ({}) failed deterministic hydration: {reason}",
+                        record.event_id, record.kind
                     )));
                 }
                 ProjectionEffect::Ignored => {

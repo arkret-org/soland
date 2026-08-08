@@ -1446,6 +1446,44 @@ impl ProjectionState {
             _ => {}
         }
 
+        // `contact-and-direct-conversation.md` section 6.1 fixes the founder
+        // membership as a reducer projection of the Direct Conversation
+        // genesis Event. The peer remains the unit's sole explicit membership
+        // Event. Ordinary Realm creates intentionally do not take this branch:
+        // their creator membership is an explicit final bootstrap slot.
+        if kind == arkret_wire::EventKind::REALM_CREATE
+            && payload_object
+                .and_then(|object| object.get("purpose"))
+                .and_then(Value::as_str)
+                == Some("direct_conversation")
+            && let Some(founder) = creator
+        {
+            let mut founder_payload = serde_json::json!({
+                "actor_id": founder,
+                "sender": founder,
+                "membership": "join",
+                "role": "member",
+                "reason": "direct_conversation_bootstrap"
+            });
+            if let Some(event_id) = operation.realm_id.event_id() {
+                founder_payload["event_id"] = Value::String(event_id.to_string());
+            }
+            let mut founder_projection = Operation::create(
+                operation.operation_id.clone(),
+                operation.realm_id.clone(),
+                arkret_wire::EventKind::MEMBER_STATE,
+                founder_payload,
+            );
+            founder_projection.created_at = operation.created_at;
+            let _ = self.project_accepted_membership(
+                &founder_projection,
+                now,
+                "join".to_owned(),
+                founder.to_string(),
+                realm_id.clone(),
+            );
+        }
+
         ProjectionEffect::RealmLifecycle {
             realm_id,
             action: kind.strip_prefix("ak.realm.").unwrap_or(kind).to_owned(),

@@ -482,6 +482,7 @@ CREATE TABLE public.canonical_events (
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT canonical_events_state_check CHECK (state IN ('accepted', 'quarantined')),
     CONSTRAINT canonical_events_id_length_check CHECK (octet_length(id) = 33),
+    CONSTRAINT canonical_events_reserved_nibble_check CHECK ((get_byte(id, 0) >> 4) = 0),
     CONSTRAINT canonical_events_digest_suite_check CHECK (digest_suite IN (1, 2)),
     CONSTRAINT canonical_events_digest_length_check CHECK (octet_length(digest) = 32),
     CONSTRAINT canonical_events_id_digest_check CHECK (

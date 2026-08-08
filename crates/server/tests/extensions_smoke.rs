@@ -33,7 +33,8 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+const DEMO_REALM_ID: &str = "ak:realm:AVRxFKYQlThLJddurruDUltKZAxQ7_57zKeEz9z-Y-tH";
+const SEEDED_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 
 fn test_config() -> AppConfig {
@@ -94,16 +95,43 @@ async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> S
 }
 
 async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> String {
-    state.hydrate().await.unwrap();
     let typed_realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    if state
+        .test_persistence()
+        .realm_meta()
+        .get(DEMO_REALM_ID)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        let meta = state
+            .test_persistence()
+            .realm_meta()
+            .get(SEEDED_DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .expect("seeded demo Realm metadata");
+        state
+            .test_persistence()
+            .realm_meta()
+            .put(DEMO_REALM_ID, &meta)
+            .await
+            .unwrap();
+    }
+    state.hydrate().await.unwrap();
     let actor_did = Did::new(actor.to_owned()).unwrap();
     let now = chrono::Utc::now();
     {
         let mut realms = state.test_realms().lock();
-        let mut realm = realms
-            .get(&typed_realm_id)
-            .cloned()
-            .expect("seeded extension test realm");
+        let mut realm = realms.get(&typed_realm_id).cloned().unwrap_or_else(|| {
+            let seeded_realm_id = RealmId::new(SEEDED_DEMO_REALM_ID.to_owned()).unwrap();
+            let mut seeded = realms
+                .get(&seeded_realm_id)
+                .cloned()
+                .expect("seeded demo Realm directory entry");
+            seeded.realm_id = typed_realm_id.clone();
+            seeded
+        });
         realm.members.insert(actor_did);
         realms.upsert(realm);
     }
@@ -139,28 +167,65 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     const ADMIN_GRANT_ID: &str = "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
-    let create = arkret_wire::Event::new(
+    {
+        let mut projection = state.test_projection().lock();
+        let genesis = projection
+            .realm_null_subject_cells
+            .entry((
+                DEMO_REALM_ID.to_owned(),
+                arkret_wire::REALM_GENESIS_CELL.to_owned(),
+            ))
+            .or_insert_with(|| arkret_state::lattice::CellState::Value(serde_json::json!({})));
+        if let arkret_state::lattice::CellState::Value(Value::Object(object)) = genesis {
+            object.insert(
+                "digest_algorithm".to_owned(),
+                Value::String("sha256".to_owned()),
+            );
+        }
+        projection.realm_null_subject_cells.insert(
+            (
+                DEMO_REALM_ID.to_owned(),
+                format!(
+                    "ak:cell:{}:null",
+                    arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+                ),
+            ),
+            arkret_state::lattice::CellState::Value(Value::String(
+                arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
+            )),
+        );
+        let authority_root = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+            Did::new("did:web:alice.example").unwrap(),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+        );
+        projection.realm_null_subject_cells.insert(
+            (
+                DEMO_REALM_ID.to_owned(),
+                arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+            ),
+            arkret_state::lattice::CellState::Value(serde_json::to_value(authority_root).unwrap()),
+        );
+    }
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let create = arkret_wire::Event::new_at(
         arkret_wire::EventKind::REALM_CREATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm.clone(),
-        },
+        arkret_wire::ScopeRef::RealmGenesis,
         Did::new("did:web:alice.example").unwrap(),
         0,
-        arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce000").unwrap(),
-        json!({
-            "object": {
-                "id": realm,
-                "created_by": "did:web:alice.example",
-                "capability_action_registry_digest":
-                    arkret_policy::current_capability_action_registry_digest().unwrap(),
-                "notary": {
-                    "kind": "single_did",
-                    "did": state.service_id(),
-                },
-            }
-        }),
+        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
+        soland_test_support::cba_basis::realm_genesis_payload(
+            "did:web:alice.example",
+            state.service_id(),
+            "Extension test Realm",
+            "ak:trust_domain:soland.test",
+            created_at,
+        ),
+        created_at,
     )
     .unwrap();
+    assert_eq!(RealmId::from_event_id(&create.event_id), realm);
     let move_id = arkret_identifiers::Hash::new(create.event_digest().unwrap()).unwrap();
     let admin_grant_move_id =
         arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
@@ -271,24 +336,12 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         )
         .unwrap();
     state.test_refresh_grant_from_sealed_cells(&realm, ADMIN_GRANT_ID);
-    let envelope = serde_json::to_value(&create).unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: create.event_id.to_string(),
-            actor_id: create.actor_id.to_string(),
-            actor_seq: create.actor_seq,
-            realm_id: Some(DEMO_REALM_ID.to_owned()),
-            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest: create.event_digest().unwrap(),
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
+    soland_test_support::cba_basis::seed_realm_genesis_event(
+        state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+    )
+    .await;
     seal.seal_basis()
 }
 
@@ -1769,7 +1822,7 @@ async fn signed_install_events(
             ],
             issued_at: now,
             not_before: None,
-            expires_at: None,
+            expires_at: Some(now + chrono::Duration::hours(1)),
         };
         let payload = CapabilityGrantPayload { grant };
         let counter = offset + 2;

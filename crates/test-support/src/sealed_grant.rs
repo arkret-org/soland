@@ -287,8 +287,12 @@ async fn persist_canonical_event(
             kind: arkret_wire::EventKind::CAPABILITY_GRANT.to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: canonical_digest.to_owned(),
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope)
-                .expect("fixture Event canonical bytes"),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event
+                    .digest_payload()
+                    .expect("fixture Event digest payload"),
+            )
+            .expect("fixture Event canonical bytes"),
             envelope,
             received_at: chrono::Utc::now(),
         })

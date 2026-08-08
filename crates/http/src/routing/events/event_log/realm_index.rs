@@ -108,7 +108,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     else {
         return false;
     };
-    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
         return false;
     }
     let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
@@ -141,7 +141,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
-    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
         return false;
     }
     let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
@@ -180,7 +180,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
-    if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
+    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
         return false;
     }
     let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {

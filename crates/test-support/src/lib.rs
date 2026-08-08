@@ -82,16 +82,12 @@ pub fn app_state_with_persistence(
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
-/// Mint a syntactically valid content-bound id for a fixture that has no Event.
+/// Mint a syntactically valid v1 Event-derived token for an out-of-band fixture.
 ///
-/// A real `event_derived` id is `content_bound_uuid(created_at, event_digest)`.
-/// A fixture that stands an object up straight in persistence has no Event to
-/// derive from, so this fills the same shape from fresh randomness.
-///
-/// It is deliberately **not** a derivation: nothing can re-derive the result,
-/// and no production path may call it. It exists so out-of-band fixtures stay
-/// well-formed under the v1 id rules instead of carrying a UUIDv7 that every
-/// typed-id constructor now rejects.
+/// The returned token is always the full 33-byte `SHA-256 suite || digest`
+/// wire form. It is deliberately not an object derivation because the fixture
+/// has no producer Event; fixtures that model a real create flow must build the
+/// Event first and call the typed `from_event_id` constructor instead.
 pub fn fixture_content_bound_id(prefix: &str) -> String {
     use sha2::Digest as _;
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -101,20 +97,10 @@ pub fn fixture_content_bound_id(prefix: &str) -> String {
     hasher.update(prefix.as_bytes());
     hasher.update(seq.to_be_bytes());
     hasher.update(std::process::id().to_be_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex = hex::encode(bytes);
-    format!(
-        "{prefix}{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    let digest: [u8; 32] = hasher.finalize().into();
+    let event_id =
+        arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest);
+    arkret_identifiers::encode_event_token(prefix, event_id.token_bytes())
 }
 
 pub fn fixture_signing_seed(config: &AppConfig, identity: &ServiceIdentityState) -> [u8; 32] {

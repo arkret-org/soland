@@ -217,25 +217,20 @@ pub async fn seed_realm_basis(
 pub fn realm_genesis_payload(
     subject: &str,
     notary_did: &str,
-    title: &str,
+    _title: &str,
     trust_domain: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
+    _created_at: chrono::DateTime<chrono::Utc>,
 ) -> serde_json::Value {
     serde_json::json!({
         "object": {
-            "schema": "ak.schema.realm.v1",
-            "title": title,
-            "summary": "Soland integration-test Realm",
-            "created_by": subject,
+            "schema": "ak.schema.realm_genesis.v1",
+            "purpose": "collaboration",
+            "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
             "trust_domain": trust_domain,
             "schema_refs": ["ak.schema.realm.v1"],
-            "default_discoverability": "unlisted",
-            "default_join_rule": "invite",
-            "history_visibility": "shared",
             "encryption_profile": "none",
             "security_class": "standard",
-            "federation_policy": "restricted",
             "notary_profile": "single_did",
             "digest_algorithm": "sha256",
             "capability_action_registry_digest":
@@ -247,8 +242,7 @@ pub fn realm_genesis_payload(
                 "recovery_members": [FIXTURE_NOTARY_RECOVERY_MEMBER],
                 "controller_organization": subject,
                 "recovery_controller_organizations": [FIXTURE_NOTARY_RECOVERY_ORGANIZATION]
-            },
-            "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+            }
         }
     })
 }
@@ -269,6 +263,21 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     // well-formed content-bound Event id will do for fixture construction.
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .expect("fixture Realm id is canonical");
+    if let Some(existing) = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id)
+        .await
+        .expect("fixture Realm genesis lookup")
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+    {
+        let event: arkret_wire::Event =
+            serde_json::from_value(existing.envelope).expect("stored fixture genesis envelope");
+        let payload = serde_json::to_value(&event.payload).expect("stored fixture genesis payload");
+        persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+        return;
+    }
     let is_principal_control_realm = realm.event_id().is_none();
     let genesis_event_id = realm
         .event_id()
@@ -280,14 +289,6 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     // Event. The reducer projection is checked separately below: fixtures that
     // write persistence directly still have to materialize the authority root
     // used by authorization predicates.
-    let genesis_is_stored = state
-        .test_persistence()
-        .events()
-        .realm_events_newest_first(realm_id)
-        .await
-        .expect("fixture Realm genesis lookup")
-        .iter()
-        .any(|record| record.kind == arkret_wire::EventKind::REALM_CREATE);
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
@@ -321,26 +322,151 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         event.event_id,
         realm
     );
-    let genesis_event_id = event.event_id.to_string();
-    let canonical_digest = event.event_digest().expect("fixture genesis Event digest");
-    if !genesis_is_stored {
+    persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+}
+
+/// Author a canonical genesis Event first and derive its Realm identity from
+/// that producer Event. Dynamic Realm fixtures must use this path instead of
+/// independently minting an `ak:realm:` token.
+pub async fn seed_event_derived_realm_genesis_event(
+    state: &AppState,
+    subject: &str,
+    title: &str,
+) -> String {
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .expect("fixture genesis timestamp")
+        .with_timezone(&chrono::Utc);
+    let payload = realm_genesis_payload(
+        subject,
+        state.service_id(),
+        title,
+        "ak:trust_domain:soland.test",
+        created_at,
+    );
+    let event = arkret_wire::Event::new_at(
+        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::RealmGenesis,
+        Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        0,
+        Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
+        payload.clone(),
+        created_at,
+    )
+    .expect("fixture genesis Event");
+    let realm = RealmId::from_event_id(&event.event_id);
+    persist_and_project_realm_genesis_event(state, &realm, subject, event, payload).await;
+    realm.to_string()
+}
+
+async fn persist_and_project_realm_genesis_event(
+    state: &AppState,
+    realm: &RealmId,
+    subject: &str,
+    event: arkret_wire::Event,
+    payload: serde_json::Value,
+) {
+    let realm_id = realm.as_str();
+    let stored_event_ids = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id)
+        .await
+        .expect("fixture Realm genesis lookup")
+        .iter()
+        .map(|record| record.event_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let followups = [
+        (
+            arkret_wire::EventKind::REALM_PROFILE,
+            serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": "Fixture Realm"}),
+        ),
+        (
+            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            serde_json::json!({"policy_revision": 1, "content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        (
+            arkret_wire::EventKind::REALM_JOIN_RULE,
+            serde_json::json!({"value": "invite"}),
+        ),
+        (
+            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+            serde_json::json!({"value": "joined"}),
+        ),
+        (
+            arkret_wire::EventKind::REALM_DISCOVERY,
+            serde_json::json!({"value": "invite_only"}),
+        ),
+        (
+            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            serde_json::json!({"allow_unroutable_members": false}),
+        ),
+        (
+            arkret_wire::EventKind::MEMBER_STATE,
+            serde_json::json!({
+                "realm_id": realm_id,
+                "actor_id": subject,
+                "membership": "join",
+                "delivery_status": "unroutable"
+            }),
+        ),
+    ];
+    let mut bootstrap_events = vec![event.clone()];
+    let mut previous_event_id = event.event_id.clone();
+    for (offset, (kind, followup_payload)) in followups.into_iter().enumerate() {
+        let actor_seq = u64::try_from(offset + 1).expect("fixture bootstrap sequence");
+        let mut followup = arkret_wire::Event::new_at(
+            kind,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            Did::new(subject.to_owned()).expect("fixture bootstrap actor DID"),
+            actor_seq,
+            Hlc::new(format!("0196419b0000-{actor_seq:04x}-51c0a1ed"))
+                .expect("fixture bootstrap HLC"),
+            followup_payload,
+            event.created_at,
+        )
+        .expect("fixture bootstrap follow-up Event");
+        followup.prev_refs = vec![previous_event_id];
+        followup
+            .refresh_content_bound_identity()
+            .expect("fixture bootstrap follow-up identity");
+        previous_event_id = followup.event_id.clone();
+        bootstrap_events.push(followup);
+    }
+    arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&bootstrap_events)
+        .expect("fixture ordinary Realm bootstrap unit");
+
+    for bootstrap_event in &bootstrap_events {
+        if stored_event_ids.contains(bootstrap_event.event_id.as_str()) {
+            continue;
+        }
         state
             .test_persistence()
             .events()
             .put(soland_storage::CanonicalEventRecord {
-                event_id: genesis_event_id.clone(),
-                actor_id: subject.to_owned(),
-                actor_seq: 0,
+                event_id: bootstrap_event.event_id.to_string(),
+                actor_id: bootstrap_event.actor_id.to_string(),
+                actor_seq: bootstrap_event.actor_seq,
                 realm_id: Some(realm_id.to_owned()),
-                kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
+                kind: bootstrap_event.kind.to_string(),
                 schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest,
-                canonical_bytes: Vec::new(),
-                envelope: serde_json::to_value(&event).expect("fixture genesis envelope"),
+                canonical_digest: bootstrap_event
+                    .event_digest()
+                    .expect("fixture bootstrap Event digest"),
+                canonical_bytes: arkret_canonical::canonical_json_bytes(
+                    &bootstrap_event
+                        .digest_payload()
+                        .expect("fixture bootstrap Event digest payload"),
+                )
+                .expect("fixture bootstrap Event canonical bytes"),
+                envelope: serde_json::to_value(bootstrap_event)
+                    .expect("fixture bootstrap envelope"),
                 received_at: chrono::Utc::now(),
             })
             .await
-            .expect("fixture Realm genesis Event");
+            .expect("fixture Realm bootstrap Event");
     }
 
     let projection = state.test_projection();

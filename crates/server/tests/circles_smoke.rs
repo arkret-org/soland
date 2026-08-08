@@ -35,7 +35,37 @@ const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
 
-fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
+fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
+    let object = payload.get_mut("object").and_then(Value::as_object_mut);
+    let sender = object
+        .as_ref()
+        .and_then(|object| object.get("created_by"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let producer_event_id = object
+        .as_ref()
+        .and_then(|object| object.get("id"))
+        .and_then(Value::as_str)
+        .and_then(|id| id.split_once(':').map(|(_, tail)| tail))
+        .and_then(|tail| tail.split_once(':').map(|(_, token)| token))
+        .map(|token| format!("ak:event:{token}"))
+        .unwrap_or_else(|| soland_test_support::fixture_content_bound_id("ak:event:"));
+    if let Some(object) = object {
+        object.remove("id");
+        object.remove("created_by");
+    }
+    payload
+        .as_object_mut()
+        .expect("test payload object")
+        .entry("event_id")
+        .or_insert_with(|| Value::String(producer_event_id));
+    if let Some(sender) = sender {
+        payload
+            .as_object_mut()
+            .expect("test payload object")
+            .entry("sender")
+            .or_insert_with(|| Value::String(sender));
+    }
     Operation::create(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
@@ -44,46 +74,56 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     )
 }
 
-fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
-    state.apply(
-        &op(
-            arkret_wire::EventKind::REALM_CREATE,
-            realm_id,
-            json!({
-                "object": {
-                    "id": realm_id,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Test Realm",
-                    "created_by": owner,
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "default_discoverability": "public",
-                    "encryption_profile": "none",
-                }
-            }),
+fn seed_realm(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, owner: &str) {
+    seed_realm_projection(state, realm_id, owner, "none");
+}
+
+fn seed_realm_projection(
+    state: &mut ProjectionState,
+    realm_id: &str,
+    owner: &str,
+    encryption_profile: &str,
+) {
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        realm_id.to_owned(),
+        soland_domain::reducer::SolandRealmState {
+            realm_id: realm_id.to_owned(),
+            owner: Some(owner.to_owned()),
+            title: Some("Test Realm".to_owned()),
+            deleted: false,
+            archived: false,
+            frozen: false,
+            freeze_expires_at: None,
+            created_at: now,
+            updated_at: now,
+            trust_domain: Some("ak:trust_domain:example.net".to_owned()),
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+            active_profiles: Vec::new(),
+        },
+    );
+    state.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        hlc,
+        arkret_state::lattice::CellState::Value(json!({
+            "purpose": "collaboration",
+            "encryption_profile": encryption_profile,
+            "schema_refs": ["ak.schema.realm.v1"]
+        })),
     );
 }
 
-fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owner: &str) {
-    state.apply(
-        &op(
-            arkret_wire::EventKind::REALM_CREATE,
-            realm_id,
-            json!({
-                "object": {
-                    "id": realm_id,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Encrypted Test Realm",
-                    "created_by": owner,
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "default_discoverability": "public",
-                    "encryption_profile": "mls_rfc9420",
-                }
-            }),
-        ),
-        hlc,
-    );
+fn seed_encrypted_realm(
+    state: &mut ProjectionState,
+    _hlc: &ServerHlc,
+    realm_id: &str,
+    owner: &str,
+) {
+    seed_realm_projection(state, realm_id, owner, "mls_rfc9420");
 }
 
 /// AKP-0007 smoke helper — write a `(realm_id, actor)` membership entry
@@ -190,17 +230,14 @@ fn circle_content_floor_below_realm_rejected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("circles-content-floor-test");
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
-    // Realm raises its content floor to e2ee_required via policy_bundle.
-    state.apply(
-        &op(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            REALM_A,
-            json!({
-                "policy_revision": 1,
-                "content_encryption_floor": "e2ee_required"
-            }),
-        ),
-        &hlc,
+    // Install the already-accepted policy projection; this reducer-level test
+    // exercises Circle floor enforcement, not policy-bundle admission.
+    state.realm_policy_bundle_cells.insert(
+        REALM_A.to_owned(),
+        arkret_state::lattice::CellState::Value(json!({
+            "policy_revision": 1,
+            "content_encryption_floor": "e2ee_required"
+        })),
     );
     let rejected = state.apply(
         &op(

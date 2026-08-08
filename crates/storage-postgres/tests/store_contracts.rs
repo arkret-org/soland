@@ -224,7 +224,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         realm_id: Some(realm_id.clone()),
         kind: "ak.test.data".to_owned(),
         schema_id: "arkret://events/test/v1".to_owned(),
-        canonical_digest,
+        canonical_digest: canonical_digest.clone(),
         canonical_bytes: preimage,
         envelope: serde_json::json!({"variant": "incoming", "proofs": [{"jws": "full-evidence"}]}),
         received_at: now,
@@ -297,6 +297,42 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     );
     assert!(store.get(&event_id).await.unwrap().is_none());
     assert_eq!(store.collision_variants(&event_id).await.unwrap().len(), 2);
+
+    let mut conn = pool.get().await.unwrap();
+    let projections =
+        sql_query("SELECT COUNT(*) AS value FROM projection_events WHERE event_pk = $1")
+            .bind::<BigInt, _>(event_pk)
+            .get_result::<CountRow>(&mut conn)
+            .await
+            .unwrap()
+            .value;
+    assert_eq!(projections, 0, "unsealed projection must be withdrawn");
+    sql_query(
+        "INSERT INTO state_control_events \
+         (event_digest, realm_id, event_json, sealed_by, sealed_at) \
+         VALUES ($1, $2, '{}'::jsonb, 'ak:seal:test', $3)",
+    )
+    .bind::<Text, _>(&canonical_digest)
+    .bind::<Text, _>(&realm_id)
+    .bind::<diesel::sql_types::Timestamptz, _>(now)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sql_query(
+        "INSERT INTO projection_events \
+         (event_pk, realm_pk, realm_id, event_kind, operation_kind, payload, created_at, received_at) \
+         VALUES ($1, $2, $3, $4, 'sealed-test', '{}'::jsonb, $5, $5)",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .bind::<BigInt, _>(realm_pk)
+    .bind::<Text, _>(&realm_id)
+    .bind::<Text, _>(&incoming.kind)
+    .bind::<diesel::sql_types::Timestamptz, _>(now)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+
     let repeated = store.put(incoming.clone()).await.unwrap_err();
     assert!(
         matches!(repeated, PersistenceError::Conflict(reason) if reason == "event_hash_collision")
@@ -358,7 +394,10 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
             .await
             .unwrap()
             .value;
-    assert_eq!(projections, 0);
+    assert_eq!(
+        projections, 1,
+        "accepted sealed history must survive repeated collision quarantine"
+    );
     let outbox = PgFederationOutboxStore { pool };
     let delivery = outbox.get(&outbox_id).await.unwrap().unwrap();
     assert_eq!(

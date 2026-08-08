@@ -36,15 +36,18 @@ fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(ISSUER.to_owned()));
     // The registered or_set dot is `ak:event:<event_id>:<write_index>`, so a
-    // fixture Operation owes the Event id the submit path injects
-    // (`sdk_projection::projection_operation_from_event`). Retyping the
-    // producer-allocated uuid into the content-bound version nibble is enough:
-    // the fixture only needs a well-formed value that differs per Operation.
-    let mut event_uuid = operation_uuid.clone();
-    event_uuid.replace_range(14..15, "8");
+    // fixture Operation owes the full producer Event token injected by the
+    // submit path. An Event-derived grant must be the byte-for-byte retyping of
+    // that producer Event; non-create operations receive an independent full
+    // SHA-256 fixture token.
+    let event_id = object
+        .get("event_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| soland_test_support::fixture_content_bound_id("ak:event:"));
     object
         .entry("event_id".to_owned())
-        .or_insert_with(|| Value::String(format!("ak:event:{event_uuid}")));
+        .or_insert_with(|| Value::String(event_id));
     Operation::create(
         OperationId::new(format!("ak:operation:{operation_uuid}")).unwrap(),
         RealmId::new(realm_id).unwrap(),
@@ -68,10 +71,8 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
         arkret_wire::EventKind::CAPABILITY_GRANT,
         REALM,
         json!({
-            "grant_id": grant_id,
+            "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
             "grant": {
-                "id": grant_id,
-                "grant_id": grant_id,
                 "realm_id": REALM,
                 "issuer": ISSUER,
                 "issuer_authority_refs": [{
@@ -208,10 +209,8 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
             arkret_wire::EventKind::CAPABILITY_GRANT,
             REALM,
             json!({
-                "grant_id": GRANT_ID,
+                "event_id": GRANT_ID.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
-                    "id": GRANT_ID,
-                    "grant_id": GRANT_ID,
                     "realm_id": REALM,
                     "issuer": ISSUER,
                     "issuer_authority_refs": [{

@@ -76,18 +76,28 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 async fn put_account_data(
     state: AppState,
     token: &str,
+    actor: &str,
+    device_id: &str,
     account_data_key: &str,
     expected_revision: u64,
     content: Value,
 ) -> (StatusCode, Value) {
+    let set_event = signed_account_data_submission(
+        state.clone(),
+        token,
+        actor,
+        device_id,
+        account_data_key,
+        expected_revision,
+        Some(content),
+        false,
+    )
+    .await;
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&json!({
-        "expected_revision": expected_revision,
-        "content": content
-    }))
+    .json(&json!({"set_event": set_event}))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.expect("account_data PUT status");
@@ -96,6 +106,59 @@ async fn put_account_data(
         .await
         .expect("account_data PUT JSON response");
     (status, body)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn signed_account_data_submission(
+    state: AppState,
+    token: &str,
+    actor: &str,
+    device_id: &str,
+    account_data_key: &str,
+    expected_revision: u64,
+    content: Option<Value>,
+    tombstone: bool,
+) -> arkret_wire::EventInitialSubmission {
+    let realm_id = soland_test_support::principal_control_realm_for_did(actor);
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state))
+            .await
+            .take_json()
+            .await
+            .expect("typed actor Realm frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
+        panic!("combined Realm+actor selector returned the wrong variant");
+    };
+    frontier.validate().expect("valid actor Realm frontier");
+    let mut payload = json!({
+        "key": account_data_key,
+        "expected_revision": expected_revision,
+        "owner": actor,
+        "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
+    });
+    if let Some(content) = content {
+        payload["body"] = content;
+    }
+    if tombstone {
+        payload["tombstone"] = Value::Bool(true);
+    }
+    let event = signed_actor_private_event_envelope(
+        actor,
+        device_id,
+        &realm_id,
+        arkret_wire::EventKind::ACCOUNT_DATA_SET,
+        payload,
+        frontier.next_actor_seq,
+        frontier.frontier_event_ids,
+    );
+    arkret_wire::EventInitialSubmission::online(
+        serde_json::from_value(event).expect("signed account_data Event"),
+    )
 }
 
 /// Stand a plaintext Realm up through its canonical `ak.realm.create`.
@@ -115,8 +178,10 @@ async fn put_account_data(
 /// soland-local read projections, and they restate the genesis object rather
 /// than inventing values it does not carry.
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
-    soland_test_support::cba_basis::seed_realm_genesis_event(&state, &realm_id, owner).await;
+    let realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
+        &state, owner, title,
+    )
+    .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -402,6 +467,8 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let (first_status, first) = put_account_data(
         state.clone(),
         &desktop,
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         0,
         json!({ "version": 1, "label": "first" }),
@@ -413,6 +480,8 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let (second_status, second) = put_account_data(
         state.clone(),
         &desktop,
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         first["revision"].as_u64().unwrap(),
         json!("second"),
@@ -424,6 +493,8 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let (stale_status, stale) = put_account_data(
         state.clone(),
         &desktop,
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000011",
         account_data_key,
         first["revision"].as_u64().unwrap(),
         json!("stale retry"),
@@ -448,10 +519,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let event = account_data_entry(&phone_sync, account_data_key)
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
     assert_eq!(event["kind"], arkret_wire::EventKind::ACCOUNT_DATA_SET);
-    assert_eq!(
-        event["actor_id"].as_str(),
-        Some(state.service_id().as_str())
-    );
+    assert_eq!(event["actor_id"].as_str(), Some(actor.as_str()));
     assert_eq!(event["payload"]["owner"], actor);
     assert_eq!(event["payload"]["expected_revision"], 1);
     assert_eq!(event["payload"]["body"], "second");
@@ -471,11 +539,22 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "initial baseline must come from the durable Event store"
     );
 
+    let delete_event = signed_account_data_submission(
+        state.clone(),
+        &desktop,
+        &actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000011",
+        account_data_key,
+        second["revision"].as_u64().unwrap(),
+        None,
+        true,
+    )
+    .await;
     let mut delete = TestClient::delete(format!(
-        "http://server/_arkret/self/account_data/{account_data_key}?expected_revision={}",
-        second["revision"].as_u64().unwrap()
+        "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {desktop}"), true)
+    .json(&json!({"set_event": delete_event}))
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(delete.status_code, Some(StatusCode::OK));
