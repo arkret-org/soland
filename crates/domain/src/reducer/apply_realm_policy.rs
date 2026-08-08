@@ -335,19 +335,18 @@ impl ProjectionState {
         cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
         let kind = operation.object_kind.as_str();
-        if kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE {
-            return self.apply_realm_policy_bundle(operation);
-        }
-        if !matches!(
-            kind,
-            arkret_wire::EventKind::REALM_ALIAS
-                | arkret_wire::EventKind::REALM_JOIN_RULE
-                | arkret_wire::EventKind::REALM_HISTORY_VISIBILITY
-                | arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
-                | arkret_wire::EventKind::REALM_DISCOVERY
-                | arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY
-                | arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
-        ) {
+        if kind != arkret_wire::EventKind::REALM_POLICY_BUNDLE
+            && !matches!(
+                kind,
+                arkret_wire::EventKind::REALM_ALIAS
+                    | arkret_wire::EventKind::REALM_JOIN_RULE
+                    | arkret_wire::EventKind::REALM_HISTORY_VISIBILITY
+                    | arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
+                    | arkret_wire::EventKind::REALM_DISCOVERY
+                    | arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY
+                    | arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
+            )
+        {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
             };
@@ -367,6 +366,16 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
+        if kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE {
+            // Projection Operations carry receiver-only metadata such as
+            // event_id/sender/hlc beside their Event payload. The registered
+            // cell write is the authoritative closed policy-bundle value, so
+            // feed that value to the deny-unknown-fields typed reducer rather
+            // than accidentally treating projection metadata as wire fields.
+            let mut canonical = operation.clone();
+            canonical.payload = value;
+            return self.apply_realm_policy_bundle(&canonical);
+        }
         let wire_cell = direct.cell.clone();
         let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
             return ProjectionEffect::Rejected {

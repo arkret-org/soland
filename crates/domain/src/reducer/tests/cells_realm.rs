@@ -1298,6 +1298,38 @@ fn policy_bundle_revision_starts_at_one_and_advances_without_gaps() {
 }
 
 #[test]
+fn bootstrap_policy_bundle_uses_registered_value_without_projection_metadata() {
+    let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
+    let mut state = ProjectionState::new();
+    let payload = serde_json::json!({
+        "policy_revision": 1,
+        "federation_policy": "restricted",
+        "content_encryption_floor": "allow_plaintext",
+        "metadata_encryption_floor": "allow_plaintext"
+    });
+    let (_, writes) = projected_cell_writes(
+        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        realm_id,
+        &payload,
+    );
+    let mut enriched = payload;
+    enriched["event_id"] =
+        serde_json::json!("ak:event:Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    enriched["sender"] = serde_json::json!("did:web:alice.example");
+    enriched["hlc"] = serde_json::json!("019fdf8a179d-0000-a13f9c2e");
+    let operation = make_operation(
+        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        realm_id,
+        enriched,
+    );
+
+    assert!(matches!(
+        state.apply_validated_realm_bootstrap_facet(&operation, &writes),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+}
+
+#[test]
 fn policy_bundle_validates_control_proposal_timing_as_one_component() {
     let realm_id = "ak:realm:AdxEgvRaqkzAG9iN9YT9pxaGx7skfMnQEhVi79_pvlJs";
     let mut state = ProjectionState::new();
