@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
+use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 use arkret_wire::ReasonCode;
 
@@ -873,6 +874,378 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
     .await
 }
 
+pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: DirectConversationFoundingUnitSubmission,
+) -> Result<DirectConversationFoundingAcceptanceOutcome, SubmitOneError> {
+    let typed_events = submission
+        .events
+        .iter()
+        .map(|submission| &submission.event)
+        .collect::<Vec<_>>();
+    let exact: [&arkret_wire::Event; 3] = typed_events
+        .try_into()
+        .expect("typed founding carrier has exactly three Events");
+    let plan = DirectConversationFoundingPlan::from_events(exact).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "direct_conversation_founding_unit_invalid",
+            error.to_string(),
+        )
+    })?;
+    let trust_domain_id =
+        TypedTrustDomainId::new(state.config().trust_domain.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("configured trust domain is invalid: {error}"),
+            )
+        })?;
+    let (pair_key, founder_id, authorization_core) = match &submission.founder_basis_evidence {
+        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human { .. } => {
+            evidence
+                .human_pair_key_and_authorization_core(trust_domain_id.clone())
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "direct_conversation_founding_unit_invalid",
+                        error.to_string(),
+                    )
+                })?
+        }
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::ControllerAgent {
+            agent_provision_ref,
+            agent_provision_digest,
+            controller_binding_digest,
+        } => {
+            let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+                serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
+                    SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
+                })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            let peer = member_payload.actor_id.ok_or_else(|| SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "direct_conversation_founding_unit_invalid",
+                "controller-Agent founding peer membership has no actor_id",
+            ))?;
+            let founder = submission.events[0].event.actor_id.clone();
+            let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
+                trust_domain_id.clone(),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(founder.clone()),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(peer),
+            ).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            (
+                pair_key,
+                founder,
+                DirectConversationFoundingAuthorizationCore::ControllerAgent {
+                    agent_provision_ref: agent_provision_ref.clone(),
+                    agent_provision_digest: agent_provision_digest.clone(),
+                    controller_binding_digest: controller_binding_digest.clone(),
+                },
+            )
+        }
+    };
+    if founder_id.as_str() != session.actor || submission.events[0].event.actor_id != founder_id {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "only the founder derived from the root basis may submit this unit",
+        ));
+    }
+    if let Some(stored) = state
+        .event_queries()
+        .direct_conversation_founding_slot(
+            founder_id.as_str(),
+            trust_domain_id.as_str(),
+            pair_key.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?
+        && stored.idempotency_key == submission.idempotency_key.as_str()
+        && stored.founding_unit_digest == plan.founding_unit_digest.as_str()
+    {
+        let stored_receipt = serde_json::from_slice(&stored.receipt_bytes).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored founding receipt is invalid: {error}"),
+            )
+        })?;
+        return Ok(DirectConversationFoundingAcceptanceOutcome {
+            unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+            status: DirectConversationFoundingAcceptanceStatus::Duplicate,
+            event_ids: plan.event_ids,
+            receipt: stored_receipt,
+        });
+    }
+    let accepted_at = now();
+    match &submission.founder_basis_evidence {
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human {
+            basis_evidence_bundle,
+            ..
+        } => {
+            let ([left, right], _) = submission
+                .founder_basis_evidence
+                .participants_and_founder()
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "direct_conversation_founding_unit_invalid",
+                        error.to_string(),
+                    )
+                })?;
+            let current = crate::routing::identity::account::accepted_contact_for_pair(
+                state,
+                left.as_str(),
+                right.as_str(),
+                "direct_message",
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "failed_precondition",
+                    "current two-direction direct_message Contact gate is not accepted",
+                )
+            })?;
+            let current_heads = [
+                current.request_event_ref.as_deref(),
+                current.response_event_ref.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>();
+            let evidence_heads = basis_evidence_bundle
+                .current_proofs
+                .iter()
+                .map(|proof| proof.head_event_ref.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if current.basis_id.as_deref() != Some(basis_evidence_bundle.basis_id.as_str())
+                || current_heads != evidence_heads
+                || basis_evidence_bundle
+                    .current_proofs
+                    .iter()
+                    .any(|proof| proof.fresh_until <= accepted_at)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "failed_precondition",
+                    "founding evidence does not match the fresh current Contact heads",
+                ));
+            }
+        }
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::ControllerAgent {
+            agent_provision_ref,
+            agent_provision_digest,
+            ..
+        } => {
+            let member_payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+                serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
+                    SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
+                })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
+            let agent_id = member_payload.actor_id.ok_or_else(|| SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "direct_conversation_founding_unit_invalid",
+                "controller-Agent founding peer membership has no actor_id",
+            ))?;
+            let agent = state
+                .agent_pairings()
+                .agent(agent_id.as_str())
+                .await
+                .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
+                .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision is unavailable"))?;
+            let stored_provision_ref = agent
+                .provision_event_refs
+                .as_ref()
+                .and_then(|refs| refs.get("provision_event_id"))
+                .and_then(Value::as_str);
+            let accepted_provision = state
+                .event_queries()
+                .accepted_event(agent_provision_ref.as_str())
+                .await
+                .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
+                .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision Event is unavailable"))?;
+            if agent.controller_id != founder_id.as_str()
+                || agent.state
+                    != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+                || stored_provision_ref != Some(agent_provision_ref.as_str())
+                || accepted_provision.kind != arkret_wire::EventKind::AGENT_PROVISION
+                || accepted_provision.canonical_digest != agent_provision_digest.as_str()
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "failed_precondition",
+                    "controller-Agent founding evidence does not match the current provision",
+                ));
+            }
+            crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+                state,
+                &agent,
+                accepted_at,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "failed_precondition",
+                    error.to_string(),
+                )
+            })?;
+        }
+    }
+    let issuer_service_id = Did::new(state.service_id().clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("service DID is invalid: {error}"),
+        )
+    })?;
+    let (issuer_service_binding_digest, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("service receipt binding is unavailable: {error}"),
+            )
+        })?;
+    let mut receipt = DirectConversationFoundingAcceptanceReceipt {
+        pair_key: pair_key.clone(),
+        founder_id: founder_id.clone(),
+        realm_id: plan.realm_id.clone(),
+        main_strand_id: plan.main_strand_id.clone(),
+        founding_unit_digest: plan.founding_unit_digest.clone(),
+        authorization_core,
+        slot_committed: true,
+        issuer_service_id,
+        issuer_service_binding_digest,
+        accepted_at,
+        proof: arkret_wire::ProtocolSignature {
+            verification_method,
+            created_at: accepted_at,
+            jws: arkret_wire::Base64UrlString::new("AA".to_owned()).expect("static base64url"),
+        },
+    };
+    let signing_input = receipt.signing_input_bytes().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    let jws = arkret_signatures::jws::sign_jws_ed25519(
+        &signing_input,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| {
+        SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    })?;
+    receipt.proof.jws = arkret_wire::Base64UrlString::new(jws).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    let receipt_bytes = canonical::canonical_json_bytes(&receipt).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    let slot = soland_storage::DirectConversationFoundingSlotRecord {
+        founder_id: founder_id.to_string(),
+        trust_domain_id: trust_domain_id.to_string(),
+        pair_key: pair_key.to_string(),
+        founding_unit_digest: plan.founding_unit_digest.to_string(),
+        realm_id: plan.realm_id.to_string(),
+        main_strand_id: plan.main_strand_id.to_string(),
+        event_ids: plan.event_ids.iter().map(ToString::to_string).collect(),
+        idempotency_key: submission.idempotency_key.to_string(),
+        receipt_bytes,
+        accepted_at,
+    };
+    let envelopes = submission
+        .events
+        .iter()
+        .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let leases = submission
+        .events
+        .iter()
+        .map(|event| event.authorization_lease.clone())
+        .collect::<Vec<_>>();
+    let basis_evidence = submission.founder_basis_evidence.clone();
+    let ordinary_outcome = submit_realm_bootstrap_batch(
+        state,
+        session,
+        envelopes,
+        None,
+        Some(&leases),
+        Some(realm_bootstrap::DirectConversationFoundingCommitContext {
+            slot,
+            receipt: receipt.clone(),
+            founder_basis_evidence: basis_evidence,
+        }),
+    )
+    .await?;
+    let stored = state
+        .event_queries()
+        .direct_conversation_founding_slot(
+            founder_id.as_str(),
+            trust_domain_id.as_str(),
+            pair_key.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "founding slot disappeared after commit",
+            )
+        })?;
+    let stored_receipt: DirectConversationFoundingAcceptanceReceipt =
+        serde_json::from_slice(&stored.receipt_bytes).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+    Ok(DirectConversationFoundingAcceptanceOutcome {
+        unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+        status: if ordinary_outcome.status == EventsSubmitStatus::Duplicate {
+            DirectConversationFoundingAcceptanceStatus::Duplicate
+        } else {
+            DirectConversationFoundingAcceptanceStatus::Accepted
+        },
+        event_ids: plan.event_ids,
+        receipt: stored_receipt,
+    })
+}
+
 async fn submit_event_batch_outcome_with_leases(
     state: &AppState,
     session: &SessionRecord,
@@ -934,8 +1307,15 @@ async fn submit_event_batch_outcome_with_leases(
         .await;
     }
     if batch_begins_realm_create(&envelopes) && !batch_is_managed_agent_pcr_create(&envelopes) {
-        return submit_realm_bootstrap_batch(state, session, envelopes, None, authorization_leases)
-            .await;
+        return submit_realm_bootstrap_batch(
+            state,
+            session,
+            envelopes,
+            None,
+            authorization_leases,
+            None,
+        )
+        .await;
     }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
@@ -1366,6 +1746,13 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     };
+    let submit = match submit {
+        EventsSubmitFederationRequestBody::Batch(batch) => batch,
+        EventsSubmitFederationRequestBody::DirectConversationFounding(founding) => {
+            submit_direct_conversation_federation(state, req, founding, request_hash, res).await;
+            return;
+        }
+    };
     if let Err(error) = submit.validate_federation_transport() {
         tracing::debug!(%error, "federation transport contract rejected");
         render_error(
@@ -1376,7 +1763,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    let EventsSubmitFederationRequestBody {
+    let arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,
         cba_proof_bundles,
@@ -1884,6 +2271,7 @@ pub(crate) async fn submit_federation_events(
             events,
             Some(admissions.as_slice()),
             Some(authorization_leases.as_slice()),
+            None,
         )
         .await
         {
@@ -2207,6 +2595,213 @@ pub(crate) async fn submit_federation_events(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     )));
+}
+
+async fn submit_direct_conversation_federation(
+    state: &AppState,
+    req: &Request,
+    submission: arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingFederationSubmission,
+    request_hash: String,
+    res: &mut Response,
+) {
+    let receipt = &submission.source_acceptance_receipt;
+    if let Err(error) = receipt.validate_shape() {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            &error.to_string(),
+        );
+        return;
+    }
+    let events = submission
+        .events
+        .iter()
+        .map(|item| &item.event)
+        .collect::<Vec<_>>();
+    let exact: [&arkret_wire::Event; 3] = events
+        .try_into()
+        .expect("typed founding federation carrier has exactly three Events");
+    let plan = match DirectConversationFoundingPlan::from_events(exact) {
+        Ok(plan) => plan,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "direct_conversation_founding_unit_invalid",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if receipt.founder_id != submission.events[0].event.actor_id
+        || receipt.realm_id != plan.realm_id
+        || receipt.main_strand_id != plan.main_strand_id
+        || receipt.founding_unit_digest != plan.founding_unit_digest
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "direct_conversation_founding_unit_invalid",
+            "source receipt does not bind the transported founding unit",
+        );
+        return;
+    }
+    let source_service_id = req
+        .headers()
+        .get("source-service-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if source_service_id != receipt.issuer_service_id.as_str() {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "transport source does not match the founding receipt issuer",
+        );
+        return;
+    }
+    let signing_input = match receipt.signing_input_bytes() {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                &error.to_string(),
+            );
+            return;
+        }
+    };
+    if let Err(error) = crate::jws_verify::verify_did_controlled_jws_async(
+        &signing_input,
+        receipt.proof.jws.as_str(),
+        receipt.proof.verification_method.as_str(),
+        receipt.issuer_service_id.as_str(),
+        state,
+    )
+    .await
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            &format!("founding acceptance receipt signature is invalid: {error}"),
+        );
+        return;
+    }
+    let peer_actor = submission.events[1]
+        .event
+        .payload
+        .get("actor_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let destination = submission.events[1]
+        .event
+        .payload
+        .get("delivery_binding")
+        .and_then(Value::as_object)
+        .and_then(|binding| binding.get("recipient_service_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if peer_actor.is_empty() || destination != state.service_id() {
+        render_error(
+            res,
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "founding destination does not carry the local peer participant",
+        );
+        return;
+    }
+    let envelopes = match submission
+        .events
+        .iter()
+        .map(|item| typed_event_to_canonical_value(item.event.clone()))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(value) => value,
+        Err(error) => {
+            render_submit_one_error(res, error);
+            return;
+        }
+    };
+    if !direct_bootstrap_source_is_contact_authority(state, source_service_id, &envelopes).await {
+        render_error(
+            res,
+            StatusCode::CONFLICT,
+            "dependency_missing",
+            "the Direct Conversation Contact basis mirror is not available",
+        );
+        return;
+    }
+    let mut verified_signers = Vec::new();
+    for evidence in &submission.signer_key_evidence {
+        if let Err(error) =
+            super::validate_federated_device_signing_key_evidence(state, evidence).await
+        {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                &format!("founding signer evidence is invalid: {error}"),
+            );
+            return;
+        }
+        verified_signers.push(evidence.clone());
+    }
+    let created_at = now();
+    let session = SessionRecord {
+        token_hash: format!("federation:direct-conversation:{request_hash}"),
+        actor: receipt.founder_id.to_string(),
+        device_id: verified_signers
+            .first()
+            .map(|evidence| evidence.device_id.to_string())
+            .unwrap_or_else(|| "federation:direct-conversation".to_owned()),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: created_at + Duration::minutes(5),
+        created_at,
+        revoked_at: None,
+    };
+    let admissions = submission
+        .events
+        .iter()
+        .map(|item| {
+            InternalEventAdmission::peer_federated_event(
+                plan.realm_id.to_string(),
+                receipt.founder_id.to_string(),
+                session.device_id.clone(),
+                item.event.event_id.to_string(),
+                verified_signers.clone(),
+                Vec::new(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let leases = submission
+        .events
+        .iter()
+        .map(|item| item.authorization_lease.clone())
+        .collect::<Vec<_>>();
+    match submit_realm_bootstrap_batch(
+        state,
+        &session,
+        envelopes,
+        Some(&admissions),
+        Some(&leases),
+        None,
+    )
+    .await
+    {
+        Ok(outcome) => res.render(Json(outcome)),
+        Err(error) if error.code == "dependency_missing" => render_error(
+            res,
+            StatusCode::CONFLICT,
+            "dependency_missing",
+            "the atomic Direct Conversation founding unit is waiting for dependencies",
+        ),
+        Err(error) => render_submit_one_error(res, error),
+    }
 }
 
 async fn project_verified_federated_device_evidence(

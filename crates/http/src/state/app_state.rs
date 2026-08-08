@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arc_swap::ArcSwap;
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::service_identity::ServiceIdentityState;
 #[cfg(test)]
 use arkret_identity::service_identity::{LocalServiceIdentity, ServiceIdentityKeyRef};
@@ -538,6 +538,40 @@ impl AppState {
 
     pub fn storage_mode(&self) -> &'static str {
         self.storage_mode
+    }
+
+    pub async fn current_service_receipt_binding(
+        &self,
+    ) -> Result<(Hash, arkret_wire::DidUrl), String> {
+        let stored = self
+            .persistence
+            .stored_service_identity()
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "durable service identity is unavailable".to_owned())?;
+        if stored.identity.service_id.as_str() != self.service_id {
+            return Err("durable service identity does not match the serving service".to_owned());
+        }
+        let assertion_method = stored
+            .did_document
+            .assertion_method
+            .first()
+            .ok_or_else(|| "service DID document has no assertion method".to_owned())?;
+        if !stored
+            .did_document
+            .verification_method
+            .iter()
+            .any(|method| method.id == *assertion_method)
+        {
+            return Err("service DID assertion method is not declared".to_owned());
+        }
+        let document_bytes = arkret_canonical::canonical_json_bytes(&stored.did_document)
+            .map_err(|error| error.to_string())?;
+        let document_digest = Hash::new(arkret_canonical::sha256_digest(document_bytes))
+            .map_err(|error| error.to_string())?;
+        let assertion_method = arkret_wire::DidUrl::new(assertion_method.clone())
+            .map_err(|error| error.to_string())?;
+        Ok((document_digest, assertion_method))
     }
 
     pub fn install_federation_peer_verifying_key(

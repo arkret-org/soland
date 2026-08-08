@@ -383,7 +383,7 @@ pub(super) async fn peer_event_batch_fanout_records(
             hasher_input.extend_from_slice(parsed.canonical_digest.as_bytes());
         }
         let idempotency_key = format!("ak:outbox:event-batch:{}", sha256_hex(&hasher_input));
-        let body = EventsSubmitFederationRequestBody {
+        let body = EventsSubmitFederationBatchRequestBody {
             service_binding_ref,
             events: submissions.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
@@ -406,6 +406,98 @@ pub(super) async fn peer_event_batch_fanout_records(
             peer_url: peer.url.trim_end_matches('/').to_owned(),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
+            payload_json,
+            created_at: now,
+        });
+    }
+    Ok(records)
+}
+
+pub(super) async fn direct_conversation_founding_fanout_records(
+    state: &AppState,
+    parsed_events: &[ValidatedEventEnvelope],
+    envelopes: &[Value],
+    receipt: &DirectConversationFoundingAcceptanceReceipt,
+    founder_basis_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
+    if parsed_events.len() != 3 || envelopes.len() != 3 {
+        return Err("Direct Conversation founding fanout requires exactly three Events".to_owned());
+    }
+    let mut peers = Vec::new();
+    for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
+        let Some(service_id) = routable_member_delivery_service(&parsed.kind, envelope) else {
+            continue;
+        };
+        if service_id == state.service_id()
+            || peers
+                .iter()
+                .any(|peer: &DynamicPeerEventTarget| peer.service_id == service_id)
+        {
+            continue;
+        }
+        let Some(url) =
+            crate::routing::federation::federation::peer_url_for_service_id(state, service_id)
+        else {
+            return Err(format!(
+                "Direct Conversation founding destination {service_id} has no configured federation URL"
+            ));
+        };
+        peers.push(DynamicPeerEventTarget {
+            url,
+            service_id: service_id.to_owned(),
+            membership_frontier: Vec::new(),
+            delivery_binding_frontier: Vec::new(),
+            realm_sync_endpoint: false,
+        });
+    }
+    let events = envelopes
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<Event>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to type Direct Conversation founding Events: {error}"))?;
+    let mut signer_key_evidence = Vec::new();
+    let mut methods = std::collections::BTreeSet::new();
+    for event in &events {
+        for evidence in crate::jws_verify::federated_event_signer_evidence(state, event)
+            .await
+            .map_err(|error| format!("failed to resolve founding signer evidence: {error}"))?
+        {
+            if methods.insert(evidence.verification_method.clone()) {
+                signer_key_evidence.push(evidence);
+            }
+        }
+    }
+    let cba_proof_bundles = federation_cba_proof_bundles(state, &events)
+        .map_err(|error| format!("failed to resolve founding CBA proof bundles: {error}"))?;
+    let submissions = federation_submissions(state, &events, None, &[], None).await?;
+    let submissions: [arkret_wire::EventFederationSubmission; 3] = submissions
+        .try_into()
+        .map_err(|_| "founding federation submission cardinality changed".to_owned())?;
+    let now = chrono::Utc::now().timestamp();
+    let mut records = Vec::new();
+    for peer in peers {
+        let body = arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingFederationSubmission {
+            unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+            events: submissions.clone(),
+            source_acceptance_receipt: receipt.clone(),
+            founder_basis_evidence: founder_basis_evidence.clone(),
+            cba_proof_bundles: cba_proof_bundles.clone(),
+            signer_key_evidence: signer_key_evidence.clone(),
+        };
+        let payload_json = canonical::canonical_json_bytes(&body)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(|| format!("failed to encode founding delivery for {}", peer.service_id))?;
+        records.push(soland_services::federation::FederationDeliveryRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id.clone(),
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key: format!(
+                "ak:outbox:direct-conversation-founding:{}:{}",
+                receipt.pair_key, receipt.founding_unit_digest
+            ),
             payload_json,
             created_at: now,
         });
@@ -580,7 +672,7 @@ pub(super) async fn peer_event_fanout_records(
             membership_compensation_evidence,
         )
         .await?;
-        let body = EventsSubmitFederationRequestBody {
+        let body = EventsSubmitFederationBatchRequestBody {
             service_binding_ref,
             events: submissions,
             cba_proof_bundles,
@@ -833,7 +925,7 @@ async fn realm_bootstrap_fanout_record(
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
     let submissions = federation_submissions(state, &events, None, &[], None).await?;
-    let body = EventsSubmitFederationRequestBody {
+    let body = EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,
         // Realm bootstrap prerequisites precede any Seal, so the batch closes

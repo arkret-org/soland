@@ -1,11 +1,13 @@
 use super::{
-    Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    EventStore, FederationOutboxRecord, FederationOutboxState, IdentityAnchorCommitOutcome,
-    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex,
-    PeerEventsPageQuery, PersistenceError, PersistenceResult, ProjectionEventRecord,
-    PublicationEvidenceRecord, RealmEventStats, async_trait, event_position_cmp,
-    identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
-    receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
+    Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
+    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
+    EventBatchReceipt, EventStore, FederationOutboxRecord, FederationOutboxState,
+    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
+    MessageRecord, MessageStore, Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult,
+    ProjectionEventRecord, PublicationEvidenceRecord, RealmEventStats, async_trait,
+    event_position_cmp, identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor,
+    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
+    stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -84,6 +86,8 @@ pub(crate) struct MemoryEventStore {
     federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
     pub(crate) projections: Arc<Mutex<Vec<ProjectionEventRecord>>>,
     pub(crate) event_outbox_ids: Mutex<BTreeMap<String, BTreeSet<String>>>,
+    direct_conversation_founding_slots:
+        Mutex<BTreeMap<(String, String, String), DirectConversationFoundingSlotRecord>>,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
@@ -104,6 +108,7 @@ impl MemoryEventStore {
             federation_outbox,
             projections,
             event_outbox_ids: Mutex::new(BTreeMap::new()),
+            direct_conversation_founding_slots: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -434,6 +439,98 @@ impl EventStore for MemoryEventStore {
                 .extend(outbox_ids.iter().cloned());
         }
         Ok(())
+    }
+
+    async fn put_direct_conversation_founding_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: DirectConversationFoundingSlotRecord,
+        outbox: Vec<FederationOutboxRecord>,
+    ) -> PersistenceResult<DirectConversationFoundingCommitOutcome> {
+        let key = (
+            slot.founder_id.clone(),
+            slot.trust_domain_id.clone(),
+            slot.pair_key.clone(),
+        );
+        let mut slots = self.direct_conversation_founding_slots.lock();
+        if let Some(existing) = slots.get(&key) {
+            return Ok(if existing.idempotency_key == slot.idempotency_key {
+                if existing.founding_unit_digest == slot.founding_unit_digest {
+                    DirectConversationFoundingCommitOutcome::ExactRetry(existing.clone())
+                } else {
+                    DirectConversationFoundingCommitOutcome::IdempotencyConflict
+                }
+            } else {
+                DirectConversationFoundingCommitOutcome::SlotConflict(existing.clone())
+            });
+        }
+        if records.len() != 3
+            || slot.event_ids
+                != records
+                    .iter()
+                    .map(|record| record.event_id.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err(PersistenceError::Conflict(
+                "direct_conversation_founding_unit_invalid".to_owned(),
+            ));
+        }
+        let mut data = self.data.lock();
+        let mut quarantined = self.quarantined.lock();
+        let mut variants = self.collision_variants.lock();
+        let mut stored_control_proposal_acks = self.control_proposal_acks.lock();
+        let mut projections = self.projections.lock();
+        let mut event_outbox_ids = self.event_outbox_ids.lock();
+        let mut federation_outbox = self.federation_outbox.lock();
+        preflight_memory_events(
+            &records,
+            &mut data,
+            &mut quarantined,
+            &mut variants,
+            &mut projections,
+            &event_outbox_ids,
+            &mut federation_outbox,
+        )?;
+        let event_ids = slot.event_ids.clone();
+        let outbox_ids = outbox
+            .iter()
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>();
+        let mut staged = data.clone();
+        let mut staged_acks = stored_control_proposal_acks.clone();
+        let mut staged_outbox = federation_outbox.clone();
+        stage_control_proposal_acks(&mut staged_acks, &records, control_proposal_acks, true)?;
+        stage_identity_anchor_events(&mut staged, records)?;
+        stage_federation_outbox(&mut staged_outbox, outbox)?;
+        slots.insert(key, slot);
+        *data = staged;
+        *stored_control_proposal_acks = staged_acks;
+        *federation_outbox = staged_outbox;
+        for event_id in event_ids {
+            event_outbox_ids
+                .entry(event_id)
+                .or_default()
+                .extend(outbox_ids.iter().cloned());
+        }
+        Ok(DirectConversationFoundingCommitOutcome::Committed)
+    }
+
+    async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationFoundingSlotRecord>> {
+        Ok(self
+            .direct_conversation_founding_slots
+            .lock()
+            .get(&(
+                founder_id.to_owned(),
+                trust_domain_id.to_owned(),
+                pair_key.to_owned(),
+            ))
+            .cloned())
     }
 
     async fn put_identity_anchor_batch_atomic(

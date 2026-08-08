@@ -104,3 +104,5 @@ DROP TABLE IF EXISTS service_identity_registrations CASCADE;
 DROP TABLE IF EXISTS service_identity CASCADE;
 DROP TABLE IF EXISTS webvh_documents CASCADE;
 DROP TABLE IF EXISTS webvh_log_events CASCADE;
+DROP TABLE IF EXISTS public.direct_conversation_founding_equivocations;
+DROP TABLE IF EXISTS public.direct_conversation_founding_slots;

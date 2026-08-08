@@ -890,3 +890,28 @@ pub struct RetentionTombstoneRecord {
     pub tombstoned_at: chrono::DateTime<chrono::Utc>,
     pub sealed: bool,
 }
+
+/// Durable closure of one founder-local Direct Conversation founding slot.
+///
+/// Field order follows the acceptance receipt and the unique key is the first three fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectConversationFoundingSlotRecord {
+    pub founder_id: String,
+    pub trust_domain_id: String,
+    pub pair_key: String,
+    pub founding_unit_digest: String,
+    pub realm_id: String,
+    pub main_strand_id: String,
+    pub event_ids: Vec<String>,
+    pub idempotency_key: String,
+    pub receipt_bytes: Vec<u8>,
+    pub accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectConversationFoundingCommitOutcome {
+    Committed,
+    ExactRetry(DirectConversationFoundingSlotRecord),
+    IdempotencyConflict,
+    SlotConflict(DirectConversationFoundingSlotRecord),
+}

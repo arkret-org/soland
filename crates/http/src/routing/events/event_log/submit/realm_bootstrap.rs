@@ -1,6 +1,13 @@
 use super::identity_anchor::{canonical_record, identical_historical_retry};
 use super::*;
 
+pub(super) struct DirectConversationFoundingCommitContext {
+    pub slot: soland_storage::DirectConversationFoundingSlotRecord,
+    pub receipt: DirectConversationFoundingAcceptanceReceipt,
+    pub founder_basis_evidence:
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+}
+
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {
     event_string_field_from_value(envelopes.first().unwrap_or(&Value::Null), "kind").as_deref()
         == Some(arkret_wire::EventKind::REALM_CREATE)
@@ -31,6 +38,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     envelopes: Vec<Value>,
     internal_admissions: Option<&[InternalEventAdmission]>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
+    direct_conversation_founding: Option<DirectConversationFoundingCommitContext>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if internal_admissions.is_some_and(|admissions| admissions.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
@@ -272,7 +280,23 @@ pub(super) async fn submit_realm_bootstrap_batch(
     // the same transaction as the Events. A construction failure rejects the
     // admission: a Realm genesis unit accepted locally without its outbox rows
     // would be a silently unroutable Realm after any crash.
-    let deliveries = if session.token_hash.starts_with("federation:") {
+    let deliveries = if let Some(context) = &direct_conversation_founding {
+        direct_conversation_founding_fanout_records(
+            state,
+            &validated,
+            &envelopes,
+            &context.receipt,
+            &context.founder_basis_evidence,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "federation_fanout_unavailable",
+                format!("Direct Conversation founding delivery intent unavailable: {error}"),
+            )
+        })?
+    } else if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
         peer_event_batch_fanout_records(state, &validated, &envelopes)
@@ -285,35 +309,75 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             })?
     };
-    state
-        .event_queries()
-        .store_realm_bootstrap_batch(records, control_proposal_acks.clone(), deliveries)
-        .await
-        .map_err(|error| {
-            if error.is_realm_already_exists() {
-                realm_already_exists_error()
-            } else if let Some(collision) = map_event_hash_collision(
-                validated
-                    .first()
-                    .map(|event| event.event_id.clone())
-                    .unwrap_or_default(),
-                &error,
-            ) {
-                collision
-            } else if error.is_conflict("duplicate_conflict") {
-                SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "duplicate_conflict",
-                    "Realm bootstrap raced a different stored unit",
-                )
-            } else {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("atomic Realm bootstrap commit failed: {error}"),
-                )
-            }
-        })?;
+    let direct_commit_outcome = if let Some(context) = direct_conversation_founding {
+        state
+            .event_queries()
+            .store_direct_conversation_founding_batch(
+                records,
+                control_proposal_acks.clone(),
+                context.slot,
+                deliveries,
+            )
+            .await
+    } else {
+        state
+            .event_queries()
+            .store_realm_bootstrap_batch(records, control_proposal_acks.clone(), deliveries)
+            .await
+            .map(|_| soland_storage::DirectConversationFoundingCommitOutcome::Committed)
+    };
+    let commit_outcome = direct_commit_outcome.map_err(|error| {
+        if error.is_realm_already_exists() {
+            realm_already_exists_error()
+        } else if let Some(collision) = map_event_hash_collision(
+            validated
+                .first()
+                .map(|event| event.event_id.clone())
+                .unwrap_or_default(),
+            &error,
+        ) {
+            collision
+        } else if error.is_conflict("duplicate_conflict") {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "duplicate_conflict",
+                "Realm bootstrap raced a different stored unit",
+            )
+        } else {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("atomic Realm bootstrap commit failed: {error}"),
+            )
+        }
+    })?;
+    match commit_outcome {
+        soland_storage::DirectConversationFoundingCommitOutcome::Committed => {}
+        soland_storage::DirectConversationFoundingCommitOutcome::ExactRetry(existing) => {
+            return Ok(events_submit_outcome(
+                EventsSubmitStatus::Duplicate,
+                Vec::new(),
+                existing.event_ids,
+                Vec::new(),
+                Vec::new(),
+                None,
+            ));
+        }
+        soland_storage::DirectConversationFoundingCommitOutcome::IdempotencyConflict => {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "duplicate_conflict",
+                "Direct Conversation founding idempotency key names another unit",
+            ));
+        }
+        soland_storage::DirectConversationFoundingCommitOutcome::SlotConflict(_) => {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                "direct_conversation_slot_already_committed",
+            ));
+        }
+    }
     for (event, ack) in typed_events.iter().zip(&control_proposal_acks) {
         state
             .projections()

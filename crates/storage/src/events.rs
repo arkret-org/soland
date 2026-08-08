@@ -1,6 +1,7 @@
 use super::{
-    BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    FederationOutboxRecord, MessageRecord, PersistenceError, PersistenceResult,
+    BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
+    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
+    EventBatchReceipt, FederationOutboxRecord, MessageRecord, PersistenceError, PersistenceResult,
     PublicationEvidenceRecord, Value, async_trait,
 };
 /// Trait for message storage operations.
@@ -45,6 +46,21 @@ pub trait EventStore: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()>;
+    /// Commit the accepted Direct Conversation founding unit, its immutable slot, receipt bytes,
+    /// Control Proposal Acks and peer delivery outbox in one transaction.
+    async fn put_direct_conversation_founding_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: DirectConversationFoundingSlotRecord,
+        outbox: Vec<FederationOutboxRecord>,
+    ) -> PersistenceResult<DirectConversationFoundingCommitOutcome>;
+    async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationFoundingSlotRecord>>;
     /// Commit the closed identity-anchor unit, its signed receipt (for
     /// re-anchor), the replacement device projection and its federation outbox
     /// rows as one durable unit.

@@ -844,6 +844,19 @@ pub trait EventReadPort: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()>;
+    async fn store_direct_conversation_founding_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: soland_storage::DirectConversationFoundingSlotRecord,
+        deliveries: Vec<FederationDelivery>,
+    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome>;
+    async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> ServiceResult<Option<soland_storage::DirectConversationFoundingSlotRecord>>;
     /// Commit the closed identity-anchor unit together with its federation
     /// outbox rows — same atomicity requirement as the Realm genesis unit.
     #[allow(clippy::too_many_arguments)]
@@ -1160,6 +1173,32 @@ impl EventQueryService {
     ) -> ServiceResult<()> {
         self.events
             .store_realm_bootstrap_batch(records, control_proposal_acks, deliveries)
+            .await
+    }
+    pub async fn store_direct_conversation_founding_batch(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: soland_storage::DirectConversationFoundingSlotRecord,
+        deliveries: Vec<FederationDelivery>,
+    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
+        self.events
+            .store_direct_conversation_founding_batch(
+                records,
+                control_proposal_acks,
+                slot,
+                deliveries,
+            )
+            .await
+    }
+    pub async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> ServiceResult<Option<soland_storage::DirectConversationFoundingSlotRecord>> {
+        self.events
+            .direct_conversation_founding_slot(founder_id, trust_domain_id, pair_key)
             .await
     }
     #[allow(clippy::too_many_arguments)]

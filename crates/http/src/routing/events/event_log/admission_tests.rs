@@ -160,7 +160,7 @@ fn media_plaintext_authority_requires_matching_service_and_data_class() {
 
 #[test]
 fn federation_binding_rejects_duplicate_frontier_entries() {
-    let req = EventsSubmitFederationRequestBody {
+    let req = EventsSubmitFederationBatchRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
@@ -199,7 +199,7 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
     let event_id =
         arkret_identifiers::EventId::new("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
             .unwrap();
-    let req = EventsSubmitFederationRequestBody {
+    let req = EventsSubmitFederationBatchRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),

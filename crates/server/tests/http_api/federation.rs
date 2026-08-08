@@ -894,7 +894,7 @@ fn peer_submit_body(event: &Value) -> Value {
         "event_id": &event_id,
         "canonical_digest": &event_digest,
     });
-    let body = arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody {
+    let body = arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: arkret_identifiers::RealmId::new(TEST_REALM_ID.to_owned()).unwrap(),
             realm_policy_digest: arkret_identifiers::Hash::new(sha256_json(&binding_payload))

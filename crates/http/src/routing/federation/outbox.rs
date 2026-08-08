@@ -440,7 +440,7 @@ fn peer_event_partial_retry(
         .iter()
         .map(|item| item.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let mut request: arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody =
+    let mut request: arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody =
         serde_json::from_str(request_body).ok()?;
     request
         .events
@@ -1585,27 +1585,28 @@ mod tests {
             }
         };
 
-        let request = arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody {
-            service_binding_ref:
-                arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-                    realm_id: realm_id.clone(),
-                    realm_policy_digest: arkret_identifiers::Hash::new(format!(
-                        "sha256:{}",
-                        "b".repeat(64)
-                    ))
-                    .unwrap(),
-                    membership_frontier: Vec::new(),
-                    delivery_binding_frontier: Vec::new(),
-                    destination_service_kind: "principal_server".to_owned(),
-                },
-            events: vec![
-                submission("000000000001", "00000000ae01", "00000000ce01"),
-                submission("000000000002", "00000000ae02", "00000000ce02"),
-            ],
-            cba_proof_bundles: Vec::new(),
-            signer_key_evidence: Vec::new(),
-            agent_signer_evidence_bundle: None,
-        };
+        let request =
+            arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
+                service_binding_ref:
+                    arkret_models_collaboration::event_sync::FederationServiceBindingRef {
+                        realm_id: realm_id.clone(),
+                        realm_policy_digest: arkret_identifiers::Hash::new(format!(
+                            "sha256:{}",
+                            "b".repeat(64)
+                        ))
+                        .unwrap(),
+                        membership_frontier: Vec::new(),
+                        delivery_binding_frontier: Vec::new(),
+                        destination_service_kind: "principal_server".to_owned(),
+                    },
+                events: vec![
+                    submission("000000000001", "00000000ae01", "00000000ce01"),
+                    submission("000000000002", "00000000ae02", "00000000ce02"),
+                ],
+                cba_proof_bundles: Vec::new(),
+                signer_key_evidence: Vec::new(),
+                agent_signer_evidence_bundle: None,
+            };
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =
             serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();

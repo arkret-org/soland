@@ -342,7 +342,7 @@ pub async fn requeue_dead_letter(
 /// nothing to re-derive for it beyond it still being parseable JSON.
 fn revalidate_transport(delivery: &FederationDeliveryRecord) -> Result<(), String> {
     if delivery.endpoint == "/_arkret/peer/events" {
-        let body: arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody =
+        let body: arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody =
             serde_json::from_str(&delivery.payload_json)
                 .map_err(|error| format!("stored federation request no longer parses: {error}"))?;
         return body

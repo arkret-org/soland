@@ -18,9 +18,15 @@ use std::collections::BTreeMap;
 use arkret_canonical as canonical;
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, EventId, Hash, Hlc, OperationId, RealmId, TypedTrustDomainId};
+use arkret_models_collaboration::direct_conversation_ops::{
+    DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingAcceptanceReceipt,
+    DirectConversationFoundingAcceptanceStatus, DirectConversationFoundingAuthorizationCore,
+    DirectConversationFoundingPlan, DirectConversationFoundingUnitKind,
+    DirectConversationFoundingUnitSubmission,
+};
 use arkret_models_collaboration::event_sync::{
     ActorAggregateFrontierKind, ActorAggregateFrontierView, EventsFrontierAccountClientState,
-    EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef,
+    EventsFrontierView, EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef,
     ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind, RealmActorFrontierView,
     RealmSealFrontierView,
 };
@@ -99,9 +105,10 @@ pub(crate) use endpoints::load_realm_actor_frontier;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DataEventQueryGrade, EventCommitIdempotency, ValidatedEventEnvelope,
-    service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
-    submit_ghost_provision_batch, submit_initial_event_batch_outcome,
-    submit_initial_event_submission, submit_initial_identity_anchor_batch, submit_mimi_event_value,
+    service_event_authoring_lock, submit_account_data_event_value,
+    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
+    submit_initial_event_batch_outcome, submit_initial_event_submission,
+    submit_initial_identity_anchor_batch, submit_mimi_event_value,
     submit_moderation_report_event_value, submit_one_error_to_app_error,
     submit_sidecar_ensure_batch,
 };

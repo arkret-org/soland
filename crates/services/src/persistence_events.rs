@@ -158,6 +158,39 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .await?;
         Ok(())
     }
+    async fn store_direct_conversation_founding_batch(
+        &self,
+        records: Vec<crate::events::CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: soland_storage::DirectConversationFoundingSlotRecord,
+        deliveries: Vec<crate::events::FederationDelivery>,
+    ) -> crate::ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
+        Ok(self
+            .0
+            .events()
+            .put_direct_conversation_founding_batch_atomic(
+                records
+                    .into_iter()
+                    .map(persistence_canonical_event)
+                    .collect(),
+                control_proposal_acks,
+                slot,
+                deliveries.into_iter().map(persistence_outbox_row).collect(),
+            )
+            .await?)
+    }
+    async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::DirectConversationFoundingSlotRecord>> {
+        Ok(self
+            .0
+            .events()
+            .direct_conversation_founding_slot(founder_id, trust_domain_id, pair_key)
+            .await?)
+    }
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,

@@ -4,12 +4,13 @@ use diesel::sql_types::SmallInt;
 
 use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
-    DeviceInventoryRecord, EventBatchReceipt, EventStore, ExistsRow, FederationOutboxRecord,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb,
-    MaxSeqRow, Nullable, OptionalExtension, PeerEventsPageQuery, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord, QueryableByName,
-    RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait,
-    identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
+    DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
+    DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, ExistsRow,
+    FederationOutboxRecord, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable, OptionalExtension, PeerEventsPageQuery,
+    PersistenceError, PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord,
+    QueryableByName, RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value,
+    async_trait, identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
 };
 use crate::federation::insert_federation_outbox_row;
 pub struct PgEventStore {
@@ -77,6 +78,49 @@ struct PkRow {
 struct TextIdRow {
     #[diesel(sql_type = Text)]
     id: String,
+}
+
+#[derive(QueryableByName)]
+struct DirectConversationFoundingSlotRow {
+    #[diesel(sql_type = Text)]
+    founder_id: String,
+    #[diesel(sql_type = Text)]
+    trust_domain_id: String,
+    #[diesel(sql_type = Text)]
+    pair_key: String,
+    #[diesel(sql_type = Text)]
+    founding_unit_digest: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    main_strand_id: String,
+    #[diesel(sql_type = Jsonb)]
+    event_ids: Value,
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Binary)]
+    receipt_bytes: Vec<u8>,
+    #[diesel(sql_type = Timestamptz)]
+    accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<DirectConversationFoundingSlotRow> for DirectConversationFoundingSlotRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: DirectConversationFoundingSlotRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            founder_id: row.founder_id,
+            trust_domain_id: row.trust_domain_id,
+            pair_key: row.pair_key,
+            founding_unit_digest: row.founding_unit_digest,
+            realm_id: row.realm_id,
+            main_strand_id: row.main_strand_id,
+            event_ids: serde_json::from_value(row.event_ids).map_err(PersistenceError::database)?,
+            idempotency_key: row.idempotency_key,
+            receipt_bytes: row.receipt_bytes,
+            accepted_at: row.accepted_at,
+        })
+    }
 }
 #[derive(QueryableByName)]
 struct StoredEventIdentityRow {
@@ -774,6 +818,172 @@ impl EventStore for PgEventStore {
                 "event_hash_collision".to_owned(),
             )),
         }
+    }
+
+    async fn put_direct_conversation_founding_batch_atomic(
+        &self,
+        records: Vec<CanonicalEventRecord>,
+        control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+        slot: DirectConversationFoundingSlotRecord,
+        outbox: Vec<FederationOutboxRecord>,
+    ) -> PersistenceResult<DirectConversationFoundingCommitOutcome> {
+        if records.len() != 3
+            || slot.event_ids
+                != records
+                    .iter()
+                    .map(|record| record.event_id.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err(PersistenceError::Conflict(
+                "direct_conversation_founding_unit_invalid".to_owned(),
+            ));
+        }
+        let mut acks = BTreeMap::new();
+        for ack in control_proposal_acks {
+            if acks
+                .insert(ack.proposal_digest.as_str().to_owned(), ack)
+                .is_some()
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: duplicate Direct Conversation founding Control Proposal Ack"
+                        .to_owned(),
+                ));
+            }
+        }
+        if acks.len() != records.len() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Direct Conversation founding Control Proposal Ack cardinality mismatch"
+                    .to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(format!(
+                    "direct-conversation-founding-idempotency\n{}\n{}",
+                    slot.founder_id, slot.idempotency_key
+                ))
+                .execute(&mut *conn)
+                .await?;
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(format!(
+                    "direct-conversation-founding-slot\n{}\n{}\n{}",
+                    slot.founder_id, slot.trust_domain_id, slot.pair_key
+                ))
+                .execute(&mut *conn)
+                .await?;
+            let existing = sql_query(
+                "SELECT founder_id, trust_domain_id, pair_key, founding_unit_digest, realm_id, \
+                        main_strand_id, event_ids, idempotency_key, receipt_bytes, accepted_at \
+                 FROM direct_conversation_founding_slots \
+                 WHERE (founder_id = $1 AND idempotency_key = $2) \
+                    OR (founder_id = $1 AND trust_domain_id = $3 AND pair_key = $4) \
+                 ORDER BY CASE WHEN idempotency_key = $2 THEN 0 ELSE 1 END LIMIT 1 FOR UPDATE",
+            )
+            .bind::<Text, _>(&slot.founder_id)
+            .bind::<Text, _>(&slot.idempotency_key)
+            .bind::<Text, _>(&slot.trust_domain_id)
+            .bind::<Text, _>(&slot.pair_key)
+            .get_result::<DirectConversationFoundingSlotRow>(conn)
+            .await
+            .optional()?;
+            if let Some(existing) = existing {
+                let existing = DirectConversationFoundingSlotRecord::try_from(existing)?;
+                if existing.idempotency_key == slot.idempotency_key
+                    && existing.founding_unit_digest == slot.founding_unit_digest
+                {
+                    return Ok(DirectConversationFoundingCommitOutcome::ExactRetry(existing));
+                }
+                sql_query(
+                    "INSERT INTO direct_conversation_founding_equivocations \
+                     (founder_id, trust_domain_id, pair_key, committed_unit_digest, \
+                      conflicting_unit_digest, idempotency_key) VALUES ($1, $2, $3, $4, $5, $6)",
+                )
+                .bind::<Text, _>(&slot.founder_id)
+                .bind::<Text, _>(&slot.trust_domain_id)
+                .bind::<Text, _>(&slot.pair_key)
+                .bind::<Text, _>(&existing.founding_unit_digest)
+                .bind::<Text, _>(&slot.founding_unit_digest)
+                .bind::<Text, _>(&slot.idempotency_key)
+                .execute(conn)
+                .await?;
+                return Ok(if existing.idempotency_key == slot.idempotency_key {
+                    DirectConversationFoundingCommitOutcome::IdempotencyConflict
+                } else {
+                    DirectConversationFoundingCommitOutcome::SlotConflict(existing)
+                });
+            }
+            if preflight_canonical_events(conn, &records).await? {
+                return Err(PersistenceError::Conflict("event_hash_collision".to_owned()).into());
+            }
+            let mut event_pks = Vec::with_capacity(records.len());
+            for record in records {
+                let event_pk = match insert_canonical_event(conn, &record).await? {
+                    CanonicalInsertOutcome::Inserted(pk) | CanonicalInsertOutcome::Replay(pk) => pk,
+                    CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
+                        unreachable!("founding collision was handled by preflight")
+                    }
+                };
+                event_pks.push(event_pk);
+                let ack = acks.get(&record.canonical_digest).ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "schema_violation: Direct Conversation founding Event is missing Control Proposal Ack"
+                            .to_owned(),
+                    )
+                })?;
+                insert_pending_control_event(conn, &record, Some(ack)).await?;
+            }
+            let event_ids = serde_json::to_value(&slot.event_ids).map_err(PersistenceError::database)?;
+            sql_query(
+                "INSERT INTO direct_conversation_founding_slots \
+                 (founder_id, trust_domain_id, pair_key, founding_unit_digest, realm_id, \
+                  main_strand_id, event_ids, idempotency_key, receipt_bytes, accepted_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            )
+            .bind::<Text, _>(&slot.founder_id)
+            .bind::<Text, _>(&slot.trust_domain_id)
+            .bind::<Text, _>(&slot.pair_key)
+            .bind::<Text, _>(&slot.founding_unit_digest)
+            .bind::<Text, _>(&slot.realm_id)
+            .bind::<Text, _>(&slot.main_strand_id)
+            .bind::<Jsonb, _>(event_ids)
+            .bind::<Text, _>(&slot.idempotency_key)
+            .bind::<Binary, _>(&slot.receipt_bytes)
+            .bind::<Timestamptz, _>(slot.accepted_at)
+            .execute(conn)
+            .await?;
+            for delivery in outbox {
+                insert_federation_outbox_row(conn, &delivery).await?;
+                bind_event_outbox_rows(conn, &event_pks, &delivery).await?;
+            }
+            Ok(DirectConversationFoundingCommitOutcome::Committed)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn direct_conversation_founding_slot(
+        &self,
+        founder_id: &str,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> PersistenceResult<Option<DirectConversationFoundingSlotRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT founder_id, trust_domain_id, pair_key, founding_unit_digest, realm_id, \
+                    main_strand_id, event_ids, idempotency_key, receipt_bytes, accepted_at \
+             FROM direct_conversation_founding_slots \
+             WHERE founder_id = $1 AND trust_domain_id = $2 AND pair_key = $3",
+        )
+        .bind::<Text, _>(founder_id)
+        .bind::<Text, _>(trust_domain_id)
+        .bind::<Text, _>(pair_key)
+        .get_result::<DirectConversationFoundingSlotRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(DirectConversationFoundingSlotRecord::try_from)
+        .transpose()
     }
 
     async fn put_identity_anchor_batch_atomic(

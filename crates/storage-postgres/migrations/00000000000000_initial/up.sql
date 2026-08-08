@@ -2094,3 +2094,28 @@ CREATE TABLE public.event_federation_outbox (
 -- and needs its own index or every outbox delete scans this table.
 CREATE INDEX event_federation_outbox_outbox_id_idx
     ON public.event_federation_outbox USING btree (outbox_id);
+CREATE TABLE public.direct_conversation_founding_slots (
+    founder_id text NOT NULL,
+    trust_domain_id text NOT NULL,
+    pair_key text NOT NULL,
+    founding_unit_digest text NOT NULL,
+    realm_id text NOT NULL,
+    main_strand_id text NOT NULL,
+    event_ids jsonb NOT NULL,
+    idempotency_key text NOT NULL,
+    receipt_bytes bytea NOT NULL,
+    accepted_at timestamptz NOT NULL,
+    PRIMARY KEY (founder_id, trust_domain_id, pair_key),
+    UNIQUE (founder_id, idempotency_key)
+);
+
+CREATE TABLE public.direct_conversation_founding_equivocations (
+    id bigserial PRIMARY KEY,
+    founder_id text NOT NULL,
+    trust_domain_id text NOT NULL,
+    pair_key text NOT NULL,
+    committed_unit_digest text NOT NULL,
+    conflicting_unit_digest text NOT NULL,
+    idempotency_key text NOT NULL,
+    observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

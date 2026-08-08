@@ -191,6 +191,19 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         );
         return;
     }
+    if matches!(
+        submit,
+        SolandEventsSubmitRequestBody::DirectConversationFounding(_)
+    ) && idempotency_key.is_some()
+    {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "Direct Conversation founding carries idempotency_key only in its body",
+        );
+        return;
+    }
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
@@ -308,6 +321,12 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
+            match submit_direct_conversation_founding_unit(state, &session, submission).await {
+                Ok(outcome) => res.render(Json(outcome)),
+                Err(error) => render_submit_one_error(res, error),
+            }
+        }
         SolandEventsSubmitRequestBody::Initial(submission) => {
             match submit_initial_event_submission(state, &session, submission).await {
                 Ok(response) => res.render(Json(response.outcome)),
@@ -351,6 +370,16 @@ async fn submit_event_dispatch(
 ) -> (StatusCode, Value) {
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
+            match submit_direct_conversation_founding_unit(state, session, submission).await {
+                Ok(outcome) => (
+                    StatusCode::OK,
+                    serde_json::to_value(outcome)
+                        .unwrap_or_else(|_| json!({"unit_kind":"direct_conversation_founding"})),
+                ),
+                Err(error) => submit_one_error_value(error),
+            }
+        }
         SolandEventsSubmitRequestBody::Initial(submission) => {
             match submit_initial_event_submission(state, session, submission).await {
                 Ok(response) => (StatusCode::OK, submit_outcome_value(&response.outcome)),

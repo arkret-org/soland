@@ -23,7 +23,8 @@ use super::*;
 pub enum SolandEventsSubmitRequestBody {
     /// Federation form — `service_binding_ref` is REQUIRED and all fields are
     /// fields validated.
-    Federation(EventsSubmitFederationRequestBody),
+    Federation(EventsSubmitFederationBatchRequestBody),
+    DirectConversationFounding(DirectConversationFoundingUnitSubmission),
     /// First durable publication of one Event
     /// (`authz/offline-publication.md` §2.1). The `authorization_lease` is the
     /// only thing that can make this service mint and store an
