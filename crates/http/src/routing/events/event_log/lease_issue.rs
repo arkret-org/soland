@@ -422,6 +422,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             },
             self_principal_pcr_bootstrap,
             identity_anchor_candidate_device_key: None,
+            direct_conversation_founding: false,
             authority_root,
         },
         basis,

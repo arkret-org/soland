@@ -181,6 +181,7 @@ async fn federation_submissions(
     state: &AppState,
     events: &[Event],
     current_control_proposal_ack: Option<&arkret_wire::ControlProposalAck>,
+    pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
     pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
@@ -225,8 +226,13 @@ async fn federation_submissions(
                         event.event_id
                     )
                 })?;
-            if let Some(ack) =
-                current_control_proposal_ack.filter(|ack| ack.proposal_digest == proposal_digest)
+            if let Some(ack) = current_control_proposal_ack
+                .filter(|ack| ack.proposal_digest == proposal_digest)
+                .or_else(|| {
+                    pending_control_proposal_acks
+                        .iter()
+                        .find(|ack| ack.proposal_digest == proposal_digest)
+                })
             {
                 Some(ack.clone())
             } else {
@@ -352,7 +358,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     })?;
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
-    let submissions = federation_submissions(state, &events, None, &[], None).await?;
+    let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -420,6 +426,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     receipt: &DirectConversationFoundingAcceptanceReceipt,
     founder_basis_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
     source_service_binding: &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
+    pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     if parsed_events.len() != 3 || envelopes.len() != 3 {
         return Err("Direct Conversation founding fanout requires exactly three Events".to_owned());
@@ -471,7 +478,15 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     }
     let cba_proof_bundles = federation_cba_proof_bundles(state, &events)
         .map_err(|error| format!("failed to resolve founding CBA proof bundles: {error}"))?;
-    let submissions = federation_submissions(state, &events, None, &[], None).await?;
+    let submissions = federation_submissions(
+        state,
+        &events,
+        None,
+        pending_control_proposal_acks,
+        &[],
+        None,
+    )
+    .await?;
     let submissions: [arkret_wire::EventFederationSubmission; 3] = submissions
         .try_into()
         .map_err(|_| "founding federation submission cardinality changed".to_owned())?;
@@ -673,6 +688,7 @@ pub(super) async fn peer_event_fanout_records(
             state,
             &peer_events,
             current_control_proposal_ack,
+            &[],
             pending_evidence,
             membership_compensation_evidence,
         )
@@ -929,7 +945,7 @@ async fn realm_bootstrap_fanout_record(
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
-    let submissions = federation_submissions(state, &events, None, &[], None).await?;
+    let submissions = federation_submissions(state, &events, None, &[], &[], None).await?;
     let body = EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,

@@ -15,8 +15,7 @@ use super::*;
 /// include the `service_binding_ref` are routed to [`Self::Federation`].
 /// Client-account writes omit `service_binding_ref`; federation writes are
 /// gated by federation authentication.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, serde::Serialize)]
 // Untagged wire union mirroring the SDK submit bodies; boxing a variant would
 // change the public constructor shape without changing the JSON.
 #[allow(clippy::large_enum_variant)]
@@ -46,12 +45,55 @@ pub enum SolandEventsSubmitRequestBody {
     Single(Value),
 }
 
+impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let value = Value::deserialize(deserializer)?;
+        let object = value.as_object();
+        // `unit_kind` is a protocol discriminator, not an ignorable extension.
+        // Dispatch it before the permissive ordinary carriers so a malformed
+        // founding unit cannot silently degrade into InitialBatch/Batch/Single.
+        if object.is_some_and(|object| object.contains_key("unit_kind")) {
+            return serde_json::from_value::<DirectConversationFoundingUnitSubmission>(value)
+                .map(Self::DirectConversationFounding)
+                .map_err(D::Error::custom);
+        }
+        if object.is_some_and(|object| object.contains_key("service_binding_ref")) {
+            return serde_json::from_value::<EventsSubmitFederationBatchRequestBody>(value)
+                .map(Self::Federation)
+                .map_err(D::Error::custom);
+        }
+        if let Ok(initial) =
+            serde_json::from_value::<arkret_wire::EventInitialSubmission>(value.clone())
+        {
+            return Ok(Self::Initial(initial));
+        }
+        if let Ok(batch) =
+            serde_json::from_value::<SolandEventsInitialSubmitBatchRequestBody>(value.clone())
+        {
+            return Ok(Self::InitialBatch(batch));
+        }
+        if let Ok(batch) =
+            serde_json::from_value::<SolandEventsSubmitBatchRequestBody>(value.clone())
+        {
+            return Ok(Self::Batch(batch));
+        }
+        Ok(Self::Single(value))
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolandEventsInitialSubmitBatchRequestBody {
     pub events: Vec<arkret_wire::EventInitialSubmission>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolandEventsSubmitBatchRequestBody {
     pub events: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

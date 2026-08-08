@@ -100,6 +100,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         identity_anchor_event_id: None,
         self_principal_pcr_bootstrap: false,
         identity_anchor_candidate_device_key: None,
+        direct_conversation_founding: direct_conversation_founding.is_some(),
         authority_root: Some(unit.authority_root.clone()),
     };
     let contexts = std::slice::from_ref(&context);
@@ -238,7 +239,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     // owner is distinguishable from an out-of-order unit.
     let staged_projection = state
         .projections()
-        .stage_realm_bootstrap(&projected_operations)
+        .stage_realm_bootstrap(&projected_operations, context.direct_conversation_founding)
         .map_err(|error| {
             let code = match error.reason.as_str() {
                 reason @ ("realm_authority_root_missing" | "realm_authority_root_conflict") => {
@@ -291,6 +292,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             &context.receipt,
             &context.founder_basis_evidence,
             &context.source_service_binding,
+            &control_proposal_acks,
         )
         .await
         .map_err(|error| {

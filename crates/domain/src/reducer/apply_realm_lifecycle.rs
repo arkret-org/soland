@@ -451,6 +451,73 @@ impl ProjectionState {
         self.restore_accepted_membership(operation, operation.created_at)
     }
 
+    /// Project the peer-membership slot of an already-validated Direct
+    /// Conversation founding unit.
+    ///
+    /// Unlike an ordinary Realm bootstrap's creator self-join, this Event is
+    /// authored by the founder while `payload.actor_id` names the other
+    /// participant. The closed three-Event validator has already established
+    /// that actor relationship and the exact pair. Keep this reducer-side
+    /// bypass scoped to that caller context, and independently require the
+    /// Direct Conversation Realm role, the registered bootstrap reason, an
+    /// absent prior membership, and the receiver-derived FSM write.
+    pub fn apply_validated_direct_conversation_founding_membership(
+        &mut self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> ProjectionEffect {
+        if operation.object_kind != arkret_wire::EventKind::MEMBER_STATE
+            || !self.realm_is_direct_conversation(operation.realm_id.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: "out_of_order_bootstrap".to_owned(),
+            };
+        }
+        let Some(member) = operation
+            .payload
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .filter(|member| !member.is_empty())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if operation.payload.get("membership").and_then(Value::as_str) != Some("join")
+            || operation.payload.get("reason").and_then(Value::as_str)
+                != Some("direct_conversation_bootstrap")
+            || self.member(operation.realm_id.as_str(), member).is_some()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "out_of_order_bootstrap".to_owned(),
+            };
+        }
+        let [write] = cell_writes else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
+            || cell_id.subject() != member
+            || !matches!(
+                &write.op,
+                arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                    if to == &Value::String("join".to_owned())
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        }
+
+        self.restore_accepted_membership(operation, operation.created_at)
+    }
+
     fn direct_conversation_bootstrap_delivery_policy(
         &self,
         realm_id: &str,

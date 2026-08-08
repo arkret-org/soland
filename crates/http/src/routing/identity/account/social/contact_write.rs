@@ -889,11 +889,16 @@ async fn commit(
         }
         _ => {}
     }
-    crate::routing::events::event_log::submit_event_value(
+    crate::routing::events::event_log::submit_initial_event_submission(
         state,
         session,
-        serde_json::to_value(&body.signed_event)
-            .map_err(|error| AppError::internal(format!("Contact Event encode: {error}")))?,
+        arkret_wire::EventInitialSubmission {
+            event: body.signed_event.clone(),
+            authorization_lease: None,
+            cba_proof_bundles: Vec::new(),
+            control_proposal_ack: body.control_proposal_ack.clone(),
+            membership_compensation_evidence: None,
+        },
     )
     .await
     .map_err(|error| {

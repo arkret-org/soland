@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 use arkret_wire::ReasonCode;
+use ed25519_dalek::Signer as _;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -278,6 +279,10 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     /// anchor commits to this payload; the value is staged only for proof
     /// verification before the atomic relationship check completes.
     pub(in crate::routing) identity_anchor_candidate_device_key: Option<String>,
+    /// This batch already passed the closed three-Event Direct Conversation
+    /// founding-plan validator, so its member/Strand follow-ups may be
+    /// admitted before the new Realm has a durable membership projection.
+    pub(in crate::routing) direct_conversation_founding: bool,
     /// The genesis authority-root value this unit's `ak.realm.create` derives.
     ///
     /// Present only for an ordinary Realm genesis unit: it is the staged root
@@ -1204,14 +1209,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             error.to_string(),
         )
     })?;
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &signing_input,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| {
-        SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-    })?;
-    receipt.proof.jws = arkret_wire::Base64UrlString::new(jws).map_err(|error| {
+    let signature =
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes());
+    receipt.proof.jws = arkret_wire::Base64UrlString::new(signature).map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1403,6 +1403,7 @@ async fn submit_event_batch_outcome_with_leases(
             identity_anchor_event_id: None,
             self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device_key: None,
+            direct_conversation_founding: false,
             authority_root: None,
         });
     }
@@ -1458,6 +1459,7 @@ async fn submit_event_batch_outcome_with_leases(
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
                         identity_anchor_candidate_device_key: None,
+                        direct_conversation_founding: false,
                         authority_root: None,
                     });
                 }
@@ -2994,7 +2996,7 @@ async fn submit_direct_conversation_federation(
             return;
         }
     };
-    if let Err(error) = crate::jws_verify::verify_did_controlled_jws_async(
+    if let Err(error) = crate::jws_verify::verify_did_controlled_ed25519_signature_async(
         &signing_input,
         receipt.proof.jws.as_str(),
         receipt.proof.verification_method.as_str(),
@@ -3131,8 +3133,6 @@ async fn verify_accepted_principal_service_binding(
     state: &AppState,
 ) -> Result<(), String> {
     use arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingProofPurpose;
-    use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-
     binding
         .validate_shape()
         .map_err(|error| error.to_string())?;
@@ -3146,22 +3146,19 @@ async fn verify_accepted_principal_service_binding(
         &binding.service_verification_method.public_key_multibase,
     )
     .map_err(|error| format!("service binding key is invalid: {error}"))?;
-    Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            binding.service_acceptance_proof.jws.as_str(),
-            &service_input,
-            &PublicKeyMaterial::Ed25519Raw {
-                bytes: service_key.to_vec(),
-            },
-        )
-        .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
+    crate::jws_verify::verify_ed25519_signature_with_public_key(
+        &service_input,
+        binding.service_acceptance_proof.jws.as_str(),
+        &service_key,
+    )
+    .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
     let principal_input = binding
         .proof_signing_input_bytes(
             PrincipalServiceBindingProofPurpose::PrincipalAuthorization,
             &binding.principal_authorization_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_did_controlled_jws_async(
+    crate::jws_verify::verify_did_controlled_ed25519_signature_async(
         &principal_input,
         binding.principal_authorization_proof.jws.as_str(),
         binding
@@ -3193,7 +3190,7 @@ async fn verify_principal_service_binding_continuity(
             (&edge.previous_service_proof, &edge.previous_service_id),
             (&edge.new_service_proof, &edge.new_service_id),
         ] {
-            crate::jws_verify::verify_did_controlled_jws_async(
+            crate::jws_verify::verify_did_controlled_ed25519_signature_async(
                 &input,
                 proof.jws.as_str(),
                 proof.verification_method.as_str(),

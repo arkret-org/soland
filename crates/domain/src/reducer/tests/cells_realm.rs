@@ -202,6 +202,56 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
 }
 
 #[test]
+fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path() {
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let peer = "did:web:peer.example";
+    let payload = serde_json::json!({
+        "actor_id": peer,
+        "membership": "join",
+        "delivery_status": "unroutable",
+        "reason": "direct_conversation_bootstrap"
+    });
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::MEMBER_STATE, realm_id, &payload);
+    let operation = make_operation(arkret_wire::EventKind::MEMBER_STATE, realm_id, payload);
+
+    let mut direct = ProjectionState::new();
+    direct.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::json!({ "purpose": "direct_conversation" })),
+    );
+    assert!(matches!(
+        direct.apply_validated_direct_conversation_founding_membership(&operation, &writes),
+        ProjectionEffect::MembershipChanged { ref member, ref action, .. }
+            if member == peer && action == "join"
+    ));
+
+    assert!(matches!(
+        ProjectionState::new()
+            .apply_validated_direct_conversation_founding_membership(&operation, &writes),
+        ProjectionEffect::Rejected { reason } if reason == "out_of_order_bootstrap"
+    ));
+
+    let mut wrong_reason = operation;
+    wrong_reason.payload["reason"] = Value::String("ordinary_join".to_owned());
+    let mut direct = ProjectionState::new();
+    direct.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::json!({ "purpose": "direct_conversation" })),
+    );
+    assert!(matches!(
+        direct.apply_validated_direct_conversation_founding_membership(&wrong_reason, &writes),
+        ProjectionEffect::Rejected { reason } if reason == "out_of_order_bootstrap"
+    ));
+}
+
+#[test]
 fn bare_member_state_cannot_transition_ban_to_invite() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

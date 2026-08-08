@@ -125,6 +125,7 @@ pub(super) async fn submit_identity_anchor_batch(
             identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
                 &envelopes[1],
             ),
+            direct_conversation_founding: false,
             authority_root: None,
         })
     };
@@ -143,6 +144,7 @@ pub(super) async fn submit_identity_anchor_batch(
             identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
                 &envelopes[1],
             ),
+            direct_conversation_founding: false,
             authority_root: None,
         });
     if identity_anchor_context.realm_id != first.realm_id
@@ -766,6 +768,7 @@ fn validate_self_principal_pcr_bootstrap_context(
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
         identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(&envelopes[1]),
+        direct_conversation_founding: false,
         authority_root: None,
     })
 }

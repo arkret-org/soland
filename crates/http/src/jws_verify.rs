@@ -23,7 +23,7 @@ use arkret_identity::DidDocument;
 use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{
     DID_DOCUMENT_HIGH_RISK_TTL_SECS, DidDocumentFreshness, evaluate_did_document_freshness,
@@ -166,6 +166,52 @@ pub async fn verify_did_controlled_jws_async(
     }
     let document = document_for_verification(state, &did, verification_method).await?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
+}
+
+/// Verify the protocol's compact Ed25519 signature carrier (a single
+/// unpadded-base64url signature, not an RFC 7515 detached JWS) against a
+/// DID-controlled method. `ProtocolSignature` uses this representation for
+/// receipts and principal-service binding proofs.
+pub async fn verify_did_controlled_ed25519_signature_async(
+    payload: &[u8],
+    signature_b64url: &str,
+    verification_method: &str,
+    issuer: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if did != issuer_did {
+        return Err("verification method controller does not match issuer".to_owned());
+    }
+    let document = document_for_verification(state, &did, verification_method).await?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(verification_method)
+        .ok_or_else(|| "verification method is absent from DID document".to_owned())?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+        .map_err(|error| format!("verification method key is invalid: {error}"))?;
+    verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
+}
+
+pub fn verify_ed25519_signature_with_public_key(
+    payload: &[u8],
+    signature_b64url: &str,
+    public_key: &[u8; 32],
+) -> Result<(), String> {
+    if payload.is_empty() {
+        return Err("empty signed payload".to_owned());
+    }
+    let signature_bytes = arkret_canonical::base64url_decode(signature_b64url)
+        .map_err(|error| format!("signature is not unpadded base64url: {error}"))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| "Ed25519 signature must be 64 bytes".to_owned())?;
+    let verifying_key = VerifyingKey::from_bytes(public_key)
+        .map_err(|_| "Ed25519 public key is invalid".to_owned())?;
+    verifying_key
+        .verify(payload, &signature)
+        .map_err(|_| "Ed25519 signature verification failed".to_owned())
 }
 
 fn document_for_verification_sync(
@@ -802,12 +848,13 @@ pub async fn federated_device_signing_key_evidence(
     device_id: &arkret_identifiers::DeviceId,
     verification_method: &str,
 ) -> Result<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence, String> {
+    use std::collections::BTreeMap;
+
     use arkret_wire::event_envelope::{
         FederatedCurrentDeviceProjection, FederatedDeviceGenerationState,
         FederatedDeviceGenerationStatus, FederatedDeviceRecord, FederatedDeviceSigningKeyEvidence,
         FederatedDeviceStatus,
     };
-    use std::collections::BTreeMap;
 
     if verification_method != format!("{actor_id}#{device_id}") {
         return Err("device signing verification method is not actor_id#device_id".to_owned());
@@ -1023,6 +1070,8 @@ fn federated_range_completeness_evidence(
     realm_id: &arkret_identifiers::RealmId,
     records: &[soland_services::events::CanonicalEventRecord],
 ) -> Result<Vec<arkret_wire::Event>, String> {
+    use std::collections::BTreeMap;
+
     use arkret_models_collaboration::sync_frames::snapshot::{
         RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
         RangeCompletenessAttestationEventRangeFromFrontier,
@@ -1035,7 +1084,6 @@ fn federated_range_completeness_evidence(
         Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, Proof,
         ScopeRef, proof_kind,
     };
-    use std::collections::BTreeMap;
 
     let mut accepted_events = records
         .iter()
