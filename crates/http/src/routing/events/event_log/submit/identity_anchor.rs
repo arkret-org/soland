@@ -972,7 +972,7 @@ pub(super) async fn identical_historical_retry(
         }
         let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Duplicate,
-            ids.clone(),
+            Vec::new(),
             ids,
             Vec::new(),
             Vec::new(),
@@ -2030,7 +2030,11 @@ mod tests {
     use super::*;
 
     fn event_id(suffix: &str) -> String {
-        format!("ak:event:01904100-0000-8000-8000-{suffix}")
+        arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [suffix.parse::<u8>().unwrap(); 32],
+        )
+        .to_string()
     }
 
     fn attach_bootstrap_fixture_proof(event: &mut arkret_wire::Event, verification_method: &str) {
@@ -2210,8 +2214,6 @@ mod tests {
                 .unwrap_or_else(|| json!({})),
         )
         .unwrap();
-        event.event_id =
-            arkret_identifiers::EventId::new(envelope["event_id"].as_str().unwrap()).unwrap();
         event.created_at = "2026-06-03T12:34:56.000Z".parse().unwrap();
         event.prev_refs = envelope
             .get("prev_refs")
@@ -2239,11 +2241,50 @@ mod tests {
                 jws: jws.to_owned(),
             });
         }
+        event.event_id = event.derive_event_id().unwrap();
         serde_json::to_value(event).unwrap()
     }
 
     fn stored_record(envelope: &Value, actor_seq: u64) -> CanonicalEventRecord {
-        let envelope = sdk_test_envelope(envelope, actor_seq);
+        let mut envelope = envelope.clone();
+        let is_wire_event = envelope.get("scope_ref").is_some();
+        let canonical_bytes = if is_wire_event {
+            event_canonical_bytes(&envelope).unwrap()
+        } else {
+            serde_json::to_vec(&envelope).unwrap()
+        };
+        let canonical_digest = if is_wire_event {
+            arkret_canonical::digest(arkret_canonical::DigestSuite::Sha256, &canonical_bytes)
+        } else {
+            format!(
+                "sha256:{}",
+                format!("{actor_seq:x}")
+                    .repeat(64)
+                    .chars()
+                    .take(64)
+                    .collect::<String>()
+            )
+        };
+        if is_wire_event {
+            let event_id = arkret_identifiers::EventId::from_event_digest(
+                &arkret_identifiers::Hash::new(canonical_digest.clone()).unwrap(),
+            )
+            .unwrap();
+            envelope["event_id"] = Value::String(event_id.to_string());
+            assert!(
+                soland_storage::ids::event_identity_parts(event_id.as_str(), &canonical_digest)
+                    .is_ok(),
+                "test Event id must encode its canonical digest"
+            );
+            assert_eq!(
+                arkret_canonical::digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    event_canonical_bytes(&envelope).unwrap()
+                ),
+                canonical_digest,
+                "test Event canonical bytes must remain stable after stamping its id"
+            );
+        }
         CanonicalEventRecord {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
             actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
@@ -2251,15 +2292,8 @@ mod tests {
             realm_id: Some("ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX".to_owned()),
             kind: envelope["kind"].as_str().unwrap().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest: format!(
-                "sha256:{}",
-                format!("{actor_seq:x}")
-                    .repeat(64)
-                    .chars()
-                    .take(64)
-                    .collect::<String>()
-            ),
-            canonical_bytes: event_canonical_bytes(&envelope).unwrap(),
+            canonical_digest,
+            canonical_bytes,
             envelope,
             received_at: chrono::Utc::now(),
         }
@@ -2349,30 +2383,38 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let reanchor = sdk_test_envelope(
-            &json!({
-                "event_id": event_id("000000000001"),
-                "kind": "ak.device.reanchor",
-                "proofs": [{"jws": "first-transport-proof"}]
-            }),
+        let reanchor = stored_record(
+            &sdk_test_envelope(
+                &json!({
+                    "event_id": event_id("000000000001"),
+                    "kind": "ak.device.reanchor",
+                    "proofs": [{"jws": "first-transport-proof"}]
+                }),
+                10,
+            ),
             10,
         );
-        let authorize = sdk_test_envelope(
-            &json!({
-                "event_id": event_id("000000000002"),
-                "kind": "ak.device.authorize",
-                "proofs": [{"jws": "first-authority-proof"}]
-            }),
+        let authorize = stored_record(
+            &sdk_test_envelope(
+                &json!({
+                    "event_id": event_id("000000000002"),
+                    "kind": "ak.device.authorize",
+                    "proofs": [{"jws": "first-authority-proof"}]
+                }),
+                11,
+            ),
             11,
         );
+        let reanchor_id = reanchor.event_id.clone();
+        let authorize_id = authorize.event_id.clone();
         state
             .event_queries()
-            .store_canonical_event(stored_record(&reanchor, 10))
+            .store_canonical_event(reanchor.clone())
             .await
             .unwrap();
         state
             .event_queries()
-            .store_canonical_event(stored_record(&authorize, 11))
+            .store_canonical_event(authorize.clone())
             .await
             .unwrap();
         let later = sdk_test_envelope(
@@ -2388,9 +2430,9 @@ mod tests {
             .await
             .unwrap();
 
-        let mut retried_reanchor = reanchor;
+        let mut retried_reanchor = reanchor.envelope;
         retried_reanchor["proofs"][0]["jws"] = json!("retried-transport-proof");
-        let mut retried_authorize = authorize;
+        let mut retried_authorize = authorize.envelope;
         retried_authorize["proofs"][0]["jws"] = json!("retried-authority-proof");
         let mut candidates = Vec::new();
         for envelope in [retried_reanchor, retried_authorize] {
@@ -2410,8 +2452,9 @@ mod tests {
             .unwrap()
             .expect("stored canonical unit must be returned as duplicate");
         assert_eq!(outcome.status, EventsSubmitStatus::Duplicate);
+        assert!(outcome.accepted.is_empty());
         assert_eq!(outcome.duplicate.len(), 2);
-        for event_id in [event_id("000000000001"), event_id("000000000002")] {
+        for event_id in [reanchor_id, authorize_id] {
             let stored = state
                 .event_queries()
                 .canonical_event(&event_id)
