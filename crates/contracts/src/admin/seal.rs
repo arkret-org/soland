@@ -88,130 +88,6 @@ impl AdminNotaryValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelfSignViolation {
-    SingleDidIsAdmin,
-    ThresholdContainsAdmin,
-    ThresholdLeaderIsAdmin,
-    OpenSetContainsAdmin,
-    MixedPrimaryIsAdmin,
-    MixedRecoveryContainsAdmin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct NotaryReconfigRequestBody {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub realm_id: String,
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub single_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_k: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold_n: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub threshold_dids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_set_members: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixed_primary: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_recovery: Vec<String>,
-}
-
-impl NotaryReconfigRequestBody {
-    pub fn admin_self_signs_themselves_in(&self, admin_did: &str) -> bool {
-        self.self_sign_violation(admin_did).is_some()
-    }
-
-    pub fn self_sign_violation(&self, admin_did: &str) -> Option<SelfSignViolation> {
-        match self.kind.as_str() {
-            "single_did" => {
-                if self.single_did.as_deref() == Some(admin_did) {
-                    Some(SelfSignViolation::SingleDidIsAdmin)
-                } else {
-                    None
-                }
-            }
-            "threshold" => {
-                if self.threshold_dids.iter().any(|did| did == admin_did) {
-                    return Some(SelfSignViolation::ThresholdContainsAdmin);
-                }
-                if let Some(leader) = self.threshold_dids.iter().min()
-                    && leader == admin_did
-                {
-                    return Some(SelfSignViolation::ThresholdLeaderIsAdmin);
-                }
-                None
-            }
-            "open_set" => {
-                if self.open_set_members.iter().any(|did| did == admin_did) {
-                    Some(SelfSignViolation::OpenSetContainsAdmin)
-                } else {
-                    None
-                }
-            }
-            "mixed" => {
-                if self.mixed_primary.as_deref() == Some(admin_did) {
-                    return Some(SelfSignViolation::MixedPrimaryIsAdmin);
-                }
-                if self.mixed_recovery.iter().any(|did| did == admin_did) {
-                    return Some(SelfSignViolation::MixedRecoveryContainsAdmin);
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    pub fn to_reconfigure_body(&self) -> Value {
-        let mut body = serde_json::json!({
-            "kind": self.kind,
-        });
-        if let Some(value) = &self.single_did {
-            body["single_did"] = Value::String(value.clone());
-        }
-        if let Some(value) = self.threshold_k {
-            body["threshold_k"] = Value::from(value);
-        }
-        if let Some(value) = self.threshold_n {
-            body["threshold_n"] = Value::from(value);
-        }
-        if !self.threshold_dids.is_empty() {
-            body["threshold_dids"] = Value::Array(
-                self.threshold_dids
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            );
-        }
-        if !self.open_set_members.is_empty() {
-            body["open_set_members"] = Value::Array(
-                self.open_set_members
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            );
-        }
-        if let Some(value) = &self.mixed_primary {
-            body["mixed_primary"] = Value::String(value.clone());
-        }
-        if !self.mixed_recovery.is_empty() {
-            body["mixed_recovery"] = Value::Array(
-                self.mixed_recovery
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            );
-        }
-        body
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct SubmitControlMoveOutcome {
@@ -315,25 +191,6 @@ pub struct SealDagSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct CompactionOutcome {
-    pub seal_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state_root: Option<String>,
-    #[serde(default)]
-    pub control_event_count: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct CompactionRequestBody {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub realm_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_control_moves: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct SealPruneRequestBody {
     pub seal_id: String,
 }
@@ -358,33 +215,6 @@ pub struct SealPruneDiagnostics {
     pub successor_count: usize,
     pub is_genesis: bool,
     pub kind: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct PartialSignatureBody {
-    pub signer_did: String,
-    pub signature_b64: String,
-    pub kid: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum PartialSubmitStatus {
-    Collecting,
-    Aggregated,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct PartialSubmitOutcome {
-    pub seal_id: String,
-    pub collected: u32,
-    pub threshold: u32,
-    pub status: PartialSubmitStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aggregated_seal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -446,46 +276,4 @@ impl BottomKindExt for BottomKind {
 
 pub fn bottom_kind_from_wire(value: &str) -> Option<BottomKind> {
     serde_json::from_value(Value::String(value.to_owned())).ok()
-}
-
-#[cfg(test)]
-mod partial_submit_tests {
-    use super::*;
-
-    #[test]
-    fn partial_submit_contract_uses_closed_status_values() {
-        let outcome = PartialSubmitOutcome {
-            seal_id: "ak:seal:1".to_owned(),
-            collected: 2,
-            threshold: 2,
-            status: PartialSubmitStatus::Aggregated,
-            aggregated_seal_id: Some("ak:seal:2".to_owned()),
-        };
-
-        let value = serde_json::to_value(outcome).unwrap();
-        assert_eq!(value["status"], "aggregated");
-        assert!(
-            serde_json::from_value::<PartialSubmitOutcome>(serde_json::json!({
-                "seal_id": "ak:seal:1",
-                "collected": 1,
-                "threshold": 2,
-                "status": "rejected"
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn partial_signature_body_matches_handler_wire_names() {
-        let body = PartialSignatureBody {
-            signer_did: "did:web:admin.example".to_owned(),
-            signature_b64: "abc".to_owned(),
-            kid: "did:web:admin.example#key-1".to_owned(),
-        };
-
-        assert_eq!(
-            serde_json::to_string(&body).unwrap(),
-            r#"{"signer_did":"did:web:admin.example","signature_b64":"abc","kid":"did:web:admin.example#key-1"}"#
-        );
-    }
 }

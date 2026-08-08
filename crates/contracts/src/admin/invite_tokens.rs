@@ -2,23 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct CreateInviteTokenRequest {
-    #[serde(default)]
-    pub realm_id: Option<String>,
-    #[serde(default)]
-    pub invitee: Option<String>,
-    #[serde(default)]
-    pub invite_delivery_target: Option<Value>,
-    #[serde(default)]
-    pub introduction_evidence_digest: Option<String>,
-    #[serde(default)]
-    pub uses_allowed: Option<u64>,
-    #[serde(default)]
-    pub expires_at: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminInviteTokenItem {

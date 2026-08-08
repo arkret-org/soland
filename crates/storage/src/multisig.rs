@@ -1,11 +1,11 @@
 use super::{BTreeMap, MultisigPendingRecord, PersistenceResult, Value, async_trait};
 /// MAL-11 — persistent multisig partial-signature buffer.
 ///
-/// The coordinator endpoints (`POST .../multisig/{seal_id}/partial` and
-/// `GET .../multisig/pending`) operate against this store so partials
-/// survive restarts and can be picked up by a leader-election watchdog
-/// once the threshold is met. Memory backend is fine for dev/tests; the
-/// Pg backend writes to the `multisig_pending` table.
+/// The notary coordinator writes partials to this store so they survive
+/// restarts and can be picked up by a leader-election watchdog once the
+/// threshold is met. The read-only admin endpoint exposes pending status.
+/// Memory backend is fine for dev/tests; the Pg backend writes to the
+/// `multisig_pending` table.
 #[async_trait]
 pub trait MultisigPendingStore: Send + Sync {
     async fn upsert(&self, record: MultisigPendingRecord) -> PersistenceResult<()>;

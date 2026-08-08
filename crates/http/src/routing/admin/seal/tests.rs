@@ -1,11 +1,10 @@
 use serde_json::{Value, json};
 use soland_contracts::admin::seal::{
-    BottomCandidateHead, BottomRepairRequestBody, BottomRepairStrategy, NotaryReconfigRequestBody,
-    SubmitControlMoveOutcome,
+    BottomCandidateHead, BottomRepairRequestBody, BottomRepairStrategy, SubmitControlMoveOutcome,
 };
 
 use super::bottom::bottom_entry_from;
-use super::notary::{notary_value_from_cell, notary_value_object_from_body};
+use super::notary::notary_value_from_cell;
 use super::notary_cell_for;
 
 #[test]
@@ -138,43 +137,6 @@ fn bottom_repair_request_body_round_trips_through_serde() {
         #[allow(unreachable_patterns)]
         other => panic!("expected HeadInWinner, got {other:?}"),
     }
-}
-
-#[test]
-fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
-    // The admin request is the shared DTO field shape; the cell value
-    // written by soland is the SDK `NotaryValue` shape.
-    let body: NotaryReconfigRequestBody = serde_json::from_value(json!({
-        "kind": "threshold",
-        "threshold_k": 2,
-        "threshold_n": 3,
-        "threshold_dids": ["did:ak:a", "did:ak:b", "did:ak:c"],
-    }))
-    .unwrap();
-    let cell_value = notary_value_object_from_body(&body).unwrap();
-    assert_eq!(cell_value["kind"], "threshold");
-    // Authoritative wire shape: `threshold` (not `k`/`n`) + derived
-    // `forensic_attribution` (2*2 > 3 → quorum_intersection). `n` is no
-    // longer a wire field; the committee size is `members.len()`.
-    assert_eq!(cell_value["threshold"], 2);
-    assert_eq!(cell_value["forensic_attribution"], "quorum_intersection");
-    assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
-    assert!(cell_value.get("k").is_none());
-    assert!(cell_value.get("n").is_none());
-    assert!(cell_value.get("type").is_none());
-    assert!(cell_value.get("threshold_k").is_none());
-    assert!(cell_value.get("threshold_dids").is_none());
-
-    // Structural violations are rejected by the SDK validator
-    // (threshold > members.len()).
-    let invalid: NotaryReconfigRequestBody = serde_json::from_value(json!({
-        "kind": "threshold",
-        "threshold_k": 2,
-        "threshold_n": 3,
-        "threshold_dids": ["did:ak:a"],
-    }))
-    .unwrap();
-    assert!(notary_value_object_from_body(&invalid).is_err());
 }
 
 #[test]

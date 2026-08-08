@@ -19,7 +19,6 @@ use std::collections::BTreeMap;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
-use arkret_models_collaboration::governance::realm_lifecycle::RealmDestroyPayload;
 use arkret_wire::JoinRule;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -80,12 +79,6 @@ pub(super) struct AdminRealmItem {
     deleted: bool,
     created_at: Option<chrono::DateTime<chrono::Utc>>,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminRealmDeleteOutcome {
-    realm_id: String,
-    deleted: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -319,43 +312,6 @@ pub(super) async fn admin_get_realm(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = realm_id.into_inner();
     json_ok(admin_get_realm_item(state, &realm_id).await?)
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.realm.delete",
-    tags("soland_admin")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.delete"))]
-pub(super) async fn admin_delete_realm(
-    aa: AuthArgs,
-    realm_id: PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AdminRealmDeleteOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let realm_id = realm_id.into_inner();
-    let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
-    admin_get_realm_item(state, &realm_id).await?;
-    let payload = RealmDestroyPayload::new("admin requested realm destroy")
-        .to_value()
-        .map_err(|error| AppError::invalid_param(format!("realm destroy payload: {error}")))?;
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|error| AppError::invalid_param(format!("operation_id: {error}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::EventKind::REALM_DESTROY,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(|reason| AppError::new(ErrorCode::FailedPrecondition, reason.to_owned()))?;
-    json_ok(AdminRealmDeleteOutcome {
-        realm_id,
-        deleted: true,
-    })
 }
 
 #[salvo::oapi::endpoint(

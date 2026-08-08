@@ -8,7 +8,6 @@ mod control;
 mod delivery_binding;
 mod handles;
 mod introspect;
-mod invite_tokens;
 mod media;
 mod moderation;
 mod queries;
@@ -139,9 +138,7 @@ pub fn admin_router() -> Router {
         .hoop(RequireAdmin::scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(
-            Router::with_path("realms/{realm_id}")
-                .get(collection::admin_get_realm)
-                .delete(collection::admin_delete_realm),
+            Router::with_path("realms/{realm_id}").get(collection::admin_get_realm),
         )
         .push(
             Router::with_path("realms/{realm_id}/members")
@@ -161,10 +158,6 @@ pub fn admin_router() -> Router {
         )
         .push(crate::routing::identity::key_backup::admin_router())
         .push(Router::with_path("realms/{realm_id}/notary").get(seal::admin_get_notary))
-        .push(
-            Router::with_path("realms/{realm_id}/notary/reconfigure")
-                .post(seal::admin_reconfigure_notary),
-        )
         .push(Router::with_path("realms/{realm_id}/bottom").get(seal::admin_list_realm_bottom))
         .push(Router::with_path("bottom").get(seal::admin_list_bottom_global))
         .push(
@@ -173,19 +166,11 @@ pub fn admin_router() -> Router {
         )
         .push(Router::with_path("realms/{realm_id}/seal-dag").get(seal::admin_get_seal_dag))
         .push(
-            Router::with_path("realms/{realm_id}/seal-dag/compact")
-                .post(seal::admin_compact_seal_dag),
-        )
-        .push(
             Router::with_path("realms/{realm_id}/seal-dag/prune").post(seal::admin_prune_seal_dag),
         )
         .push(
             Router::with_path("realms/{realm_id}/multisig/pending")
                 .get(seal::admin_list_multisig_pending),
-        )
-        .push(
-            Router::with_path("realms/{realm_id}/multisig/{seal_id}/partial")
-                .post(seal::admin_submit_multisig_partial),
         )
         .push(
             Router::with_path("realms/{realm_id}/gc-candidates")
@@ -213,7 +198,6 @@ pub fn admin_router() -> Router {
         // their own routers above/below).
         .push(Router::with_path("capabilities").get(queries::admin_list_capabilities))
         .push(Router::with_path("devices").get(queries::admin_list_devices))
-        .push(invite_tokens::router())
         .push(media::router())
         .push(moderation::router())
         // Operator audit queries (`/_soland/admin/audit/events`,

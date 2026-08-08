@@ -6,7 +6,7 @@ use soland_storage::{PersistenceResult, PersistenceStore};
 
 use crate::delivery::{DeliveryService, ObjectStoragePort};
 use crate::events::RealmDirectoryIndex;
-use crate::governance::{AdminSigningKeyPort, RuntimeSettingsPort};
+use crate::governance::RuntimeSettingsPort;
 use crate::hydration::{
     HydrationProjectionAdapter, hydrate_cross_signing_from_persistence,
     hydrate_realms_from_canonical_events,
@@ -212,14 +212,12 @@ impl PersistenceHandle {
 
     pub fn operational_services(
         &self,
-        admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
         runtime_settings: Arc<dyn RuntimeSettingsPort>,
         runtime_health: Arc<dyn RuntimeHealthPort>,
         sync_cursor_hmac_key: [u8; 32],
     ) -> PersistenceOperationalServices {
         build_persistence_operational_services(
             self.persistence.clone(),
-            admin_signing_keys,
             runtime_settings,
             runtime_health,
             sync_cursor_hmac_key,

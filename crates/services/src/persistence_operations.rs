@@ -4,7 +4,7 @@ use serde_json::Value;
 use soland_storage::*;
 
 use crate::federation::FederationService;
-use crate::governance::{AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort};
+use crate::governance::{GovernanceService, RuntimeSettingsPort};
 use crate::jobs::{JobsService, RuntimeHealthPort};
 use crate::sync::SyncService;
 
@@ -1345,7 +1345,6 @@ fn application_websocket_challenge(
 
 pub fn build_persistence_operational_services(
     persistence: Arc<dyn PersistenceStore>,
-    admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
     runtime_health: Arc<dyn RuntimeHealthPort>,
     sync_cursor_hmac_key: [u8; 32],
@@ -1359,7 +1358,6 @@ pub fn build_persistence_operational_services(
             Arc::new(PersistenceAuditLog(persistence.clone())),
             Arc::new(PersistenceModeration(persistence.clone())),
             Arc::new(PersistenceGovernanceRecords(persistence.clone())),
-            admin_signing_keys,
             runtime_settings,
         ),
         sync: SyncService::new(

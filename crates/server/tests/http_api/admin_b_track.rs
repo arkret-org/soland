@@ -105,63 +105,6 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
 }
 
 #[tokio::test]
-async fn admin_invite_token_create_and_revoke_round_trip() {
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-
-    let created: Value = TestClient::post("http://server/_soland/admin/invite-tokens")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "uses_allowed": 1,
-            "expires_at": "2030-01-01T00:00:00.000Z"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let invite_id = created["id"].as_str().expect("invite id").to_owned();
-    assert!(invite_id.starts_with("ak:invite:"));
-    assert_eq!(created["invite_id"], invite_id);
-    assert_eq!(created["realm_id"], DEMO_REALM_ID);
-    assert_eq!(created["status"], "pending");
-    assert!(
-        created["token"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("ak:invite-token:")),
-        "create response must include the plaintext token once: {created}"
-    );
-
-    let revoked: Value = TestClient::delete(format!(
-        "http://server/_soland/admin/invite-tokens/{invite_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(revoked["id"], invite_id);
-    assert_eq!(revoked["status"], "revoked");
-
-    let list: Value = TestClient::get("http://server/_soland/admin/invite-tokens")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let row = list["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == invite_id)
-        .expect("revoked invite remains in admin snapshot");
-    assert_eq!(row["status"], "revoked");
-}
-
-#[tokio::test]
 async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;

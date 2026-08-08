@@ -20,7 +20,6 @@ use soland_http::result::{JsonResult, json_ok};
 use super::audit::append_audit_log;
 use super::require_admin_principal;
 use crate::routing::identity::account::{AccountLifecycleChange, set_account_lifecycle_state};
-use crate::routing::identity::auth::revoke_device_record;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -107,24 +106,6 @@ struct AdminAccountLifecycleOutcome {
     devices_revoked: usize,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct SolandAdminRevokeDeviceRequestBody {
-    #[serde(default)]
-    actor: Option<String>,
-    #[serde(default)]
-    account_id: Option<String>,
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct SolandAdminRevokeDeviceOutcome {
-    actor: String,
-    device_id: String,
-    revoked_by: String,
-    revoked_at: String,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminModerationQueueOutcome {
     items: Vec<super::moderation::ModerationQueueItemOutcome>,
@@ -143,7 +124,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/suspend").post(suspend_account))
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
-        .push(Router::with_path("devices/{device_id}/revoke").post(revoke_device))
         // `GET /_soland/admin/moderation/queue` is the local queue read.
         // The operator moderation suite in
         // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
@@ -509,56 +489,6 @@ fn account_lifecycle_change_response(
         sessions_revoked: change.sessions_revoked,
         devices_revoked: change.devices_revoked,
     }
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.revoke_device",
-    tags("soland_admin")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.revoke_device"))]
-async fn revoke_device(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    device_id: PathParam<String>,
-    body: JsonBody<SolandAdminRevokeDeviceRequestBody>,
-) -> JsonResult<SolandAdminRevokeDeviceOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let session = require_admin_principal(state, session)?;
-    let device_id = device_id.into_inner();
-    let body = body.into_inner();
-    let mut target_actor = body.actor.or(body.account_id);
-    if target_actor.is_none() {
-        target_actor = state.identities().devices().await.ok().and_then(|devices| {
-            devices
-                .into_iter()
-                .find(|record| record.device_id == device_id)
-                .map(|record| record.actor_id)
-        });
-    }
-    let target_actor = target_actor.ok_or_else(|| AppError::not_found("device not found"))?;
-    revoke_device_record(state, &target_actor, &device_id)
-        .await
-        .map_err(AppError::internal)?;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "admin.device.revoke",
-        json!({
-            "actor": target_actor.clone(),
-            "device_id": device_id.clone(),
-            "reason": body.reason,
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(SolandAdminRevokeDeviceOutcome {
-        actor: target_actor,
-        device_id,
-        revoked_by: session.actor,
-        revoked_at: arkret_canonical::format_timestamp_canonical(super::now()),
-    })
 }
 
 #[endpoint(

@@ -25,8 +25,7 @@
 | `admin::device_signing_directory` | `DeviceSigningKeyDirectoryQueryRequestBody` | local contract | Soland、Coauth | 产品间 signing-key directory 查询；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 | `admin::device_signing_directory` | `AuthorizedDeviceSigningKey` | local contract | Soland、Coauth | 产品间 signing-key directory 投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 | `admin::device_signing_directory` | `DeviceSigningKeyDirectoryOutcome` | local contract | Soland、Coauth | 产品间 signing-key directory 响应；字段复用 SDK 类型，整体未命中 spec wire 类型 |
-| `admin::invite_tokens` | `CreateInviteTokenRequest` | local contract | Soland、Sodmin | 部署本地邀请令牌管理命令；未命中 spec wire 类型 |
-| `admin::invite_tokens` | `AdminInviteTokenItem` | local contract | Soland、Sodmin | 部署本地邀请令牌管理投影；未命中 spec wire 类型 |
+| `admin::invite_tokens` | `AdminInviteTokenItem` | local contract | Soland、Sodmin | Realm invite 状态的只读管理投影；DTO 整体未命中 spec wire 类型 |
 | `admin::queries` | `AdminActor` | local contract | Soland、Sodmin | `/_soland/admin` 操作面投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 | `admin::queries` | `AdminActorList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
 | `admin::queries` | `AdminAuditEntry` | local contract | Soland、Sodmin | `/_soland/admin` 操作面审计投影；未命中 spec wire 类型 |
@@ -40,28 +39,18 @@
 | `admin::seal` | `BottomKind` | SDK re-export | Soland、Sodmin | 直接复用 `arkret-wire` 的规范枚举，不在本 crate 重复定义 |
 | `admin::seal` | `BottomKindExt` | local pure helper | Soland、Sodmin | 仅提供产品管理 UI 标签/解析辅助，不改变 SDK wire 枚举 |
 | `admin::seal` | `AdminNotaryValue` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SelfSignViolation` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `NotaryReconfigRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SubmitControlMoveOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::seal` | `SubmitControlMoveOutcome` | local contract | Soland | Bottom repair 的部署本地结果；未命中 spec wire 类型 |
 | `admin::seal` | `BottomCandidateHead` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `BottomEntry` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `BottomRepairStrategy` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `BottomRepairRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::seal` | `BottomRepairStrategy` | local contract | Soland | 只描述部署本地恢复前置检查；未命中 spec wire 类型 |
+| `admin::seal` | `BottomRepairRequestBody` | local contract | Soland | 只描述部署本地恢复前置检查；未命中 spec wire 类型 |
 | `admin::seal` | `SealLeaf` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SealDagSnapshot` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `CompactionOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `CompactionRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SealPruneRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SealPruneOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `SealPruneDiagnostics` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `admin::seal` | `PartialSignatureBody` | local contract | Soland、Sodmin | 部署本地 multisig partial 提交命令；未命中 spec wire 类型 |
-| `admin::seal` | `PartialSubmitStatus` | local contract | Soland、Sodmin | 部署本地 multisig partial 聚合状态；未命中 spec wire 类型 |
-| `admin::seal` | `PartialSubmitOutcome` | local contract | Soland、Sodmin | 部署本地 multisig partial 提交结果；未命中 spec wire 类型 |
+| `admin::seal` | `SealPruneRequestBody` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
+| `admin::seal` | `SealPruneOutcome` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
+| `admin::seal` | `SealPruneDiagnostics` | local contract | Soland | 部署本地历史存储 GC；未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingEntry` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
-| `integration::capability_fanout` | `CapabilityFanoutBody` | local contract | Coauth、Soland | 未命中 spec wire 类型 |
-| `integration::capability_fanout` | `CapabilityFanoutResponse` | local contract | Coauth、Soland | 未命中 spec wire 类型 |
-| `integration::capability_fanout` | `CapabilityFanoutAuthzState` | local contract | Coauth、Soland | 未命中 spec wire 类型 |
 
 若以后出现同名或等价的规范类型，必须先在 `arkret-rust-sdk` 实现，并用规范固定样例做
 canonical JSON 字节对比，再从本表和 `soland-contracts` 删除相应本地契约。

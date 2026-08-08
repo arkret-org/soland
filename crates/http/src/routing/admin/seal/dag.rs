@@ -1,12 +1,11 @@
-//! Seal DAG admin endpoints — snapshot, compaction, prune.
+//! Seal DAG admin endpoints — snapshot and deployment-local pruning.
 
 use arkret_identifiers::{RealmId, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use soland_contracts::admin::seal::{
-    CompactionOutcome, CompactionRequestBody, SealDagSnapshot, SealLeaf, SealPruneDiagnostics,
-    SealPruneOutcome, SealPruneRequestBody,
+    SealDagSnapshot, SealLeaf, SealPruneDiagnostics, SealPruneOutcome, SealPruneRequestBody,
 };
 use soland_http::error::{AppError, ErrorCode};
 
@@ -72,7 +71,6 @@ pub(crate) async fn admin_get_seal_dag(
             covered_event_digests.insert(f.as_str().to_owned());
         }
         latest_state_root = Some(seal.state_root.as_str().to_owned());
-        // `is_compaction` reads the explicit
         let is_compaction = seal.is_compaction();
         leaves.push(SealLeaf {
             seal_id: seal.id.as_str().to_owned(),
@@ -89,133 +87,6 @@ pub(crate) async fn admin_get_seal_dag(
         covered_event_digests: covered_event_digests.into_iter().collect(),
         state_root: latest_state_root,
         last_compaction_at: None,
-    })
-}
-
-/// `POST /_soland/admin/realms/{realm_id}/seal-dag/compact` — trigger
-/// a signed compaction Seal.
-///
-/// v1 implementation: reuse the in-process notary worker to fold any
-/// pending Moves into a fresh Seal; this isn't a *true* compaction
-/// (which would prune historical Seals per MAL-11) but it produces a
-/// structurally-correct response so sodmin's UI strand is unblocked.
-/// `max_control_moves` is honoured via `run_one_signing_pass`.
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.spaces.seal_dag.compact",
-    tags("soland_admin")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.admin.spaces.seal_dag.compact")
-)]
-pub(crate) async fn admin_compact_seal_dag(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-    body: JsonBody<CompactionRequestBody>,
-) -> JsonResult<CompactionOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let admin_session = super::super::require_admin_principal(state, session)?;
-    super::super::require_admin_scope(
-        state,
-        req,
-        &admin_session,
-        arkret_models_identity::admin_grant::admin_scopes::SEAL_COMPACT,
-    )
-    .await?;
-    let realm_id = realm_id.into_inner();
-    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
-    let max_pending = body
-        .into_inner()
-        .max_control_moves
-        .unwrap_or(1000)
-        .min(10_000) as usize;
-
-    // MAL-11 compaction: first drain any pending Moves via the regular
-    // notary pass so the compaction Seal witnesses the current covered
-    // event set, then mint a `kind=Compaction` Seal over the current
-    // leaves with no new delta. The compaction Seal is signed and applied
-    // just like a normal Seal; downstream pruning walks consult
-    // `CompactionPolicy` per-candidate and call
-    // `SealStore::prune_predecessor`.
-    // A failed signing pass must surface. Swallowing it lets compaction
-    // proceed over a leaf set that still has pending Moves behind it,
-    // which then mints a Seal the caller believes covers them.
-    if let Err(err) = crate::notary::run_one_signing_pass(state, &realm, max_pending).await {
-        return Err(match err {
-            crate::notary::NotaryError::NotAuthorized(_) => AppError::new(
-                ErrorCode::CapabilityDenied,
-                "not authorized to compact seals for this Realm".to_owned(),
-            )
-            .with_status(StatusCode::FORBIDDEN),
-            other => AppError::new(
-                ErrorCode::InternalError,
-                format!("notary signing pass before compaction failed: {other}"),
-            )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        });
-    }
-
-    // Step 1: snapshot the leaf set + recompute the effective seal view
-    // at those leaves. The compaction Seal's `predecessor_refs` are the
-    // current leaves, it accepts no new delta, and `state_root` is taken
-    // from the view.
-    let leaves = state
-        .projections()
-        .realm_seal_leaves(&realm)
-        .map_err(|e| AppError::new(ErrorCode::InternalError, format!("list_leaves failed: {e}")))?;
-    if leaves.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::Conflict,
-            "compaction requires at least one existing seal".to_owned(),
-        )
-        .with_status(StatusCode::CONFLICT));
-    }
-    let view = state
-        .projections()
-        .effective_seal_view(&leaves, &realm)
-        .map_err(|e| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("effective_seal_view failed: {e}"),
-            )
-        })?;
-
-    let compaction = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-        .sign_compaction_seal(state, &realm, &view)
-        .map_err(|error| match error {
-            crate::notary::NotaryError::NotAuthorized(_) => AppError::new(
-                ErrorCode::CapabilityDenied,
-                "current Realm notary authority is unavailable for compaction".to_owned(),
-            )
-            .with_status(StatusCode::FORBIDDEN),
-            other => AppError::new(
-                ErrorCode::InternalError,
-                format!("sign compaction seal: {other}"),
-            ),
-        })?;
-
-    let verifier = crate::routing::federation::move_seal::select_jws_verifier(state);
-    let effect = state
-        .projections()
-        .apply_seal(&compaction, verifier)
-        .map_err(|e| {
-            AppError::new(ErrorCode::Conflict, format!("apply compaction seal: {e}"))
-                .with_status(StatusCode::CONFLICT)
-        })?;
-
-    // Compaction Seals accept zero new moves by definition; surface
-    // `control_event_count: 0`.
-    let _ = effect;
-    json_ok(CompactionOutcome {
-        seal_id: compaction.id.as_str().to_owned(),
-        state_root: Some(compaction.state_root.as_str().to_owned()),
-        control_event_count: 0,
     })
 }
 

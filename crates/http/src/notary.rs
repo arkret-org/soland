@@ -577,9 +577,8 @@ impl NotaryWorker {
             notary_signature: NotarySig::Single(zero_sig),
             sealed_at: chrono::Utc::now(),
             hlc,
-            // Normal delta-accepting Seal. Compaction Seals come
-            // through `admin_compact_seal_dag`, not the regular
-            // notary pipeline.
+            // Normal delta-accepting Seal. Compaction Seals are authored
+            // by the dedicated notary workflow, not this regular pipeline.
             kind: arkret_wire::SealKind::Normal,
         };
         let canonical_bytes = seal

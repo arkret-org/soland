@@ -28,7 +28,7 @@ use soland_services::events::{
     RealmQueryService,
 };
 use soland_services::federation::{FederationService, SovereignDeploymentState};
-use soland_services::governance::{AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort};
+use soland_services::governance::{GovernanceService, RuntimeSettingsPort};
 use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::identity::{
     AccountDataService, AgentPairingService, AgentParticipationService, ConsentService,
@@ -186,14 +186,13 @@ pub struct AppState {
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
     /// `resync_required`.
-    /// Persistent Ed25519 signing key for NotaryWorker + admin endpoints.
+    /// Persistent Ed25519 signing key for the NotaryWorker and service-owned signing paths.
     /// Production construction receives the exact seed resolved and
     /// key-bound by service-identity bootstrap; AppState never re-resolves or
     /// independently mints this signer.
     ///
-    /// Shared across all signing paths so the NotaryWorker, the
-    /// `service_admin_signer` admin shortcut, and the threshold partial-
-    /// signature coordinator all bind to the **same** key/DID identity.
+    /// Shared across service-owned signing paths so they bind to the same
+    /// key/DID identity.
     /// Readers acquire the current key via `ArcSwap::load_full()`. The
     /// historical signing-key-only rotation path is fail-closed because it
     /// cannot atomically update WebVH, the DID document, durable identity,
@@ -203,15 +202,6 @@ pub struct AppState {
     /// behind a [`Mutex`] (one-shot writes from the rotation path are not
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
-    /// Per-admin signing keys: SDK
-    /// [`arkret_auth::AdminKeyStore`] keyed by the `application_id`
-    /// `soland.<service_id>`. Each admin DID in
-    /// `config.admin_principal_dids` gets its own ed25519 signing seed
-    /// (provisioned at boot in `development_mode`; lazily loaded from the
-    /// configured durable KeyStore otherwise). The signer for an admin DID is
-    /// built via `admin_signer_for(state, admin_did)` — this replaces the
-    /// service-wide `service_admin_signer` shortcut for endpoints that
-    /// want operator attribution in the audit chain.
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
     /// whose `service_role == "principal_server"` and additionally
@@ -614,7 +604,7 @@ impl AppState {
     }
 
     /// Snapshot the persistent Ed25519 signing key shared by
-    /// the NotaryWorker and all admin signing paths. Returns a fresh
+    /// the NotaryWorker and service-owned signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
     /// hold the snapshot for the duration of a signing pass.
     pub fn notary_signing_key(&self) -> Arc<SigningKey> {
@@ -734,48 +724,6 @@ impl AppState {
             hasher.finalize().into()
         };
 
-        // Per-admin signing keys: build a single
-        // [`AdminKeyStore`] for this principal. The application_id
-        // mirrors the NotaryWorker pattern (`soland.<service_id>`) so
-        // operators only manage one secret-storage namespace.
-        //
-        // In `development_mode` we proactively mint an ephemeral seed
-        // for every DID listed in `admin_principal_dids` so smoke-tests
-        // can call admin endpoints under the operator DID without any
-        // out-of-band provisioning step. Production deployments must
-        // pre-populate the configured durable KeyStore explicitly — admin DIDs
-        // without a provisioned key fall back to
-        // `service_admin_signer` at signing time with a sticky-warn.
-        let admin_app_id = format!("soland.{service_id}");
-        let admin_keystore_inner: Box<dyn arkret_keystore::KeyStore> = config
-            .key_store
-            .open(&admin_app_id)
-            .expect("configured KeyStore must open every namespace")
-            .unwrap_or_else(|| Box::new(arkret_keystore::InMemoryKeyStore::new()));
-        let admin_keystore =
-            arkret_auth::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
-        if config.development_mode {
-            for did_str in &config.admin_principal_dids {
-                let Ok(did) = Did::new(did_str.clone()) else {
-                    tracing::warn!(%did_str, "skipping admin keystore provision: invalid DID shape");
-                    continue;
-                };
-                let has_key = admin_keystore.has_admin_key(&did).unwrap_or(false);
-                if !has_key {
-                    let mut seed = [0u8; 32];
-                    getrandom_seed(&mut seed);
-                    if let Err(error) = admin_keystore.store_admin_key(&did, &seed) {
-                        tracing::warn!(%error, %did_str,
-                            "failed to provision ephemeral admin signing key");
-                    } else {
-                        tracing::info!(%did_str,
-                            "provisioned ephemeral admin signing key (development_mode)");
-                    }
-                }
-            }
-        }
-        let admin_keystore = Arc::new(admin_keystore);
-
         // Seed the mutable overlay from boot config; `hydrate` overlays the
         // persisted `server_settings` row on top if one exists.
         let initial_settings = Arc::new(ArcSwap::from_pointee(
@@ -815,7 +763,6 @@ impl AppState {
             sync,
             jobs,
         } = persistence.operational_services(
-            Arc::new(RuntimeAdminSigningKeys(admin_keystore)),
             settings_persistence,
             runtime_health,
             sync_cursor_hmac_key,
@@ -1672,8 +1619,6 @@ impl AppState {
     }
 }
 
-struct RuntimeAdminSigningKeys(Arc<arkret_auth::AdminKeyStore>);
-
 struct RuntimeHydrationProjectionAdapter;
 
 impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
@@ -1749,17 +1694,8 @@ impl AuthorizationPort for SolandAuthzEngine {
     }
 }
 
-impl AdminSigningKeyPort for RuntimeAdminSigningKeys {
-    fn load_admin_key(&self, admin_did: &Did) -> Result<Vec<u8>, String> {
-        self.0
-            .load_admin_key(admin_did)
-            .map(|bytes| bytes.to_vec())
-            .map_err(|error| error.to_string())
-    }
-}
-
 /// Fill `out` with cryptographically secure random bytes via `rand::rng`.
-/// Used by service-identity bootstrap and development admin-key provisioning.
+/// Used by service-identity bootstrap.
 pub fn getrandom_seed(out: &mut [u8; 32]) {
     use rand::RngExt;
     rand::rng().fill(out);

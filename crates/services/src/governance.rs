@@ -89,10 +89,6 @@ pub struct RetentionTombstoneRecord {
     pub sealed: bool,
 }
 
-pub trait AdminSigningKeyPort: Send + Sync {
-    fn load_admin_key(&self, admin_did: &arkret_identifiers::Did) -> Result<Vec<u8>, String>;
-}
-
 #[async_trait]
 pub trait RuntimeSettingsPort: Send + Sync {
     async fn load_overrides(&self) -> ServiceResult<Vec<(String, Value)>>;
@@ -219,7 +215,6 @@ pub struct GovernanceService {
     organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
-    admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
 }
 
@@ -328,7 +323,6 @@ impl GovernanceService {
         audit_log: Arc<dyn AuditLogPort>,
         moderation: Arc<dyn ModerationPort>,
         records: Arc<dyn GovernanceRecordsPort>,
-        admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
         runtime_settings: Arc<dyn RuntimeSettingsPort>,
     ) -> Self {
         Self {
@@ -341,16 +335,8 @@ impl GovernanceService {
             organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
             realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
-            admin_signing_keys,
             runtime_settings,
         }
-    }
-
-    pub fn admin_signing_key(
-        &self,
-        admin_did: &arkret_identifiers::Did,
-    ) -> Result<Vec<u8>, String> {
-        self.admin_signing_keys.load_admin_key(admin_did)
     }
 
     pub async fn runtime_setting_overrides(&self) -> ServiceResult<Vec<(String, Value)>> {
@@ -641,15 +627,7 @@ mod tests {
     struct RecordingAuditLog(Mutex<Vec<Value>>);
     struct NoModeration;
 
-    struct NoAdminSigningKeys;
-
     struct NoRuntimeSettings;
-
-    impl AdminSigningKeyPort for NoAdminSigningKeys {
-        fn load_admin_key(&self, _admin_did: &arkret_identifiers::Did) -> Result<Vec<u8>, String> {
-            Err("not configured".to_owned())
-        }
-    }
 
     #[async_trait]
     impl RuntimeSettingsPort for NoRuntimeSettings {
@@ -879,7 +857,6 @@ mod tests {
             port.clone(),
             Arc::new(NoModeration),
             Arc::new(NoGovernanceRecords),
-            Arc::new(NoAdminSigningKeys),
             Arc::new(NoRuntimeSettings),
         );
         service
