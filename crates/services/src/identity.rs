@@ -561,14 +561,6 @@ impl ConsentService {
             .cloned()
     }
 
-    pub fn cell_by_id(&self, cell_id: &str) -> Option<ConsentCellRecord> {
-        self.runtime_cells
-            .lock()
-            .values()
-            .find(|cell| cell.cell_id == cell_id)
-            .cloned()
-    }
-
     pub fn holder_cell_by_id(&self, holder: &str, cell_id: &str) -> Option<ConsentCellRecord> {
         self.runtime_cells
             .lock()
@@ -584,28 +576,6 @@ impl ConsentService {
             .filter(|cell| cell.holder == holder && cell.peer == peer)
             .cloned()
             .collect()
-    }
-
-    pub fn record_pending_request(
-        &self,
-        holder: &str,
-        peer: &str,
-        scope: &str,
-        default_cell_id: String,
-        requested_at: DateTime<Utc>,
-        cell_id: Option<String>,
-    ) -> ConsentCellRecord {
-        let key = consent_cell_key(holder, peer, scope);
-        let mut cells = self.runtime_cells.lock();
-        let cell = cells.entry(key).or_insert_with(|| {
-            empty_consent_cell(holder, peer, scope, default_cell_id, requested_at)
-        });
-        if let Some(cell_id) = cell_id {
-            cell.cell_id = cell_id;
-        }
-        cell.requested_at = Some(requested_at);
-        cell.updated_at = requested_at;
-        cell.clone()
     }
 
     #[allow(clippy::too_many_arguments)]

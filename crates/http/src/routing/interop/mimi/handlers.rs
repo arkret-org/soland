@@ -434,21 +434,7 @@ pub(super) async fn mimi_consent_request(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("mimi consent request requires requester_id"))?;
     verify_mimi_consent_write_authority(state, req, aa, requester).await?;
-    let target_holder = mimi_consent_target_holder(&body);
-    let scope = body
-        .get("purpose")
-        .and_then(Value::as_str)
-        .unwrap_or("direct_message");
-    let materialized = match target_holder {
-        Some(holder) => {
-            Some(materialize_mimi_consent_request(state, holder, requester, scope).await?)
-        }
-        None => None,
-    };
-    let consent_id = materialized
-        .as_ref()
-        .map(|(consent_id, _cell)| consent_id.clone())
-        .unwrap_or_else(|| ids::generate("consent"));
+    let consent_id = ids::generate("consent");
     let consent_id = arkret_identifiers::ConsentId::new(consent_id)
         .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
     let _receipt = mimi_receipt(
@@ -458,8 +444,8 @@ pub(super) async fn mimi_consent_request(
         json!({
             "consent_grants_space_capability": false,
             "privacy_state": "holder_private",
-            "holder_private_materialized": materialized.is_some(),
-            "identifier_mapping": if materialized.is_some() { "holder_did" } else { "pending_invite_or_pairwise" }
+            "holder_private_materialized": false,
+            "identifier_mapping": "pending_invite_or_pairwise"
         }),
     );
     json_ok(MimiRequestConsentOutcome {
@@ -488,49 +474,13 @@ pub(super) async fn mimi_consent_update(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let granted = matches!(
-        body.decision,
-        arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept
-    );
-    let consent_id = body.consent_id.as_str();
-    let actor_id = body.actor_id.as_str();
     verify_mimi_consent_update_authority(state, req, aa, &body).await?;
-    let materialized =
-        materialize_mimi_consent_update_by_id(state, consent_id, actor_id, granted).await?;
-    let updated_at = now();
-    let event_ref = materialized
-        .as_ref()
-        .and_then(|(_, event_ref)| event_ref.as_ref())
-        .and_then(|event_ref| EventId::new(event_ref.clone()).ok());
-    let _receipt = mimi_receipt(
-        state,
-        "ak.open.mimi.command.update_consent",
-        &body_value,
-        json!({
-            "consent_grants_space_capability": false,
-            "membership_still_required": true,
-            "holder_private_materialized": materialized.is_some(),
-            "mapped_event_kind": if granted { "ak.consent.grant" } else { "ak.consent.revoke" }
-        }),
-    );
-    json_ok(MimiUpdateConsentOutcome {
-        status: arkret_wire::NonEmptyString::new(if granted { "accepted" } else { "revoked" })
-            .expect("consent status protocol literals are non-empty"),
-        updated_at,
-        event_ref,
-    })
-}
-
-pub(super) fn mimi_consent_target_holder(body: &Value) -> Option<&str> {
-    body.get("target")
-        .and_then(|target| {
-            if target.get("kind").and_then(Value::as_str) != Some("did") {
-                return None;
-            }
-            target.get("id")
-        })
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("did:"))
+    Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "MIMI consent update requires a caller-authored Consent Event carrier",
+    )
+    .with_status(StatusCode::PRECONDITION_FAILED)
+    .with_wire_code("consent_event_authoring_required"))
 }
 
 pub(super) async fn verify_mimi_consent_write_authority(

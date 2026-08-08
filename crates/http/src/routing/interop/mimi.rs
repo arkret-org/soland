@@ -55,9 +55,6 @@ use super::moderation::{
 };
 use super::{append_audit_log, now};
 use crate::ids;
-use crate::routing::identity::consent::{
-    materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
-};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
