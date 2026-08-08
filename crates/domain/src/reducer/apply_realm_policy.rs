@@ -340,7 +340,8 @@ impl ProjectionState {
         }
         if !matches!(
             kind,
-            arkret_wire::EventKind::REALM_JOIN_RULE
+            arkret_wire::EventKind::REALM_ALIAS
+                | arkret_wire::EventKind::REALM_JOIN_RULE
                 | arkret_wire::EventKind::REALM_HISTORY_VISIBILITY
                 | arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
                 | arkret_wire::EventKind::REALM_DISCOVERY

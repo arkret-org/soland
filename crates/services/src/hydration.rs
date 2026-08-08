@@ -452,7 +452,10 @@ async fn hydrate_canonical_realm_bootstraps(
                     record.event_id
                 ))
             })?;
-            let effect = if index > 0 && operation.object_kind.as_str().starts_with("ak.realm.") {
+            let effect = if index > 0
+                && crate::projection::uses_validated_realm_bootstrap_facet_reducer(
+                    operation.object_kind.as_str(),
+                ) {
                 staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
             } else {
                 staged.apply_projected(&operation, &cell_writes, hydration_hlc)

@@ -1324,13 +1324,12 @@ impl ProjectionService {
         let mut staged = self.state.lock().clone();
         for (index, projected) in operations.iter().enumerate() {
             let operation = &projected.operation;
-            let effect = if operation.object_kind.as_str().starts_with("ak.realm.")
-                && operation.object_kind.as_str() != arkret_wire::EventKind::REALM_CREATE
-            {
-                staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
-            } else {
-                staged.apply_projected(operation, &projected.cell_writes, self.clock())
-            };
+            let effect =
+                if uses_validated_realm_bootstrap_facet_reducer(operation.object_kind.as_str()) {
+                    staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
+                } else {
+                    staged.apply_projected(operation, &projected.cell_writes, self.clock())
+                };
             match effect {
                 ProjectionEffect::Rejected { reason } => {
                     return Err(RealmBootstrapProjectionError {
@@ -2348,6 +2347,14 @@ impl ProjectionService {
     }
 }
 
+pub(crate) fn uses_validated_realm_bootstrap_facet_reducer(kind: &str) -> bool {
+    kind.starts_with("ak.realm.")
+        && !matches!(
+            kind,
+            arkret_wire::EventKind::REALM_CREATE | arkret_wire::EventKind::REALM_PROFILE
+        )
+}
+
 fn mls_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> {
     let object = effective_scope.as_object()?;
     let realm_id = object.get("realm_id").and_then(Value::as_str)?.to_owned();
@@ -2479,6 +2486,16 @@ fn pending_device_revoke_exists(
 #[cfg(test)]
 mod fsm_registry_tests {
     use super::*;
+
+    #[test]
+    fn realm_profile_uses_lifecycle_reducer_inside_bootstrap() {
+        assert!(!uses_validated_realm_bootstrap_facet_reducer(
+            arkret_wire::EventKind::REALM_PROFILE,
+        ));
+        assert!(uses_validated_realm_bootstrap_facet_reducer(
+            arkret_wire::EventKind::REALM_ALIAS,
+        ));
+    }
 
     #[test]
     fn live_projection_registry_resolves_the_exact_canonical_fsm_closure() {
