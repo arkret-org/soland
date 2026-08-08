@@ -4,6 +4,9 @@ use arkret_models_collaboration::governance::membership_invite::{
 };
 use arkret_schema::event_payload_validator_catalog;
 use serde_json::Value;
+pub(crate) use soland_domain::reducer::{
+    PROJECTION_CONTEXT_FIELDS, projection_context_stripped_payload,
+};
 
 use super::*;
 
@@ -26,38 +29,6 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
 
 fn invite_create_wire_payload(payload: &Value) -> Value {
     projection_context_stripped_payload(payload)
-}
-
-/// Envelope metadata `projection_operation_from_event` adds on top of the
-/// signed wire payload. These names are legal on a projection DTO and illegal
-/// on the wire, which is why a hand-written `PayloadRequirement` may name one
-/// of them without contradicting a closed spec def.
-pub(crate) const PROJECTION_CONTEXT_FIELDS: &[&str] = &[
-    "event_id",
-    "sender",
-    "hlc",
-    "executed_by",
-    "authorization_ref",
-    "seal_ref",
-    "seal_basis",
-    "preconditions",
-    "effects",
-    "accepted_event_id",
-    "accepted_scope_ref",
-    "envelope_causal_refs",
-    "canonical_event_digest",
-    "query_grade",
-    crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT,
-];
-
-pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        for field in PROJECTION_CONTEXT_FIELDS {
-            object.remove(*field);
-        }
-    }
-    wire_payload
 }
 
 pub(crate) fn validate_key_backup_active_series_payload(

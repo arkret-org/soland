@@ -1128,7 +1128,7 @@ impl ProjectionState {
     ///   (`ak.message.*` / `ak.reaction.*` etc.); fall through to inline `apply()` exactly as
     ///   before. No log noise.
     /// - **Unknown canonical kind**: spec compliance requires us to fail closed — log at `error`
-    ///   level and project as `ProjectionEffect:: Ignored` with `bottom = reject` semantics.
+    ///   level and return an observable [`ProjectionEffect::Rejected`].
     pub fn apply_via_lattice_registry(
         &mut self,
         operation: &Operation,
@@ -1145,7 +1145,9 @@ impl ProjectionState {
                     "lattice registry dispatch: unknown canonical kind for operation; \
                      dropping with bottom (reject)"
                 );
-                return ProjectionEffect::Ignored;
+                return ProjectionEffect::Rejected {
+                    reason: "unknown_event_kind".to_owned(),
+                };
             }
         };
         if registry.lookup_for_event_kind(kind).is_some() {
@@ -1164,7 +1166,7 @@ impl ProjectionState {
             // projection (messages / reactions / etc.) goes through the
             // inline cache. This branch is the steady state for the
             // ~10 message-domain kinds.
-            self.apply_projected(operation, cell_writes, hlc)
+            self.apply(operation, hlc)
         }
     }
 

@@ -80,23 +80,35 @@ use crate::hlc::ServerHlc;
 pub const CHILD_ORDER_CELL_FAMILY: &str = "ak.component.child_order.v1";
 pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
-fn projection_context_stripped_payload(payload: &Value) -> Value {
+/// Envelope and projection metadata added to a signed wire payload while it is
+/// represented as an [`Operation`].
+///
+/// These fields must be removed before deserializing the original wire payload
+/// into a typed SDK model or producing a payload-specific signature transcript.
+pub const PROJECTION_CONTEXT_FIELDS: &[&str] = &[
+    "event_id",
+    "sender",
+    "hlc",
+    "executed_by",
+    "authorization_ref",
+    "seal_ref",
+    "seal_basis",
+    "preconditions",
+    "effects",
+    "accepted_event_id",
+    "accepted_scope_ref",
+    "envelope_causal_refs",
+    "canonical_event_digest",
+    "query_grade",
+    READ_CURSOR_CAUSAL_RELATION_CONTEXT,
+];
+
+/// Return the signed wire payload without projection-only context fields.
+pub fn projection_context_stripped_payload(payload: &Value) -> Value {
     let mut wire_payload = payload.clone();
     if let Some(object) = wire_payload.as_object_mut() {
-        for field in [
-            "event_id",
-            "sender",
-            "hlc",
-            "executed_by",
-            "authorization_ref",
-            "seal_ref",
-            "seal_basis",
-            "preconditions",
-            "accepted_event_id",
-            "query_grade",
-            READ_CURSOR_CAUSAL_RELATION_CONTEXT,
-        ] {
-            object.remove(field);
+        for field in PROJECTION_CONTEXT_FIELDS {
+            object.remove(*field);
         }
     }
     wire_payload
