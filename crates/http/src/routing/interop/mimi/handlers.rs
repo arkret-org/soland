@@ -1081,7 +1081,7 @@ mod consent_proof_tests {
     }
 
     #[tokio::test]
-    async fn consent_actor_proof_is_verified_and_consumed_once() {
+    async fn consent_actor_proof_preflight_is_verified_without_consuming_admission() {
         let state = state();
         let request = request(&state);
         let binding = request.signature_binding_bytes().unwrap();
@@ -1101,15 +1101,9 @@ mod consent_proof_tests {
         verify_mimi_consent_actor_proof(&state, &request)
             .await
             .expect("first proof presentation");
-        let replay = verify_mimi_consent_actor_proof(&state, &request)
+        verify_mimi_consent_actor_proof(&state, &request)
             .await
-            .expect_err("proof replay must fail");
-
-        assert_eq!(replay.code, ErrorCode::Conflict);
-        assert_eq!(
-            replay.wire_code_override.as_deref(),
-            Some("duplicate_conflict")
-        );
+            .expect("proof preflight must not consume Event admission");
     }
 
     #[tokio::test]
