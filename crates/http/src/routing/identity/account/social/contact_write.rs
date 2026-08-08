@@ -570,12 +570,27 @@ async fn prepare(
         holder.subject_id().clone(),
     )
     .await?;
-    let seal_view =
+    let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {
+        crate::notary::ensure_realm_seal_head(state, &realm_id)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("conformance fixture Seal head unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "conformance fixture Realm has no accepted Seal head",
+                )
+            })?
+    } else {
         crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
             state, &realm_id,
         )
-        .await?;
-    let accepted_seal = seal_view.accepted_seal;
+        .await?
+        .accepted_seal
+    };
     let seal_basis = arkret_wire::SealBasis {
         leaves: vec![accepted_seal.id],
     };

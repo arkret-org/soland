@@ -140,6 +140,7 @@ impl std::ops::Deref for ServiceClock {
 #[derive(Clone)]
 pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
+    conformance_fixture_realms: Arc<Mutex<BTreeSet<String>>>,
     control_event_store: Arc<dyn ControlEventStore>,
     seal_store: Arc<dyn SealStore>,
     cell_store: Arc<dyn CellStore>,
@@ -387,6 +388,7 @@ impl ProjectionService {
     ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectionState::new())),
+            conformance_fixture_realms: Arc::new(Mutex::new(BTreeSet::new())),
             control_event_store,
             seal_store,
             cell_store,
@@ -1163,6 +1165,17 @@ impl ProjectionService {
                 CellState::Value(value),
             );
         }
+        self.conformance_fixture_realms
+            .lock()
+            .insert(realm_id.to_string());
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn is_conformance_fixture_realm(&self, realm_id: &RealmId) -> bool {
+        self.conformance_fixture_realms
+            .lock()
+            .contains(realm_id.as_str())
     }
 
     #[cfg(feature = "test-support")]
