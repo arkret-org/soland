@@ -9,6 +9,7 @@ use super::{now, sync_token};
 
 mod actor_signature;
 mod endpoints;
+pub(crate) mod erasure_receipts;
 mod inbound_policy;
 mod outbound;
 mod profile_intersection;

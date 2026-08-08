@@ -419,6 +419,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     envelopes: &[Value],
     receipt: &DirectConversationFoundingAcceptanceReceipt,
     founder_basis_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+    source_service_binding: &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     if parsed_events.len() != 3 || envelopes.len() != 3 {
         return Err("Direct Conversation founding fanout requires exactly three Events".to_owned());
@@ -481,6 +482,10 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
             events: submissions.clone(),
             source_acceptance_receipt: receipt.clone(),
+            source_service_continuity: arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingContinuity {
+                accepted_binding: source_service_binding.clone(),
+                cutovers: Vec::new(),
+            },
             founder_basis_evidence: founder_basis_evidence.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
             signer_key_evidence: signer_key_evidence.clone(),

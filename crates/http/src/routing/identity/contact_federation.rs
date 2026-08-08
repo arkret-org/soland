@@ -479,7 +479,8 @@ async fn validate_proof_refresh_evidence(
         &unsigned_contact_evidence(current_proof, "current_proof")?,
         "current_proof",
     )?;
-    if current_proof.issuer == contact_address.subject_id
+    if current_proof.terminal
+        || current_proof.issuer == contact_address.subject_id
         || current_proof.head_event_ref != prior_mirror_receipt.signed_event_ref
         || current_proof.head_digest != prior_mirror_receipt.signed_event_digest
         || !current_proof

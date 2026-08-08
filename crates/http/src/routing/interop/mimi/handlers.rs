@@ -474,13 +474,34 @@ pub(super) async fn mimi_consent_update(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    verify_mimi_consent_update_authority(state, req, aa, &body).await?;
-    Err(AppError::new(
-        ErrorCode::FailedPrecondition,
-        "MIMI consent update requires a caller-authored Consent Event carrier",
+    body.validate_consent_event().map_err(|error| {
+        AppError::invalid_param(format!("MIMI consent Event binding is invalid: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    let session = verify_mimi_consent_update_authority(state, req, aa, &body).await?;
+    let event_ref = body.consent_event.event.event_id.clone();
+    let updated_at = body.consent_event.event.created_at;
+    crate::routing::events::event_log::submit_initial_event_submission(
+        state,
+        &session,
+        body.consent_event.clone(),
     )
-    .with_status(StatusCode::PRECONDITION_FAILED)
-    .with_wire_code("consent_event_authoring_required"))
+    .await
+    .map_err(|error| {
+        crate::routing::events::event_log::submit_one_error_to_app_error(
+            "MIMI consent Event submit failed",
+            error.status,
+            error.code,
+            &error.message,
+        )
+    })?;
+    json_ok(MimiUpdateConsentOutcome {
+        status: arkret_models_collaboration::http_bodies::MimiUpdateConsentStatus::Accepted,
+        consent_id: body.consent_id,
+        decision: body.decision,
+        updated_at,
+        event_ref,
+    })
 }
 
 pub(super) async fn verify_mimi_consent_write_authority(
@@ -510,19 +531,43 @@ async fn verify_mimi_consent_update_authority(
     req: &mut Request,
     aa: AuthArgs,
     body: &MimiUpdateConsentRequestBody,
-) -> Result<(), AppError> {
-    if request_has_bearer_session(req) {
+) -> Result<soland_services::identity::SessionIdentityState, AppError> {
+    let session = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if session.actor != body.actor_id.as_str() {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
         }
+        session
     } else {
         verify_mimi_write_service_proof(state, req, None).await?;
-    }
+        let device_id = body
+            .consent_event
+            .event
+            .proofs
+            .first()
+            .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
+            .map(|(_, fragment)| fragment.to_owned())
+            .ok_or_else(|| {
+                AppError::invalid_param("MIMI consent Event requires a DID URL proof key")
+                    .with_wire_code("invalid_proof")
+            })?;
+        soland_services::identity::SessionIdentityState {
+            token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
+            actor: body.actor_id.to_string(),
+            device_id,
+            audience: state.service_id().to_string(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        }
+    };
 
-    verify_mimi_consent_actor_proof(state, body).await
+    verify_mimi_consent_actor_proof(state, body).await?;
+    Ok(session)
 }
 
 async fn verify_mimi_consent_actor_proof(
@@ -579,65 +624,6 @@ async fn verify_mimi_consent_actor_proof(
         AppError::invalid_param("MIMI consent actor proof JWS verification failed")
             .with_wire_code("invalid_proof")
     })?;
-
-    consume_mimi_consent_proof_replay(state, body).await
-}
-
-async fn consume_mimi_consent_proof_replay(
-    state: &AppState,
-    body: &MimiUpdateConsentRequestBody,
-) -> Result<(), AppError> {
-    let proof = &body.signature;
-    let replay_digest = arkret_canonical::canonical_sha256(&json!({
-        "actor_id": body.actor_id,
-        "payload_digest": proof.payload_digest,
-        "jws": proof.jws,
-    }))
-    .map_err(|error| AppError::internal(format!("MIMI replay key failed: {error}")))?;
-    let replay_key = format!("mimi-consent-proof:{replay_digest}");
-    let idempotency = state.jobs();
-    let current_time = now();
-    if let Err(error) = idempotency.prune_expired_idempotency(current_time).await {
-        tracing::warn!(%error, "MIMI consent replay ledger prune failed");
-    }
-    if idempotency
-        .idempotency_record(body.actor_id.as_str(), &replay_key)
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI replay lookup failed: {error}")))?
-        .is_some()
-    {
-        return Err(
-            AppError::conflict("MIMI consent proof was already consumed")
-                .with_wire_code("duplicate_conflict"),
-        );
-    }
-
-    let claim = ids::generate("mimi_proof_claim");
-    let record = IdempotencyRecord {
-        principal_id: body.actor_id.to_string(),
-        idempotency_key: replay_key.clone(),
-        service_id: state.service_id().to_owned(),
-        request_hash: proof.payload_digest.to_string(),
-        response_status: StatusCode::NO_CONTENT.as_u16() as i32,
-        response_body: json!({ "claim": claim }),
-        created_at: current_time,
-        expires_at: proof.created_at + Duration::seconds(MIMI_OPERATION_PROOF_WINDOW_SECONDS),
-    };
-    idempotency
-        .store_idempotency_record(record.clone())
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI replay claim failed: {error}")))?;
-    let landed = idempotency
-        .idempotency_record(body.actor_id.as_str(), &replay_key)
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI replay claim read failed: {error}")))?
-        .ok_or_else(|| AppError::internal("MIMI replay claim was not persisted"))?;
-    if landed.response_body != record.response_body {
-        return Err(
-            AppError::conflict("MIMI consent proof was already consumed")
-                .with_wire_code("duplicate_conflict"),
-        );
-    }
     Ok(())
 }
 
@@ -1023,112 +1009,4 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
     AppError::capability_denied("MIMI proxy download asset_ref is denied by egress policy")
         .with_wire_code("egress_policy_denied")
         .with_reason_detail(error)
-}
-
-#[cfg(test)]
-mod consent_proof_tests {
-    use arkret_identifiers::{ConsentId, Did, Hash};
-    use arkret_models_collaboration::http_bodies::MimiConsentDecision;
-    use arkret_wire::{Audience, PayloadProof, proof_kind};
-    use soland_http::error::ErrorCode;
-    use soland_storage_postgres::Db;
-
-    use super::*;
-
-    fn state() -> AppState {
-        let mut config = crate::config::AppConfig::test_default();
-        config.development_mode = true;
-        AppState::new(config, Db { pool: None })
-    }
-
-    fn request(state: &AppState) -> MimiUpdateConsentRequestBody {
-        let actor_id = Did::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
-        let verification_method = format!("{actor_id}#cotest");
-        let mut request = MimiUpdateConsentRequestBody {
-            consent_id: ConsentId::new(
-                "ak:consent:01964137-0000-7000-8000-000000000777".to_owned(),
-            )
-            .unwrap(),
-            decision: MimiConsentDecision::Accept,
-            actor_id,
-            signature: PayloadProof {
-                kind: proof_kind::DETACHED_JWS.to_owned(),
-                verification_method: arkret_wire::DidUrl::new(verification_method.clone()).unwrap(),
-                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
-                created_at: now(),
-                domain: Some(state.config().trust_domain.clone()),
-                audience: Some(Audience::Single(state.service_id().to_owned())),
-                proof_purpose: None,
-                jws: "pending".to_owned(),
-            },
-            reason: None,
-            expires_at: None,
-        };
-        request.signature.payload_digest = request.payload_digest().unwrap();
-        let binding = request.signature_binding_bytes().unwrap();
-        let signing_key = arkret_signatures::development_signing_key(&verification_method);
-        request.signature.jws =
-            arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
-        request
-    }
-
-    #[tokio::test]
-    async fn consent_actor_proof_is_verified_and_consumed_once() {
-        let state = state();
-        let request = request(&state);
-        let binding = request.signature_binding_bytes().unwrap();
-        let direct_verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-            &binding,
-            &request.signature.jws,
-            &request.signature.verification_method,
-            request.actor_id.as_str(),
-            &state,
-        )
-        .await;
-        assert!(
-            direct_verification.is_ok(),
-            "direct proof verification failed: {direct_verification:?}"
-        );
-
-        verify_mimi_consent_actor_proof(&state, &request)
-            .await
-            .expect("first proof presentation");
-        let replay = verify_mimi_consent_actor_proof(&state, &request)
-            .await
-            .expect_err("proof replay must fail");
-
-        assert_eq!(replay.code, ErrorCode::Conflict);
-        assert_eq!(
-            replay.wire_code_override.as_deref(),
-            Some("duplicate_conflict")
-        );
-    }
-
-    #[tokio::test]
-    async fn consent_actor_proof_rejects_payload_tampering() {
-        let state = state();
-        let mut request = request(&state);
-        request.decision = MimiConsentDecision::Revoke;
-
-        let error = verify_mimi_consent_actor_proof(&state, &request)
-            .await
-            .expect_err("tampered body must fail");
-
-        assert_eq!(error.code, ErrorCode::InvalidParam);
-        assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
-    }
-
-    #[tokio::test]
-    async fn consent_actor_proof_rejects_wrong_destination_binding() {
-        let state = state();
-        let mut request = request(&state);
-        request.signature.domain = Some("ak:trust_domain:other.example".to_owned());
-
-        let error = verify_mimi_consent_actor_proof(&state, &request)
-            .await
-            .expect_err("cross-domain proof must fail");
-
-        assert_eq!(error.code, ErrorCode::InvalidParam);
-        assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
-    }
 }

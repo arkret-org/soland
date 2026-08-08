@@ -5,8 +5,9 @@
 
 use arkret_identifiers::Did;
 use arkret_models_collaboration::governance::erasure::{
-    ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
-    ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
+    ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptPackage, ErasureReceiptProof,
+    ErasureReceiptSubmitRequestBody, ErasureScope, ErasureStorageBoundary, ErasureSubject,
+    ErasureSubjectKind,
 };
 
 use super::*;
@@ -658,6 +659,12 @@ pub(super) async fn erase_account(
         )
         .await;
     }
+    enqueue_erasure_receipt_fanout(
+        state,
+        &affected_realms,
+        std::iter::once(&erasure_receipt).chain(realm_erasure_receipts.iter()),
+    )
+    .await?;
     // Snapshot the audit log inline so the response is the canonical
     // last-known-good view of the actor's audit trail — subsequent
     // authenticated reads will 401 with `account_erased`, making this
@@ -680,6 +687,85 @@ pub(super) async fn erase_account(
         sessions_revoked,
         devices_revoked,
     })
+}
+
+async fn enqueue_erasure_receipt_fanout<'a>(
+    state: &AppState,
+    affected_realms: &[String],
+    receipts: impl Iterator<Item = &'a Value>,
+) -> Result<(), AppError> {
+    let affected = affected_realms
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let recipient_services = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .into_iter()
+        .filter(|event| {
+            event
+                .realm_id
+                .as_deref()
+                .is_some_and(|realm_id| affected.contains(realm_id))
+        })
+        .filter(|event| event.kind == arkret_wire::EventKind::MEMBER_STATE)
+        .filter_map(|event| {
+            event
+                .envelope
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("delivery_binding"))
+                .and_then(Value::as_object)
+                .and_then(|binding| binding.get("recipient_service_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|service| service != state.service_id())
+        .collect::<std::collections::BTreeSet<_>>();
+    let peers = crate::routing::federation::federation::configured_peer_targets(state)
+        .into_iter()
+        .filter(|peer| recipient_services.contains(&peer.did))
+        .collect::<Vec<_>>();
+    for receipt in receipts {
+        let receipt: ErasureReceipt = serde_json::from_value(receipt.clone())
+            .map_err(|error| AppError::internal(format!("typed erasure receipt: {error}")))?;
+        let retained_stub = receipt.retained_stub.clone().ok_or_else(|| {
+            AppError::internal("outbound erasure receipt has no retained verification stub")
+        })?;
+        let mut package = ErasureReceiptPackage {
+            receipt,
+            receipt_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("static digest"),
+            retained_stub,
+        };
+        package.receipt_digest = package
+            .computed_receipt_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        package
+            .validate_bindings()
+            .map_err(|error| AppError::internal(format!("outbound erasure package: {error}")))?;
+        let body = ErasureReceiptSubmitRequestBody { package };
+        let payload = arkret_canonical::canonical_json_string(&body)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        for peer in &peers {
+            crate::routing::federation::outbox::enqueue_outbound(
+                state,
+                &peer.url,
+                &peer.did,
+                "/_arkret/peer/erasure-receipts",
+                &format!(
+                    "ak:outbox:erasure-receipt:{}",
+                    body.package.receipt.receipt_id
+                ),
+                &payload,
+            )
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]

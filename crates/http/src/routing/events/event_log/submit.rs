@@ -1038,7 +1038,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 || basis_evidence_bundle
                     .current_proofs
                     .iter()
-                    .any(|proof| proof.fresh_until <= accepted_at)
+                    .any(|proof| proof.terminal || proof.fresh_until <= accepted_at)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -1113,16 +1113,52 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             format!("service DID is invalid: {error}"),
         )
     })?;
-    let (issuer_service_binding_digest, verification_method) = state
-        .current_service_receipt_binding()
+    verify_accepted_principal_service_binding(&submission.source_service_binding, state)
         .await
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("service receipt binding is unavailable: {error}"),
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                format!("source service binding is invalid: {error}"),
             )
         })?;
+    if submission.source_service_binding.principal_id != founder_id
+        || submission.source_service_binding.service_id != issuer_service_id
+        || submission.source_service_binding.accepted_at > accepted_at
+        || submission
+            .source_service_binding
+            .expires_at
+            .is_some_and(|until| until < accepted_at)
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "source service binding does not authorize this founder/service at acceptance",
+        ));
+    }
+    let (_, verification_method) =
+        state
+            .current_service_receipt_binding()
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("service receipt binding is unavailable: {error}"),
+                )
+            })?;
+    if verification_method
+        != submission
+            .source_service_binding
+            .service_verification_method
+            .id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "source service binding does not use the current service assertion method",
+        ));
+    }
     let mut receipt = DirectConversationFoundingAcceptanceReceipt {
         pair_key: pair_key.clone(),
         founder_id: founder_id.clone(),
@@ -1132,7 +1168,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         authorization_core,
         slot_committed: true,
         issuer_service_id,
-        issuer_service_binding_digest,
+        issuer_service_binding_digest: submission.source_service_binding.binding_digest.clone(),
         accepted_at,
         proof: arkret_wire::ProtocolSignature {
             verification_method,
@@ -1201,6 +1237,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             slot,
             receipt: receipt.clone(),
             founder_basis_evidence: basis_evidence,
+            source_service_binding: submission.source_service_binding.clone(),
         }),
     )
     .await?;
@@ -2652,12 +2689,47 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    if source_service_id != receipt.issuer_service_id.as_str() {
+    let source_service_id_typed = match Did::new(source_service_id.to_owned()) {
+        Ok(value) => value,
+        Err(_) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "invalid Source-Service-ID",
+            );
+            return;
+        }
+    };
+    let continuity_valid = verify_principal_service_binding_continuity(
+        &submission.source_service_continuity,
+        &source_service_id_typed,
+        state,
+    )
+    .await
+    .is_ok();
+    if submission
+        .source_service_continuity
+        .accepted_binding
+        .binding_digest
+        != receipt.issuer_service_binding_digest
+        || submission
+            .source_service_continuity
+            .accepted_binding
+            .principal_id
+            != receipt.founder_id
+        || submission
+            .source_service_continuity
+            .accepted_binding
+            .service_id
+            != receipt.issuer_service_id
+        || !continuity_valid
+    {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "transport source does not match the founding receipt issuer",
+            "transport source does not have valid founder service-binding continuity",
         );
         return;
     }
@@ -2802,6 +2874,86 @@ async fn submit_direct_conversation_federation(
         ),
         Err(error) => render_submit_one_error(res, error),
     }
+}
+
+async fn verify_accepted_principal_service_binding(
+    binding: &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
+    state: &AppState,
+) -> Result<(), String> {
+    use arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingProofPurpose;
+    use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
+
+    binding
+        .validate_shape()
+        .map_err(|error| error.to_string())?;
+    let service_input = binding
+        .proof_signing_input_bytes(
+            PrincipalServiceBindingProofPurpose::ServiceAcceptance,
+            &binding.service_acceptance_proof.verification_method,
+        )
+        .map_err(|error| error.to_string())?;
+    let service_key = arkret_canonical::decode_ed25519_multibase(
+        &binding.service_verification_method.public_key_multibase,
+    )
+    .map_err(|error| format!("service binding key is invalid: {error}"))?;
+    Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            binding.service_acceptance_proof.jws.as_str(),
+            &service_input,
+            &PublicKeyMaterial::Ed25519Raw {
+                bytes: service_key.to_vec(),
+            },
+        )
+        .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
+    let principal_input = binding
+        .proof_signing_input_bytes(
+            PrincipalServiceBindingProofPurpose::PrincipalAuthorization,
+            &binding.principal_authorization_proof.verification_method,
+        )
+        .map_err(|error| error.to_string())?;
+    crate::jws_verify::verify_did_controlled_jws_async(
+        &principal_input,
+        binding.principal_authorization_proof.jws.as_str(),
+        binding
+            .principal_authorization_proof
+            .verification_method
+            .as_str(),
+        binding.principal_id.as_str(),
+        state,
+    )
+    .await
+}
+
+async fn verify_principal_service_binding_continuity(
+    continuity: &arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingContinuity,
+    transport_source: &Did,
+    state: &AppState,
+) -> Result<(), String> {
+    continuity
+        .validate_shape(transport_source)
+        .map_err(|error| error.to_string())?;
+    verify_accepted_principal_service_binding(&continuity.accepted_binding, state).await?;
+    for edge in &continuity.cutovers {
+        verify_accepted_principal_service_binding(&edge.new_binding, state).await?;
+        let input = edge
+            .signing_input_bytes()
+            .map_err(|error| error.to_string())?;
+        for (proof, issuer) in [
+            (&edge.principal_proof, &edge.principal_id),
+            (&edge.previous_service_proof, &edge.previous_service_id),
+            (&edge.new_service_proof, &edge.new_service_id),
+        ] {
+            crate::jws_verify::verify_did_controlled_jws_async(
+                &input,
+                proof.jws.as_str(),
+                proof.verification_method.as_str(),
+                issuer.as_str(),
+                state,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 async fn project_verified_federated_device_evidence(

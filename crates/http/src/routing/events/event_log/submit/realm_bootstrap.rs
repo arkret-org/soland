@@ -6,6 +6,8 @@ pub(super) struct DirectConversationFoundingCommitContext {
     pub receipt: DirectConversationFoundingAcceptanceReceipt,
     pub founder_basis_evidence:
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+    pub source_service_binding:
+        arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
 }
 
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {
@@ -287,6 +289,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             &envelopes,
             &context.receipt,
             &context.founder_basis_evidence,
+            &context.source_service_binding,
         )
         .await
         .map_err(|error| {

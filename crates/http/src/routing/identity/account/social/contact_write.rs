@@ -723,6 +723,15 @@ fn sign_request_receipt(
         peer: reservation.branch.peer().clone(),
         slot_version: 1,
         slot_predecessor: None,
+        previous_terminal_basis_id: event
+            .payload
+            .get("previous_terminal_basis_id")
+            .and_then(Value::as_str)
+            .map(|value| Hash::new(value.to_owned()))
+            .transpose()
+            .map_err(|error| {
+                AppError::invalid_param(format!("previous terminal basis: {error}"))
+            })?,
         request_event_ref: event.event_id.clone(),
         request_digest: request_digest.clone(),
         source_checkpoint: contact_hash(
@@ -784,6 +793,7 @@ fn signed_current_proof(
     basis_id: Hash,
     event: &Event,
 ) -> Result<ContactCurrentProof, AppError> {
+    let terminal = event.kind.as_str() == arkret_wire::EventKind::CONTACT_TOMBSTONED;
     let head_digest = Hash::new(
         event
             .event_digest()
@@ -794,6 +804,7 @@ fn signed_current_proof(
     let unsigned = json!({
         "basis_id": basis_id,
         "issuer": event.actor_id,
+        "terminal": terminal,
         "head_event_ref": event.event_id,
         "head_digest": head_digest,
         "accepted_frontier": [event.event_id.clone()],
@@ -803,6 +814,7 @@ fn signed_current_proof(
     Ok(ContactCurrentProof {
         basis_id,
         issuer: event.actor_id.clone(),
+        terminal,
         head_event_ref: event.event_id.clone(),
         head_digest,
         accepted_frontier: vec![event.event_id.clone()],
@@ -1239,6 +1251,22 @@ pub(super) async fn request(
 ) -> JsonResult<ContactOperationOutcome> {
     match body {
         ContactOperationRequestBody::Prepare(body) => {
+            let prior = state
+                .contacts()
+                .contact_any(&session.actor, body.peer.subject_id().as_str())
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let local_terminal_basis = prior.as_ref().and_then(|record| {
+                (record.status == "tombstoned")
+                    .then_some(record.basis_id.as_deref())
+                    .flatten()
+            });
+            if local_terminal_basis != body.previous_terminal_basis_id.as_ref().map(Hash::as_str) {
+                return Err(AppError::conflict(
+                    "recontact request does not link the immediate local terminal Contact basis",
+                )
+                .with_wire_code("contact_lineage_conflict"));
+            }
             let introduction_evidence_digest = contact_hash(
                 "ak.contact.introduction-evidence.v1",
                 &body.introduction_evidence,
@@ -1247,6 +1275,7 @@ pub(super) async fn request(
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
+                previous_terminal_basis_id: body.previous_terminal_basis_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
             })
             .map_err(|error| AppError::internal(format!("Contact request payload: {error}")))?;
@@ -1303,6 +1332,11 @@ pub(super) async fn respond(
                 version: 1,
                 request_event_ref: body.request_receipt.core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
+                previous_terminal_basis_id: body
+                    .request_receipt
+                    .core
+                    .previous_terminal_basis_id
+                    .clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
             })
             .map_err(|error| AppError::internal(format!("Contact accept payload: {error}")))?;

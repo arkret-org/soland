@@ -322,7 +322,7 @@ async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOu
         unsupported_profiles,
         proof_verifier_mode: state.config().proof_verifier_mode().to_owned(),
         admin_auth_mode: state.admin_auth_mode().to_owned(),
-        erasure_receipts_endpoint: "/_soland/admin/audit/erasure-receipts".to_owned(),
+        erasure_receipts_endpoint: "/_arkret/peer/erasure-receipts/{receipt_id}".to_owned(),
         hardening: state.config().hardening_status(),
     })
 }

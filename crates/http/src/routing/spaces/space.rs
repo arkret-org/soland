@@ -33,7 +33,7 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 
 use super::AuthArgs;
-use crate::routing::{is_valid_discoverability, organizations};
+use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry};
 use crate::wire::now;
 use crate::{JsonResult, json_ok};
