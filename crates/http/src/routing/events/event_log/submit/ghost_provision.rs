@@ -289,6 +289,7 @@ async fn prepare_ghost_event(
             received_at,
         },
         control_proposal_ack,
+        self_principal_pcr_device_authorized: false,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {

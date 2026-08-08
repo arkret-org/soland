@@ -1711,60 +1711,40 @@ async fn validate_identity_creation_control_proof(
             "PCR genesis requires the accepted DID inception entry",
         )
     })?;
-    if inception.seq != 0 {
+    if inception.did != request.principal_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "PCR genesis DID history does not begin at entry zero",
+            "PCR genesis DID history belongs to a different principal",
         ));
     }
-    let root_key = inception
-        .operation
-        .pointer("/parameters/updateKeys/0")
-        .or_else(|| inception.operation.pointer("/parameters/update_keys/0"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
+    let inception_operation = inception.operation.as_object().cloned().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "accepted DID inception operation is not an object",
+        )
+    })?;
+    // Reconstruct the exact typed submit request whose canonical digest is
+    // committed by the Account Authority and SDK control-proof verifier. The
+    // DID store's `event_digest` intentionally hashes only the native log
+    // entry, so comparing it with this wrapper digest would reject every
+    // otherwise valid inception.
+    let inception_submit = arkret_models_identity::identity::DidOperationSubmitRequestBody {
+        did: request.principal_id.clone(),
+        did_method: "webvh".to_owned(),
+        seq: Some(inception.seq),
+        prev_event_digest: None,
+        operation: inception_operation.into_iter().collect(),
+    };
+    arkret_signatures::webvh::verify_identity_creation_control_proof(&inception_submit, proof)
+        .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::FORBIDDEN,
                 "invalid_proof",
-                "DID inception does not expose one identity root",
+                format!("identity creation control proof is invalid: {error}"),
             )
         })?;
-    if inception.event_digest != proof.operation_digest.as_str()
-        || root_key != proof.verification_key_multibase
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation control proof does not match the accepted DID inception",
-        ));
-    }
-    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            format!("identity creation proof transcript is invalid: {error}"),
-        )
-    })?;
-    let key = crate::routing::identity::device_signing::decode_ed25519_key(root_key, "multibase")
-        .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("identity root key is invalid: {error}"),
-        )
-    })?;
-    if !crate::routing::identity::device_signing::ed25519_verify(
-        &key,
-        &signing_bytes,
-        &proof.signature,
-    ) {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation control signature is invalid",
-        ));
-    }
     Ok(())
 }
 

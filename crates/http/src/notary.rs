@@ -986,6 +986,17 @@ impl NotaryWorker {
                 )));
             };
             let Some(ack) = record.control_proposal_ack.as_ref() else {
+                if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
+                    && state
+                        .projections()
+                        .snapshot()
+                        .realm_is_principal_control(record.event.realm_id.as_str())
+                {
+                    // A current Human PCR device, rather than this service,
+                    // owns the successor-Seal decision. There is no external
+                    // proposal Ack against which to record a signed rejection.
+                    continue;
+                }
                 return Err(NotaryError::Store(format!(
                     "rejected Control Move {digest} has no Control Proposal Ack"
                 )));

@@ -559,11 +559,22 @@ impl ProjectionService {
         let mut pending_proposals = Vec::with_capacity(records.len());
         for record in records {
             let digest = arkret_state::state::control_event_digest(&record.event)?;
-            let ack = record.control_proposal_ack.ok_or_else(|| {
-                arkret_state::state::StoreError::Conflict(format!(
+            let Some(ack) = record.control_proposal_ack else {
+                // Authority-authored self-principal PCR moves are deliberately
+                // outside the external proposal/Ack bounded-decision rail.
+                // They remain pending until successor-Seal finality, but are
+                // not governance-health proposals and have no decision clock.
+                if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
+                    && self
+                        .snapshot()
+                        .realm_is_principal_control(record.event.realm_id.as_str())
+                {
+                    continue;
+                }
+                return Err(arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} is missing its Control Proposal Ack"
-                ))
-            })?;
+                )));
+            };
             ack.validate_structural(policy).map_err(|error| {
                 arkret_state::state::StoreError::Conflict(format!(
                     "pending Control Move {digest} has an invalid Control Proposal Ack \
@@ -615,6 +626,15 @@ impl ProjectionService {
         let mut retained_faults = Vec::new();
         for record in sealed {
             let Some(ack) = record.control_proposal_ack else {
+                // The same Ack-less PCR class has no proposal deadline to
+                // retain as a governance fault after its Seal is accepted.
+                if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
+                    && self
+                        .snapshot()
+                        .realm_is_principal_control(record.event.realm_id.as_str())
+                {
+                    continue;
+                }
                 return Err(arkret_state::state::StoreError::Conflict(format!(
                     "sealed Control Move {} is missing its Control Proposal Ack",
                     arkret_state::state::control_event_digest(&record.event)?

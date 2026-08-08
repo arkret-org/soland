@@ -794,6 +794,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let request = EventCommitRequest {
         event,
         control_proposal_ack: Some(control_proposal_ack),
+        self_principal_pcr_device_authorized: false,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -883,6 +884,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed = EventCommitRequest {
         event: rollback_event,
         control_proposal_ack: Some(rollback_ack),
+        self_principal_pcr_device_authorized: false,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),

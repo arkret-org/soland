@@ -156,6 +156,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 received_at: now,
             },
             control_proposal_ack: Some(ack),
+            self_principal_pcr_device_authorized: false,
             projections: Vec::new(),
             idempotency: None,
             outbox: Vec::new(),
@@ -358,6 +359,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 EventCommitRequest {
                     event: prefix,
                     control_proposal_ack: None,
+                    self_principal_pcr_device_authorized: false,
                     projections: Vec::new(),
                     idempotency: None,
                     outbox: Vec::new(),
@@ -365,6 +367,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 EventCommitRequest {
                     event: incoming,
                     control_proposal_ack: None,
+                    self_principal_pcr_device_authorized: false,
                     projections: Vec::new(),
                     idempotency: None,
                     outbox: Vec::new(),

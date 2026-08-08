@@ -235,10 +235,24 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     )
                     .into());
                 }
-                let control_proposal_ack = request
-                    .control_proposal_ack
-                    .as_ref()
-                    .map(|ack| {
+                let control_proposal_ack = if request.self_principal_pcr_device_authorized {
+                    if request.control_proposal_ack.is_some()
+                        || !soland_storage::has_self_principal_pcr_device_authorized_shape(
+                            &typed_event,
+                        )
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: invalid self-principal PCR device-authorized Control Move"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    None
+                } else {
+                    Some(request
+                        .control_proposal_ack
+                        .as_ref()
+                        .map(|ack| {
                         if ack.proposal_digest.as_str() != event_digest
                             || ack.realm_id != typed_event.realm_id
                         {
@@ -252,14 +266,15 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                                 "Control Proposal Ack encoding failed: {error}"
                             ))
                         })
-                    })
-                    .transpose()?
-                    .ok_or_else(|| {
+                        })
+                        .transpose()?
+                        .ok_or_else(|| {
                         PersistenceError::Conflict(
                             "schema_violation: accepted Control Move is missing Control Proposal Ack"
                                 .to_owned(),
                         )
-                    })?;
+                        })?)
+                };
                 sql_query(
                     "INSERT INTO state_control_events \
                      (event_digest, realm_id, event_json, control_proposal_ack) \
@@ -271,12 +286,13 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                      WHERE state_control_events.realm_id = EXCLUDED.realm_id \
                        AND state_control_events.event_json = EXCLUDED.event_json \
                        AND (state_control_events.control_proposal_ack IS NULL \
+                         OR EXCLUDED.control_proposal_ack IS NULL \
                          OR state_control_events.control_proposal_ack = EXCLUDED.control_proposal_ack)",
                 )
                 .bind::<Text, _>(&event_digest)
                 .bind::<Text, _>(typed_event.realm_id.as_str())
                 .bind::<Jsonb, _>(&request.event.envelope)
-                .bind::<Jsonb, _>(&control_proposal_ack)
+                .bind::<Nullable<Jsonb>, _>(control_proposal_ack.as_ref())
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)
@@ -290,9 +306,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
-            } else if request.control_proposal_ack.is_some() {
+            } else if request.control_proposal_ack.is_some()
+                || request.self_principal_pcr_device_authorized
+            {
                 return Err(PersistenceError::Conflict(
-                    "schema_violation: non-Control Event cannot carry a Control Proposal Ack"
+                    "schema_violation: non-Control Event cannot carry Control Proposal authority"
                         .to_owned(),
                 )
                 .into());

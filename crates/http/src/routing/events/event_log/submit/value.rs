@@ -581,6 +581,112 @@ async fn stored_control_proposal_ack(
     Ok(submitted.clone())
 }
 
+/// Whether this Control Move is authored directly by the current device of a
+/// self-principal Human PCR.
+///
+/// This is the only class whose Event proof is also its proposal authority.
+/// It deliberately skips the external Control Proposal Ack/decision rail, but
+/// it still enters the pending-control store and requires an accepted
+/// successor Seal for finality. Every condition is checked against accepted
+/// state; managed Agents and ordinary Realms therefore remain on the Ack rail.
+pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
+    state: &AppState,
+    event: &Event,
+) -> Result<bool, String> {
+    let is_control_move =
+        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
+    if !is_control_move
+        || !soland_storage::has_self_principal_pcr_device_authorized_shape(event)
+        || !state
+            .projections()
+            .snapshot()
+            .realm_is_principal_control(event.realm_id.as_str())
+    {
+        return Ok(false);
+    }
+
+    let realm_id = RealmId::new(event.realm_id.to_string())
+        .map_err(|error| format!("self-principal PCR Realm id is invalid: {error}"))?;
+    let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+    let Some((notary, _)) = worker
+        // The exemption is based on accepted authority, never on a notary
+        // mutation proposed by this Event itself.
+        .current_notary_profile_for_events(state, &realm_id, &[])
+        .map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
+    else {
+        return Ok(false);
+    };
+    if !matches!(
+        notary,
+        arkret_wire::notary::NotaryValue::SingleDid { ref did, .. }
+            if did == &event.actor_id
+    ) {
+        return Ok(false);
+    }
+
+    let proof = &event.proofs[0];
+    let proof_prefix = format!("{}#", event.actor_id);
+    let Some(device_id) = proof
+        .verification_method
+        .as_str()
+        .strip_prefix(&proof_prefix)
+        .filter(|fragment| fragment.starts_with("ak:device:"))
+        .filter(|fragment| fragment.len() > "ak:device:".len())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(false);
+    };
+    let Some(device) = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: event.actor_id.to_string(),
+            device_id,
+        })
+        .await
+        .map_err(|error| format!("self-principal PCR device lookup failed: {error}"))?
+    else {
+        return Ok(false);
+    };
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Ok(false);
+    }
+    let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        event.actor_id.as_str(),
+    )
+    .await
+    .map_err(|error| format!("self-principal PCR device generation is unavailable: {error}"))?
+    else {
+        return Ok(false);
+    };
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || device
+            .payload
+            .get("authorized_generation_ref")
+            .and_then(Value::as_str)
+            != Some(generation.current_ref.as_str())
+    {
+        return Ok(false);
+    }
+
+    let basis = event
+        .seal_basis
+        .as_ref()
+        .expect("the persistence-side shape guard requires a non-empty Seal basis");
+    for leaf in &basis.leaves {
+        if state
+            .projections()
+            .seal_by_id(leaf)
+            .map_err(|error| format!("self-principal PCR Seal basis is unavailable: {error}"))?
+            .is_none()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
@@ -725,6 +831,32 @@ pub(super) async fn submit_event_value_with_context(
             None => None,
         };
     let received_at = now();
+    let envelope_for_bootstrap = envelope.clone();
+    let control_event_for_proposal =
+        serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
+            .ok()
+            .filter(|event| {
+                event.kind.is_reducer_input()
+                    && event.seal_ref.is_none()
+                    && event.auth_context.is_none()
+            });
+    let self_principal_pcr_device_authorized =
+        if let Some(event) = control_event_for_proposal.as_ref() {
+            is_authority_authored_self_principal_pcr_control_move(state, event)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?
+        } else {
+            false
+        };
+    if self_principal_pcr_device_authorized && submitted_control_proposal_ack.is_some() {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "authority-authored self-principal PCR Control Move must not carry a Control Proposal Ack",
+        ));
+    }
     // `offline-publication.md` §2.1 — the receipt is minted once the lease,
     // Event proofs and scope have been verified, and BEFORE the duplicate
     // check, so an idempotent retry returns the stored receipt rather than a
@@ -790,7 +922,9 @@ pub(super) async fn submit_event_value_with_context(
                 .await,
                 ingress_receipt.as_ref(),
             );
-            if envelope.get("seal_basis").is_some() || managed_agent_pcr_genesis {
+            if (envelope.get("seal_basis").is_some() || managed_agent_pcr_genesis)
+                && !self_principal_pcr_device_authorized
+            {
                 let digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1498,15 +1632,6 @@ pub(super) async fn submit_event_value_with_context(
         stamp_projection_operation_received_at(operation, received_at);
     }
 
-    let envelope_for_bootstrap = envelope.clone();
-    let control_event_for_proposal =
-        serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
-            .ok()
-            .filter(|event| {
-                event.kind.is_reducer_input()
-                    && event.seal_ref.is_none()
-                    && event.auth_context.is_none()
-            });
     let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
             SubmitOneError::new(
@@ -1522,103 +1647,114 @@ pub(super) async fn submit_event_value_with_context(
                 format!("validated Control Move digest is invalid: {error}"),
             )
         })?;
-        let policy = crate::control_proposal::control_proposal_policy(
-            state,
-            &realm_id,
-            std::slice::from_ref(event),
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "quorum_unreachable",
-                format!("Control Proposal policy is unavailable: {error}"),
-            )
-        })?;
-        if let Some(ack) = submitted_control_proposal_ack {
-            let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-            let (_, authority_set_ref) = worker
-                .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        format!("Control Proposal authority is unavailable: {error}"),
-                    )
-                })?
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        "current proposal authority profile is unavailable",
-                    )
-                })?;
-            if ack.realm_id != realm_id
-                || ack.proposal_digest != proposal_digest
-                || ack.authority_set_ref != authority_set_ref
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    "submitted Control Proposal Ack does not bind the Event basis authority",
-                ));
-            }
-            crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "failed_precondition",
-                        format!("submitted Control Proposal Ack is invalid: {error}"),
-                    )
-                })?;
-            Some(ack.clone())
-        } else if event.seal_basis.is_none() {
-            let bootstrap_authority = authorization_lease
-                .map(|lease| &lease.authority_set_ref)
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "failed_precondition",
-                        "basis-less Control Move requires an anchor-unit authorization lease",
-                    )
-                })?;
-            crate::control_proposal::mint_control_proposal_acks(
+        if self_principal_pcr_device_authorized {
+            None
+        } else {
+            let policy = crate::control_proposal::control_proposal_policy(
                 state,
                 &realm_id,
                 std::slice::from_ref(event),
-                received_at,
-                Some(bootstrap_authority),
             )
             .await
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "quorum_unreachable",
-                    format!("Control Proposal Ack signing failed: {error}"),
+                    format!("Control Proposal policy is unavailable: {error}"),
                 )
-            })?
-            .into_iter()
-            .next()
-        } else {
-            let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-            let (_, authority_set_ref) = worker
-                .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+            })?;
+            if let Some(ack) = submitted_control_proposal_ack {
+                let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+                let (_, authority_set_ref) = worker
+                    .current_notary_profile_for_events(
+                        state,
+                        &realm_id,
+                        std::slice::from_ref(event),
+                    )
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "quorum_unreachable",
+                            format!("Control Proposal authority is unavailable: {error}"),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "quorum_unreachable",
+                            "current proposal authority profile is unavailable",
+                        )
+                    })?;
+                if ack.realm_id != realm_id
+                    || ack.proposal_digest != proposal_digest
+                    || ack.authority_set_ref != authority_set_ref
+                {
+                    return Err(SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        "submitted Control Proposal Ack does not bind the Event basis authority",
+                    ));
+                }
+                crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
+                    .await
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::PRECONDITION_FAILED,
+                            "failed_precondition",
+                            format!("submitted Control Proposal Ack is invalid: {error}"),
+                        )
+                    })?;
+                Some(ack.clone())
+            } else if event.seal_basis.is_none() {
+                let bootstrap_authority = authorization_lease
+                    .map(|lease| &lease.authority_set_ref)
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::PRECONDITION_FAILED,
+                            "failed_precondition",
+                            "basis-less Control Move requires an anchor-unit authorization lease",
+                        )
+                    })?;
+                crate::control_proposal::mint_control_proposal_acks(
+                    state,
+                    &realm_id,
+                    std::slice::from_ref(event),
+                    received_at,
+                    Some(bootstrap_authority),
+                )
+                .await
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "quorum_unreachable",
-                        format!("Control Proposal authority is unavailable: {error}"),
+                        format!("Control Proposal Ack signing failed: {error}"),
                     )
                 })?
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        "current proposal authority profile is unavailable",
+                .into_iter()
+                .next()
+            } else {
+                let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+                let (_, authority_set_ref) = worker
+                    .current_notary_profile_for_events(
+                        state,
+                        &realm_id,
+                        std::slice::from_ref(event),
                     )
-                })?;
-            worker
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "quorum_unreachable",
+                            format!("Control Proposal authority is unavailable: {error}"),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "quorum_unreachable",
+                            "current proposal authority profile is unavailable",
+                        )
+                    })?;
+                worker
                 .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1634,23 +1770,24 @@ pub(super) async fn submit_event_value_with_context(
                         "this service cannot issue the current authority set's Control Proposal Ack",
                     )
                 })?;
-            Some(
-                crate::control_proposal::mint_control_proposal_ack(
-                    state,
-                    realm_id,
-                    proposal_digest,
-                    authority_set_ref,
-                    received_at,
-                    policy,
-                )
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("Control Proposal Ack signing failed: {error}"),
+                Some(
+                    crate::control_proposal::mint_control_proposal_ack(
+                        state,
+                        realm_id,
+                        proposal_digest,
+                        authority_set_ref,
+                        received_at,
+                        policy,
                     )
-                })?,
-            )
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("Control Proposal Ack signing failed: {error}"),
+                        )
+                    })?,
+                )
+            }
         }
     } else {
         None
@@ -1772,6 +1909,7 @@ pub(super) async fn submit_event_value_with_context(
             received_at,
         },
         control_proposal_ack: control_proposal_ack.clone(),
+        self_principal_pcr_device_authorized,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
@@ -1900,7 +2038,8 @@ pub(super) async fn submit_event_value_with_context(
                         .await,
                         ingress_receipt.as_ref(),
                     );
-                    if control_event_for_proposal.is_some() {
+                    if control_event_for_proposal.is_some() && !self_principal_pcr_device_authorized
+                    {
                         let digest =
                             Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
                                 SubmitOneError::new(
@@ -1938,14 +2077,12 @@ pub(super) async fn submit_event_value_with_context(
         ));
     }
     if let Some(control_event) = control_event_for_proposal.as_ref() {
+        // Device-authorized self-principal PCR moves do not enter the external
+        // proposal/decision rail. They remain canonical pending controls, with
+        // a nullable Ack, until the same authority signs a successor Seal.
         state
             .projections()
-            .put_pending_control_event_with_ack(
-                control_event,
-                control_proposal_ack
-                    .as_ref()
-                    .expect("Control Proposal Ack was minted before commit"),
-            )
+            .put_pending_control_event(control_event, control_proposal_ack.as_ref())
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,

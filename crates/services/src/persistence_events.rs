@@ -102,6 +102,7 @@ fn persistence_event_commit_request(
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
         control_proposal_ack: command.control_proposal_ack,
+        self_principal_pcr_device_authorized: command.self_principal_pcr_device_authorized,
         projections: command
             .projections
             .into_iter()

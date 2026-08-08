@@ -178,6 +178,16 @@ fn defer_due_proposals_after_failed_signing(
         .map_err(|error| error.to_string())?;
     for record in records {
         let Some(ack) = record.control_proposal_ack.as_ref() else {
+            if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
+                && state
+                    .projections()
+                    .snapshot()
+                    .realm_is_principal_control(record.event.realm_id.as_str())
+            {
+                // Device-authorized Human PCR moves have no external proposal
+                // deadline and therefore never receive coordinator defers.
+                continue;
+            }
             return Err(format!(
                 "pending Control Move {} has no Control Proposal Ack",
                 record

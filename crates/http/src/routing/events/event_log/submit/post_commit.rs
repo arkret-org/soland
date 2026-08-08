@@ -219,36 +219,46 @@ async fn federation_submissions(
             && event.seal_ref.is_none()
             && event.auth_context.is_none();
         let control_proposal_ack = if is_control_move {
-            let proposal_digest =
-                arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
-                    format!(
-                        "Control Move {} digest is not a typed Hash: {error}",
-                        event.event_id
-                    )
-                })?;
-            if let Some(ack) = current_control_proposal_ack
-                .filter(|ack| ack.proposal_digest == proposal_digest)
-                .or_else(|| {
-                    pending_control_proposal_acks
-                        .iter()
-                        .find(|ack| ack.proposal_digest == proposal_digest)
-                })
+            // A current accepted device is the proposal authority in its own
+            // Human PCR. This class is intentionally federated without an Ack;
+            // receivers run the same accepted-state admission check and still
+            // require the successor Seal before applying the Move.
+            if super::value::is_authority_authored_self_principal_pcr_control_move(state, event)
+                .await?
             {
-                Some(ack.clone())
+                None
             } else {
-                match state.projections().control_proposal_ack(&proposal_digest) {
-                    Ok(Some(ack)) => Some(ack),
-                    Ok(None) => {
-                        return Err(format!(
-                            "Control Move {} has no stored Control Proposal Ack and cannot be federated",
+                let proposal_digest =
+                    arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
+                        format!(
+                            "Control Move {} digest is not a typed Hash: {error}",
                             event.event_id
-                        ));
-                    }
-                    Err(error) => {
-                        return Err(format!(
-                            "failed to read Control Move {} Control Proposal Ack for federation: {error}",
-                            event.event_id
-                        ));
+                        )
+                    })?;
+                if let Some(ack) = current_control_proposal_ack
+                    .filter(|ack| ack.proposal_digest == proposal_digest)
+                    .or_else(|| {
+                        pending_control_proposal_acks
+                            .iter()
+                            .find(|ack| ack.proposal_digest == proposal_digest)
+                    })
+                {
+                    Some(ack.clone())
+                } else {
+                    match state.projections().control_proposal_ack(&proposal_digest) {
+                        Ok(Some(ack)) => Some(ack),
+                        Ok(None) => {
+                            return Err(format!(
+                                "Control Move {} has no stored Control Proposal Ack and cannot be federated",
+                                event.event_id
+                            ));
+                        }
+                        Err(error) => {
+                            return Err(format!(
+                                "failed to read Control Move {} Control Proposal Ack for federation: {error}",
+                                event.event_id
+                            ));
+                        }
                     }
                 }
             }

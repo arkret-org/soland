@@ -62,9 +62,10 @@ pub trait EventStore: Send + Sync {
         trust_domain_id: &str,
         pair_key: &str,
     ) -> PersistenceResult<Option<DirectConversationFoundingSlotRecord>>;
-    /// Commit the closed identity-anchor unit, its signed receipt (for
-    /// re-anchor), the replacement device projection and its federation outbox
-    /// rows as one durable unit.
+    /// Commit the closed identity-anchor unit, its signed accepted-unit
+    /// receipt, the device projection and its federation outbox rows as one
+    /// durable unit. PCR genesis carries no Control Proposal Ack; an accepted
+    /// re-anchor carries one Ack per Control Move.
     #[allow(clippy::too_many_arguments)]
     async fn put_identity_anchor_batch_atomic(
         &self,

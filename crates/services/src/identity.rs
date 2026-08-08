@@ -1809,8 +1809,7 @@ pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
     pub issuer: String,
     pub credential_class: arkret_models_identity::session_credential::SessionGrantCredentialClass,
-    pub holder_binding:
-        Option<arkret_models_identity::session_credential::SessionGrantHolderBinding>,
+    pub holder_binding: arkret_models_identity::session_credential::SessionGrantHolderBinding,
     pub cnf_jkt: String,
 }
 

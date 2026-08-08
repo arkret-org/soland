@@ -239,7 +239,7 @@ pub struct AppStateRuntime {
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
-        let demo_realm_id = "ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG";
+        let demo_realm_id = "ak:realm:Ae3cHe84Qdq9276TYWiGD-pAkFlCQrwmo6sI-8UeAlEl";
         let mut demo = RealmDirectoryEntry::new(
             RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
             "Arkret Demo Realm",

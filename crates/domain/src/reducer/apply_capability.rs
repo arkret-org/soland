@@ -1088,24 +1088,15 @@ impl ProjectionState {
     /// per-action whitelist — and a grantable action still passes its
     /// profile's own registration / constraint / evidence gates downstream.
     fn realm_declared_profiles(&self, realm_id: &str) -> Vec<String> {
-        let Some(metadata) = self
-            .realm_create_log(realm_id)
-            .and_then(|entries| entries.first())
-            .and_then(|entry| entry.get("object"))
-        else {
-            return Vec::new();
-        };
-        metadata
-            .get("schema_refs")
-            .and_then(Value::as_array)
+        // `realm_create_log()` is an ordered-log audit projection whose entry
+        // is only the Realm id. Profile activation belongs to the authoritative
+        // create-locked realm-genesis cell, exposed through this shared query.
+        self.realm_schema_refs(realm_id)
             .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
             .filter(|reference| {
                 arkret_schema::generated::profile_requirements::PROFILE_REQUIREMENTS
-                    .contains_key(reference)
+                    .contains_key(reference.as_str())
             })
-            .map(ToOwned::to_owned)
             .collect()
     }
 
@@ -3346,6 +3337,15 @@ mod realm_owner_authority_tests {
         state
     }
 
+    fn declare_profiles(state: &mut ProjectionState, profiles: &[&str]) {
+        state.realm_null_subject_cells.insert(
+            (REALM.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
+            arkret_state::lattice::CellState::Value(json!({
+                "schema_refs": profiles,
+            })),
+        );
+    }
+
     fn issue(state: &mut ProjectionState, operation: &Operation) -> ProjectionEffect {
         let mut operation = operation.clone();
         let issuer = super::grant_issuer(&operation.payload).unwrap_or_default();
@@ -3454,6 +3454,39 @@ mod realm_owner_authority_tests {
                 "{action} must be held verbatim after issuance"
             );
         }
+    }
+
+    #[test]
+    fn owner_may_issue_calendar_rsvp_only_when_calendar_profile_is_declared() {
+        let now = chrono::Utc::now();
+        let mut calendar = realm(Some(OWNER), None);
+        declare_profiles(
+            &mut calendar,
+            &["ak.schema.realm.v1", "ak.profile.calendar_event.v1"],
+        );
+        assert!(calendar.owner_may_issue_grant_for(
+            OWNER,
+            REALM,
+            CapabilityActionId::RSVP_SET,
+            now,
+        ));
+
+        let mut unrelated = realm(Some(OWNER), None);
+        declare_profiles(
+            &mut unrelated,
+            &["ak.profile.calendar_notification_dispatch.v1"],
+        );
+        assert!(!unrelated.owner_may_issue_grant_for(
+            OWNER,
+            REALM,
+            CapabilityActionId::RSVP_SET,
+            now,
+        ));
+
+        let absent = realm(Some(OWNER), None);
+        assert!(
+            !absent.owner_may_issue_grant_for(OWNER, REALM, CapabilityActionId::RSVP_SET, now,)
+        );
     }
 
     #[test]

@@ -26,9 +26,9 @@ fn stage_control_proposal_ack(
     let is_control_move =
         event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
     if !is_control_move {
-        if request.control_proposal_ack.is_some() {
+        if request.control_proposal_ack.is_some() || request.self_principal_pcr_device_authorized {
             return Err(PersistenceError::Conflict(
-                "schema_violation: non-Control Event cannot carry a Control Proposal Ack"
+                "schema_violation: non-Control Event cannot carry Control Proposal authority"
                     .to_owned(),
             ));
         }
@@ -43,6 +43,17 @@ fn stage_control_proposal_ack(
         return Err(PersistenceError::Conflict(
             "schema_violation: canonical digest differs from Control Move digest".to_owned(),
         ));
+    }
+    if request.self_principal_pcr_device_authorized {
+        if request.control_proposal_ack.is_some()
+            || !soland_storage::has_self_principal_pcr_device_authorized_shape(&event)
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: invalid self-principal PCR device-authorized Control Move"
+                    .to_owned(),
+            ));
+        }
+        return Ok(());
     }
     let ack = request.control_proposal_ack.as_ref().ok_or_else(|| {
         PersistenceError::Conflict(
@@ -476,6 +487,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 
 #[cfg(test)]
 mod tests {
+    use super::stage_control_proposal_ack;
     use chrono::{Duration, Utc};
     use soland_storage::{
         AppletGhostCommit, CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest,
@@ -536,10 +548,103 @@ mod tests {
                 received_at: Utc::now(),
             },
             control_proposal_ack: None,
+            self_principal_pcr_device_authorized: false,
             projections: Vec::new(),
             idempotency,
             outbox: Vec::new(),
         }
+    }
+
+    fn self_principal_pcr_control_request() -> EventCommitRequest {
+        let actor_id = "did:web:alice.example";
+        let realm_id = arkret_identifiers::principal_control_realm_id(actor_id).to_string();
+        let created_at = Utc::now();
+        let mut event = arkret_wire::Event::new_with_derived_id_at(
+            arkret_wire::EventKind::CONTACT_REQUESTED,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            },
+            arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
+            0,
+            arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
+            serde_json::json!({"contact_id": "ak:contact:test"}),
+            created_at,
+        )
+        .unwrap();
+        event.seal_basis = Some(arkret_wire::SealBasis {
+            leaves: vec![
+                arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
+            ],
+        });
+        event.event_id = event.derive_event_id().unwrap();
+        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        event.proofs = vec![arkret_wire::Proof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            proof_purpose: None,
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{actor_id}#ak:device:01904100-0000-7000-8000-000000000001"
+            ))
+            .unwrap(),
+            event_digest: event_digest.clone(),
+            created_at,
+            domain: None,
+            audience: None,
+            jws: "fixture.signature".to_owned(),
+        }];
+        let event_id = event.event_id.to_string();
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        EventCommitRequest {
+            event: CanonicalEventRecord {
+                event_id,
+                actor_id: actor_id.to_owned(),
+                actor_seq: event.actor_seq,
+                realm_id: Some(realm_id),
+                kind: event.kind.to_string(),
+                schema_id: "arkret://events/contact/requested/v1".to_owned(),
+                canonical_digest: event_digest.to_string(),
+                canonical_bytes,
+                envelope: serde_json::to_value(event).unwrap(),
+                received_at: created_at,
+            },
+            control_proposal_ack: None,
+            self_principal_pcr_device_authorized: true,
+            projections: Vec::new(),
+            idempotency: None,
+            outbox: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn self_principal_pcr_device_authority_is_the_only_ackless_control_shape() {
+        let request = self_principal_pcr_control_request();
+        let mut staged = std::collections::BTreeMap::new();
+        stage_control_proposal_ack(&mut staged, &request)
+            .expect("current Human PCR device proof is sufficient proposal authority");
+        assert!(
+            staged.is_empty(),
+            "Ack-less PCR move must not synthesize an Ack"
+        );
+
+        let mut missing_flag = request.clone();
+        missing_flag.self_principal_pcr_device_authorized = false;
+        assert!(matches!(
+            stage_control_proposal_ack(&mut staged, &missing_flag),
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("missing Control Proposal Ack")
+        ));
+
+        let mut delegated = request;
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(delegated.event.envelope.clone()).unwrap();
+        event.executed_by = Some(arkret_wire::Did::new("did:web:controller.example").unwrap());
+        delegated.event.canonical_digest = event.event_digest().unwrap();
+        delegated.event.envelope = serde_json::to_value(event).unwrap();
+        assert!(matches!(
+            stage_control_proposal_ack(&mut staged, &delegated),
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("invalid self-principal PCR device-authorized")
+        ));
     }
 
     #[tokio::test]

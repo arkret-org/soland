@@ -462,12 +462,12 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
-    if let Some(SessionGrantHolderBinding::AgentRuntime {
+    if let SessionGrantHolderBinding::AgentRuntime {
         agent_id,
         device_id,
         agent_key_authorization_ref,
         verification_method,
-    }) = grant.holder_binding.as_ref()
+    } = &grant.holder_binding
     {
         if agent_id.as_str() != grant.subject || grant.device_id.as_ref() != Some(device_id) {
             return Err(unauthenticated(
@@ -835,10 +835,9 @@ mod tests {
             cnf_jkt: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             credential_class:
                 arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard,
-            recovery_binding: None,
-            holder_binding: Some(SessionGrantHolderBinding::HumanDevice {
+            holder_binding: SessionGrantHolderBinding::HumanDevice {
                 device_binding: "accepted-device-binding".to_owned(),
-            }),
+            },
         }
     }
 
@@ -860,7 +859,7 @@ mod tests {
         let device_id = grant.device_id.clone().unwrap();
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
-        grant.holder_binding = Some(SessionGrantHolderBinding::AgentRuntime {
+        grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: Did::new("did:web:agent.example").unwrap(),
             device_id,
             agent_key_authorization_ref: arkret_identifiers::EventId::new(
@@ -871,7 +870,7 @@ mod tests {
                 "did:web:agent.example#runtime-1".to_owned(),
             )
             .unwrap(),
-        });
+        };
 
         let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
         let agent_session = agent_session.unwrap();
