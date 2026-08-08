@@ -1276,16 +1276,16 @@ mod tests {
         );
     }
 
-    /// A fully marked PCR takes the profile-fixed baseline and needs no Event.
-    /// A HALF-marked object is not a PCR (`realm.schema.json` binds the two
-    /// discriminators bidirectionally) and MUST NOT collect the exemption.
+    /// The canonical `purpose` discriminator selects the PCR profile-fixed
+    /// baseline. A profile ref without that discriminator remains an ordinary
+    /// Realm and must carry the projected policy.
     #[test]
-    fn only_a_fully_marked_pcr_skips_the_history_sharing_policy_requirement() {
+    fn principal_control_purpose_skips_the_history_sharing_policy_requirement() {
         let pcr = realm_create_op(
             TEST_REALM,
             json!({
                 "history_visibility": "restricted",
-                "fields": {"purpose": "principal_control"},
+                "purpose": "principal_control",
                 "schema_refs": [
                     "ak.schema.realm.v1",
                     "ak.profile.principal_control_realm.v1"
@@ -1297,11 +1297,24 @@ mod tests {
             RestrictedHistorySharingRequirement::NotApplicable
         );
 
-        for half_marked in [
+        let purpose_only = realm_create_op(
+            TEST_REALM,
             json!({
                 "history_visibility": "restricted",
-                "fields": {"purpose": "principal_control"}
+                "purpose": "principal_control"
             }),
+        );
+        assert_eq!(
+            restricted_history_sharing_requirement(
+                std::slice::from_ref(&purpose_only),
+                &purpose_only,
+            )
+            .unwrap(),
+            RestrictedHistorySharingRequirement::NotApplicable
+        );
+
+        let profile_ref_only = realm_create_op(
+            TEST_REALM,
             json!({
                 "history_visibility": "restricted",
                 "schema_refs": [
@@ -1309,15 +1322,16 @@ mod tests {
                     "ak.profile.principal_control_realm.v1"
                 ]
             }),
-        ] {
-            let create = realm_create_op(TEST_REALM, half_marked);
-            assert_eq!(
-                restricted_history_sharing_requirement(std::slice::from_ref(&create), &create)
-                    .unwrap(),
-                RestrictedHistorySharingRequirement::NeedsProjectedPolicy,
-                "a half-marked object is not a PCR and keeps the ordinary requirement"
-            );
-        }
+        );
+        assert_eq!(
+            restricted_history_sharing_requirement(
+                std::slice::from_ref(&profile_ref_only),
+                &profile_ref_only,
+            )
+            .unwrap(),
+            RestrictedHistorySharingRequirement::NeedsProjectedPolicy,
+            "a profile ref without the principal_control purpose keeps the ordinary requirement"
+        );
     }
 
     /// A non-restricted create carries no requirement at all.

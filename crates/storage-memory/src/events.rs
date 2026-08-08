@@ -1,14 +1,24 @@
 use super::{
-    Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
-    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
-    EventBatchReceipt, EventStore, FederationOutboxRecord, FederationOutboxState,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    MessageRecord, MessageStore, Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult,
-    ProjectionEventRecord, PublicationEvidenceRecord, RealmEventStats, async_trait,
-    event_position_cmp, identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor,
-    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
-    stage_identity_anchor_events,
+    Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceBootstrapDecisionWriteOutcome,
+    DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
+    DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, FederationOutboxRecord,
+    FederationOutboxState, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
+    PersistenceError, PersistenceResult, ProjectionEventRecord, PublicationEvidenceRecord,
+    RealmEventStats, async_trait, device_bootstrap_receipt_time_is_valid, event_position_cmp,
+    identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
+    receipt_covers_event, record_is_peer_authz_state_record,
+    same_accepted_device_bootstrap_binding, stage_identity_anchor_events,
 };
+
+fn validate_device_bootstrap_decision_record(
+    record: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+) -> PersistenceResult<()> {
+    record
+        .decode_and_validate_outcome()
+        .map(|_| ())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
+}
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
     data: Arc<Mutex<Vec<MessageRecord>>>,
@@ -88,6 +98,12 @@ pub(crate) struct MemoryEventStore {
     pub(crate) event_outbox_ids: Mutex<BTreeMap<String, BTreeSet<String>>>,
     direct_conversation_founding_slots:
         Mutex<BTreeMap<(String, String, String), DirectConversationFoundingSlotRecord>>,
+    device_bootstrap_decisions: Mutex<
+        BTreeMap<
+            (String, String),
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
+    >,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
@@ -109,6 +125,7 @@ impl MemoryEventStore {
             projections,
             event_outbox_ids: Mutex::new(BTreeMap::new()),
             direct_conversation_founding_slots: Mutex::new(BTreeMap::new()),
+            device_bootstrap_decisions: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -543,6 +560,9 @@ impl EventStore for MemoryEventStore {
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
+        bootstrap_decision: Option<
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut data = self.data.lock();
         let mut quarantined = self.quarantined.lock();
@@ -554,6 +574,7 @@ impl EventStore for MemoryEventStore {
         let mut projections = self.projections.lock();
         let mut event_outbox_ids = self.event_outbox_ids.lock();
         let mut federation_outbox = self.federation_outbox.lock();
+        let mut bootstrap_decisions = self.device_bootstrap_decisions.lock();
         preflight_memory_events(
             &records,
             &mut data,
@@ -577,6 +598,7 @@ impl EventStore for MemoryEventStore {
         let mut staged_receipts = receipts.clone();
         let mut staged_evidence = evidence.clone();
         let mut staged_outbox = federation_outbox.clone();
+        let mut staged_bootstrap_decisions = bootstrap_decisions.clone();
         let reanchor_conflict = reanchor_slot.as_ref().is_some_and(|slot| {
             identity_anchor_slot_conflicts(&staged_events.values().collect::<Vec<_>>(), slot)
         });
@@ -603,6 +625,32 @@ impl EventStore for MemoryEventStore {
             staged_receipts.insert(receipt.receipt_id.as_str().to_owned(), receipt);
         }
         if !reanchor_conflict {
+            if let Some(record) = bootstrap_decision {
+                validate_device_bootstrap_decision_record(&record)?;
+                let key = (
+                    record.account_authority_id.as_str().to_owned(),
+                    record.transaction_id.as_str().to_owned(),
+                );
+                if let Some(existing) = staged_bootstrap_decisions.get(&key) {
+                    if !same_accepted_device_bootstrap_binding(existing, &record) {
+                        return Err(PersistenceError::Conflict(
+                            "bootstrap_decision_conflict".to_owned(),
+                        ));
+                    }
+                } else {
+                    if record.decision
+                        != arkret_models_collaboration::contact_operations::DeviceBootstrapDecision::Accepted
+                        || !device_bootstrap_receipt_time_is_valid(&record)
+                        || chrono::Utc::now() > record.receipt.bootstrap_transaction_expires_at
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "bootstrap_decision_conflict: accepted decision is past its deadline"
+                                .to_owned(),
+                        ));
+                    }
+                    staged_bootstrap_decisions.insert(key, record);
+                }
+            }
             for record in publication_evidence {
                 staged_evidence
                     .entry(record.event_digest.clone())
@@ -618,6 +666,7 @@ impl EventStore for MemoryEventStore {
         *receipts = staged_receipts;
         *evidence = staged_evidence;
         *federation_outbox = staged_outbox;
+        *bootstrap_decisions = staged_bootstrap_decisions;
         if !reanchor_conflict {
             for event_id in event_ids {
                 event_outbox_ids
@@ -627,6 +676,75 @@ impl EventStore for MemoryEventStore {
             }
         }
         Ok(IdentityAnchorCommitOutcome { reanchor_conflict })
+    }
+
+    async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    > {
+        Ok(self
+            .device_bootstrap_decisions
+            .lock()
+            .get(&(account_authority_id.to_owned(), transaction_id.to_owned()))
+            .cloned())
+    }
+
+    async fn put_device_bootstrap_decision_atomic(
+        &self,
+        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
+        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    ) -> PersistenceResult<DeviceBootstrapDecisionWriteOutcome> {
+        request
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        validate_device_bootstrap_decision_record(&record)?;
+        record
+            .receipt
+            .validate_against(request)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if record.binding_digest != request.decision_request_digest {
+            return Err(PersistenceError::SchemaViolation(
+                "bootstrap decision row binding_digest does not match request".to_owned(),
+            ));
+        }
+        let key = (
+            request.account_authority_id.as_str().to_owned(),
+            request.transaction_id.as_str().to_owned(),
+        );
+        let mut decisions = self.device_bootstrap_decisions.lock();
+        if let Some(existing) = decisions.get(&key) {
+            return Ok(DeviceBootstrapDecisionWriteOutcome::Existing(
+                existing.clone(),
+            ));
+        }
+        let now = chrono::Utc::now();
+        match request.requested_decision {
+            arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Cancelled
+                if now >= request.bootstrap_transaction_expires_at =>
+            {
+                return Err(PersistenceError::Conflict(
+                    "bootstrap_decision_conflict: cancellation deadline has elapsed".to_owned(),
+                ));
+            }
+            arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Expired
+                if now < request.bootstrap_transaction_expires_at =>
+            {
+                return Err(PersistenceError::Conflict(
+                    "bootstrap_decision_conflict: bootstrap deadline has not elapsed".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        if !device_bootstrap_receipt_time_is_valid(&record) {
+            return Err(PersistenceError::SchemaViolation(
+                "device bootstrap decision receipt violates its deadline".to_owned(),
+            ));
+        }
+        decisions.insert(key, record);
+        Ok(DeviceBootstrapDecisionWriteOutcome::Inserted)
     }
 
     async fn batch_receipts_for_event(
@@ -799,7 +917,17 @@ impl EventStore for MemoryEventStore {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use arkret_models_collaboration::contact_operations::{
+        DeviceBootstrapDecision, DeviceBootstrapDecisionOutcome,
+        DeviceBootstrapDecisionReceiptPreimage, DeviceBootstrapDecisionReceiptSchema,
+        DeviceBootstrapDecisionRecord, DeviceBootstrapDecisionRequestBody,
+        DeviceBootstrapDecisionRequestPreimage, RequestedDeviceBootstrapDecision,
+    };
+    use arkret_wire::{
+        Audience, Base64UrlString, DeviceId, Did, DidUrl, EventId, Hash, IdempotencyKey,
+        PayloadProof, PayloadProofPurpose, ProtocolOpaqueId, SessionGrantId, proof_kind,
+    };
+    use chrono::{Duration, Utc};
 
     use super::*;
 
@@ -821,6 +949,306 @@ mod tests {
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: Utc::now(),
         }
+    }
+
+    fn hash(byte: u8) -> Hash {
+        Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+    }
+
+    fn bootstrap_request(
+        requested_decision: RequestedDeviceBootstrapDecision,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> DeviceBootstrapDecisionRequestBody {
+        let expires_at = chrono::DateTime::from_timestamp_millis(expires_at.timestamp_millis())
+            .expect("fixture timestamp");
+        let event_ids = [
+            EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x11; 32]),
+            EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x22; 32]),
+        ];
+        DeviceBootstrapDecisionRequestPreimage {
+            account_authority_id: Did::new("did:web:authority.example").unwrap(),
+            transaction_id: ProtocolOpaqueId::new("bootstrap-transaction-1").unwrap(),
+            idempotency_key: IdempotencyKey::new("bootstrap-decision-1").unwrap(),
+            requested_decision,
+            principal_id: Did::new("did:web:principal.example").unwrap(),
+            device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap(),
+            grant_id: SessionGrantId::from_issuance_digest([0x33; 32]),
+            canonical_request_digest: hash(0x44),
+            founding_batch_digest: arkret_models_identity::founding_batch_digest(&event_ids)
+                .unwrap(),
+            founding_event_ids: event_ids,
+            bootstrap_transaction_expires_at: expires_at,
+        }
+        .finalize()
+        .unwrap()
+    }
+
+    fn bootstrap_record(
+        request: &DeviceBootstrapDecisionRequestBody,
+        decision: DeviceBootstrapDecision,
+        receipt_suffix: &str,
+    ) -> DeviceBootstrapDecisionRecord {
+        let decided_at = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+            .expect("fixture timestamp");
+        let preimage = DeviceBootstrapDecisionReceiptPreimage {
+            schema: DeviceBootstrapDecisionReceiptSchema::V1,
+            receipt_id: ProtocolOpaqueId::new(format!("receipt-{receipt_suffix}")).unwrap(),
+            principal_server_id: Did::new("did:web:principal.example").unwrap(),
+            account_authority_id: request.account_authority_id.clone(),
+            transaction_id: request.transaction_id.clone(),
+            decision,
+            principal_id: request.principal_id.clone(),
+            device_id: request.device_id.clone(),
+            grant_id: request.grant_id.clone(),
+            canonical_request_digest: request.canonical_request_digest.clone(),
+            founding_event_ids: request.founding_event_ids.clone(),
+            founding_batch_digest: request.founding_batch_digest.clone(),
+            bootstrap_transaction_expires_at: request.bootstrap_transaction_expires_at,
+            decided_at,
+        };
+        let receipt_digest = preimage.receipt_digest().unwrap();
+        let receipt = preimage
+            .finalize(PayloadProof {
+                kind: proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: DidUrl::new("did:web:principal.example#notary-key").unwrap(),
+                payload_digest: receipt_digest,
+                created_at: decided_at,
+                domain: None,
+                audience: Some(Audience::Single(
+                    request.account_authority_id.as_str().to_owned(),
+                )),
+                proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
+                jws: "e30..c2ln".to_owned(),
+            })
+            .unwrap();
+        let outcome = DeviceBootstrapDecisionOutcome {
+            transaction_id: request.transaction_id.clone(),
+            decision,
+            receipt: receipt.clone(),
+        };
+        let canonical_outcome = arkret_canonical::canonical_json_bytes(&outcome).unwrap();
+        DeviceBootstrapDecisionRecord {
+            account_authority_id: request.account_authority_id.clone(),
+            transaction_id: request.transaction_id.clone(),
+            decision,
+            binding_digest: if decision == DeviceBootstrapDecision::Accepted {
+                request.canonical_request_digest.clone()
+            } else {
+                request.decision_request_digest.clone()
+            },
+            canonical_outcome_bytes: Base64UrlString::new(arkret_canonical::base64url_encode(
+                canonical_outcome,
+            ))
+            .unwrap(),
+            receipt,
+        }
+    }
+
+    fn event_store() -> MemoryEventStore {
+        MemoryEventStore::with_devices(
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+    }
+
+    fn control_proposal_ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
+        let now = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: arkret_wire::RealmId::new(record.realm_id.clone().unwrap()).unwrap(),
+            proposal_digest: Hash::new(record.canonical_digest.clone()).unwrap(),
+            received_at: now,
+            decision_due_at: now + policy.decision_window,
+            absolute_due_at: now + policy.absolute_horizon,
+            authority_set_ref: hash(0xaa),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: DidUrl::new("did:web:principal.example#bootstrap-authority")
+                    .unwrap(),
+                payload_digest: hash(0),
+                created_at: now,
+                jws: "e30..c2ln".to_owned(),
+                extra: BTreeMap::new(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+    }
+
+    #[tokio::test]
+    async fn bootstrap_negative_decision_replays_first_canonical_outcome() {
+        let store = event_store();
+        let request = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Cancelled,
+            Utc::now() + Duration::minutes(5),
+        );
+        let first = bootstrap_record(&request, DeviceBootstrapDecision::Cancelled, "first");
+        let retry = bootstrap_record(&request, DeviceBootstrapDecision::Cancelled, "retry");
+
+        assert_eq!(
+            store
+                .put_device_bootstrap_decision_atomic(&request, first.clone())
+                .await
+                .unwrap(),
+            DeviceBootstrapDecisionWriteOutcome::Inserted
+        );
+        let DeviceBootstrapDecisionWriteOutcome::Existing(replayed) = store
+            .put_device_bootstrap_decision_atomic(&request, retry)
+            .await
+            .unwrap()
+        else {
+            panic!("retry must replay the durable authority row");
+        };
+        assert_eq!(
+            replayed.canonical_outcome_bytes,
+            first.canonical_outcome_bytes
+        );
+        assert_eq!(replayed.receipt, first.receipt);
+    }
+
+    #[tokio::test]
+    async fn accepted_decision_replays_even_when_expiry_request_is_early() {
+        let store = event_store();
+        let request = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Expired,
+            Utc::now() + Duration::minutes(5),
+        );
+        let accepted = bootstrap_record(&request, DeviceBootstrapDecision::Accepted, "accepted");
+        store
+            .put_identity_anchor_batch_atomic(
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Some(accepted.clone()),
+            )
+            .await
+            .unwrap();
+
+        let early_expiry = bootstrap_record(&request, DeviceBootstrapDecision::Expired, "expiry");
+        let DeviceBootstrapDecisionWriteOutcome::Existing(replayed) = store
+            .put_device_bootstrap_decision_atomic(&request, early_expiry)
+            .await
+            .unwrap()
+        else {
+            panic!("an accepted winner must replay before expiry eligibility is checked");
+        };
+        assert_eq!(replayed.decision, DeviceBootstrapDecision::Accepted);
+        assert_eq!(
+            replayed.canonical_outcome_bytes,
+            accepted.canonical_outcome_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn negative_decision_prevents_founder_batch_from_committing_any_event() {
+        let store = event_store();
+        let request = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Cancelled,
+            Utc::now() + Duration::minutes(5),
+        );
+        let cancelled = bootstrap_record(&request, DeviceBootstrapDecision::Cancelled, "cancelled");
+        store
+            .put_device_bootstrap_decision_atomic(&request, cancelled)
+            .await
+            .unwrap();
+        let accepted = bootstrap_record(&request, DeviceBootstrapDecision::Accepted, "accepted");
+        let founding = record(b"founding-event");
+        let founding_id = founding.event_id.clone();
+        let ack = control_proposal_ack(&founding);
+        let error = store
+            .put_identity_anchor_batch_atomic(
+                vec![founding],
+                vec![ack],
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Some(accepted),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PersistenceError::Conflict(reason) if reason == "bootstrap_decision_conflict"
+        ));
+        assert!(!store.contains(&founding_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_decision_time_windows_are_enforced_before_first_write() {
+        let store = event_store();
+        let cancelled_too_late = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Cancelled,
+            Utc::now() - Duration::seconds(1),
+        );
+        let cancelled = bootstrap_record(
+            &cancelled_too_late,
+            DeviceBootstrapDecision::Cancelled,
+            "late-cancel",
+        );
+        assert!(matches!(
+            store
+                .put_device_bootstrap_decision_atomic(&cancelled_too_late, cancelled)
+                .await,
+            Err(PersistenceError::Conflict(reason)) if reason.contains("cancellation deadline")
+        ));
+
+        let expired_too_early = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Expired,
+            Utc::now() + Duration::minutes(5),
+        );
+        let expired = bootstrap_record(
+            &expired_too_early,
+            DeviceBootstrapDecision::Expired,
+            "early-expiry",
+        );
+        assert!(matches!(
+            store
+                .put_device_bootstrap_decision_atomic(&expired_too_early, expired)
+                .await,
+            Err(PersistenceError::Conflict(reason)) if reason.contains("has not elapsed")
+        ));
+
+        let accepted_too_late = bootstrap_request(
+            RequestedDeviceBootstrapDecision::Cancelled,
+            Utc::now() - Duration::seconds(1),
+        );
+        let accepted = bootstrap_record(
+            &accepted_too_late,
+            DeviceBootstrapDecision::Accepted,
+            "late-accepted",
+        );
+        let founding = record(b"late-founding-event");
+        let founding_id = founding.event_id.clone();
+        let ack = control_proposal_ack(&founding);
+        let error = store
+            .put_identity_anchor_batch_atomic(
+                vec![founding],
+                vec![ack],
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Some(accepted),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, PersistenceError::Conflict(reason) if reason.contains("past its deadline")),
+            "unexpected late accepted decision error: {error:?}"
+        );
+        assert!(!store.contains(&founding_id).await.unwrap());
     }
 
     #[tokio::test]

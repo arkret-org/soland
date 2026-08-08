@@ -716,6 +716,7 @@ mod tests {
         realm_id: &str,
         agent: &str,
         accept_third_party_mention: bool,
+        expected_version: u64,
     ) {
         assert!(
             state
@@ -727,14 +728,14 @@ mod tests {
                         "scope_key": format!("realm:{}", uuid_tail(realm_id)),
                         "realm_id": realm_id,
                         "scope": { "kind": "realm", "realm_id": realm_id },
-                        "version": 1,
+                        "version": expected_version + 1,
                         "reply_message": true,
                         "reaction_add": false,
                         "reaction_remove": false,
                         "accept_third_party_mention": accept_third_party_mention,
                         "act_on_behalf": false,
                     }),
-                    0
+                    expected_version
                 )
                 .await
                 .expect("agent participation selection")
@@ -804,15 +805,23 @@ mod tests {
         plain_message_with_strand(realm_id, seed, sender, None)
     }
 
+    fn fixture_event_id(seed: &str) -> arkret_identifiers::EventId {
+        let digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(seed))
+            .expect("fixture digest is typed");
+        arkret_identifiers::EventId::from_event_digest(&digest)
+            .expect("SHA-256 is a registered Event digest suite")
+    }
+
     fn plain_message_with_strand(
         realm_id: &str,
         seed: &str,
         sender: &str,
         strand_id: Option<&str>,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
         let mut payload = json!({
             "sender": sender,
-            "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+            "event_id": event_id,
             "content": {
                 "body": "hello"
             }
@@ -902,6 +911,8 @@ mod tests {
         strand_id: &str,
         assignee: &str,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
+        let relation_id = arkret_identifiers::RelationId::from_event_id(&event_id);
         arkret_event_draft::Operation::create(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -911,8 +922,8 @@ mod tests {
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
-                "relation_id": format!("ak:relation:01904100-0000-8000-8000-{seed}"),
+                "event_id": event_id,
+                "relation_id": relation_id,
                 "relation_kind": "assigned_to",
                 "from_ref": strand_id,
                 "to_ref": assignee,
@@ -926,6 +937,7 @@ mod tests {
         sender: &str,
         strand_id: &str,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
         arkret_event_draft::Operation::create(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -935,7 +947,7 @@ mod tests {
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+                "event_id": event_id,
                 "target_ref": strand_id,
                 "patch": {
                     "metadata.fields.due_at": {
@@ -953,6 +965,7 @@ mod tests {
         sender: &str,
         strand_id: &str,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
         arkret_event_draft::Operation::create(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -962,7 +975,7 @@ mod tests {
             arkret_wire::EventKind::RSVP_SET,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+                "event_id": event_id,
                 "event_ref": strand_id,
                 "occurrence": null,
                 "entry": {
@@ -991,9 +1004,10 @@ mod tests {
         agent: &str,
         strand_id: Option<&str>,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
         let mut payload = json!({
             "sender": sender,
-            "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+            "event_id": event_id,
             "content": {
                 "body": "ping",
                 "mentions": [{
@@ -1024,6 +1038,7 @@ mod tests {
         seed: &str,
         sender: &str,
     ) -> arkret_event_draft::Operation {
+        let event_id = fixture_event_id(seed);
         arkret_event_draft::Operation::create(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -1033,7 +1048,7 @@ mod tests {
             arkret_wire::EventKind::MESSAGE_CREATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+                "event_id": event_id,
                 "mention_sidecar_digest": ["unregistered-opaque-tag"],
                 "encrypted": true,
                 "encrypted_content": {
@@ -1282,22 +1297,23 @@ mod tests {
         let third_party = "did:web:bob.example";
         let agent = "did:web:agents.example:alice-summary";
         put_agent(&state, agent, controller).await;
-        set_realm_selection(&state, realm_id, agent, false).await;
+        set_realm_selection(&state, realm_id, agent, false, 0).await;
 
+        let suppressed_event_id = fixture_event_id("000000009982").to_string();
         let suppressed = mention_message(realm_id, "000000009982", third_party, agent);
         dispatch_message_notifications(&state, &suppressed).await;
         assert!(notifications_for(&state, agent).await.is_empty());
 
+        let controller_event_id = fixture_event_id("000000009983").to_string();
         let controller_mention = mention_message(realm_id, "000000009983", controller, agent);
         dispatch_message_notifications(&state, &controller_mention).await;
         assert_eq!(notifications_for(&state, agent).await.len(), 1);
 
-        set_realm_selection(&state, realm_id, agent, true).await;
+        set_realm_selection(&state, realm_id, agent, true, 1).await;
         let after_flip = notifications_for(&state, agent).await;
         assert_eq!(after_flip.len(), 1);
         assert!(after_flip.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:Ac6eeWuJslKMJT2zGJEF7N4t5sErAN_xz5Y4cAjP31Nu")
+            row.get("source_event_id").and_then(Value::as_str) == Some(controller_event_id.as_str())
         }));
 
         let unknown_strand = mention_message_with_strand(
@@ -1310,17 +1326,16 @@ mod tests {
         dispatch_message_notifications(&state, &unknown_strand).await;
         assert_eq!(notifications_for(&state, agent).await.len(), 1);
 
+        let delivered_event_id = fixture_event_id("000000009984").to_string();
         let delivered = mention_message(realm_id, "000000009984", third_party, agent);
         dispatch_message_notifications(&state, &delivered).await;
         let notifications = notifications_for(&state, agent).await;
         assert_eq!(notifications.len(), 2);
         assert!(notifications.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:Ab0suykdS2b61ag1xyf17HCqYLjFNDiZY9u27F92fN2q")
+            row.get("source_event_id").and_then(Value::as_str) == Some(delivered_event_id.as_str())
         }));
         assert!(!notifications.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:AYnPcmXVSs62OoYuEMXUgRoNurJjvGl-Vf_UDgCatALf")
+            row.get("source_event_id").and_then(Value::as_str) == Some(suppressed_event_id.as_str())
         }));
     }
 
@@ -1335,7 +1350,7 @@ mod tests {
         let agent = "did:web:agents.example:alice-summary";
         put_agent(&state, agent, controller).await;
         seed_strand_scope(&state, realm_id, strand_id, circle_id);
-        set_realm_selection(&state, realm_id, agent, false).await;
+        set_realm_selection(&state, realm_id, agent, false, 0).await;
         set_circle_selection(&state, realm_id, circle_id, agent, true).await;
 
         let delivered = mention_message_with_strand(

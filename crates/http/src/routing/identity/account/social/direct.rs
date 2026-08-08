@@ -639,23 +639,23 @@ mod binding_digest_tests {
                 "did:webvh:z6mkfixture:bob.example",
                 "did:webvh:z6mkfixture:alice.example"
             ],
-            "realm_id": "ak:realm:AdoahEryEldhLbQHY9vRcm90ddQW1gjDVrYmHsbaLIJc",
-            "main_strand_id": "ak:strand:AVBgYTmzSkzTSd1dlFH4ZADaQRkVcx_iTAvXdxlTfxrg",
+            "realm_id": "ak:realm:AVYxXzYx_KzaGx7X62doksaQR0ISkneyOwwF1k6ExHKy",
+            "main_strand_id": "ak:strand:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
             "founding_unit_digest": format!("sha256:{}", "b".repeat(64)),
             "authorization_basis": {
                 "kind": "accepted_contact",
                 "event_refs": [
-                    "ak:event:AZEKWQk7S1IEVkTZjcT12MRjxvvR0En6bkVts-6J291j",
-                    "ak:event:AddAyvTWYHhm_lW7RsUuvnFIC5wTaJKbJH8n6pBR8k2x"
+                    "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
+                    "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"
                 ]
             },
-            "initial_exact_pair_generation_ref": "ak:event:AefZWnHGPzC81Ls7rpebhGyZbPHtT86zejsTwOZs24bH",
+            "initial_exact_pair_generation_ref": "ak:event:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM",
             "created_at": "2026-08-07T12:34:56.000Z"
         });
         let payload = serde_json::from_value(payload).unwrap();
         assert_eq!(
             direct_binding_endorsement_digest(&payload).unwrap(),
-            "sha256:bda6045ed2af5f51dc19296b3c1f906f415a329c9d65c3da40b1d063b68773a8"
+            "sha256:bb50b66aa3a8e808ea61743efb278f1d55d0849f534ce2ee6ab01e893ce15a58"
         );
     }
 }

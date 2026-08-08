@@ -343,6 +343,7 @@ async fn peer_invites_submit(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: now() + Duration::minutes(5),
         created_at: now(),
         revoked_at: None,

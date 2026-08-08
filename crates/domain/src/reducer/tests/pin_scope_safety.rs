@@ -8,24 +8,44 @@ const STRAND_ID: &str = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD"
 const MESSAGE_EVENT_ID: &str = "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t";
 
 fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_CREATE,
-            REALM_ID,
-            serde_json::json!({
-                "object": {
-                    "id": REALM_ID,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Product",
-                    "created_by": "did:web:alice.example",
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "encryption_profile": "mls_rfc9420"
-                }
-            }),
-        ),
-        hlc,
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        REALM_ID.to_owned(),
+        SolandRealmState {
+            realm_id: REALM_ID.to_owned(),
+            owner: Some("did:web:alice.example".to_owned()),
+            title: Some("Product".to_owned()),
+            deleted: false,
+            archived: false,
+            frozen: false,
+            freeze_expires_at: None,
+            created_at: now,
+            updated_at: now,
+            trust_domain: None,
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+            active_profiles: Vec::new(),
+        },
     );
-    state.apply(
+    state.members.insert(
+        (REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
+        SolandMembershipState {
+            member: "did:web:alice.example".to_owned(),
+            realm_id: REALM_ID.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+    let circle = state.apply(
         &make_operation(
             arkret_wire::EventKind::CIRCLE_CREATE,
             REALM_ID,
@@ -43,7 +63,11 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
         ),
         hlc,
     );
-    state.apply(
+    assert!(
+        !matches!(circle, ProjectionEffect::Rejected { .. }),
+        "circle fixture failed: {circle:?}"
+    );
+    let member = state.apply(
         &make_operation(
             arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             REALM_ID,
@@ -56,7 +80,11 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
         ),
         hlc,
     );
-    state.apply(
+    assert!(
+        !matches!(member, ProjectionEffect::Rejected { .. }),
+        "circle member fixture failed: {member:?}"
+    );
+    let strand = state.apply(
         &make_operation(
             arkret_wire::EventKind::STRAND_CREATE,
             REALM_ID,
@@ -72,7 +100,11 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
         ),
         hlc,
     );
-    state.apply(
+    assert!(
+        !matches!(strand, ProjectionEffect::Rejected { .. }),
+        "strand fixture failed: {strand:?}"
+    );
+    let message = state.apply(
         &make_operation(
             arkret_wire::EventKind::MESSAGE_CREATE,
             REALM_ID,
@@ -84,6 +116,10 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             }),
         ),
         hlc,
+    );
+    assert!(
+        !matches!(message, ProjectionEffect::Rejected { .. }),
+        "message fixture failed: {message:?}"
     );
 }
 

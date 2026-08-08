@@ -152,6 +152,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: created_at + chrono::Duration::minutes(5),
         created_at,
         revoked_at: None,
@@ -1001,7 +1002,6 @@ mod report_safety_tests {
 
     const REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
     const TARGET: &str = "ak:message:AUDcGyskAu9_TgDdHy4-tLmIbJp1s_rpjKSw3apHadK8";
-    const FRANKING_EVENT: &str = "ak:event:AY3aEHEku45kFksenyEUUeJDYGC8pcxJwaT9PypXoEZw";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
     const REPORTER: &str = "did:web:alice.example";
 
@@ -1047,21 +1047,32 @@ mod report_safety_tests {
         format!("sha256:{}", ch.to_string().repeat(64))
     }
 
+    fn franking_event_fixture() -> (String, String, Vec<u8>) {
+        let canonical_bytes = b"{}".to_vec();
+        let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
+        let digest = arkret_identifiers::Hash::new(canonical_digest.clone()).unwrap();
+        let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
+            .unwrap()
+            .to_string();
+        (event_id, canonical_digest, canonical_bytes)
+    }
+
     async fn seed_franking_event_anchor(state: &AppState, received_at: &str) {
         let received_at = chrono::DateTime::parse_from_rfc3339(received_at)
             .unwrap()
             .with_timezone(&chrono::Utc);
+        let (event_id, canonical_digest, canonical_bytes) = franking_event_fixture();
         state
             .event_queries()
             .store_canonical_event(soland_services::events::CanonicalEventRecord {
-                event_id: FRANKING_EVENT.to_owned(),
+                event_id,
                 actor_id: REPORTER.to_owned(),
                 actor_seq: 1,
                 realm_id: Some(REALM.to_owned()),
                 kind: "ak.message.create".to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: hash('9'),
-                canonical_bytes: b"{}".to_vec(),
+                canonical_digest,
+                canonical_bytes,
                 envelope: json!({
                     "payload": {
                         "encrypted_content": {
@@ -1086,11 +1097,12 @@ mod report_safety_tests {
     }
 
     fn valid_franking() -> Value {
+        let (event_id, ..) = franking_event_fixture();
         json!({
             "kind": "ak.moderation.franking_proof",
             "franking_proof_id": "ak:franking_proof:01904100-0000-7000-8000-000000000111",
             "realm_id": REALM,
-            "event_id": FRANKING_EVENT,
+            "event_id": event_id,
             "routing_metadata_digest": hash('c'),
             "ciphertext_digest": hash('d'),
             "aad_digest": hash('e'),

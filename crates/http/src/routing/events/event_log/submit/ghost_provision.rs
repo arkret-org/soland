@@ -356,6 +356,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: provision_time + Duration::minutes(5),
         created_at: provision_time,
         revoked_at: None,

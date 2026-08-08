@@ -161,6 +161,7 @@ pub(super) async fn dev_login(
         // dev-login does not carry a ak.session.grant signing key; bearer-only.
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at,
         created_at: now(),
         revoked_at: None,

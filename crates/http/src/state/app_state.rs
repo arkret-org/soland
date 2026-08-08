@@ -1768,22 +1768,63 @@ mod membership_hydration_tests {
         assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
     }
 
-    fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
+    fn canonical_projection_source_event(
+        realm_id: &str,
+        actor_id: &str,
+        actor_seq: u64,
+        kind: &str,
+        payload: serde_json::Value,
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> CanonicalEventRecord {
+        let event = arkret_wire::Event::new_at(
+            kind,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(realm_id).unwrap(),
+            },
+            Did::new(actor_id).unwrap(),
+            actor_seq,
+            arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
+            payload,
+            received_at,
+        )
+        .unwrap();
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(
+            &event.digest_payload().expect("membership digest payload"),
+        )
+        .expect("membership canonical bytes");
+        let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
+        let event_id = event.event_id.to_string();
+        let envelope = serde_json::to_value(event).unwrap();
         CanonicalEventRecord {
-            event_id: format!("ak:event:{member}-{membership}"),
-            actor_id: member.to_owned(),
-            actor_seq: 1,
+            event_id,
+            actor_id: actor_id.to_owned(),
+            actor_seq,
             realm_id: Some(realm_id.to_owned()),
-            kind: "ak.member.state".to_owned(),
-            schema_id: String::new(),
-            canonical_digest: String::new(),
-            canonical_bytes: Vec::new(),
-            envelope: serde_json::json!({
-                "realm_id": realm_id,
-                "payload": { "membership": membership, "actor_id": member },
-            }),
-            received_at: chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap(),
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest,
+            canonical_bytes,
+            envelope,
+            received_at,
         }
+    }
+
+    fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
+        let received_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        canonical_projection_source_event(
+            realm_id,
+            member,
+            1,
+            arkret_wire::EventKind::MEMBER_STATE,
+            serde_json::json!({
+                "membership": membership,
+                "actor_id": member,
+                "delivery_status": "unroutable"
+            }),
+            received_at,
+        )
     }
 
     fn directory_with_creator(realm_id: &RealmId, creator: &Did) -> RealmDirectoryIndex {
@@ -1884,32 +1925,7 @@ mod membership_hydration_tests {
         let store = SolandMemoryPersistenceStore::new();
         store
             .events()
-            .put(CanonicalEventRecord {
-                event_id: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
-                actor_id: "did:web:alice.example".to_owned(),
-                actor_seq: 2,
-                realm_id: Some(realm_id.to_owned()),
-                kind: arkret_wire::EventKind::MEMBER_STATE.to_owned(),
-                schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: "sha256:membership".to_owned(),
-                canonical_bytes: Vec::new(),
-                envelope: serde_json::json!({
-                    "event_id": "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn",
-                    "actor_id": "did:web:alice.example",
-                    "actor_seq": 2,
-                    "realm_id": realm_id,
-                    "kind": arkret_wire::EventKind::MEMBER_STATE,
-                    "created_at": "2026-07-20T00:00:00.000Z",
-                    "payload": {
-                        "actor_id": member,
-                        "membership": "join",
-                        "delivery_status": "unroutable",
-                    },
-                }),
-                received_at: chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
-                    .unwrap()
-                    .with_timezone(&chrono::Utc),
-            })
+            .put(member_state_event(realm_id, member, "join"))
             .await
             .expect("persist member Event");
 
@@ -1979,7 +1995,9 @@ mod membership_hydration_tests {
                 lifetime_not_after: i64::MAX,
                 claimed_by_mls_group_id: None,
                 ssk_generation: None,
-                device_authorize_event_id: Some("ak:event:auth".to_owned()),
+                device_authorize_event_id: Some(
+                    "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
+                ),
                 agent_key_authorize_event_id: None,
                 claimed_at: None,
                 claim_expires_at_unix_ms: None,
@@ -2006,7 +2024,9 @@ mod membership_hydration_tests {
                 lifetime_not_after: i64::MAX,
                 claimed_by_mls_group_id: Some("retired".to_owned()),
                 ssk_generation: None,
-                device_authorize_event_id: Some("ak:event:auth".to_owned()),
+                device_authorize_event_id: Some(
+                    "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
+                ),
                 agent_key_authorize_event_id: None,
                 claimed_at: None,
                 claim_expires_at_unix_ms: None,
@@ -2027,7 +2047,7 @@ mod membership_hydration_tests {
                 group_id,
                 leader_actor_id: "did:web:alice.example",
                 creator_device_id: "ak:device:alice-1",
-                genesis_event_ref: "ak:event:genesis",
+                genesis_event_ref: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn",
                 governance_binding: &governance_binding,
                 committed_at: 1,
             })
@@ -2067,7 +2087,10 @@ mod membership_hydration_tests {
             .expect("commit epoch rehydrated");
         assert_eq!(epoch.epoch, 0);
         assert_eq!(epoch.creator_device_id, "ak:device:alice-1");
-        assert_eq!(epoch.genesis_event_ref, "ak:event:genesis");
+        assert_eq!(
+            epoch.genesis_event_ref,
+            "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn"
+        );
         assert_eq!(epoch.governance_binding, governance_binding);
     }
 
@@ -2120,47 +2143,60 @@ mod membership_hydration_tests {
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
         let now = chrono::Utc::now();
+        let first_payload = serde_json::json!({
+            "schema": "ak.schema.key_backup_active_series.v1",
+            "actor_id": actor,
+            "backup_kind": "mls_history",
+            "active_series_id": series_id,
+            "series_pointer_version": 1,
+            "previous_series_ids": [],
+            "frontier_ref": {
+                "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "ssk_generation": 1
+            },
+            "issued_at": "2026-07-18T00:00:00.000Z",
+            "auth_data": {
+                "verification_method": "did:web:alice.example#device-key",
+                "signature_algorithm": "Ed25519",
+                "signature": "AA",
+                "signed_fields": [
+                    "schema",
+                    "actor_id",
+                    "backup_kind",
+                    "active_series_id",
+                    "series_pointer_version",
+                    "previous_series_ids",
+                    "frontier_ref",
+                    "issued_at"
+                ],
+                "ssk_generation": 1
+            }
+        });
+        let first_source = canonical_projection_source_event(
+            realm_id,
+            actor,
+            1,
+            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            first_payload.clone(),
+            now,
+        );
+        let first_event_id = first_source.event_id.clone();
+        store
+            .events()
+            .put(first_source)
+            .await
+            .expect("persist active-series canonical Event");
         let appended = store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:ASNT62Xkv9o-f5_gN8QAmANltuCZ9s6J-SOPbXj3IlUR".to_owned(),
+                event_id: first_event_id,
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
-                operation_id: Some(
-                    "ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned(),
-                ),
+                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned()),
                 sender: Some(actor.to_owned()),
-                payload: serde_json::json!({
-                    "schema": "ak.schema.key_backup_active_series.v1",
-                    "actor_id": actor,
-                    "backup_kind": "mls_history",
-                    "active_series_id": series_id,
-                    "series_pointer_version": 1,
-                    "previous_series_ids": [],
-                    "frontier_ref": {
-                        "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                        "ssk_generation": 1
-                    },
-                    "issued_at": "2026-07-18T00:00:00.000Z",
-                    "auth_data": {
-                        "verification_method": "did:web:alice.example#device-key",
-                        "signature_algorithm": "Ed25519",
-                        "signature": "AA",
-                        "signed_fields": [
-                            "schema",
-                            "actor_id",
-                            "backup_kind",
-                            "active_series_id",
-                            "series_pointer_version",
-                            "previous_series_ids",
-                            "frontier_ref",
-                            "issued_at"
-                        ],
-                        "ssk_generation": 1
-                    }
-                }),
+                payload: first_payload,
                 created_at: now,
                 received_at: now,
             })
@@ -2179,41 +2215,54 @@ mod membership_hydration_tests {
         assert_eq!(pointer.active_series_id, series_id);
         assert_eq!(pointer.series_pointer_version, 1);
 
+        let gap_payload = serde_json::json!({
+            "schema": "ak.schema.key_backup_active_series.v1",
+            "actor_id": actor,
+            "backup_kind": "mls_history",
+            "active_series_id": series_id,
+            "series_pointer_version": 3,
+            "previous_series_ids": [],
+            "frontier_ref": {
+                "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "ssk_generation": 1
+            },
+            "issued_at": "2026-07-18T00:01:00.000Z",
+            "auth_data": {
+                "verification_method": "did:web:alice.example#device-key",
+                "signature_algorithm": "Ed25519",
+                "signature": "AA",
+                "signed_fields": [
+                    "schema", "actor_id", "backup_kind", "active_series_id",
+                    "series_pointer_version", "previous_series_ids", "frontier_ref",
+                    "issued_at"
+                ],
+                "ssk_generation": 1
+            }
+        });
+        let gap_source = canonical_projection_source_event(
+            realm_id,
+            actor,
+            2,
+            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            gap_payload.clone(),
+            now,
+        );
+        let gap_event_id = gap_source.event_id.clone();
+        store
+            .events()
+            .put(gap_source)
+            .await
+            .expect("persist gap active-series canonical Event");
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:AYmpBR6Q5rYN9q69X2PTNt_Yn1M8K-gXk1VQCbr67p3q".to_owned(),
+                event_id: gap_event_id,
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
-                operation_id: Some(
-                    "ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
-                ),
+                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned()),
                 sender: Some(actor.to_owned()),
-                payload: serde_json::json!({
-                    "schema": "ak.schema.key_backup_active_series.v1",
-                    "actor_id": actor,
-                    "backup_kind": "mls_history",
-                    "active_series_id": series_id,
-                    "series_pointer_version": 3,
-                    "previous_series_ids": [],
-                    "frontier_ref": {
-                        "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "ssk_generation": 1
-                    },
-                    "issued_at": "2026-07-18T00:01:00.000Z",
-                    "auth_data": {
-                        "verification_method": "did:web:alice.example#device-key",
-                        "signature_algorithm": "Ed25519",
-                        "signature": "AA",
-                        "signed_fields": [
-                            "schema", "actor_id", "backup_kind", "active_series_id",
-                            "series_pointer_version", "previous_series_ids", "frontier_ref",
-                            "issued_at"
-                        ],
-                        "ssk_generation": 1
-                    }
-                }),
+                payload: gap_payload,
                 created_at: now,
                 received_at: now,
             })
@@ -2240,15 +2289,30 @@ mod membership_hydration_tests {
         let agent_id =
             "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
         let realm_id = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
-        let event_id = "ak:event:AXqMJt-NK9AYFKgQFnV62RNHBIZVFu8PeZDP8jqje1xd";
         let key_id = format!("{agent_id}#runtime-1");
-        let replacement_event_id = "ak:event:AXkBchgWu3Ok8yCekmeRd4JBehZVbP3uS4X7LQZ7DTpC";
         let replacement_key_id = format!("{agent_id}#runtime-2");
         let now = chrono::Utc::now();
+        let authorize_source = canonical_projection_source_event(
+            realm_id,
+            agent_id,
+            1,
+            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "key_id": key_id
+            }),
+            now,
+        );
+        let event_id = authorize_source.event_id.clone();
+        store
+            .events()
+            .put(authorize_source)
+            .await
+            .expect("persist agent-key authorization canonical Event");
         let appended = store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: event_id.to_owned(),
+                event_id: event_id.clone(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2265,10 +2329,27 @@ mod membership_hydration_tests {
             .await
             .expect("append agent-key authorization projection event");
         assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
+        let revoke_source = canonical_projection_source_event(
+            realm_id,
+            agent_id,
+            2,
+            arkret_wire::EventKind::AGENT_KEY_REVOKE,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "key_id": key_id
+            }),
+            now,
+        );
+        let revoke_event_id = revoke_source.event_id.clone();
+        store
+            .events()
+            .put(revoke_source)
+            .await
+            .expect("persist agent-key revocation canonical Event");
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:AWqDVkXtcVnsb68rvZhxe1yKpstTL8E5-wU_3B7gvpqx".to_owned(),
+                event_id: revoke_event_id,
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::AGENT_KEY_REVOKE.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2283,10 +2364,27 @@ mod membership_hydration_tests {
             })
             .await
             .expect("append agent-key revocation projection event");
+        let replacement_source = canonical_projection_source_event(
+            realm_id,
+            agent_id,
+            3,
+            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "key_id": replacement_key_id
+            }),
+            now,
+        );
+        let replacement_event_id = replacement_source.event_id.clone();
+        store
+            .events()
+            .put(replacement_source)
+            .await
+            .expect("persist replacement agent-key authorization canonical Event");
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: replacement_event_id.to_owned(),
+                event_id: replacement_event_id.clone(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 operation_kind: "event".to_owned(),

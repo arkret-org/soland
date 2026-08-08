@@ -105,7 +105,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // to_ref} form has no derivable cell value.
             payload: json!({
                 "relation": {
-                    "id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA",
                     "kind": "blocks",
                     "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
                     "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
@@ -259,11 +258,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "strand create",
             kind: arkret_wire::EventKind::STRAND_CREATE,
-            // strand_create_payload wraps the full Strand object (strand.schema.json):
-            // required {id, schema, realm_id, tracks, created_by, created_at}; title lives in
-            // metadata.
+            // strand_create_payload wraps the Strand preimage. Its id is
+            // derived from the accepted create Event and therefore MUST NOT
+            // be supplied by the producer.
             payload: json!({"object": {
-                "id": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
                 "schema": "ak.schema.strand.v1",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "tracks": {"discussion": {}},
@@ -335,11 +333,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "morph create",
             kind: arkret_wire::EventKind::MORPH_CREATE,
-            // morph_create_payload wraps the full Morph object (morph.schema.json):
-            // required {id, schema, realm_id, schema_refs, morph_kind, stage, created_by,
-            // created_at}.
+            // morph_create_payload wraps the Morph preimage. Its id is
+            // derived from the accepted create Event and therefore MUST NOT
+            // be supplied by the producer.
             payload: json!({"object": {
-                "id": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb",
                 "schema": "ak.schema.morph.v1",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "schema_refs": ["ak.schema.morph.v1"],

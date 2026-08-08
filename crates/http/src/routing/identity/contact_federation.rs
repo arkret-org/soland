@@ -1294,7 +1294,9 @@ mod tests {
         let source_service_id = "did:web:remote.local"; // requester's home PS
 
         let payload = json!({
+            "peer": {"kind": "human", "principal_id": target},
             "granted_to_peer_scopes": ["direct_message"],
+            "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
             "message": "hi from across the federation",
         });
 

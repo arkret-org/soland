@@ -236,15 +236,19 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     let apply_floor = |state: &mut ProjectionState, floor: Option<&str>| {
         let payload = match floor {
             Some(f) => serde_json::json!({ "content_encryption_floor": f }),
-            None => serde_json::json!({}),
+            None => serde_json::json!({ "federation_policy": "open" }),
         };
         apply_policy_bundle(state, &hlc, realm, payload)
     };
     // baseline allow_plaintext -> projected
-    assert!(matches!(
-        apply_floor(&mut state, Some("allow_plaintext")),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
+    let baseline = apply_floor(&mut state, Some("allow_plaintext"));
+    assert!(
+        matches!(
+            baseline,
+            ProjectionEffect::RealmPolicyBundleProjected { .. }
+        ),
+        "baseline policy projection failed: {baseline:?}"
+    );
     // in-place enable: allow_plaintext -> e2ee_required is accepted
     assert!(matches!(
         apply_floor(&mut state, Some("e2ee_required")),
@@ -256,10 +260,14 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
         ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
     ));
     // dropping the floor by omission is also a downgrade
-    assert!(matches!(
-        apply_floor(&mut state, None),
-        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
-    ));
+    let omitted = apply_floor(&mut state, None);
+    assert!(
+        matches!(
+            omitted,
+            ProjectionEffect::Rejected { ref reason } if reason == arkret_wire::ReasonCode::CONTENT_ENCRYPTION_FLOOR_DOWNGRADE
+        ),
+        "omitted content floor returned {omitted:?}"
+    );
 }
 
 #[test]
@@ -297,15 +305,19 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
     let apply_scheme = |state: &mut ProjectionState, scheme: Option<&str>| {
         let payload = match scheme {
             Some(s) => serde_json::json!({ "content_scheme": s }),
-            None => serde_json::json!({}),
+            None => serde_json::json!({ "federation_policy": "open" }),
         };
         apply_policy_bundle(state, &hlc, realm, payload)
     };
     // baseline mls_rfc9420 -> projected
-    assert!(matches!(
-        apply_scheme(&mut state, Some("mls_rfc9420")),
-        ProjectionEffect::RealmPolicyBundleProjected { .. }
-    ));
+    let baseline = apply_scheme(&mut state, Some("mls_rfc9420"));
+    assert!(
+        matches!(
+            baseline,
+            ProjectionEffect::RealmPolicyBundleProjected { .. }
+        ),
+        "baseline policy projection failed: {baseline:?}"
+    );
     // upgrade rfc9420 -> exporter-aead is accepted
     assert!(matches!(
         apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
@@ -322,10 +334,14 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
         ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
     ));
     // dropping the scheme by omission is also a downgrade
-    assert!(matches!(
-        apply_scheme(&mut state, None),
-        ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
-    ));
+    let omitted = apply_scheme(&mut state, None);
+    assert!(
+        matches!(
+            omitted,
+            ProjectionEffect::Rejected { ref reason } if reason == CONTENT_SCHEME_DOWNGRADE
+        ),
+        "omitted content scheme returned {omitted:?}"
+    );
 }
 
 // An unknown `content_scheme` enum value is rejected outright, even on a realm
@@ -354,12 +370,21 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme");
     let realm = "ak:realm:AT7NHZtjTsuzRThBF8kLDDkl9394Uno1fO21jOiLjo-U";
-    state.realm_create_cells.insert(
-        realm.to_owned(),
-        CellState::Value(serde_json::json!([{
-            "encryption_profile": "mls_rfc9420",
-            "history_visibility": "shared"
-        }])),
+    state.realm_null_subject_cells.insert(
+        (realm.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
+        CellState::Value(serde_json::json!({
+            "encryption_profile": "mls_rfc9420"
+        })),
+    );
+    state.realm_null_subject_cells.insert(
+        (
+            realm.to_owned(),
+            format!(
+                "ak:cell:{}:null",
+                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
+            ),
+        ),
+        CellState::Value(serde_json::json!({"value": "shared"})),
     );
     assert_eq!(
         state.realm_encryption_profile(realm).as_deref(),
@@ -394,12 +419,21 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-ok");
     let realm = "ak:realm:AQ5hB6Hsk2fZA-x-ErLhDAYuzeu8Y_gLzUPe2VZUa8Z8";
-    state.realm_create_cells.insert(
-        realm.to_owned(),
-        CellState::Value(serde_json::json!([{
-            "encryption_profile": "mls_rfc9420",
-            "history_visibility": "shared"
-        }])),
+    state.realm_null_subject_cells.insert(
+        (realm.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
+        CellState::Value(serde_json::json!({
+            "encryption_profile": "mls_rfc9420"
+        })),
+    );
+    state.realm_null_subject_cells.insert(
+        (
+            realm.to_owned(),
+            format!(
+                "ak:cell:{}:null",
+                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
+            ),
+        ),
+        CellState::Value(serde_json::json!({"value": "shared"})),
     );
 
     let effect = apply_policy_bundle(
@@ -415,19 +449,18 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 }
 
 #[test]
-fn content_scheme_falls_back_to_realm_create_log() {
+fn content_scheme_reads_the_policy_bundle_cell() {
     use arkret_state::lattice::CellState;
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("history-scheme-create");
     let realm = "ak:realm:ATJpGWcxXQSxhpRxXI7xH5XTDhzIUCqOy5m6bXv454ge";
-    state.realm_create_cells.insert(
+    state.realm_policy_bundle_cells.insert(
         realm.to_owned(),
-        CellState::Value(serde_json::json!([{
-            "encryption_profile": "mls_rfc9420",
-            "history_visibility": "shared",
+        CellState::Value(serde_json::json!({
+            "policy_revision": 1,
             "content_scheme": "mls_exporter_aead_v1"
-        }])),
+        })),
     );
 
     assert_eq!(

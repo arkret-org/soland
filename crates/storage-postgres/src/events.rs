@@ -4,13 +4,15 @@ use diesel::sql_types::SmallInt;
 
 use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
-    DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
-    DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, ExistsRow,
-    FederationOutboxRecord, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable, OptionalExtension, PeerEventsPageQuery,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord,
-    QueryableByName, RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value,
-    async_trait, identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
+    DeviceBootstrapDecisionWriteOutcome, DeviceInventoryRecord,
+    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
+    EventBatchReceipt, EventStore, ExistsRow, FederationOutboxRecord, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable,
+    OptionalExtension, PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl,
+    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, device_bootstrap_receipt_time_is_valid,
+    identity_anchor_slot_conflicts, ids, pg_conn, same_accepted_device_bootstrap_binding,
+    sql_query,
 };
 use crate::federation::insert_federation_outbox_row;
 pub struct PgEventStore {
@@ -102,6 +104,142 @@ struct DirectConversationFoundingSlotRow {
     receipt_bytes: Vec<u8>,
     #[diesel(sql_type = Timestamptz)]
     accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct DeviceBootstrapDecisionRow {
+    #[diesel(sql_type = Text)]
+    account_authority_id: String,
+    #[diesel(sql_type = Text)]
+    transaction_id: String,
+    #[diesel(sql_type = Text)]
+    decision: String,
+    #[diesel(sql_type = Text)]
+    binding_digest: String,
+    #[diesel(sql_type = Text)]
+    canonical_outcome_bytes: String,
+    #[diesel(sql_type = Jsonb)]
+    receipt: Value,
+}
+
+impl TryFrom<DeviceBootstrapDecisionRow>
+    for arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord
+{
+    type Error = PersistenceError;
+
+    fn try_from(row: DeviceBootstrapDecisionRow) -> Result<Self, Self::Error> {
+        use arkret_models_collaboration::contact_operations::DeviceBootstrapDecision;
+        let decision = match row.decision.as_str() {
+            "accepted" => DeviceBootstrapDecision::Accepted,
+            "cancelled" => DeviceBootstrapDecision::Cancelled,
+            "expired" => DeviceBootstrapDecision::Expired,
+            other => {
+                return Err(PersistenceError::SchemaViolation(format!(
+                    "stored device bootstrap decision is invalid: {other}"
+                )));
+            }
+        };
+        let record = Self {
+            account_authority_id: arkret_identifiers::Did::new(row.account_authority_id)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            transaction_id: arkret_wire::ProtocolOpaqueId::new(row.transaction_id)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            decision,
+            binding_digest: arkret_identifiers::Hash::new(row.binding_digest)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            canonical_outcome_bytes: arkret_wire::Base64UrlString::new(row.canonical_outcome_bytes)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            receipt: serde_json::from_value(row.receipt).map_err(PersistenceError::database)?,
+        };
+        record
+            .decode_and_validate_outcome()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        Ok(record)
+    }
+}
+
+fn decision_name(
+    decision: arkret_models_collaboration::contact_operations::DeviceBootstrapDecision,
+) -> &'static str {
+    use arkret_models_collaboration::contact_operations::DeviceBootstrapDecision;
+    match decision {
+        DeviceBootstrapDecision::Accepted => "accepted",
+        DeviceBootstrapDecision::Cancelled => "cancelled",
+        DeviceBootstrapDecision::Expired => "expired",
+    }
+}
+
+async fn insert_device_bootstrap_decision(
+    conn: &mut AsyncPgConnection,
+    record: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+) -> Result<bool, PgTransactionError> {
+    record
+        .decode_and_validate_outcome()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if !device_bootstrap_receipt_time_is_valid(record) {
+        return Err(PersistenceError::SchemaViolation(
+            "device bootstrap decision receipt violates its deadline".to_owned(),
+        )
+        .into());
+    }
+    let receipt = serde_json::to_value(&record.receipt).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "failed to encode bootstrap decision receipt: {error}"
+        ))
+    })?;
+    let inserted = sql_query(
+        "INSERT INTO device_bootstrap_decisions \
+         (account_authority_id, transaction_id, decision, binding_digest, canonical_outcome_bytes, receipt, decided_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(record.account_authority_id.as_str())
+    .bind::<Text, _>(record.transaction_id.as_str())
+    .bind::<Text, _>(decision_name(record.decision))
+    .bind::<Text, _>(record.binding_digest.as_str())
+    .bind::<Text, _>(record.canonical_outcome_bytes.as_str())
+    .bind::<Jsonb, _>(&receipt)
+    .bind::<Timestamptz, _>(record.receipt.decided_at)
+    .execute(conn)
+    .await?;
+    Ok(inserted == 1)
+}
+
+async fn load_device_bootstrap_decision(
+    conn: &mut AsyncPgConnection,
+    account_authority_id: &str,
+    transaction_id: &str,
+) -> Result<
+    Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    PgTransactionError,
+> {
+    sql_query(
+        "SELECT account_authority_id, transaction_id, decision, binding_digest, canonical_outcome_bytes, receipt \
+         FROM device_bootstrap_decisions WHERE account_authority_id = $1 AND transaction_id = $2",
+    )
+    .bind::<Text, _>(account_authority_id)
+    .bind::<Text, _>(transaction_id)
+    .get_result::<DeviceBootstrapDecisionRow>(conn)
+    .await
+    .optional()?
+    .map(TryInto::try_into)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn lock_device_bootstrap_decision_fence(
+    conn: &mut AsyncPgConnection,
+    account_authority_id: &str,
+    transaction_id: &str,
+) -> Result<(), PgTransactionError> {
+    // The row may not exist yet, so a row lock cannot serialize the initial
+    // accepted-vs-negative race. Both writers take this transaction-scoped
+    // advisory lock before observing absence or installing the unique row.
+    let lock_key = format!("{account_authority_id}:{transaction_id}");
+    sql_query("SELECT TRUE AS present FROM pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(lock_key)
+        .get_result::<ExistsRow>(conn)
+        .await?;
+    Ok(())
 }
 
 impl TryFrom<DirectConversationFoundingSlotRow> for DirectConversationFoundingSlotRecord {
@@ -996,6 +1134,9 @@ impl EventStore for PgEventStore {
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
+        bootstrap_decision: Option<
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut control_proposal_acks_by_digest = BTreeMap::new();
         for receipt in control_proposal_acks {
@@ -1077,6 +1218,49 @@ impl EventStore for PgEventStore {
                 }
                 if let Some(frontier_cas) = frontier_cas {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
+                }
+                if let Some(record) = bootstrap_decision.as_ref() {
+                    lock_device_bootstrap_decision_fence(
+                        conn,
+                        record.account_authority_id.as_str(),
+                        record.transaction_id.as_str(),
+                    )
+                    .await?;
+                    if let Some(existing) = load_device_bootstrap_decision(
+                        conn,
+                        record.account_authority_id.as_str(),
+                        record.transaction_id.as_str(),
+                    )
+                    .await?
+                    {
+                        if !same_accepted_device_bootstrap_binding(&existing, record) {
+                            return Err(PersistenceError::Conflict(
+                                "bootstrap_decision_conflict".to_owned(),
+                            ).into());
+                        }
+                    } else {
+                        let eligible = sql_query("SELECT NOW() <= $1 AS present")
+                            .bind::<Timestamptz, _>(record.receipt.bootstrap_transaction_expires_at)
+                            .get_result::<ExistsRow>(conn)
+                            .await?;
+                        if record.decision
+                            != arkret_models_collaboration::contact_operations::DeviceBootstrapDecision::Accepted
+                            || !eligible.present
+                        {
+                            return Err(PersistenceError::Conflict(
+                                "bootstrap_decision_conflict: accepted decision is past its deadline"
+                                    .to_owned(),
+                            )
+                            .into());
+                        }
+                        if !insert_device_bootstrap_decision(conn, record).await? {
+                            return Err(PersistenceError::Internal(
+                                "bootstrap decision fence was lost while holding its authority lock"
+                                    .to_owned(),
+                            )
+                            .into());
+                        }
+                    }
                 }
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
@@ -1165,6 +1349,91 @@ impl EventStore for PgEventStore {
                 "event_hash_collision".to_owned(),
             )),
         }
+    }
+
+    async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    > {
+        let mut conn = pg_conn(&self.pool).await?;
+        load_device_bootstrap_decision(&mut conn, account_authority_id, transaction_id)
+            .await
+            .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn put_device_bootstrap_decision_atomic(
+        &self,
+        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
+        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    ) -> PersistenceResult<DeviceBootstrapDecisionWriteOutcome> {
+        request
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        record
+            .receipt
+            .validate_against(request)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if record.binding_digest != request.decision_request_digest {
+            return Err(PersistenceError::SchemaViolation(
+                "bootstrap decision row binding_digest does not match request".to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            lock_device_bootstrap_decision_fence(
+                conn,
+                request.account_authority_id.as_str(),
+                request.transaction_id.as_str(),
+            )
+            .await?;
+            if let Some(existing) = load_device_bootstrap_decision(
+                conn,
+                request.account_authority_id.as_str(),
+                request.transaction_id.as_str(),
+            )
+            .await?
+            {
+                return Ok(DeviceBootstrapDecisionWriteOutcome::Existing(existing));
+            }
+            let eligible_query = match request.requested_decision {
+                arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Cancelled => {
+                    "SELECT NOW() < $1 AS present"
+                }
+                arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Expired => {
+                    "SELECT NOW() >= $1 AS present"
+                }
+            };
+            let eligible = sql_query(eligible_query)
+                .bind::<Timestamptz, _>(request.bootstrap_transaction_expires_at)
+                .get_result::<ExistsRow>(conn)
+                .await?;
+            if !eligible.present {
+                let detail = match request.requested_decision {
+                    arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Cancelled => {
+                        "bootstrap_decision_conflict: cancellation deadline has elapsed"
+                    }
+                    arkret_models_collaboration::contact_operations::RequestedDeviceBootstrapDecision::Expired => {
+                        "bootstrap_decision_conflict: bootstrap deadline has not elapsed"
+                    }
+                };
+                    return Err(PersistenceError::Conflict(
+                        detail.to_owned(),
+                    )
+                    .into());
+            }
+            if !insert_device_bootstrap_decision(conn, &record).await? {
+                return Err(PersistenceError::Internal(
+                    "bootstrap decision fence was lost while holding its authority lock".to_owned(),
+                )
+                .into());
+            }
+            Ok(DeviceBootstrapDecisionWriteOutcome::Inserted)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn batch_receipts_for_event(

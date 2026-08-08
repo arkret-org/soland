@@ -561,18 +561,16 @@ fn capability_add_dot(operation: &Operation) -> Option<String> {
 /// `sdk_projection::projection_operation_from_event` injects on the submit
 /// path.
 ///
-/// Retypes the fixture's producer-allocated Operation uuid into the
-/// content-bound version nibble an Event id carries. Fixtures that reuse one
-/// Operation id across calls keep sharing one dot — the idempotent re-add the
-/// previous `ak:operation:` tag also produced.
+/// Hashes the fixture Operation id into a valid v1 SHA-256 Event identity.
+/// Fixtures that reuse one Operation id across calls keep sharing one dot —
+/// the idempotent re-add the previous `ak:operation:` tag also produced.
 #[cfg(test)]
 fn fixture_event_id_for_operation(operation_id: &str) -> String {
-    let mut uuid = operation_id
-        .strip_prefix("ak:operation:")
-        .expect("fixture operation id is typed")
-        .to_owned();
-    uuid.replace_range(14..15, "8");
-    format!("ak:event:{uuid}")
+    let digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(operation_id))
+        .expect("fixture digest is typed");
+    arkret_identifiers::EventId::from_event_digest(&digest)
+        .expect("SHA-256 is a registered Event digest suite")
+        .to_string()
 }
 
 /// Pull the canonical grant body out of an `ak.capability.grant` payload.
@@ -2838,7 +2836,13 @@ mod authority_cycle_tests {
             RealmId::new(REALM.to_owned()).unwrap(),
             arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
-                "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
+                "event_id": arkret_identifiers::EventId::from_token_bytes(
+                    arkret_identifiers::GrantId::new(grant_id.to_owned())
+                        .expect("fixture grant id")
+                        .token_bytes(),
+                )
+                .expect("fixture grant is Event-derived")
+                .to_string(),
                 "grant": {
                     "issuer": "did:web:alice.example",
                     "issuer_authority_refs": [
@@ -3305,7 +3309,11 @@ mod realm_owner_authority_tests {
     }
 
     fn grant_id(slot: &str) -> String {
-        format!("ak:grant:01980000-0000-8000-8000-0000000000{slot}")
+        let operation_id = format!("ak:operation:01980000-0000-7000-8000-0000000000{slot}");
+        let event_id =
+            arkret_identifiers::EventId::new(super::fixture_event_id_for_operation(&operation_id))
+                .expect("fixture event id");
+        arkret_identifiers::GrantId::from_event_id(&event_id).to_string()
     }
 
     /// A Realm whose `realm_states` mirror names `mirror_owner` but whose
@@ -3562,16 +3570,20 @@ mod realm_owner_authority_tests {
         );
         let mut state = realm(Some(OWNER), None);
         let owner_grant = grant_id("e1");
-        assert!(projected(&issue(
+        let owner_issue = issue(
             &mut state,
             &grant_op(
                 "e1",
                 &owner_grant,
                 OWNER,
                 CO_OWNER,
-                json!(["ak.realm.owner"])
+                json!(["ak.realm.owner"]),
             ),
-        )));
+        );
+        assert!(
+            projected(&owner_issue),
+            "owner grant failed: {owner_issue:?}"
+        );
         // The co-owner holds the aggregate, but not the non-Event surface it
         // does not cover.
         assert!(!state.issuer_has_projected_capability(

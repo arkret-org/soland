@@ -2684,8 +2684,18 @@ async fn validate_agent_keypackage_upload(
     let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
         .map_err(|_| "key_package_invalid".to_owned())?;
     match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity == principal.as_str().as_bytes() => {}
+        arkret_mls::AuthorLeafCredential::Basic { identity } => {
+            let encoded = std::str::from_utf8(&identity)
+                .map_err(|_| "claim_generation_mismatch".to_owned())?;
+            let (leaf_principal, leaf_device) = encoded
+                .rsplit_once('#')
+                .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
+            if leaf_principal != principal.as_str()
+                || arkret_identifiers::DeviceId::new(leaf_device.to_owned()).is_err()
+            {
+                return Err("claim_generation_mismatch".to_owned());
+            }
+        }
         _ => return Err("claim_generation_mismatch".to_owned()),
     }
     let public_key: [u8; 32] = leaf
@@ -3453,6 +3463,10 @@ mod trust_binding_tests {
         )
         .unwrap();
         let authorize_event_id = authorize_event.event_id.to_string();
+        let authorize_envelope = serde_json::to_value(&authorize_event).unwrap();
+        let authorize_canonical_bytes =
+            crate::routing::events::event_log::event_canonical_bytes(&authorize_envelope).unwrap();
+        let authorize_canonical_digest = authorize_event.event_digest().unwrap();
         state
             .event_queries()
             .store_canonical_event(soland_services::events::CanonicalEventRecord {
@@ -3462,9 +3476,9 @@ mod trust_binding_tests {
                 realm_id: Some(authorize_event.realm_id.to_string()),
                 kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: format!("sha256:{}", "a".repeat(64)),
-                canonical_bytes: Vec::new(),
-                envelope: serde_json::to_value(authorize_event).unwrap(),
+                canonical_digest: authorize_canonical_digest,
+                canonical_bytes: authorize_canonical_bytes,
+                envelope: authorize_envelope,
                 received_at: now(),
             })
             .await

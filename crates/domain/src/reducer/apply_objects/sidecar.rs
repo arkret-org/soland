@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn sidecar_create_retypes_event_and_never_creates_circle_membership() {
         let mut state = ProjectionState::default();
-        let first = create("01964137-0000-8000-8000-000000000042");
+        let first = create("AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw");
         assert!(matches!(
             state.apply(&first, &ServerHlc::new("sidecar-test")),
             ProjectionEffect::Ignored
@@ -271,7 +271,7 @@ mod tests {
             Some("ak:event:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw")
         );
 
-        let second = create("01964137-0000-8000-8000-000000000043");
+        let second = create("AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b");
         assert!(matches!(
             state.apply(&second, &ServerHlc::new("sidecar-test")),
             ProjectionEffect::Rejected { reason } if reason == "sidecar_singleton_conflict"

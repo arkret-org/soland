@@ -933,6 +933,21 @@ mod tests {
             description.profile_bindings[ProfileId::CANDIDATE_JOIN_POLICY_V1].carrier,
             "profile_private_http_receipt_v1"
         );
+        for operation in [
+            "ak.self.realm.join_application.command.submit",
+            "ak.self.realm.join_application.command.review",
+            "ak.self.realm.join_application.command.cancel",
+            "ak.self.realm.join_application.read.list",
+            "ak.self.realm.join_application.resource.get",
+            "ak.self.realm.join_application.audit.read.list",
+        ] {
+            assert!(
+                description
+                    .supported_operations
+                    .iter()
+                    .any(|candidate| candidate == operation)
+            );
+        }
         assert!(description.validate().is_ok());
 
         apply_claim_level_partition(&mut description, &[], false);

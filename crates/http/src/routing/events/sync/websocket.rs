@@ -733,9 +733,17 @@ async fn verify_authenticate(
     if grant.audience.as_str() != state.service_id() || grant.expires_at <= chrono::Utc::now() {
         return Err("grant");
     }
-    let Some(cnf_jkt) = grant.cnf_jkt.clone().filter(|jkt| !jkt.is_empty()) else {
+    if grant.credential_class
+        == arkret_models_identity::session_credential::SessionGrantCredentialClass::DeviceBootstrap
+    {
+        // The founding credential's exact four-operation allowlist contains no
+        // WebSocket subscribe/reauth operation.
         return Err("grant");
-    };
+    }
+    let cnf_jkt = grant.cnf_jkt.clone();
+    if cnf_jkt.is_empty() {
+        return Err("grant");
+    }
 
     let Ok(Some(challenge)) = state
         .sync()
@@ -2068,6 +2076,7 @@ mod tests {
             audience: "did:example:service".to_owned(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
             revoked_at: None,

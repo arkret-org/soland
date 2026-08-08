@@ -592,7 +592,7 @@ mod tests {
         }
     }
 
-    fn event_unit(service_id: &Did, _event_id: EventId, kind: &str) -> PreparedEventUnit {
+    fn event_unit(service_id: &Did, kind: &str, seed: &str) -> (EventId, PreparedEventUnit) {
         let authorization_lease = erase_authorization_lease();
         let event = Event::new_with_derived_id_at(
             kind,
@@ -600,7 +600,7 @@ mod tests {
             authorization_lease.actor_id.clone(),
             1,
             Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
-            json!({"fixture": true}),
+            json!({"fixture": seed}),
             Utc::now(),
         )
         .unwrap();
@@ -613,11 +613,21 @@ mod tests {
                 membership_compensation_evidence: None,
             }],
         };
-        PreparedEventUnit::new(service_id.clone(), serde_json::to_value(request).unwrap()).unwrap()
+        let event_id = request.events[0].event.event_id.clone();
+        (
+            event_id,
+            PreparedEventUnit::new(service_id.clone(), serde_json::to_value(request).unwrap())
+                .unwrap(),
+        )
     }
 
     fn initial_rotation() -> SecurityTransactionRecord {
         let service_id = Did::new("did:web:principal.example").unwrap();
+        let (revoke_event_id, revoke_unit) = event_unit(&service_id, "ak.device.revoke", "revoke");
+        let (secret_active_series_event_id, secret_active_series_unit) =
+            event_unit(&service_id, "ak.key_backup.active_series", "secret-storage");
+        let (mls_active_series_event_id, mls_active_series_unit) =
+            event_unit(&service_id, "ak.key_backup.active_series", "mls-history");
         let secret_binding = BackupRotationBinding {
             backup_kind: BackupRotationKind::SecretStorage,
             previous_series_id: BackupSeriesId::new(
@@ -640,10 +650,7 @@ mod tests {
                     ciphertext_digest: hash('c'),
                 },
             ],
-            active_series_event_id: EventId::new(
-                "ak:event:AVGanUczk_HqyhD3qntCokCcB-r4a3Qwn1A7POJwQjDv",
-            )
-            .unwrap(),
+            active_series_event_id: secret_active_series_event_id,
             old_backups: vec![BackupObjectRef {
                 backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010e").unwrap(),
                 ciphertext_digest: hash('9'),
@@ -671,10 +678,7 @@ mod tests {
                     ciphertext_digest: hash('6'),
                 },
             ],
-            active_series_event_id: EventId::new(
-                "ak:event:AYJt8GV9iI2IPvObbXcGeRMnIlx7VVkBQ3YKAdRFfrUt",
-            )
-            .unwrap(),
+            active_series_event_id: mls_active_series_event_id,
             old_backups: vec![BackupObjectRef {
                 backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108").unwrap(),
                 ciphertext_digest: hash('8'),
@@ -682,32 +686,22 @@ mod tests {
         };
         let transaction_id =
             TransactionId::new("ak:transaction:019a7360-0000-7000-8000-000000000101").unwrap();
-        let revoke_event_id =
-            EventId::new("ak:event:AaAkIzblCDjqaSCE04n-JnjSzLVYVVT9LyvaLdLiTJrW").unwrap();
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
                 Did::new("did:web:alice.example").unwrap(),
                 Utc::now() + Duration::hours(1),
                 revoke_event_id.clone(),
-                event_unit(&service_id, revoke_event_id, "ak.device.revoke"),
+                revoke_unit,
                 hash('1'),
                 vec![
                     BackupRotationPlan {
-                        active_series_unit: event_unit(
-                            &service_id,
-                            secret_binding.active_series_event_id.clone(),
-                            "ak.key_backup.active_series",
-                        ),
+                        active_series_unit: secret_active_series_unit,
                         encrypted_backup_material: canonical_material(&secret_binding),
                         binding: secret_binding,
                     },
                     BackupRotationPlan {
-                        active_series_unit: event_unit(
-                            &service_id,
-                            mls_binding.active_series_event_id.clone(),
-                            "ak.key_backup.active_series",
-                        ),
+                        active_series_unit: mls_active_series_unit,
                         encrypted_backup_material: canonical_material(&mls_binding),
                         binding: mls_binding,
                     },

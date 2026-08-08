@@ -560,6 +560,7 @@ async fn verify_mimi_consent_update_authority(
             audience: state.service_id().to_string(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: now() + chrono::Duration::minutes(5),
             created_at: now(),
             revoked_at: None,

@@ -688,6 +688,7 @@ mod tests {
             audience: state.service_id().clone(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: created_at + chrono::Duration::minutes(1),
             created_at,
             revoked_at: None,

@@ -47,22 +47,34 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
 }
 
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_CREATE,
-            REALM_ID,
-            serde_json::json!({
-                "object": {
-                    "id": REALM_ID,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Product",
-                    "created_by": "did:web:alice.example",
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "encryption_profile": "mls_rfc9420"
-                }
-            }),
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        REALM_ID.to_owned(),
+        SolandRealmState {
+            realm_id: REALM_ID.to_owned(),
+            owner: Some("did:web:alice.example".to_owned()),
+            title: Some("Product".to_owned()),
+            deleted: false,
+            archived: false,
+            frozen: false,
+            freeze_expires_at: None,
+            created_at: now,
+            updated_at: now,
+            trust_domain: None,
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+            active_profiles: Vec::new(),
+        },
+    );
+    state.realm_null_subject_cells.insert(
+        (
+            REALM_ID.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        hlc,
+        arkret_state::lattice::CellState::Value(
+            serde_json::json!({"encryption_profile": "mls_rfc9420"}),
+        ),
     );
     let mut create = make_operation(
         arkret_wire::EventKind::STRAND_CREATE,
@@ -94,7 +106,11 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
     // the fixture carries the canonical digest a real Event would.
     create.canonical_event_digest =
         Some("sha256:6666666666666666666666666666666666666666666666666666666666666666".to_owned());
-    state.apply(&create, hlc);
+    let strand = state.apply(&create, hlc);
+    assert!(
+        !matches!(strand, ProjectionEffect::Rejected { .. }),
+        "strand fixture failed: {strand:?}"
+    );
 }
 
 fn pin_payload(note: Value) -> Value {

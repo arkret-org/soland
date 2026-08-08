@@ -183,16 +183,6 @@ pub enum ProjectionEffect {
         binding_id: String,
         state: String,
     },
-    /// Auth service-attested SessionGrant genesis projected under the
-    /// SessionGrantId derived from the accepted Event.
-    SessionGrantProjected {
-        session_grant_id: String,
-    },
-    /// Terminal lifecycle transition for an accepted SessionGrant.
-    SessionGrantStateProjected {
-        session_grant_id: String,
-        state: String,
-    },
     /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
     /// `ak.component.call.summary.v1` cas_register cell.
     CallSummaryProjected {

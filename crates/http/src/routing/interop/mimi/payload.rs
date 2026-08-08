@@ -115,6 +115,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: now + chrono::Duration::minutes(5),
         created_at: now,
         revoked_at: None,

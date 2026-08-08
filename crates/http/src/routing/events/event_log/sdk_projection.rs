@@ -1181,8 +1181,13 @@ mod refs_limit_tests {
     fn authorized_by_over_max_rejected_as_refs_too_large() {
         let refs: Vec<Value> = (0..(arkret_wire::event_envelope::MAX_AUTHORIZED_BY_REFS + 1))
             .map(|index| {
+                let event_id = arkret_identifiers::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [index as u8; 32],
+                );
+                let grant_id = arkret_identifiers::GrantId::from_event_id(&event_id);
                 json!({
-                    "id": format!("ak:grant:019fa9da-0000-8000-8000-{index:012x}"),
+                    "id": grant_id,
                     "role": "authorized_by"
                 })
             })

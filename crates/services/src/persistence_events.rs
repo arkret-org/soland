@@ -201,6 +201,9 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
         deliveries: Vec<crate::events::FederationDelivery>,
+        bootstrap_decision: Option<
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
@@ -235,11 +238,36 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 }),
                 publication_evidence,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
+                bootstrap_decision,
             )
             .await?;
         Ok(crate::events::IdentityAnchorCommitResult {
             reanchor_conflict: outcome.reanchor_conflict,
         })
+    }
+    async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> crate::ServiceResult<
+        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    > {
+        Ok(self
+            .0
+            .events()
+            .device_bootstrap_decision(account_authority_id, transaction_id)
+            .await?)
+    }
+    async fn put_device_bootstrap_decision(
+        &self,
+        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
+        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    ) -> crate::ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome> {
+        Ok(self
+            .0
+            .events()
+            .put_device_bootstrap_decision_atomic(request, record)
+            .await?)
     }
     async fn canonical_event(
         &self,

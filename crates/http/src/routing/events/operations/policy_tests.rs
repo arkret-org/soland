@@ -38,7 +38,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let strand_id =
         arkret_identifiers::StrandId::new("ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D")
             .unwrap();
-    let realm_create = op(
+    let mut realm_create = op(
         realm_id.clone(),
         "000000000691",
         arkret_wire::EventKind::REALM_CREATE,
@@ -53,6 +53,8 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         ).unwrap())
         .unwrap(),
     );
+    realm_create.payload["event_id"] =
+        json!(realm_id.as_str().replacen("ak:realm:", "ak:event:", 1));
     let mut peer_join = op(
         realm_id.clone(),
         "000000000692",
@@ -66,6 +68,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         .unwrap(),
     );
     peer_join.payload["sender"] = json!("did:web:alice.example");
+    peer_join.payload["event_id"] = json!("ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5");
     let mut strand_create = op(
         realm_id.clone(),
         "000000000693",
@@ -85,9 +88,9 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         json!("ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D");
     {
         let mut projection = state.test_projection().lock();
-        projection.apply(&realm_create, state.hlc());
-        projection.apply(&peer_join, state.hlc());
-        projection.apply(&strand_create, state.hlc());
+        apply_with_registered_cell_writes(&mut projection, &realm_create, 0, state.hlc());
+        apply_with_registered_cell_writes(&mut projection, &peer_join, 1, state.hlc());
+        apply_with_registered_cell_writes(&mut projection, &strand_create, 2, state.hlc());
     }
     state.contacts().install_direct_binding(
         "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
@@ -109,6 +112,44 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     (state, realm_id)
 }
 
+fn apply_with_registered_cell_writes(
+    projection: &mut soland_domain::reducer::ProjectionState,
+    operation: &Operation,
+    actor_seq: u64,
+    server_hlc: &soland_domain::hlc::ServerHlc,
+) {
+    let actor = operation
+        .payload
+        .get("sender")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("did:web:alice.example");
+    let event = arkret_wire::Event::new_at(
+        operation.object_kind.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: operation.realm_id.clone(),
+        },
+        arkret_identifiers::Did::new(actor).unwrap(),
+        actor_seq,
+        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
+        projection_context_stripped_payload(&operation.payload),
+        operation.created_at,
+    )
+    .unwrap();
+    let writes = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let effect = projection.apply_projected(operation, &writes, server_hlc);
+    assert!(
+        !matches!(
+            effect,
+            soland_domain::reducer::ProjectionEffect::Rejected { .. }
+        ),
+        "canonical fixture projection rejected: {effect:?}"
+    );
+}
+
 fn op(
     realm_id: arkret_identifiers::RealmId,
     seed: &str,
@@ -124,6 +165,21 @@ fn op(
         kind,
         payload,
     )
+}
+
+fn canonical_event_storage_identity(
+    digest_payload: &serde_json::Value,
+) -> (String, String, Vec<u8>) {
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(digest_payload).expect("canonical fixture bytes");
+    let canonical_digest =
+        arkret_canonical::canonical_sha256(digest_payload).expect("canonical fixture digest");
+    let digest =
+        arkret_identifiers::Hash::new(canonical_digest.clone()).expect("fixture digest is typed");
+    let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
+        .expect("SHA-256 is a registered Event digest suite")
+        .to_string();
+    (event_id, canonical_digest, canonical_bytes)
 }
 
 fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::Value {
@@ -815,10 +871,16 @@ async fn register_native_agent_membership_context(
         now,
     );
     record.agent_slug = Some("summary".to_owned());
-    let authorize_event_id = "ak:event:AfDDdHscw1t6MBiARodVU-OB1MKSNBVOhVZ_QpsX0Sov";
     let verification_method = "did:web:agent.example#runtime-1";
+    let (authorize_event_id, authorize_canonical_digest, authorize_canonical_bytes) =
+        canonical_event_storage_identity(&json!({
+            "kind": arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+            "realm_id": realm_id.as_str(),
+            "agent_id": agent,
+            "verification_method": verification_method
+        }));
     if with_claimable_keypackage {
-        record.authorized_event_ref = Some(authorize_event_id.to_owned());
+        record.authorized_event_ref = Some(authorize_event_id.clone());
         record.authorized_verification_method = Some(verification_method.to_owned());
     }
     state
@@ -847,24 +909,27 @@ async fn register_native_agent_membership_context(
         arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
     >(accountability_grant_payload.clone())
     .expect("standard accountability grant payload");
+    let accountability_envelope = json!({
+        "actor_id": controller,
+        "executed_by": controller,
+        "kind": "ak.identity.accountability_grant",
+        "payload": accountability_grant_payload
+    });
+    let (accountability_event_id, accountability_digest, accountability_bytes) =
+        canonical_event_storage_identity(&accountability_envelope);
     state
         .test_persistence()
         .events()
         .put(soland_storage::CanonicalEventRecord {
-            event_id: "ak:event:ASpivoHxwC3V_nT9UCImH0gC3QnCozFZGCCqXBqPBhPG".to_owned(),
+            event_id: accountability_event_id,
             actor_id: controller.to_owned(),
             actor_seq: 1,
             realm_id: Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: "sha256:test".to_owned(),
-            canonical_bytes: Vec::new(),
-            envelope: json!({
-                "actor_id": controller,
-                "executed_by": controller,
-                "kind": "ak.identity.accountability_grant",
-                "payload": accountability_grant_payload
-            }),
+            canonical_digest: accountability_digest,
+            canonical_bytes: accountability_bytes,
+            envelope: accountability_envelope,
             received_at: now,
         })
         .await
@@ -946,14 +1011,14 @@ async fn register_native_agent_membership_context(
         .test_persistence()
         .events()
         .put(soland_storage::CanonicalEventRecord {
-            event_id: authorize_event_id.to_owned(),
+            event_id: authorize_event_id.clone(),
             actor_id: agent.to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
             kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: format!("sha256:{}", "5".repeat(64)),
-            canonical_bytes: Vec::new(),
+            canonical_digest: authorize_canonical_digest,
+            canonical_bytes: authorize_canonical_bytes,
             envelope: authorize_envelope,
             received_at: now,
         })
@@ -1186,14 +1251,13 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D",
-            "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "recipient_service_kind": "principal_server"
             },
-            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "expires_at": "2026-08-05T10:00:00.000Z"
         }),
     );
     assert_eq!(
@@ -1247,9 +1311,13 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000604",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:AVJ3Urc46gK-WoiuktJ0Mv8wBM6XEiuM_6aRXU9iBbMU",
-            "inviter": "did:web:alice.example",
-            "invitee": "did:web:charlie.example"
+            "invitee": "did:web:charlie.example",
+            "invite_delivery_target": {
+                "recipient_service_id": "did:web:local.host",
+                "recipient_service_kind": "principal_server"
+            },
+            "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "expires_at": "2026-08-05T10:00:00.000Z"
         }),
     );
     assert_eq!(
@@ -1631,7 +1699,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
 }
 
 #[tokio::test]
-async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_write() {
+async fn provenance_actor_kind_agent_unknown_action_fails_closed_before_context() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AXzeZ-Ew-5O_W5FC1b8TyxqwA3twPkBPtlQ6j3xWqBYN".to_owned(),
@@ -1657,7 +1725,7 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
         validate_agent_reply_participation(&state, &[operation])
             .await
             .unwrap_err(),
-        "agent_context_missing"
+        "agent_participation_action_unknown"
     );
 }
 
@@ -1741,7 +1809,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
 }
 
 #[tokio::test]
-async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
+async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AeAr0dq27Y12394LKAb3Xv0CnKBcTVG6R0EQTJCQbIe6".to_owned(),
@@ -1773,7 +1841,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
         validate_agent_reply_participation(&state, &[operation])
             .await
             .unwrap_err(),
-        "agent_context_authorization_action_unsupported"
+        "agent_participation_action_unknown"
     );
 }
 
@@ -2024,29 +2092,32 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         "ak:realm:AVL-lH-YPO6V6QqApOt_nAmCdrWn3Wi6XOHl91H653O5".to_owned(),
     )
     .unwrap();
+    let grant_envelope = json!({
+        "actor_id": "did:web:mallory.example",
+        "kind": "ak.identity.accountability_grant",
+        "realm_id": realm_id.to_string(),
+        "payload": {
+            "issuer": "did:web:alice.example",
+            "subject": "did:web:agent.example",
+            "grant_status": "active",
+            "not_before": "2026-01-01T00:00:00.000Z",
+            "expires_at": "2099-01-01T00:00:00.000Z"
+        }
+    });
+    let (grant_event_id, grant_digest, grant_bytes) =
+        canonical_event_storage_identity(&grant_envelope);
     state
         .event_queries()
         .store_canonical_event(CanonicalEventRecord {
-            event_id: "ak:event:AV7K8qoFD_RwtiKYfMe26-5D6csWJ6XQ8qUhD5IjjPT3".to_owned(),
+            event_id: grant_event_id,
             actor_id: "did:web:mallory.example".to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
             kind: "ak.identity.accountability_grant".to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: "sha256:test".to_owned(),
-            canonical_bytes: Vec::new(),
-            envelope: json!({
-                "actor_id": "did:web:mallory.example",
-                "kind": "ak.identity.accountability_grant",
-                "realm_id": realm_id.to_string(),
-                "payload": {
-                    "issuer": "did:web:alice.example",
-                    "subject": "did:web:agent.example",
-                    "grant_status": "active",
-                    "not_before": "2026-01-01T00:00:00.000Z",
-                    "expires_at": "2099-01-01T00:00:00.000Z"
-                }
-            }),
+            canonical_digest: grant_digest,
+            canonical_bytes: grant_bytes,
+            envelope: grant_envelope,
             received_at: chrono::Utc::now(),
         })
         .await
@@ -2834,6 +2905,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
+                "policy_revision": 1,
                 "content_scheme": "mls_rfc9420"
             })),
         );
@@ -2878,6 +2950,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
         projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
+                "policy_revision": 1,
                 "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",
@@ -3059,6 +3132,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
+                "policy_revision": 1,
                 "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",

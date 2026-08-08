@@ -21,7 +21,7 @@ mod invite_create_schema_tests {
 
     fn invite_payload() -> serde_json::Value {
         json!({
-            "invite_id": "ak:invite:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF",
+            "event_id": "ak:event:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF",
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:web:local.host",
@@ -44,7 +44,6 @@ mod invite_create_schema_tests {
     fn invite_create_accepts_projection_internal_fields() {
         let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
-        payload["event_id"] = json!("ak:event:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF");
         payload["sender"] = json!("did:web:alice.example");
         payload["hlc"] = json!("2026-06-14T10:00:00.000Z/node/1");
         payload["seal_ref"] = json!(
@@ -56,13 +55,16 @@ mod invite_create_schema_tests {
     }
 
     #[test]
-    fn invite_create_accepts_spec_reason_field() {
+    fn invite_create_rejects_removed_reason_field() {
         let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["reason"] = json!("review_accept");
         let operation = op(payload);
 
-        assert!(validate_operation_schema(&operation, schema).is_ok());
+        assert_eq!(
+            validate_operation_schema(&operation, schema),
+            Err("operation payload violates SDK artifact schema")
+        );
     }
 
     #[test]
@@ -79,15 +81,15 @@ mod invite_create_schema_tests {
     }
 
     #[test]
-    fn invite_create_requires_invite_id() {
+    fn invite_create_rejects_event_derived_invite_id_on_wire() {
         let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
-        payload.as_object_mut().unwrap().remove("invite_id");
+        payload["invite_id"] = json!("ak:invite:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF");
         let operation = op(payload);
 
         assert_eq!(
             validate_operation_schema(&operation, schema),
-            Err("ak.invite.create operation requires invite_id")
+            Err("operation payload violates SDK artifact schema")
         );
     }
 
@@ -105,7 +107,7 @@ mod invite_create_schema_tests {
     }
 
     #[test]
-    fn invite_create_rejects_invalid_invite_id() {
+    fn invite_create_rejects_legacy_invite_id_even_when_malformed() {
         let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["invite_id"] = json!("ak:invite:01");

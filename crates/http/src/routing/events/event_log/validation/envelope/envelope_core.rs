@@ -111,6 +111,17 @@ async fn validate_event_envelope_with_ingress(
         )
     })?;
     validate_event_critical_features(state, object)?;
+    // `effective_scope` is reducer output and is intentionally absent from
+    // the closed SDK Event DTO. Reject it from the raw envelope before
+    // canonical decoding so callers receive the contract-specific reason
+    // instead of a generic unknown-field error.
+    if object.get("effective_scope").is_some() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            arkret_wire::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED,
+            "envelope.effective_scope is reducer-managed; clients MUST NOT supply it",
+        ));
+    }
 
     let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
         event_validation_error(
@@ -246,14 +257,6 @@ async fn validate_event_envelope_with_ingress(
             "envelope.actor_kind is reducer-managed; clients MUST NOT supply it",
         ));
     }
-    if object.get("effective_scope").is_some() {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            arkret_wire::ReasonCode::EFFECTIVE_SCOPE_REDUCER_MANAGED,
-            "envelope.effective_scope is reducer-managed; clients MUST NOT supply it",
-        ));
-    }
-
     // AKP-0008 / AKP-0009 — when `executed_by` is present the reducer MUST
     // verify the DID resolved from `proof.verification_method` matches
     // `executed_by` (signs-as-X-on-behalf-of-Y attribution proof). This

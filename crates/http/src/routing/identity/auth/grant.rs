@@ -47,12 +47,13 @@ pub(crate) async fn validate_session_grant_binding(
             "runtime principal service_id is not a DID: {error}"
         ))
     })?;
-    let request = SessionGrantIntrospectRequestBody {
-        id: None,
-        grant_jwt: Some(input.grant_jwt.to_owned()),
-        audience: Some(audience),
-        proof: input.proof.cloned(),
-    };
+    let request = SessionGrantIntrospectRequestBody::ByJwt(
+        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
+            grant_jwt: input.grant_jwt.to_owned(),
+            audience: Some(audience),
+            proof: input.proof.cloned(),
+        },
+    );
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
     let (introspection_url, client) =
@@ -139,6 +140,6 @@ pub(crate) async fn validate_session_grant_binding(
 
     Ok(Some(ValidatedSessionGrant {
         expires_at: grant.expires_at,
-        session_public_key: Some(grant.session_public_key),
+        session_public_key: Some(grant.session_public_key.into_string()),
     }))
 }

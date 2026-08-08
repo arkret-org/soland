@@ -616,6 +616,7 @@ async fn push_register_session_grant_bridge(
         audience: state.service_id().clone(),
         session_public_key,
         agent_session: None,
+        session_grant: None,
         expires_at,
         created_at: now(),
         revoked_at: None,

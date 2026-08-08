@@ -1,5 +1,45 @@
 use super::*;
 
+fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) {
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        realm_id.to_owned(),
+        SolandRealmState {
+            realm_id: realm_id.to_owned(),
+            owner: Some(member.to_owned()),
+            title: Some("Product".to_owned()),
+            deleted: false,
+            archived: false,
+            frozen: false,
+            freeze_expires_at: None,
+            created_at: now,
+            updated_at: now,
+            trust_domain: None,
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+            active_profiles: Vec::new(),
+        },
+    );
+    state.members.insert(
+        (realm_id.to_owned(), member.to_owned()),
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+}
+
 /// Stream-F (Wave 2C) — spec `realm-and-space.md` §2.5.1 ¶6.
 /// `ak.realm.destroy` on Realm A must mark cross-Realm child
 /// Spaces in Realm B (whose `parent_ref` points at a Space hosted
@@ -798,23 +838,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     let public_strand_id = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
     let scoped_strand_id = "ak:strand:ATz4yMg8D3eSMJ7kiPNr0BF70hg3o_DBZklFZd5GZSuJ";
 
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_CREATE,
-            realm_id,
-            serde_json::json!({
-                "object": {
-                    "id": realm_id,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Product",
-                    "created_by": "did:web:alice.example",
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "encryption_profile": "mls_rfc9420"
-                }
-            }),
-        ),
-        &hlc,
-    );
+    seed_realm_member(&mut state, realm_id, "did:web:alice.example");
     state.apply(
         &make_operation(
             arkret_wire::EventKind::CIRCLE_CREATE,
@@ -936,23 +960,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     let child_id = "ak:space:AUZVSPb9v-NuEN6dQgTA44vXJnQ1d-pxAvvfplV4zgOc";
     let scoped_child_id = "ak:space:Ab-u0alSwVcrUhqmeFQmMzuYs83_IrjXlRSBnpm-B-JL";
 
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_CREATE,
-            realm_id,
-            serde_json::json!({
-                "object": {
-                    "id": realm_id,
-                    "schema": "ak.schema.realm.v1",
-                    "title": "Product",
-                    "created_by": "did:web:alice.example",
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "encryption_profile": "mls_rfc9420"
-                }
-            }),
-        ),
-        &hlc,
-    );
+    seed_realm_member(&mut state, realm_id, "did:web:alice.example");
     state.apply(
         &make_operation(
             arkret_wire::EventKind::CIRCLE_CREATE,

@@ -1393,6 +1393,7 @@ fn application_session_identity(
                 scope_details: agent.scope_details,
                 freshness_state: agent.freshness_state,
             }),
+        session_grant: None,
         expires_at: session.expires_at,
         created_at: session.created_at,
         revoked_at: session.revoked_at,
@@ -1402,6 +1403,10 @@ fn application_session_identity(
 fn persistence_session_identity(
     session: crate::identity::SessionIdentityState,
 ) -> soland_storage::SessionRecord {
+    debug_assert!(
+        session.session_grant.is_none(),
+        "request-scoped session grants must never be persisted"
+    );
     soland_storage::SessionRecord {
         token_hash: session.token_hash,
         actor: session.actor,

@@ -870,7 +870,22 @@ pub trait EventReadPort: Send + Sync {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDelivery>,
+        bootstrap_decision: Option<
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
+    async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    >;
+    async fn put_device_bootstrap_decision(
+        &self,
+        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
+        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    ) -> ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
@@ -1212,6 +1227,9 @@ impl EventQueryService {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDelivery>,
+        bootstrap_decision: Option<
+            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+        >,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -1223,7 +1241,28 @@ impl EventQueryService {
                 reanchor_slot,
                 publication_evidence,
                 deliveries,
+                bootstrap_decision,
             )
+            .await
+    }
+    pub async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
+    > {
+        self.events
+            .device_bootstrap_decision(account_authority_id, transaction_id)
+            .await
+    }
+    pub async fn put_device_bootstrap_decision(
+        &self,
+        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
+        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    ) -> ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome> {
+        self.events
+            .put_device_bootstrap_decision(request, record)
             .await
     }
     pub async fn canonical_event(

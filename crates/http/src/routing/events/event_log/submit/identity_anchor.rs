@@ -28,6 +28,141 @@ fn event_digests(envelopes: &[Value]) -> Result<Vec<String>, anyhow::Error> {
         .collect()
 }
 
+fn bootstrap_schema_error(message: impl Into<String>) -> SubmitOneError {
+    SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message)
+}
+
+async fn build_accepted_bootstrap_decision(
+    state: &AppState,
+    session: &SessionRecord,
+    events: &[arkret_wire::Event],
+    envelopes: &[Value],
+    decided_at: DateTime<Utc>,
+) -> Result<
+    arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
+    SubmitOneError,
+> {
+    use arkret_models_identity::session_credential::{
+        SessionGrantBootstrapBinding, SessionGrantCredentialClass,
+        device_bootstrap_device_key_digest, founding_batch_digest,
+    };
+    let context = session
+        .session_grant
+        .as_ref()
+        .filter(|context| context.credential_class == SessionGrantCredentialClass::DeviceBootstrap)
+        .ok_or_else(|| {
+            unit_error("founding identity-anchor InitialBatch requires a device-bootstrap grant")
+        })?;
+    let Some(SessionGrantBootstrapBinding::Founding {
+        principal_id,
+        device_id,
+        device_key_digest,
+        transaction_id,
+        holder_jkt,
+        canonical_request_digest,
+        founding_batch_digest: declared_batch_digest,
+        founding_event_ids,
+        bootstrap_transaction_expires_at,
+        ..
+    }) = context.bootstrap_binding.as_ref()
+    else {
+        return Err(unit_error(
+            "founding identity-anchor InitialBatch requires mode=founding bootstrap binding",
+        ));
+    };
+    if events.len() != 2 || envelopes.len() != 2 {
+        return Err(unit_error("founding decision requires exactly two Events"));
+    }
+    let event_ids = [events[0].event_id.clone(), events[1].event_id.clone()];
+    let computed_batch_digest = founding_batch_digest(&event_ids).map_err(|error| {
+        bootstrap_schema_error(format!("founding batch digest failed: {error}"))
+    })?;
+    let authorize = typed_device_authorize_payload(&envelopes[1])?;
+    let account_authority_id =
+        arkret_identifiers::Did::new(context.issuer.clone()).map_err(|error| {
+            bootstrap_schema_error(format!("bootstrap issuer is not a DID: {error}"))
+        })?;
+    let authority_matches = authorize
+        .enrollment_authority_binding
+        .as_ref()
+        .is_some_and(|binding| binding.authority_did == account_authority_id);
+    let raw_device_key = arkret_canonical::decode_ed25519_multibase(
+        authorize.device_public_key.as_str(),
+    )
+    .map_err(|error| {
+        bootstrap_schema_error(format!("bootstrap device public key is invalid: {error}"))
+    })?;
+    let computed_device_key_digest =
+        device_bootstrap_device_key_digest(raw_device_key).map_err(|error| {
+            bootstrap_schema_error(format!("bootstrap device key digest failed: {error}"))
+        })?;
+    let mut proof_free_authorize = events[1].clone();
+    proof_free_authorize.proofs.clear();
+    let authorize_preimage = arkret_wire::DeviceAuthorizeEventPreimage::try_from(
+        proof_free_authorize,
+    )
+    .map_err(|error| {
+        bootstrap_schema_error(format!("bootstrap authorize preimage is invalid: {error}"))
+    })?;
+    let computed_request_digest =
+        arkret_models_identity::http_bodies::AccountDeviceEnrollRequestBody {
+            device_id: device_id.clone(),
+            authorize_event_preimage: authorize_preimage,
+        }
+        .canonical_request_digest()
+        .map_err(|error| {
+            bootstrap_schema_error(format!("bootstrap request digest failed: {error}"))
+        })?;
+    if principal_id.as_str() != session.actor
+        || device_id.as_str() != session.device_id
+        || holder_jkt != &context.cnf_jkt
+        || founding_event_ids.as_slice() != event_ids
+        || declared_batch_digest != &computed_batch_digest
+        || canonical_request_digest != &computed_request_digest
+        || device_key_digest != &computed_device_key_digest
+        || authorize.principal_id != *principal_id
+        || authorize.device_id != *device_id
+        || !authority_matches
+        || *bootstrap_transaction_expires_at <= decided_at
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "bootstrap_decision_conflict",
+            "founding InitialBatch does not match the complete bootstrap credential binding",
+        ));
+    }
+    let transaction_id =
+        arkret_wire::ProtocolOpaqueId::new(transaction_id.clone()).map_err(|error| {
+            bootstrap_schema_error(format!("bootstrap transaction id is invalid: {error}"))
+        })?;
+    crate::routing::events::device_bootstrap_decision::build_device_bootstrap_decision_record(
+        state,
+        crate::routing::events::device_bootstrap_decision::DeviceBootstrapDecisionBinding {
+            account_authority_id,
+            transaction_id,
+            decision:
+                arkret_models_collaboration::contact_operations::DeviceBootstrapDecision::Accepted,
+            principal_id: principal_id.clone(),
+            device_id: device_id.clone(),
+            grant_id: context.grant_id.clone(),
+            canonical_request_digest: canonical_request_digest.clone(),
+            founding_event_ids: event_ids,
+            founding_batch_digest: computed_batch_digest,
+            bootstrap_transaction_expires_at: *bootstrap_transaction_expires_at,
+            binding_digest: canonical_request_digest.clone(),
+        },
+        decided_at,
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("bootstrap accepted receipt construction failed: {error}"),
+        )
+    })
+}
+
 pub(super) async fn submit_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
@@ -402,6 +537,28 @@ pub(super) async fn submit_identity_anchor_batch(
         &publication_evidence,
     )
     .await?;
+    let bootstrap_decision = if is_bootstrap {
+        Some(
+            build_accepted_bootstrap_decision(
+                state,
+                session,
+                &typed_control_events,
+                &envelopes,
+                received_at,
+            )
+            .await?,
+        )
+    } else {
+        if session.session_grant.as_ref().is_some_and(|grant| {
+            grant.credential_class
+                == arkret_models_identity::session_credential::SessionGrantCredentialClass::DeviceBootstrap
+        }) {
+            return Err(unit_error(
+                "device-bootstrap grant may submit only its bound founding InitialBatch",
+            ));
+        }
+        None
+    };
     let commit_outcome = state
         .event_queries()
         .store_identity_anchor_batch(
@@ -413,6 +570,7 @@ pub(super) async fn submit_identity_anchor_batch(
             reanchor_slot,
             publication_evidence,
             deliveries,
+            bootstrap_decision,
         )
         .await
         .map_err(|error| {
@@ -783,6 +941,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             None,
             publication_evidence,
             deliveries,
+            None,
         )
         .await
         .map_err(|error| {
@@ -2374,7 +2533,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(max_seq, 2);
-        assert_eq!(heads, vec![left_id, right_id]);
+        let mut expected_heads = vec![left_id, right_id];
+        expected_heads.sort_unstable();
+        assert_eq!(heads, expected_heads);
     }
 
     #[tokio::test]

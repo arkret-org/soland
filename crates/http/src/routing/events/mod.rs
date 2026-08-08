@@ -3,6 +3,7 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 pub(crate) const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
+pub(super) mod device_bootstrap_decision;
 pub(crate) mod event_log;
 pub(super) mod frontier;
 pub(super) mod peer;
@@ -117,6 +118,7 @@ mod tests {
                 }),
                 freshness_state: FreshnessState::Fresh,
             }),
+            session_grant: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
             created_at: Utc::now(),
             revoked_at: None,
@@ -131,6 +133,7 @@ mod tests {
             audience: "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
             created_at: Utc::now(),
             revoked_at: None,

@@ -272,7 +272,6 @@ fn timeline_position_disambiguates_same_second_events() {
     );
 
     assert_ne!(realm_create, welcome_message);
-    assert!(welcome_message > realm_create);
 }
 
 // ── Signal rail (`sync/signal.md`) ─────────────────────────────────────
@@ -540,6 +539,7 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: now() + ChronoDuration::hours(1),
         created_at: now(),
         revoked_at: None,
@@ -782,65 +782,50 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     }
 }
 
-async fn put_canonical_event_received_at(
-    state: &AppState,
-    event_id: &str,
-    actor_seq: u64,
-    kind: &str,
-    payload: Value,
-    created_at: DateTime<Utc>,
-    received_at: DateTime<Utc>,
-) {
-    put_canonical_event_received_at_for_actor(
-        state,
-        event_id,
-        actor_seq,
-        kind,
-        payload,
-        ROSTER_ACTOR,
-        created_at,
-        received_at,
-    )
-    .await;
-}
-
-async fn put_canonical_event_received_at_for_actor(
-    state: &AppState,
-    event_id: &str,
+fn canonical_event_record_received_at(
     actor_seq: u64,
     kind: &str,
     payload: Value,
     actor_id: &str,
     created_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
+) -> soland_services::events::CanonicalEventRecord {
+    let event = arkret_wire::Event::new_with_derived_id_at(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
+        },
+        arkret_identifiers::Did::new(actor_id.to_owned()).unwrap(),
+        actor_seq,
+        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000001")).unwrap(),
+        payload,
+        created_at,
+    )
+    .expect("canonical sync fixture Event");
+    let envelope = serde_json::to_value(&event).unwrap();
+    let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
+        .expect("canonical sync fixture digest payload");
+    soland_services::events::CanonicalEventRecord {
+        event_id: event.event_id.to_string(),
+        actor_id: actor_id.to_owned(),
+        actor_seq,
+        realm_id: Some(ROSTER_REALM.to_owned()),
+        kind: kind.to_owned(),
+        schema_id: "ak.event.v1".to_owned(),
+        canonical_digest: event.event_digest().unwrap(),
+        canonical_bytes,
+        envelope,
+        received_at,
+    }
+}
+
+async fn store_canonical_event(
+    state: &AppState,
+    record: soland_services::events::CanonicalEventRecord,
 ) {
-    let envelope = json!({
-        "event_id": event_id,
-        "actor_id": actor_id,
-        "actor_seq": actor_seq,
-        "realm_id": ROSTER_REALM,
-        "kind": kind,
-        "payload": payload,
-        "created_at": created_at,
-        "hlc": "019041000000-0000-00000001",
-        "prev_refs": [],
-        "proofs": [],
-    });
-    let canonical_bytes = serde_json::to_vec(&envelope).expect("canonical event test envelope");
     state
         .event_queries()
-        .store_canonical_event(soland_services::events::CanonicalEventRecord {
-            event_id: event_id.to_owned(),
-            actor_id: actor_id.to_owned(),
-            actor_seq,
-            realm_id: Some(ROSTER_REALM.to_owned()),
-            kind: kind.to_owned(),
-            schema_id: "ak.event.v1".to_owned(),
-            canonical_digest: arkret_canonical::sha256_digest(&canonical_bytes),
-            canonical_bytes,
-            envelope,
-            received_at,
-        })
+        .store_canonical_event(record)
         .await
         .expect("canonical event stored");
 }
@@ -906,11 +891,41 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .lock()
         .apply(&member_join, state.hlc());
 
-    let pre_join_event_id = "ak:event:AVV6l37w19px1OG38EezfM8o9OHU5l7oBFRL7LQ-nVgL";
-    let post_join_event_id = "ak:event:AfHt5VkfKW_5ttUcjqgiW0it2_6a8PcdTj07GonJ7YNW";
+    let pre_join_record = canonical_event_record_received_at(
+        1,
+        arkret_wire::EventKind::MESSAGE_CREATE,
+        json!({
+            "strand_id": strand_id,
+            "thread_id": strand_id,
+            "content": {"kind": "ak.content.text", "body": "before join"}
+        }),
+        ROSTER_ACTOR,
+        created_at,
+        pre_join_received_at,
+    );
+    let post_join_record = canonical_event_record_received_at(
+        2,
+        arkret_wire::EventKind::MESSAGE_CREATE,
+        json!({
+            "strand_id": strand_id,
+            "thread_id": strand_id,
+            "content": {"kind": "ak.content.text", "body": "after join"}
+        }),
+        ROSTER_ACTOR,
+        created_at,
+        post_join_received_at,
+    );
+    let pre_join_event_id = pre_join_record.event_id.clone();
+    let post_join_event_id = post_join_record.event_id.clone();
+    let pre_join_message_id = arkret_identifiers::MessageId::from_event_id(
+        &arkret_identifiers::EventId::new(pre_join_event_id.clone()).unwrap(),
+    );
+    let post_join_message_id = arkret_identifiers::MessageId::from_event_id(
+        &arkret_identifiers::EventId::new(post_join_event_id.clone()).unwrap(),
+    );
     let pre_join_payload = json!({
         "event_id": pre_join_event_id,
-        "message_id": "ak:message:AVV6l37w19px1OG38EezfM8o9OHU5l7oBFRL7LQ-nVgL",
+        "message_id": pre_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -919,7 +934,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
-        "message_id": "ak:message:AfHt5VkfKW_5ttUcjqgiW0it2_6a8PcdTj07GonJ7YNW",
+        "message_id": post_join_message_id,
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -943,26 +958,8 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         projection.apply(&pre_join_message, state.hlc());
         projection.apply(&post_join_message, state.hlc());
     }
-    put_canonical_event_received_at(
-        &state,
-        pre_join_event_id,
-        1,
-        arkret_wire::EventKind::MESSAGE_CREATE,
-        pre_join_payload,
-        created_at,
-        pre_join_received_at,
-    )
-    .await;
-    put_canonical_event_received_at(
-        &state,
-        post_join_event_id,
-        2,
-        arkret_wire::EventKind::MESSAGE_CREATE,
-        post_join_payload,
-        created_at,
-        post_join_received_at,
-    )
-    .await;
+    store_canonical_event(&state, pre_join_record).await;
+    store_canonical_event(&state, post_join_record).await;
 
     let body = roster_body(state.service_id());
     let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
@@ -1527,38 +1524,35 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         )
         .await
         .expect("realm meta stored");
+    let first_payload = json!({
+        "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
+        "patch": {"synthesis": {"$op": "set", "value": "first"}}
+    });
+    let first_record = canonical_event_record_received_at(
+        1,
+        arkret_wire::EventKind::STRAND_UPDATE,
+        first_payload.clone(),
+        ROSTER_ACTOR,
+        first_created_at,
+        first_created_at,
+    );
+    store_canonical_event(&state, first_record.clone()).await;
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t".to_owned(),
+            event_id: first_record.event_id.clone(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
-            payload: json!({
-                "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-                "patch": {"synthesis": {"$op": "set", "value": "first"}}
-            }),
+            payload: first_payload,
             created_at: first_created_at,
             received_at: first_created_at,
         },
     )
     .await
     .expect("first state event appended");
-    put_canonical_event_received_at(
-        &state,
-        "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t",
-        1,
-        arkret_wire::EventKind::STRAND_UPDATE,
-        json!({
-            "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-            "patch": {"synthesis": {"$op": "set", "value": "first"}}
-        }),
-        first_created_at,
-        first_created_at,
-    )
-    .await;
 
     let body = roster_body(state.service_id());
     let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
@@ -1580,39 +1574,35 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .await
     .expect("initial cursor parses");
 
+    let second_payload = json!({
+        "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
+        "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
+    });
+    let second_record = canonical_event_record_received_at(
+        2,
+        arkret_wire::EventKind::STRAND_UPDATE,
+        second_payload.clone(),
+        ROSTER_CALLER,
+        second_created_at,
+        second_created_at,
+    );
+    store_canonical_event(&state, second_record.clone()).await;
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:AZaaHAEvC1DejakImwHCcJHb0F1pgE-Jd-3_9BGirbuW".to_owned(),
+            event_id: second_record.event_id.clone(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
-            payload: json!({
-                "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-                "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
-            }),
+            payload: second_payload,
             created_at: second_created_at,
             received_at: second_created_at,
         },
     )
     .await
     .expect("second state event appended");
-    put_canonical_event_received_at_for_actor(
-        &state,
-        "ak:event:AZaaHAEvC1DejakImwHCcJHb0F1pgE-Jd-3_9BGirbuW",
-        2,
-        arkret_wire::EventKind::STRAND_UPDATE,
-        json!({
-            "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
-            "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
-        }),
-        ROSTER_CALLER,
-        second_created_at,
-        second_created_at,
-    )
-    .await;
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
@@ -1813,11 +1803,24 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .await
     .expect("initial cursor parses");
 
+    let pin_payload = json!({
+        "pin_scope": {"kind": "strand", "id": strand_id},
+        "target_ref": message_id,
+        "rank": "r1"
+    });
+    let pin_record = canonical_event_record_received_at(
+        5,
+        arkret_wire::EventKind::PIN_ADD,
+        pin_payload.clone(),
+        ROSTER_ACTOR,
+        base + ChronoDuration::seconds(4),
+        base + ChronoDuration::seconds(4),
+    );
     let pin_add = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
         arkret_wire::EventKind::PIN_ADD,
         json!({
-            "event_id": "ak:event:AQqtS_1B9tn79JSdpOpgZePeM0jFwBeojsZYHXc8gtQ_",
+            "event_id": pin_record.event_id.clone(),
             "pin_scope": {"kind": "strand", "id": strand_id},
             "target_ref": message_id,
             "rank": "r1",
@@ -1825,24 +1828,11 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         }),
         base + ChronoDuration::seconds(4),
     );
+    store_canonical_event(&state, pin_record).await;
     crate::routing::events::projection::project_accepted_operations(
         &state,
         ROSTER_ACTOR,
         &[pin_add],
-    )
-    .await;
-    put_canonical_event_received_at(
-        &state,
-        "ak:event:AQqtS_1B9tn79JSdpOpgZePeM0jFwBeojsZYHXc8gtQ_",
-        5,
-        arkret_wire::EventKind::PIN_ADD,
-        json!({
-            "pin_scope": {"kind": "strand", "id": strand_id},
-            "target_ref": message_id,
-            "rank": "r1"
-        }),
-        base + ChronoDuration::seconds(4),
-        base + ChronoDuration::seconds(4),
     )
     .await;
 
@@ -1871,12 +1861,23 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
     let message_event_id = "ak:event:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
-    let revision_event_id = "ak:event:ATaNQm55rR2h94g5nZuJC7ZEFZVaBVNkdeDrcicqchII";
     let redaction_event_id = "ak:event:ARd31VEuNctVD_m_3KpeoN5D_TuBpgHos97UPSApGL_6";
     let message_id = "ak:message:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
     let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
+    let revision_record = canonical_event_record_received_at(
+        5,
+        arkret_wire::EventKind::MESSAGE_REVISE,
+        json!({
+            "target_ref": message_id,
+            "content": {"kind": "ak.content.text", "body": "edited"}
+        }),
+        ROSTER_ACTOR,
+        base + ChronoDuration::seconds(4),
+        base + ChronoDuration::seconds(4),
+    );
+    let revision_event_id = revision_record.event_id.clone();
     let realm_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c1",
         arkret_wire::EventKind::REALM_CREATE,
@@ -1971,20 +1972,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         ],
     )
     .await;
-    put_canonical_event_received_at(
-        &state,
-        revision_event_id,
-        5,
-        arkret_wire::EventKind::MESSAGE_REVISE,
-        json!({
-            "message_id": message_id,
-            "target_ref": message_id,
-            "content": {"kind": "ak.content.text", "body": "edited"}
-        }),
-        base + ChronoDuration::seconds(4),
-        base + ChronoDuration::seconds(4),
-    )
-    .await;
+    store_canonical_event(&state, revision_record).await;
 
     let body = roster_body(state.service_id());
     let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;

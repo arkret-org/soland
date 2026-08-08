@@ -26,3 +26,5 @@ pub(super) use envelope::{
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;
 #[cfg(test)]
 pub(super) use mls_governance::projected_media_plaintext_service_present;
+#[cfg(test)]
+pub(super) use payload_shape::validate_realm_create_policy_constraints;

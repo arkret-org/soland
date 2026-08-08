@@ -1,9 +1,57 @@
+use arkret_models_collaboration::contact_operations::{
+    DeviceBootstrapDecision, DeviceBootstrapDecisionRecord, DeviceBootstrapDecisionRequestBody,
+};
+
 use super::{
     BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
     EventBatchReceipt, FederationOutboxRecord, MessageRecord, PersistenceError, PersistenceResult,
     PublicationEvidenceRecord, Value, async_trait,
 };
+
+/// True when two authority rows describe the same accepted founding unit.
+///
+/// Receipt ids, timestamps, signatures, and encoded outcomes are deliberately
+/// excluded: two Principal Server processes may prepare those independently
+/// before the unique decision fence chooses one durable receipt.
+pub fn same_accepted_device_bootstrap_binding(
+    existing: &DeviceBootstrapDecisionRecord,
+    candidate: &DeviceBootstrapDecisionRecord,
+) -> bool {
+    let left = &existing.receipt;
+    let right = &candidate.receipt;
+    existing.decision == DeviceBootstrapDecision::Accepted
+        && candidate.decision == DeviceBootstrapDecision::Accepted
+        && existing.account_authority_id == candidate.account_authority_id
+        && existing.transaction_id == candidate.transaction_id
+        && existing.binding_digest == candidate.binding_digest
+        && left.principal_server_id == right.principal_server_id
+        && left.account_authority_id == right.account_authority_id
+        && left.transaction_id == right.transaction_id
+        && left.principal_id == right.principal_id
+        && left.device_id == right.device_id
+        && left.grant_id == right.grant_id
+        && left.canonical_request_digest == right.canonical_request_digest
+        && left.founding_event_ids == right.founding_event_ids
+        && left.founding_batch_digest == right.founding_batch_digest
+        && left.bootstrap_transaction_expires_at == right.bootstrap_transaction_expires_at
+}
+
+/// Closed receipt-time rule for the three terminal decisions. Database time
+/// separately decides whether a first write is currently eligible.
+pub fn device_bootstrap_receipt_time_is_valid(record: &DeviceBootstrapDecisionRecord) -> bool {
+    match record.decision {
+        DeviceBootstrapDecision::Accepted => {
+            record.receipt.decided_at <= record.receipt.bootstrap_transaction_expires_at
+        }
+        DeviceBootstrapDecision::Cancelled => {
+            record.receipt.decided_at < record.receipt.bootstrap_transaction_expires_at
+        }
+        DeviceBootstrapDecision::Expired => {
+            record.receipt.decided_at >= record.receipt.bootstrap_transaction_expires_at
+        }
+    }
+}
 /// Trait for message storage operations.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
@@ -75,7 +123,22 @@ pub trait EventStore: Send + Sync {
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
+        bootstrap_decision: Option<DeviceBootstrapDecisionRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome>;
+    /// Read the immutable Principal-Server decision authority row. Absence is
+    /// the only representation of an undecided founding bootstrap.
+    async fn device_bootstrap_decision(
+        &self,
+        account_authority_id: &str,
+        transaction_id: &str,
+    ) -> PersistenceResult<Option<DeviceBootstrapDecisionRecord>>;
+    /// Atomically install a cancelled/expired tombstone, or return the row that
+    /// won the same unique fence. Implementations must never update a row.
+    async fn put_device_bootstrap_decision_atomic(
+        &self,
+        request: &DeviceBootstrapDecisionRequestBody,
+        record: DeviceBootstrapDecisionRecord,
+    ) -> PersistenceResult<DeviceBootstrapDecisionWriteOutcome>;
     async fn batch_receipts_for_event(
         &self,
         event_id: &str,
@@ -131,6 +194,12 @@ pub struct RealmEventStats {
 pub struct IdentityAnchorFrontierCas {
     pub realm_id: String,
     pub raw_leaves: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceBootstrapDecisionWriteOutcome {
+    Inserted,
+    Existing(DeviceBootstrapDecisionRecord),
 }
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorSlot {

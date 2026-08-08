@@ -106,3 +106,4 @@ DROP TABLE IF EXISTS webvh_documents CASCADE;
 DROP TABLE IF EXISTS webvh_log_events CASCADE;
 DROP TABLE IF EXISTS public.direct_conversation_founding_equivocations;
 DROP TABLE IF EXISTS public.direct_conversation_founding_slots;
+DROP TABLE IF EXISTS public.device_bootstrap_decisions;

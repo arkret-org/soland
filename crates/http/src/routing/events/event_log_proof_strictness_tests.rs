@@ -41,6 +41,7 @@ fn session() -> SessionRecord {
                 .to_owned(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         created_at: chrono::Utc::now(),
         revoked_at: None,
@@ -962,15 +963,24 @@ fn production_requires_requirements_schema() {
 
 #[tokio::test]
 async fn top_level_effective_scope_is_reducer_managed() {
-    let state = make_state(false);
+    let state = make_state(true);
     let session = session();
-    let envelope = json!({
-        "event_id": "ak:event:AY8qKJ9oY7RJJMqZWvAL7xFsRzdwHuIdn-0jJgKF2tL8",
-        "kind": arkret_wire::EventKind::REALM_CREATE,
-        "requirements": { "schema": ["ak.schema.event.v1"] },
-        "actor_id": session.actor.clone(),
-        "effective_scope": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC"
-    });
+    let event = arkret_wire::Event::new(
+        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
+            )
+            .unwrap(),
+        },
+        arkret_identifiers::Did::new(session.actor.clone()).unwrap(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+        json!({"object": {"id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC"}}),
+    )
+    .unwrap();
+    let mut envelope = serde_json::to_value(event).unwrap();
+    envelope["effective_scope"] = json!("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC");
 
     let err = validate_event_envelope(&state, &session, &envelope)
         .await
@@ -1012,7 +1022,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
 }
 
 #[test]
-fn event_canonical_bytes_reject_non_canonical_numbers() {
+fn event_canonical_bytes_reject_fractional_numbers() {
     let event = arkret_wire::Event::new(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
@@ -1024,11 +1034,13 @@ fn event_canonical_bytes_reject_non_canonical_numbers() {
         arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
         7,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
-        json!({"rank": 1.5}),
+        json!({"rank": 1}),
     )
     .unwrap();
-    let envelope = serde_json::to_value(event).unwrap();
-    let err = event_canonical_bytes(&envelope).expect_err("floats are not canonical JSON");
+    let mut envelope = serde_json::to_value(event).unwrap();
+    envelope["payload"]["rank"] = json!(1.5);
+    let err = event_canonical_bytes(&envelope)
+        .expect_err("Arkret canonical JSON rejects fractional numbers");
     assert_eq!(err.code, "invalid_event_envelope");
 }
 
@@ -1272,44 +1284,15 @@ fn event_payload_validator_enforces_patch_family_schema() {
 
 #[test]
 fn realm_create_rejects_world_readable_history_without_history_capable_scheme() {
-    let state = make_state(true);
-    let realm_id = "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC";
-    let envelope = json!({
-        "payload": {
-            "object": {
-                "id": realm_id,
-                "schema": "ak.schema.realm.v1",
-                "title": "encrypted public history",
-                "created_by": "did:web:alice.example",
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                "trust_domain": "ak:trust_domain:soland.local",
-                "schema_refs": ["ak.schema.realm.v1"],
-                "default_discoverability": "listed",
-                "default_join_rule": "invite",
-                "history_visibility": "world_readable",
-                "encryption_profile": "mls_rfc9420",
-                "security_class": "standard",
-                "federation_policy": "restricted",
-                "notary_profile": "single_did",
-                "digest_algorithm": "sha256",
-                "notary": {
-                    "kind": "single_did",
-                    "did": "did:web:alice.example",
-                    "recovery_members": ["did:web:recovery.example"],
-                    "controller_organization": "did:web:organization.primary.example",
-                    "recovery_controller_organizations": ["did:web:organization.recovery.example"]
-                },
-                "created_at": "2026-05-17T00:00:00.000Z"
-            }
+    let payload = json!({
+        "object": {
+            "history_visibility": "world_readable",
+            "encryption_profile": "mls_rfc9420"
         }
     });
-    let object = envelope.as_object().unwrap();
-    let err = validate_event_schema_and_payload(
-        &state,
-        "ak.realm.create",
-        "ak.schema.event.v1",
-        &envelope,
-        object,
+    let err = validate_realm_create_policy_constraints(
+        arkret_wire::EventKind::REALM_CREATE,
+        &payload,
         false,
     )
     .expect_err("world-readable MLS history requires a history-capable content scheme");

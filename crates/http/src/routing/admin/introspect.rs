@@ -25,7 +25,9 @@ use arkret_identifiers::Did;
 use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
 };
-use arkret_models_identity::admin_grant::SessionGrantIntrospection;
+use arkret_models_identity::admin_grant::{
+    SessionGrantAdminIntrospectionStatus, SessionGrantIntrospection,
+};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
@@ -123,6 +125,7 @@ fn admin_grant_from_introspection_outcome(
 
     Ok(SessionGrantIntrospection {
         active: true,
+        status: SessionGrantAdminIntrospectionStatus::Active,
         principal_id,
         admin_scopes: grant.scopes,
         expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
@@ -171,6 +174,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     });
     SessionGrantIntrospection {
         active: true,
+        status: SessionGrantAdminIntrospectionStatus::Active,
         principal_id,
         admin_scopes: scopes,
         expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
@@ -222,12 +226,13 @@ pub(crate) async fn introspect_admin_scopes(
             "runtime principal service_id is not a DID: {error}"
         ))
     })?;
-    let request = SessionGrantIntrospectRequestBody {
-        id: None,
-        grant_jwt: Some(token),
-        audience: Some(audience),
-        proof: None,
-    };
+    let request = SessionGrantIntrospectRequestBody::ByJwt(
+        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
+            grant_jwt: token,
+            audience: Some(audience),
+            proof: None,
+        },
+    );
     let bearer = state
         .config()
         .session_grant_introspection_bearer

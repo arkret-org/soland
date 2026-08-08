@@ -169,6 +169,7 @@ async fn run_introspection_mock(
     listener: tokio::net::TcpListener,
     audience: String,
     holder_jkt: String,
+    session_public_key: String,
 ) {
     loop {
         let Ok((mut stream, _)) = listener.accept().await else {
@@ -192,7 +193,7 @@ async fn run_introspection_mock(
             "proof_required": false,
             "one_time_use_consumed": false,
             "grant": {
-                "id": "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
+                "id": "ak:session_grant:ATLC-gY-xpE0kN3QXVYxo0Kh32EoNCTBQTSFuu_P57e6",
                 "issuer": "did:web:coauth.local",
                 "subject": "did:web:alice.example",
                 "service_account_id": "alice",
@@ -204,9 +205,13 @@ async fn run_introspection_mock(
                 ],
                 "expires_at": expires_at,
                 "revocation_ref": "ak:session:live-websocket-test",
-                "session_public_key": "{}",
+                "session_public_key": session_public_key.clone(),
                 "cnf_jkt": holder_jkt,
-                "credential_class": "standard"
+                "credential_class": "standard",
+                "holder_binding": {
+                    "kind": "human_device",
+                    "device_binding": ALICE_DEVICE
+                }
             }
         });
         serde_json::from_value::<
@@ -411,7 +416,13 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     let introspection_task = tokio::spawn(run_introspection_mock(
         introspection,
         state.service_id().to_owned(),
-        initial_proof.jkt,
+        initial_proof.jkt.clone(),
+        arkret_models_identity::session_credential::CanonicalSessionPublicJwk::new(
+            serde_json::to_string(&initial_proof.protected.jwk)
+                .expect("serialize WebSocket DPoP public JWK"),
+        )
+        .expect("WebSocket DPoP public JWK is supported")
+        .into_string(),
     ));
     let server = Server::new(acceptor);
     let server_handle = server.handle();

@@ -85,7 +85,7 @@ fn wire_rejection_to_validation_error(
     )
 }
 
-pub(super) fn validate_realm_create_policy_constraints(
+pub(in crate::routing::events::event_log) fn validate_realm_create_policy_constraints(
     kind: &str,
     payload: &Value,
     is_self_principal_pcr_bootstrap_create: bool,

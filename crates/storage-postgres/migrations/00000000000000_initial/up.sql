@@ -2120,3 +2120,18 @@ CREATE TABLE public.direct_conversation_founding_equivocations (
     idempotency_key text NOT NULL,
     observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE public.device_bootstrap_decisions (
+    account_authority_id text NOT NULL,
+    transaction_id text NOT NULL,
+    decision text NOT NULL CHECK (decision IN ('accepted', 'cancelled', 'expired')),
+    binding_digest text NOT NULL,
+    canonical_outcome_bytes text NOT NULL,
+    receipt jsonb NOT NULL,
+    decided_at timestamptz NOT NULL,
+    PRIMARY KEY (account_authority_id, transaction_id)
+);
+
+-- v1 terminal decision rows are retention tombstones. Deliberately no expiry
+-- column and no cascading foreign key: cleanup must never make a terminal
+-- founding transaction appear undecided again.

@@ -378,6 +378,7 @@ async fn recovery_session_derives_enrollment_authority_model() {
             None,
             Vec::new(),
             Vec::new(),
+            None,
         )
         .await
         .unwrap();

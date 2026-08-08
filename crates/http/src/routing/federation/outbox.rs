@@ -1473,7 +1473,7 @@ mod tests {
         let received_at: chrono::DateTime<chrono::Utc> =
             "2026-07-26T00:00:01.000Z".parse().unwrap();
 
-        let submission = |_suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
+        let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
             let mut event = arkret_wire::Event::new_with_derived_id_at(
                 arkret_wire::EventKind::MESSAGE_CREATE,
                 arkret_wire::ScopeRef::Realm {
@@ -1482,7 +1482,7 @@ mod tests {
                 actor_id.clone(),
                 1,
                 arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
-                serde_json::json!({}),
+                serde_json::json!({"fixture_suffix": suffix}),
                 issued_at,
             )
             .unwrap();
@@ -1498,6 +1498,9 @@ mod tests {
                 key_epoch: 0,
                 credential_epoch: None,
             });
+            event.event_id = event
+                .derive_event_id()
+                .expect("fixture Event id follows the completed digest payload");
             let event_digest =
                 arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
             event.proofs = vec![arkret_wire::primitives::Proof {

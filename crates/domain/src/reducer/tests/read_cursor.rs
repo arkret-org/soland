@@ -3,6 +3,13 @@ use super::*;
 const REALM_ID: &str = "ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6";
 const ACTOR_ID: &str = "did:webvh:z6mkalice:alice.example";
 
+fn fixture_event_id(suffix: u32) -> String {
+    let mut digest = [0u8; 32];
+    digest[28..].copy_from_slice(&suffix.to_be_bytes());
+    arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest)
+        .to_string()
+}
+
 fn cursor_operation(
     device_suffix: u32,
     event_suffix: u32,
@@ -17,9 +24,7 @@ fn cursor_operation(
         "realm_id": REALM_ID,
         "read_scope": {"kind": "realm"},
         "position": {
-            "event_id": format!(
-                "ak:event:01964137-0000-8000-8000-{event_suffix:012x}"
-            ),
+            "event_id": fixture_event_id(event_suffix),
             "hlc": hlc,
         },
     });
@@ -65,7 +70,7 @@ fn causal_dominance_overrides_higher_hlc() {
         state.apply(&candidate, &server_hlc),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
-    assert!(stored_event_suffix(&state).ends_with("000000000002"));
+    assert_eq!(stored_event_suffix(&state), fixture_event_id(2));
 }
 
 #[test]
@@ -87,7 +92,7 @@ fn current_causal_dominance_rejects_higher_candidate_hlc() {
         state.apply(&candidate, &server_hlc),
         ProjectionEffect::Ignored
     ));
-    assert!(stored_event_suffix(&state).ends_with("000000000001"));
+    assert_eq!(stored_event_suffix(&state), fixture_event_id(1));
 }
 
 #[test]
@@ -105,7 +110,7 @@ fn only_concurrent_positions_use_hlc_then_device_id() {
         ),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
-    assert!(stored_event_suffix(&state).ends_with("000000000002"));
+    assert_eq!(stored_event_suffix(&state), fixture_event_id(2));
 
     assert!(matches!(
         state.apply(
@@ -114,7 +119,7 @@ fn only_concurrent_positions_use_hlc_then_device_id() {
         ),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
-    assert!(stored_event_suffix(&state).ends_with("000000000003"));
+    assert_eq!(stored_event_suffix(&state), fixture_event_id(3));
 }
 
 #[test]
@@ -134,6 +139,6 @@ fn absent_or_undecidable_closure_preserves_current() {
             ),
             ProjectionEffect::Ignored
         ));
-        assert!(stored_event_suffix(&state).ends_with("000000000001"));
+        assert_eq!(stored_event_suffix(&state), fixture_event_id(1));
     }
 }

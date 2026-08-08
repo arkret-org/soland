@@ -1403,13 +1403,13 @@ mod tests {
             realm_id.clone(),
             arkret_wire::EventKind::INVITE_CREATE,
             json!({
-                "invite_id": invite_id,
                 "invitee": invitee,
                 "invite_delivery_target": delivery_target,
                 "introduction_evidence_digest": evidence_digest,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
         );
+        operation.payload["event_id"] = json!(invite_id.replacen("ak:invite:", "ak:event:", 1));
         operation.created_at = created_at;
 
         project_invite_create_operation(&state, inviter, &operation).await;
@@ -1469,11 +1469,11 @@ mod tests {
             realm_id.clone(),
             arkret_wire::EventKind::INVITE_CREATE,
             json!({
-                "invite_id": invite_id,
                 "invitee": invitee,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
         );
+        operation.payload["event_id"] = json!(invite_id.replacen("ak:invite:", "ak:event:", 1));
         operation.created_at = created_at;
 
         project_invite_create_operation(&state, "did:web:alice.example", &operation).await;

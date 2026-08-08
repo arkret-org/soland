@@ -198,17 +198,26 @@ where
 mod tests {
     use super::*;
 
+    fn fixture_realm_id() -> String {
+        let digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
+            b"soland-http-id-fixture",
+        ))
+        .unwrap();
+        RealmId::from_event_id(&arkret_identifiers::EventId::from_event_digest(&digest).unwrap())
+            .to_string()
+    }
+
     #[test]
     fn parse_typed_uuid_roundtrip() {
-        let id = generate_event_id();
-        let raw = parse_typed_uuid(&id, "event").expect("parse");
-        let back = format_typed_uuid("event", &raw);
+        let id = generate_operation_id();
+        let raw = parse_typed_uuid(&id, "operation").expect("parse");
+        let back = format_typed_uuid("operation", &raw);
         assert_eq!(id, back);
     }
 
     #[test]
     fn parse_typed_uuid_rejects_wrong_kind() {
-        let id = generate_event_id();
+        let id = generate_operation_id();
         assert!(parse_typed_uuid(&id, "space").is_none());
     }
 
@@ -237,7 +246,7 @@ mod tests {
 
     #[test]
     fn realm_id_accepts_wire_form() {
-        let wire = generate_realm_id();
+        let wire = fixture_realm_id();
         let id = RealmId::new(wire.clone()).expect("realm id parse");
         assert_eq!(id.as_str(), wire);
         assert_eq!(id.to_string(), wire);
@@ -246,7 +255,7 @@ mod tests {
 
     #[test]
     fn realm_id_round_trips_through_serde() {
-        let id = RealmId::new(generate_realm_id()).expect("realm id");
+        let id = RealmId::new(fixture_realm_id()).expect("realm id");
         let json = serde_json::to_string(&id).expect("serialize");
         let parsed: RealmId = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, id);
@@ -254,7 +263,7 @@ mod tests {
 
     #[test]
     fn realm_id_fromstr_matches_new() {
-        let wire = generate_realm_id();
+        let wire = fixture_realm_id();
         let via_fromstr: RealmId = wire.parse().expect("FromStr");
         let via_new = RealmId::new(wire.clone()).expect("new");
         assert_eq!(via_fromstr, via_new);
@@ -262,7 +271,7 @@ mod tests {
 
     #[test]
     fn space_container_id_rejects_bad_kind() {
-        assert!(SpaceContainerId::new(generate_realm_id()).is_err());
+        assert!(SpaceContainerId::new(fixture_realm_id()).is_err());
         assert!(SpaceContainerId::new("ak:space:not-a-uuid").is_err());
         assert!(SpaceContainerId::new("").is_err());
     }

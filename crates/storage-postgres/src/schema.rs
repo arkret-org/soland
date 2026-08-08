@@ -1401,6 +1401,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    device_bootstrap_decisions (account_authority_id, transaction_id) {
+        account_authority_id -> Text,
+        transaction_id -> Text,
+        decision -> Text,
+        binding_digest -> Text,
+        canonical_outcome_bytes -> Text,
+        receipt -> Jsonb,
+        decided_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     webvh_documents (id) {
         id -> Text,
         did_document -> Jsonb,
@@ -1467,6 +1479,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_message_txns,
     device_messages,
     device_pairings,
+    device_bootstrap_decisions,
     devices,
     event_batch_receipts,
     event_batch_receipt_events,

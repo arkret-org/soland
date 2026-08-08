@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn scheduled_send_rejects_plaintext_message_payload() {
-        let key = "ak.scheduled_send.v1:ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+        let key = "ak.scheduled_send.v1:ak:scheduled_send:01904100-0000-7000-8000-000000000001";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 

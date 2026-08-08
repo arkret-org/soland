@@ -312,7 +312,7 @@ mod tests {
             principal_id: APPLICANT.to_owned(),
             idempotency_key: key.to_owned(),
             request_hash: request_hash.to_owned(),
-            idempotency_expires_at: at(0) + Duration::days(8),
+            idempotency_expires_at: at(0) + Duration::days(30),
             mutation,
         }
     }

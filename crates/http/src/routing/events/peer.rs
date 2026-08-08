@@ -61,6 +61,10 @@ pub(super) fn router() -> Router {
         )
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
+        .push(
+            Router::with_path("device-bootstrap-decisions")
+                .post(super::device_bootstrap_decision::decide_device_bootstrap),
+        )
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(Router::with_path("signal").post(peer_signal_relay))
 }

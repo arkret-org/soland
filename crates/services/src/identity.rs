@@ -1894,6 +1894,16 @@ pub struct AgentSessionState {
 }
 
 #[derive(Clone, Debug)]
+pub struct SessionGrantAuthorizationState {
+    pub grant_id: arkret_identifiers::SessionGrantId,
+    pub issuer: String,
+    pub credential_class: arkret_models_identity::session_credential::SessionGrantCredentialClass,
+    pub bootstrap_binding:
+        Option<arkret_models_identity::session_credential::SessionGrantBootstrapBinding>,
+    pub cnf_jkt: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct SessionIdentityState {
     pub token_hash: String,
     pub actor: String,
@@ -1901,6 +1911,10 @@ pub struct SessionIdentityState {
     pub audience: String,
     pub session_public_key: Option<String>,
     pub agent_session: Option<AgentSessionState>,
+    /// Present only for request-scoped `ak.session.grant` authentication. This
+    /// preserves the credential class and closed bootstrap binding through
+    /// authorization; local/dev sessions deliberately carry `None`.
+    pub session_grant: Option<SessionGrantAuthorizationState>,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,

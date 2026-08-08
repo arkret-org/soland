@@ -712,6 +712,7 @@ mod tests {
             audience: "soland".to_owned(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
             revoked_at: None,

@@ -19,6 +19,7 @@ pub(super) fn controller_service_session(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: now() + chrono::Duration::minutes(5),
         created_at: now(),
         revoked_at: None,

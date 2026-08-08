@@ -28,7 +28,10 @@ use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
 use arkret_identifiers::{DeviceId, Did};
-use arkret_models_identity::session_credential::SessionGrantProofKind;
+use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
+use arkret_models_identity::session_credential::{
+    SessionGrantBootstrapBinding, SessionGrantCredentialClass, SessionGrantHolderBinding,
+};
 use arkret_wire::FreshnessState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -36,10 +39,10 @@ use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_services::identity::{
-    AgentSessionState as AgentSessionRecord, SessionIdentityState as SessionRecord,
+    AgentSessionState as AgentSessionRecord, SessionGrantAuthorizationState,
+    SessionIdentityState as SessionRecord,
 };
 
 use super::auth::PRINCIPAL_SESSION_BIND_SCOPE;
@@ -290,15 +293,14 @@ async fn introspect_session_grant_remote(
             "session grant introspection bearer is not configured",
         ));
     };
-    let request = SessionGrantIntrospectRequestBody {
-        id: None,
-        grant_jwt: Some(grant_jwt.to_owned()),
+    let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+        grant_jwt: grant_jwt.to_owned(),
         audience: Some(configured_service_audience(state)?),
         // The Account Authority returns non-secret grant metadata over this
         // authenticated S2S channel; holder possession is verified below by the
         // request's DPoP proof against the returned `cnf_jkt`.
         proof: None,
-    };
+    });
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
     // Introspection is read-only. A pooled keep-alive connection can be closed
@@ -462,38 +464,28 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
-    let is_agent_session = grant.proof_kind == Some(SessionGrantProofKind::AgentKeyProof);
-    if is_agent_session {
-        let device_id = grant
-            .device_id
-            .as_ref()
-            .ok_or_else(|| unauthenticated("agent session grant omitted stable device binding"))?
-            .as_str()
-            .to_owned();
-        validate_agent_session_scope_details(grant)?;
-        match grant.freshness_state.unwrap_or(FreshnessState::Unknown) {
-            FreshnessState::Fresh => {}
-            FreshnessState::Stale => {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    "auth_stale",
-                    "agent session revocation freshness is stale",
-                ));
-            }
-            FreshnessState::Unknown => {
-                return Err((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "auth_unavailable",
-                    "agent session revocation freshness is unknown",
-                ));
-            }
+    if let Some(SessionGrantHolderBinding::AgentRuntime {
+        agent_id,
+        device_id,
+        agent_key_authorization_ref,
+        verification_method,
+    }) = grant.holder_binding.as_ref()
+    {
+        if agent_id.as_str() != grant.subject || grant.device_id.as_ref() != Some(device_id) {
+            return Err(unauthenticated(
+                "agent holder binding does not match introspected subject/device",
+            ));
         }
-        let scope_details = agent_session_scope_details(grant);
         return Ok((
-            device_id,
+            device_id.as_str().to_owned(),
             Some(AgentSessionRecord {
                 granted_scope: grant.scopes.clone(),
-                scope_details,
+                scope_details: serde_json::json!({
+                    "session_grant_id": grant.id,
+                    "session_grant_revocation_ref": grant.revocation_ref,
+                    "agent_key_authorization_ref": agent_key_authorization_ref,
+                    "verification_method": verification_method,
+                }),
                 freshness_state: FreshnessState::Fresh,
             }),
         ));
@@ -529,76 +521,6 @@ fn session_binding_from_introspection(
     Ok((device_id, None))
 }
 
-fn validate_agent_session_scope_details(
-    grant: &SessionGrantIntrospectGrant,
-) -> Result<(), AuthError> {
-    let Some(details) = grant.scope_details.as_ref() else {
-        return Err(agent_scope_metadata_error());
-    };
-    if Did::new(grant.subject.clone()).is_err() {
-        return Err(agent_scope_metadata_error());
-    }
-    if agent_scope_requires_resource_selector(&grant.scopes)
-        && details.realm_ids.is_empty()
-        && details.strand_ids.is_empty()
-    {
-        return Err(agent_scope_metadata_error());
-    }
-    Ok(())
-}
-
-fn agent_scope_requires_resource_selector(scopes: &[String]) -> bool {
-    scopes.iter().any(|scope| {
-        !agent_account_service_scope(scope)
-            && (scope.starts_with("ak.event.")
-                || scope.starts_with("ak.message.")
-                || scope.starts_with("ak.reaction.")
-                || scope.starts_with("ak.strand.")
-                || scope.starts_with("ak.space.")
-                || scope.starts_with("ak.blob.")
-                || scope.starts_with("ak.call.")
-                || scope.starts_with("ak.morph.")
-                || scope.starts_with("ak.relation."))
-    })
-}
-
-fn agent_account_service_scope(scope: &str) -> bool {
-    matches!(
-        scope,
-        "ak.self.events.read.describe"
-            | "ak.self.events.command.submit"
-            | "ak.self.events.resource.get"
-            | "ak.self.events.read.resolve"
-            | "ak.self.events.read.scan"
-            | "ak.self.events.stream.subscribe"
-            | "ak.self.events.read.frontier"
-            | "ak.self.authorization_leases.command.issue"
-            | "ak.self.keys.keypackages.upload.create"
-            | "ak.self.keys.keypackages.command.consume"
-            | "ak.self.keys.keypackages.command.revoke"
-            | "ak.self.device_messages.read.list"
-            | "ak.self.device_messages.command.ack"
-            | "ak.self.signal.command.send"
-    )
-}
-
-fn agent_scope_metadata_error() -> AuthError {
-    unauthenticated("agent session grant omitted resource scope metadata")
-}
-
-fn agent_session_scope_details(grant: &SessionGrantIntrospectGrant) -> Value {
-    let mut scope_details = serde_json::to_value(&grant.scope_details).unwrap_or(Value::Null);
-    if let Some(object) = scope_details.as_object_mut() {
-        object
-            .entry("session_grant_id".to_owned())
-            .or_insert_with(|| Value::String(grant.id.to_string()));
-        object
-            .entry("session_grant_revocation_ref".to_owned())
-            .or_insert_with(|| Value::String(grant.revocation_ref.clone()));
-    }
-    scope_details
-}
-
 pub(crate) fn session_record_from_introspected_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
@@ -617,8 +539,15 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         actor: grant.subject.clone(),
         device_id,
         audience: state.service_id().clone(),
-        session_public_key: Some(grant.session_public_key.clone()),
+        session_public_key: Some(grant.session_public_key.as_str().to_owned()),
         agent_session,
+        session_grant: Some(SessionGrantAuthorizationState {
+            grant_id: grant.id.clone(),
+            issuer: grant.issuer.clone(),
+            credential_class: grant.credential_class,
+            bootstrap_binding: grant.bootstrap_binding.clone(),
+            cnf_jkt: grant.cnf_jkt.clone(),
+        }),
         expires_at: grant.expires_at,
         created_at: crate::wire::now(),
         revoked_at: None,
@@ -716,15 +645,86 @@ pub(crate) async fn grant_dpop_session(
     }
 
     // 2. DPoP signature valid against the grant's cnf.jkt.
-    verify_grant_dpop_request(state, req, grant_jwt, grant.cnf_jkt.as_deref())?;
+    verify_grant_dpop_request(state, req, grant_jwt, Some(&grant.cnf_jkt))?;
 
-    Ok(session_from_verified_grant(
-        state,
-        grant_jwt,
-        grant,
+    let session = session_from_verified_grant(state, grant_jwt, grant, device_id, agent_session);
+    validate_device_bootstrap_authorization(&session, req)?;
+    Ok(session)
+}
+
+const FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS: [&str; 4] = [
+    "ak.gate.account.command.enroll_device",
+    "ak.gate.account.command.cancel_device_bootstrap",
+    "ak.self.events.command.submit",
+    "ak.self.events.read.resolve",
+];
+
+fn founding_bootstrap_allowlist_is_exact(allowed_operation_ids: &[String]) -> bool {
+    let mut actual = allowed_operation_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut expected = FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    actual == expected
+}
+
+fn validate_device_bootstrap_authorization(
+    session: &SessionRecord,
+    req: &Request,
+) -> Result<(), AuthError> {
+    let Some(context) = session.session_grant.as_ref() else {
+        return Ok(());
+    };
+    if context.credential_class != SessionGrantCredentialClass::DeviceBootstrap {
+        return Ok(());
+    }
+    let Some(SessionGrantBootstrapBinding::Founding {
+        principal_id,
         device_id,
-        agent_session,
-    ))
+        holder_jkt,
+        allowed_operation_ids,
+        bootstrap_transaction_expires_at,
+        ..
+    }) = context.bootstrap_binding.as_ref()
+    else {
+        return Err(unauthenticated(
+            "principal service accepts only founding device-bootstrap grants",
+        ));
+    };
+    if !founding_bootstrap_allowlist_is_exact(allowed_operation_ids)
+        || principal_id.as_str() != session.actor
+        || device_id.as_str() != session.device_id
+        || holder_jkt != &context.cnf_jkt
+        || *bootstrap_transaction_expires_at <= crate::wire::now()
+    {
+        return Err(unauthenticated(
+            "device-bootstrap grant binding is invalid or expired",
+        ));
+    }
+    let current_operation = match (req.method().as_str(), req.uri().path()) {
+        ("POST", "/_arkret/self/events") => "ak.self.events.command.submit",
+        ("QUERY", "/_arkret/self/events/resolve") => "ak.self.events.read.resolve",
+        _ => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "device-bootstrap grant does not authorize this operation",
+            ));
+        }
+    };
+    if !allowed_operation_ids
+        .iter()
+        .any(|operation| operation == current_operation)
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "device-bootstrap operation is absent from the grant allowlist",
+        ));
+    }
+    Ok(())
 }
 
 /// Synthesize the request- or connection-scoped `SessionRecord` from an
@@ -740,6 +740,13 @@ pub(crate) fn session_from_verified_grant(
     device_id: String,
     agent_session: Option<AgentSessionRecord>,
 ) -> SessionRecord {
+    let grant_context = SessionGrantAuthorizationState {
+        grant_id: grant.id.clone(),
+        issuer: grant.issuer.clone(),
+        credential_class: grant.credential_class,
+        bootstrap_binding: grant.bootstrap_binding.clone(),
+        cnf_jkt: grant.cnf_jkt.clone(),
+    };
     SessionRecord {
         token_hash: crate::routing::identity::auth::session_credential_hash(
             grant_jwt,
@@ -748,8 +755,9 @@ pub(crate) fn session_from_verified_grant(
         actor: grant.subject,
         device_id,
         audience: state.service_id().clone(),
-        session_public_key: Some(grant.session_public_key),
+        session_public_key: Some(grant.session_public_key.into_string()),
         agent_session,
+        session_grant: Some(grant_context),
         expires_at: grant.expires_at,
         created_at: crate::wire::now(),
         revoked_at: None,
@@ -766,7 +774,7 @@ pub(crate) fn grant_session_binding(
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::{RealmId, SessionGrantId};
+    use arkret_identifiers::SessionGrantId;
 
     use super::*;
 
@@ -815,6 +823,27 @@ mod tests {
         let a = introspection_cache_key("grant", "did:web:a");
         let b = introspection_cache_key("grant", "did:web:b");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn founding_bootstrap_allowlist_rejects_missing_extra_and_duplicate_operations() {
+        let exact = FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        assert!(founding_bootstrap_allowlist_is_exact(&exact));
+
+        let mut missing = exact.clone();
+        missing.pop();
+        assert!(!founding_bootstrap_allowlist_is_exact(&missing));
+
+        let mut extra = exact.clone();
+        extra.push("ak.self.events.read.scan".to_owned());
+        assert!(!founding_bootstrap_allowlist_is_exact(&extra));
+
+        let mut duplicate = exact.clone();
+        duplicate[3] = duplicate[2].clone();
+        assert!(!founding_bootstrap_allowlist_is_exact(&duplicate));
     }
 
     #[test]
@@ -892,15 +921,19 @@ mod tests {
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
             revocation_ref: "ak:session:grant-1".to_owned(),
-            session_public_key: "{}".to_owned(),
-            cnf_jkt: Some("holder-thumbprint".to_owned()),
+            session_public_key:
+                arkret_models_identity::session_credential::CanonicalSessionPublicJwk::new(
+                    r#"{"crv":"Ed25519","kty":"OKP","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+                )
+                .unwrap(),
+            cnf_jkt: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             credential_class:
                 arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard,
             recovery_binding: None,
-            device_binding: None,
-            proof_kind: None,
-            scope_details: None,
-            freshness_state: None,
+            bootstrap_binding: None,
+            holder_binding: Some(SessionGrantHolderBinding::HumanDevice {
+                device_binding: "accepted-device-binding".to_owned(),
+            }),
         }
     }
 
@@ -917,159 +950,34 @@ mod tests {
     }
 
     #[test]
-    fn agent_session_binding_materializes_scope_details() {
+    fn agent_holder_binding_materializes_closed_authorization_context() {
         let mut grant = test_introspection_grant();
-        grant.id =
-            SessionGrantId::new("ak:session_grant:AQM8rE4gp8l4axkSbbb9_dkqwWE8ZPYHwFsC24o2mrIL")
-                .unwrap();
-        grant.subject = "did:web:agent.example".to_owned();
-        grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
-                realm_ids: vec![
-                    RealmId::new(
-                        "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc".to_owned(),
-                    )
-                    .unwrap(),
-                ],
-                ..Default::default()
-            },
-        );
-        grant.freshness_state = Some(FreshnessState::Fresh);
-
-        let (device_id, agent_session) = session_binding_from_introspection(&grant).unwrap();
-
-        assert_eq!(device_id, "ak:device:0196419b-0000-7000-8000-000000000001");
-        let agent_session = agent_session.unwrap();
-        assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
-        assert_eq!(
-            agent_session.granted_scope,
-            vec!["ak.agent.action:message.send"]
-        );
-        assert_eq!(
-            agent_session.scope_details["realm_ids"][0],
-            "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc"
-        );
-    }
-
-    #[test]
-    fn agent_session_binding_requires_stable_device_id() {
-        let mut grant = test_introspection_grant();
-        grant.subject = "did:web:agent.example".to_owned();
-        grant.device_id = None;
-        grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
-                realm_ids: vec![
-                    RealmId::new(
-                        "ak:realm:AS252vuP-RBWyHCCUj5LzODF2HpHKbppXwDpNNkzDqRc".to_owned(),
-                    )
-                    .unwrap(),
-                ],
-                ..Default::default()
-            },
-        );
-        grant.freshness_state = Some(FreshnessState::Fresh);
-
-        let err = session_binding_from_introspection(&grant).unwrap_err();
-
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(err.1, "unauthenticated");
-        assert_eq!(err.2, "agent session grant omitted stable device binding");
-    }
-
-    #[test]
-    fn agent_session_binding_requires_scope_details() {
-        let mut grant = test_introspection_grant();
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.freshness_state = Some(FreshnessState::Fresh);
-
-        let err = session_binding_from_introspection(&grant).unwrap_err();
-
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(err.1, "unauthenticated");
-        assert_eq!(err.2, "agent session grant omitted resource scope metadata");
-    }
-
-    #[test]
-    fn agent_account_event_service_scope_allows_empty_resource_details() {
-        let mut grant = test_introspection_grant();
+        let device_id = grant.device_id.clone().unwrap();
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
-        );
-        grant.freshness_state = Some(FreshnessState::Fresh);
+        grant.holder_binding = Some(SessionGrantHolderBinding::AgentRuntime {
+            agent_id: Did::new("did:web:agent.example").unwrap(),
+            device_id,
+            agent_key_authorization_ref: arkret_identifiers::EventId::new(
+                "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            )
+            .unwrap(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:agent.example#runtime-1".to_owned(),
+            )
+            .unwrap(),
+        });
 
         let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
-
+        let agent_session = agent_session.unwrap();
         assert_eq!(
-            agent_session.unwrap().granted_scope,
+            agent_session.granted_scope,
             vec!["ak.self.events.read.scan"]
         );
-    }
-
-    #[test]
-    fn agent_content_scope_rejects_empty_resource_details() {
-        let mut grant = test_introspection_grant();
-        grant.subject = "did:web:agent.example".to_owned();
-        grant.scopes = vec!["ak.message.create".to_owned()];
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
-        );
-        grant.freshness_state = Some(FreshnessState::Fresh);
-
-        let err = session_binding_from_introspection(&grant).unwrap_err();
-
-        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(err.1, "unauthenticated");
-        assert_eq!(err.2, "agent session grant omitted resource scope metadata");
-    }
-
-    #[test]
-    fn agent_account_service_scope_allows_empty_resource_details() {
-        let mut grant = test_introspection_grant();
-        grant.subject = "did:web:agent.example".to_owned();
-        grant.scopes = vec!["ak.self.keys.keypackages.upload.create".to_owned()];
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
-        );
-        grant.freshness_state = Some(FreshnessState::Fresh);
-
-        let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
-
+        assert_eq!(agent_session.freshness_state, FreshnessState::Fresh);
         assert_eq!(
-            agent_session.unwrap().granted_scope,
-            vec!["ak.self.keys.keypackages.upload.create"]
+            agent_session.scope_details["session_grant_revocation_ref"],
+            "ak:session:grant-1"
         );
-    }
-
-    #[test]
-    fn agent_session_binding_requires_fresh_introspection() {
-        let mut grant = test_introspection_grant();
-        grant.subject = "did:web:agent.example".to_owned();
-        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(
-            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
-                realm_ids: vec![
-                    RealmId::new(
-                        "ak:realm:Adu9FAkRisZrTbFmyaXkT1rsvvEehH_ZoNfgG2tFFv_A".to_owned(),
-                    )
-                    .unwrap(),
-                ],
-                ..Default::default()
-            },
-        );
-
-        let err = session_binding_from_introspection(&grant).unwrap_err();
-
-        assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(err.1, "auth_unavailable");
-        assert_eq!(err.2, "agent session revocation freshness is unknown");
     }
 }

@@ -488,6 +488,17 @@ mod tests {
         format!("{prefix}{}", uuid::Uuid::now_v7())
     }
 
+    fn realm_id() -> String {
+        let digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            uuid::Uuid::now_v7().as_bytes(),
+        ))
+        .unwrap();
+        arkret_wire::RealmId::from_event_id(
+            &arkret_wire::EventId::from_event_digest(&digest).unwrap(),
+        )
+        .to_string()
+    }
+
     fn event_request(
         event_seed: String,
         realm_id: String,
@@ -536,7 +547,7 @@ mod tests {
         let store = SolandMemoryPersistenceStore::new();
         let request = event_request(
             "exact-replay".to_owned(),
-            typed_id("ak:realm:"),
+            realm_id(),
             "did:web:replay.example",
             None,
         );
@@ -593,7 +604,7 @@ mod tests {
         let request = EventBatchCommitRequest {
             events: vec![event_request(
                 event_id.clone(),
-                typed_id("ak:realm:"),
+                realm_id(),
                 principal_id,
                 Some(IdempotencyRecord {
                     principal_id: principal_id.to_owned(),
@@ -641,7 +652,7 @@ mod tests {
         let request = EventBatchCommitRequest {
             events: vec![event_request(
                 typed_id("ak:event:"),
-                typed_id("ak:realm:"),
+                realm_id(),
                 "did:web:bridge.example:ghost:second",
                 None,
             )],

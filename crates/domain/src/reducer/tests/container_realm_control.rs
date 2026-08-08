@@ -154,21 +154,12 @@ fn container_rebalance_is_atomic_against_order_digest() {
 fn realm_notary_and_digest_suite_transition_project_control_cells() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_CREATE,
-            REALM_ID,
-            serde_json::json!({
-                "object": {
-                    "created_by": "did:web:alice.example",
-                    "title": "Control Realm",
-                    "digest_algorithm": "sha256",
-                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "notary": {"kind": "single_did", "did": "did:web:notary.example"}
-                }
-            }),
+    state.realm_null_subject_cells.insert(
+        (
+            REALM_ID.to_owned(),
+            arkret_wire::REALM_GENESIS_CELL.to_owned(),
         ),
-        &hlc,
+        CellState::Value(serde_json::json!({"digest_algorithm": "sha256"})),
     );
 
     let notary = state.apply(
@@ -199,24 +190,32 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
         Some("did:web:new-notary.example")
     );
 
+    let transition_payload = serde_json::json!({
+        "from_digest_algorithm": "sha256",
+        "to_digest_algorithm": "blake3",
+        "transition_snapshot_ref": "ak:snapshot:01904100-0000-7000-8000-000000000301",
+        "snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    });
+    serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload,
+    >(transition_payload.clone())
+    .expect("transition fixture matches the SDK type");
     let transition = state.apply(
         &make_operation(
             arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
             REALM_ID,
-            serde_json::json!({
-                "from_digest_algorithm": "sha256",
-                "to_digest_algorithm": "blake3",
-                "transition_snapshot_ref": "ak:snapshot:01904100-0000-7000-8000-000000000301",
-                "snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            }),
+            transition_payload,
         ),
         &hlc,
     );
-    assert!(matches!(
-        transition,
-        ProjectionEffect::RealmDigestSuiteTransitionProjected { ref digest_algorithm, .. }
-            if digest_algorithm == "blake3"
-    ));
+    assert!(
+        matches!(
+            transition,
+            ProjectionEffect::RealmDigestSuiteTransitionProjected { ref digest_algorithm, .. }
+                if digest_algorithm == "blake3"
+        ),
+        "digest-suite transition failed: {transition:?}"
+    );
     assert_eq!(
         state.realm_digest_algorithm(REALM_ID).as_deref(),
         Some("blake3")

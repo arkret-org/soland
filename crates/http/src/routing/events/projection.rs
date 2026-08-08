@@ -77,30 +77,42 @@ mod tests {
     }
 
     #[test]
-    fn realm_projection_metadata_reads_canonical_object_fields() {
-        let operation = op(
+    fn realm_projection_metadata_reads_each_canonical_facet_shape() {
+        let profile = op(
+            arkret_wire::EventKind::REALM_PROFILE,
+            json!({
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "Launch Room",
+                "summary": "Planning space"
+            }),
+        );
+        let discovery = op(
+            arkret_wire::EventKind::REALM_DISCOVERY,
+            json!({"value": "listed"}),
+        );
+        let history_visibility = op(
+            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+            json!({"value": "shared"}),
+        );
+        let create = op(
             arkret_wire::EventKind::REALM_CREATE,
             json!({
                 "object": {
                     "id": REALM_ID,
-                    "title": "Launch Room",
-                    "summary": "Planning space",
-                    "default_discoverability": "listed",
-                    "history_visibility": "shared",
                     "encryption_profile": "plaintext"
                 }
             }),
         );
 
-        assert_eq!(operation_realm_title(&operation), Some("Launch Room"));
-        assert_eq!(operation_realm_summary(&operation), Some("Planning space"));
-        assert_eq!(operation_realm_discoverability(&operation), Some("listed"));
+        assert_eq!(operation_realm_title(&profile), Some("Launch Room"));
+        assert_eq!(operation_realm_summary(&profile), Some("Planning space"));
+        assert_eq!(operation_realm_discoverability(&discovery), Some("listed"));
         assert_eq!(
-            operation_realm_history_visibility(&operation),
+            operation_realm_history_visibility(&history_visibility),
             Some("shared")
         );
         assert_eq!(
-            operation_realm_encryption_profile(&operation),
+            operation_realm_encryption_profile(&create),
             Some("plaintext")
         );
     }
@@ -243,13 +255,14 @@ mod tests {
     }
 
     #[test]
-    fn invite_acceptance_ref_reads_canonical_invite_ref() {
+    fn invite_acceptance_ref_reads_canonical_invite_id() {
         let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
         let operation = op(
             arkret_wire::EventKind::INVITE_ACCEPT,
             json!({
                 "sender": "did:web:bob.example",
-                "invite_ref": invite_id,
+                "invite_id": invite_id,
+                "delivery_status": "routable",
             }),
         );
 

@@ -1420,7 +1420,10 @@ mod tests {
             "purpose".to_owned(),
             Value::String("principal_control".to_owned()),
         );
-        realm.schema_refs = vec!["ak.profile.principal_control_realm.v1".to_owned()];
+        realm.schema_refs = vec![
+            "ak.schema.realm.v1".to_owned(),
+            "ak.profile.principal_control_realm.v1".to_owned(),
+        ];
         realm.history_visibility = arkret_wire::HistoryVisibility::Restricted;
         realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
         realm.content_encryption_floor =
@@ -1522,7 +1525,6 @@ mod tests {
     /// cannot project at all.
     #[test]
     fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
-        let realm_id = RealmId::new(PCR).unwrap();
         let mut event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::RealmGenesis,
@@ -1536,6 +1538,8 @@ mod tests {
         event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
             arkret_wire::EventId::new(provision_event_id).unwrap(),
         )];
+        event.refresh_content_bound_identity().unwrap();
+        let realm_id = event.realm_id.clone();
         let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(
             envelope.as_object().unwrap(),

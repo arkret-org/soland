@@ -140,6 +140,7 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: now + chrono::Duration::minutes(5),
         created_at: now,
         revoked_at: None,

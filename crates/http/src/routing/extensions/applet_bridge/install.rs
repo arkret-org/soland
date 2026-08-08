@@ -1797,8 +1797,17 @@ mod tests {
                 ],
             ),
         );
-        let response = sample_response(&package);
+        let mut response = sample_response(&package);
         let record = sample_record(&package, &response);
+        response.registration_event_ref = record
+            .registration_event
+            .as_ref()
+            .map(|event| event.event_id.clone());
+        response.capability_grant_refs = record
+            .capability_grant_events
+            .iter()
+            .map(|event| arkret_identifiers::GrantId::from_event_id(&event.event_id))
+            .collect();
 
         let stored = serde_json::to_value(&record).unwrap();
         assert!(stored.get("registration_epoch_evidence").is_some());
@@ -1853,8 +1862,17 @@ mod tests {
     #[test]
     fn install_execution_record_tracks_pending_and_accepted_steps() {
         let package = sample_package();
-        let response = sample_response(&package);
+        let mut response = sample_response(&package);
         let record = sample_record(&package, &response);
+        response.registration_event_ref = record
+            .registration_event
+            .as_ref()
+            .map(|event| event.event_id.clone());
+        response.capability_grant_refs = record
+            .capability_grant_events
+            .iter()
+            .map(|event| arkret_identifiers::GrantId::from_event_id(&event.event_id))
+            .collect();
         let body_digest = record.install_body_digest.as_deref().unwrap();
         let submitted_plan_digest = format!("sha256:{}", "33".repeat(32));
 

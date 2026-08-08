@@ -239,7 +239,7 @@ async fn session_signing_key_jwk(
         let grant = super::auth_grant_dpop::introspect_session_grant_cached(state, token, false)
             .await
             .map_err(|(_, _, message)| AppError::unauthenticated(message))?;
-        return Ok(grant.session_public_key);
+        return Ok(grant.session_public_key.into_string());
     }
     let token_hash = session_credential_hash(token, state.service_id());
     let session = state

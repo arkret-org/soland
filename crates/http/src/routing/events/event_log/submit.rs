@@ -2295,6 +2295,7 @@ pub(crate) async fn submit_federation_events(
             audience: state.service_id().clone(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: created_at + Duration::minutes(5),
             created_at,
             revoked_at: None,
@@ -2499,6 +2500,7 @@ pub(crate) async fn submit_federation_events(
             audience: state.service_id().clone(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: created_at + Duration::minutes(5),
             created_at,
             revoked_at: None,
@@ -2851,6 +2853,7 @@ async fn submit_direct_conversation_federation(
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,
+        session_grant: None,
         expires_at: created_at + Duration::minutes(5),
         created_at,
         revoked_at: None,
@@ -3202,6 +3205,7 @@ mod internal_event_admission_tests {
             audience: "soland".to_owned(),
             session_public_key: None,
             agent_session: None,
+            session_grant: None,
             expires_at: now + Duration::minutes(5),
             created_at: now,
             revoked_at: None,
@@ -3241,7 +3245,8 @@ mod federation_delivery_binding_tests {
     use super::*;
 
     fn event_id(suffix: u32) -> EventId {
-        EventId::new(format!("ak:event:01904100-0000-8000-8000-{suffix:012x}")).unwrap()
+        let digest = Hash::new(arkret_canonical::sha256_digest(suffix.to_be_bytes())).unwrap();
+        EventId::from_event_digest(&digest).unwrap()
     }
 
     fn member_view(

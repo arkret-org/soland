@@ -812,7 +812,7 @@ mod tests {
     fn private_account_data_key_patterns_are_validated() {
         assert!(
             validate_registered_account_data_key(
-                "ak.scheduled_send.v1:ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+                "ak.scheduled_send.v1:ak:scheduled_send:01904100-0000-7000-8000-000000000001"
             )
             .is_ok()
         );

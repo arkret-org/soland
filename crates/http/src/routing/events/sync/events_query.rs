@@ -1352,10 +1352,6 @@ mod tests {
 
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
-    const TEST_MESSAGE_EVENT: &str = "ak:event:ASujRpecNrAE0Lej07fc2eG0erjXRqjyVSMXIKUTqhhn";
-    const TEST_REVISE_EVENT: &str = "ak:event:AZVG8Uz9VGRmh7iKimxdulm4DWQLsZ6w6yT2eosMkZkK";
-    const TEST_MESSAGE_ID: &str = "ak:message:AdP3qdD6rtaQn2ZJ6yiIDmdR8kxzJAPmtR-kgRjkiaHB";
-    const TEST_REDACTION_EVENT: &str = "ak:event:AZ8d8ta-b8eG0YNUzUy_tCrhrGyHc9zGBQRFsfspSPpt";
 
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
@@ -1459,11 +1455,11 @@ mod tests {
         envelope: Value,
         created_at: DateTime<Utc>,
     ) {
-        let canonical_bytes = serde_json::to_vec(&envelope).unwrap();
-        let canonical_digest = serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-            .ok()
-            .and_then(|event| event.event_digest().ok())
-            .unwrap_or_else(|| format!("sha256:test-{}", event_id.rsplit(':').next().unwrap()));
+        let event: arkret_wire::Event =
+            serde_json::from_value(envelope.clone()).expect("durable fixture is a typed Event");
+        let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
+            .expect("durable fixture has a canonical digest payload");
+        let canonical_digest = event.event_digest().expect("durable fixture digest");
         let actor_id = envelope
             .get("actor_id")
             .and_then(Value::as_str)
@@ -1505,9 +1501,61 @@ mod tests {
         let revised_at = created_at + chrono::Duration::seconds(30);
         let redacted_at = created_at + chrono::Duration::minutes(1);
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
+        let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
+        let actor_id = arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap();
+        let message_event = arkret_wire::Event::new_with_derived_id_at(
+            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor_id.clone(),
+            1,
+            arkret_identifiers::Hlc::new("019041000000-0000-00000000").unwrap(),
+            json!({
+                "strand_id": strand_id,
+                "track_name": "discussion",
+                "content": {"kind": "ak.content.text", "body": "secret that must not leak"}
+            }),
+            created_at,
+        )
+        .unwrap();
+        let message_event_id = message_event.event_id.to_string();
+        let message_id = arkret_identifiers::MessageId::from_event_id(&message_event.event_id);
+        let revise_event = arkret_wire::Event::new_with_derived_id_at(
+            arkret_wire::EventKind::MESSAGE_REVISE,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor_id.clone(),
+            2,
+            arkret_identifiers::Hlc::new("019041000000-0001-00000000").unwrap(),
+            json!({
+                "target_ref": message_id,
+                "strand_id": strand_id,
+                "track_name": "discussion",
+                "content": {"kind": "ak.content.text", "body": "revised secret that must not leak"}
+            }),
+            revised_at,
+        )
+        .unwrap();
+        let revise_event_id = revise_event.event_id.to_string();
+        let redaction_event = arkret_wire::Event::new_with_derived_id_at(
+            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::ScopeRef::Realm { realm_id },
+            actor_id,
+            3,
+            arkret_identifiers::Hlc::new("019041000000-0002-00000000").unwrap(),
+            json!({
+                "message_id": message_id,
+                "reason": "test redaction"
+            }),
+            redacted_at,
+        )
+        .unwrap();
+        let redaction_event_id = redaction_event.event_id.to_string();
         let plaintext_payload = json!({
-            "event_id": TEST_MESSAGE_EVENT,
-            "message_id": TEST_MESSAGE_ID,
+            "event_id": message_event_id,
+            "message_id": message_id,
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",
@@ -1515,8 +1563,8 @@ mod tests {
             "content": {"kind": "ak.content.text", "body": "secret that must not leak"}
         });
         let revised_payload = json!({
-            "event_id": TEST_REVISE_EVENT,
-            "target_ref": TEST_MESSAGE_ID,
+            "event_id": revise_event_id,
+            "target_ref": message_id,
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",
@@ -1539,57 +1587,41 @@ mod tests {
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
             arkret_wire::EventKind::MESSAGE_REDACT,
             json!({
-                "event_id": TEST_REDACTION_EVENT,
-                "message_id": TEST_MESSAGE_ID,
+                "event_id": redaction_event_id,
+                "message_id": message_id,
                 "reason": "test redaction",
                 "sender": TEST_ACTOR
             }),
             redacted_at,
         );
-        crate::routing::events::projection::project_accepted_operations(
-            &state,
-            TEST_ACTOR,
-            &[message, revise, redaction],
-        )
-        .await;
         put_durable_event(
             &state,
-            TEST_MESSAGE_EVENT,
+            message_event_id.as_str(),
             arkret_wire::EventKind::MESSAGE_CREATE,
-            json!({
-                "event_id": TEST_MESSAGE_EVENT,
-                "kind": arkret_wire::EventKind::MESSAGE_CREATE,
-                "realm_id": TEST_REALM,
-                "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
-                "actor_id": TEST_ACTOR,
-                "actor_seq": 1,
-                "created_at": created_at,
-                "hlc": "019041000000-0000-00000000",
-                "prev_refs": [],
-                "payload": plaintext_payload,
-                "proofs": []
-            }),
+            serde_json::to_value(&message_event).unwrap(),
             created_at,
         )
         .await;
         put_durable_event(
             &state,
-            TEST_REVISE_EVENT,
+            revise_event_id.as_str(),
             arkret_wire::EventKind::MESSAGE_REVISE,
-            json!({
-                "event_id": TEST_REVISE_EVENT,
-                "kind": arkret_wire::EventKind::MESSAGE_REVISE,
-                "realm_id": TEST_REALM,
-                "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
-                "actor_id": TEST_ACTOR,
-                "actor_seq": 2,
-                "created_at": revised_at,
-                "hlc": "019041000000-0001-00000000",
-                "prev_refs": [TEST_MESSAGE_EVENT],
-                "payload": revised_payload,
-                "proofs": []
-            }),
+            serde_json::to_value(&revise_event).unwrap(),
             revised_at,
+        )
+        .await;
+        put_durable_event(
+            &state,
+            redaction_event_id.as_str(),
+            arkret_wire::EventKind::MESSAGE_REDACT,
+            serde_json::to_value(&redaction_event).unwrap(),
+            redacted_at,
+        )
+        .await;
+        crate::routing::events::projection::project_accepted_operations(
+            &state,
+            TEST_ACTOR,
+            &[message, revise, redaction],
         )
         .await;
 
@@ -1604,19 +1636,19 @@ mod tests {
             .collect::<Vec<_>>();
         let message_row = rows
             .iter()
-            .find(|row| row["event_id"] == TEST_MESSAGE_EVENT)
+            .find(|row| row["event_id"] == message_event_id)
             .expect("message row retained as tombstone");
         assert_eq!(message_row["payload"]["redacted"], json!(true));
         let revise_row = rows
             .iter()
-            .find(|row| row["event_id"] == TEST_REVISE_EVENT)
+            .find(|row| row["event_id"] == revise_event_id)
             .expect("revision row retained as tombstone");
         assert_eq!(revise_row["payload"]["redacted"], json!(true));
 
         let events = full_events_from_projection_json(&state, &rows).await;
         let message_event = events
             .iter()
-            .find(|event| event.event_id.as_str() == TEST_MESSAGE_EVENT)
+            .find(|event| event.event_id.as_str() == message_event_id)
             .expect("message event returned");
         assert_eq!(message_event.payload["redacted"], json!(true));
         assert_eq!(
@@ -1630,7 +1662,7 @@ mod tests {
         );
         let revise_event = events
             .iter()
-            .find(|event| event.event_id.as_str() == TEST_REVISE_EVENT)
+            .find(|event| event.event_id.as_str() == revise_event_id)
             .expect("revision event returned");
         assert_eq!(revise_event.payload["redacted"], json!(true));
         assert_eq!(revise_event.payload["content"]["body"], json!("[redacted]"));

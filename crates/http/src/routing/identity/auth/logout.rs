@@ -51,11 +51,18 @@ pub(super) async fn logout(
     }
 
     let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
+    if grant.credential_class
+        != arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard
+    {
+        return Err(AppError::capability_denied(
+            "account logout requires a standard session grant",
+        ));
+    }
     super::super::auth_grant_dpop::verify_grant_dpop_request(
         state,
         req,
         &grant_jwt,
-        grant.cnf_jkt.as_deref(),
+        Some(&grant.cnf_jkt),
     )
     .map_err(auth_error_to_app_error)?;
     let session = super::super::auth_grant_dpop::session_record_from_introspected_grant_for_logout(
@@ -180,12 +187,13 @@ async fn introspect_session_grant_for_logout(
             "runtime principal service_id is not a DID: {error}"
         ))
     })?;
-    let request = SessionGrantIntrospectRequestBody {
-        id: None,
-        grant_jwt: Some(grant_jwt.to_owned()),
-        audience: Some(audience),
-        proof: None,
-    };
+    let request = SessionGrantIntrospectRequestBody::ByJwt(
+        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
+            grant_jwt: grant_jwt.to_owned(),
+            audience: Some(audience),
+            proof: None,
+        },
+    );
     let (introspection_url, client) =
         crate::security::validate_http_url_for_egress_with_pinned_client(
             introspection_url,

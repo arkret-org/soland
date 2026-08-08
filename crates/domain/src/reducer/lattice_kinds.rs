@@ -25,7 +25,7 @@ pub use arkret_lattice_registry::{
     RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService,
     RealmModerationPolicy, RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy,
     RealmPolicyBundle, RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy,
-    RealmReducerProfile, RealmSchema, RealmSearchPolicy, RealmTombstone, SessionGrant, SpaceParent,
+    RealmReducerProfile, RealmSchema, RealmSearchPolicy, RealmTombstone, SpaceParent,
     StrandPosition, StrandStage, ViewCreate, ViewReconcile, ViewUpdate, build_sdk_cell_registry,
     default_lattice_registry, lattice_bindings_for_sdk_registry,
 };
@@ -37,7 +37,7 @@ use arkret_state::lattice::LatticeKind;
 use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};
 
 /// Closed shared-FSM family count in the canonical v1 contract.
-pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 18;
+pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 17;
 
 /// Resolve and validate the one shared SDK registry used by every Soland
 /// state-resolution path.
