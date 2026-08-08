@@ -430,7 +430,11 @@ pub async fn realm_basis(
         })?;
     state
         .projections()
-        .conformance_install_realm_genesis(&basis.seal.realm_id, basis.genesis);
+        .conformance_install_realm_bootstrap_facets(
+            &basis.seal.realm_id,
+            basis.genesis,
+            basis.reducer_profile,
+        );
     json_ok(RealmBasisOutcome {
         seal_id: basis.seal.id.to_string(),
         control_event_set_root: basis.seal.control_event_set_root.to_string(),

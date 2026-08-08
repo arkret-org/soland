@@ -45,6 +45,9 @@ pub struct ConformanceRealmBasis {
     /// this value into the application projection cache after the sealed cell
     /// effects are persisted.
     pub genesis: Value,
+    /// Realm reducer profile covered by `ops` and mirrored into the
+    /// application projection cache alongside `genesis`.
+    pub reducer_profile: Value,
     /// Exact grant bodies covered by the governance Seal. Test adapters use
     /// these to update derived indexes without reconstructing protocol state.
     pub grants: Vec<ConformanceGrant>,
@@ -110,6 +113,13 @@ pub fn build_realm_basis(
         data_plane_actions,
         "genesis",
     )?;
+    let reducer_profile_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "reducer-profile",
+    )?;
     let authority_root_move = fixture_move_id(
         fixture_id_domain,
         realm_id,
@@ -163,6 +173,7 @@ pub fn build_realm_basis(
         .cloned()
         .collect::<Vec<_>>();
     let genesis = serde_json::json!({"digest_algorithm": "sha256"});
+    let reducer_profile = Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned());
     let mut ops = Vec::new();
     let mut grants = Vec::new();
     // Synthetic fixture Realms have no accepted `ak.realm.create`, but every
@@ -179,6 +190,23 @@ pub fn build_realm_basis(
                 op_type: arkret_wire::LatticeOpType::Set,
                 tag: None,
                 value: Some(genesis.clone()),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    ));
+    ops.push((
+        CellRef::new(arkret_wire::REALM_REDUCER_PROFILE_CELL.to_owned())
+            .map_err(|error| error.to_string())?,
+        issued_op(
+            &issuer,
+            &reducer_profile_move,
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Set,
+                tag: None,
+                value: Some(reducer_profile.clone()),
                 from: None,
                 to: None,
                 reason: None,
@@ -281,6 +309,7 @@ pub fn build_realm_basis(
     );
     let mut delta = vec![
         genesis_move,
+        reducer_profile_move,
         authority_root_move.clone(),
         owner_move.clone(),
     ];
@@ -305,6 +334,7 @@ pub fn build_realm_basis(
         seal,
         ops,
         genesis,
+        reducer_profile,
         grants,
     })
 }
@@ -478,6 +508,16 @@ mod tests {
                 .any(|(cell, _)| { cell.as_str() == arkret_wire::REALM_GENESIS_CELL })
         );
         assert_eq!(first.genesis["digest_algorithm"], "sha256");
+        assert_eq!(
+            first.reducer_profile,
+            Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned())
+        );
+        assert!(
+            first
+                .ops
+                .iter()
+                .any(|(cell, _)| { cell.as_str() == arkret_wire::REALM_REDUCER_PROFILE_CELL })
+        );
         assert!(build("soland:test:first:", Some("not a DID")).is_err());
     }
 

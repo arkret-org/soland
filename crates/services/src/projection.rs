@@ -1147,14 +1147,22 @@ impl ProjectionService {
     /// `ak.realm.create` Event for the reducer to project, so persisting its
     /// sealed cell effects alone cannot populate this cache.
     #[doc(hidden)]
-    pub fn conformance_install_realm_genesis(&self, realm_id: &RealmId, genesis: Value) {
-        self.state.lock().realm_null_subject_cells.insert(
-            (
-                realm_id.to_string(),
-                arkret_wire::REALM_GENESIS_CELL.to_owned(),
-            ),
-            CellState::Value(genesis),
-        );
+    pub fn conformance_install_realm_bootstrap_facets(
+        &self,
+        realm_id: &RealmId,
+        genesis: Value,
+        reducer_profile: Value,
+    ) {
+        let mut state = self.state.lock();
+        for (cell, value) in [
+            (arkret_wire::REALM_GENESIS_CELL, genesis),
+            (arkret_wire::REALM_REDUCER_PROFILE_CELL, reducer_profile),
+        ] {
+            state.realm_null_subject_cells.insert(
+                (realm_id.to_string(), cell.to_owned()),
+                CellState::Value(value),
+            );
+        }
     }
 
     #[cfg(feature = "test-support")]
