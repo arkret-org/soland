@@ -317,7 +317,20 @@ pub fn projected_grant_fixture(
     constraints: Vec<Constraint>,
 ) -> Grant {
     Grant {
-        grant_id: crate::ids::generate_grant_id(),
+        // `grant` is Event-derived, so the id can only be the create Event's
+        // token retyped. The fixture stands in for an accepted
+        // `ak.capability.grant`, so it derives one from a synthetic Event
+        // digest rather than minting a UUID the SDK would reject.
+        grant_id: {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let digest = arkret_canonical::sha256_bytes(&seq.to_be_bytes());
+            let event_id = arkret_identifiers::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                digest,
+            );
+            arkret_identifiers::GrantId::from_event_id(&event_id).into_string()
+        },
         realm_id,
         issuer,
         subject,

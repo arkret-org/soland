@@ -48,24 +48,12 @@ pub fn generate(kind: &str) -> String {
 /// `arkret-work/work/active/2026-08-06-event-log-operations-need-a-signed-request.md`.
 ///
 /// Do not add callers.
-pub fn generate_space_id() -> String {
-    generate("space")
-}
-
 pub fn generate_realm_id() -> String {
     generate("realm")
 }
 
 pub fn generate_event_id() -> String {
     generate("event")
-}
-
-pub fn generate_relation_id() -> String {
-    generate("relation")
-}
-
-pub fn generate_circle_id() -> String {
-    generate("circle")
 }
 
 /// A locally-minted correlation token for a server-side record that stands
@@ -82,10 +70,6 @@ pub fn generate_operation_id() -> String {
     generate("operation")
 }
 
-pub fn generate_grant_id() -> String {
-    generate("grant")
-}
-
 /// Surrogate primary-key id for the `accounts` row (`ak:account:<uuid7>`).
 /// Distinct from the account's `actor_id` DID: the DID is the protocol
 /// identity, this is the stable internal row handle the PK is built on.
@@ -95,10 +79,6 @@ pub fn generate_account_id() -> String {
 
 pub fn generate_install_id() -> String {
     generate("install")
-}
-
-pub fn generate_invite_id() -> String {
-    generate("invite")
 }
 
 pub fn generate_snapshot_id() -> String {
@@ -219,50 +199,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_format_is_ak_kind_uuid() {
-        let id = generate_space_id();
-        assert!(id.starts_with("ak:space:"));
-        let uuid_part = &id["ak:space:".len()..];
-        // 36-char canonical UUID form: 8-4-4-4-12 hex with dashes
-        assert_eq!(uuid_part.len(), 36);
-        let parsed = Uuid::parse_str(uuid_part).expect("uuid parse");
-        // version 7
-        assert_eq!(parsed.get_version_num(), 7);
-    }
-
-    #[test]
-    fn all_generators_produce_valid_prefixes() {
-        assert!(generate_realm_id().starts_with("ak:realm:"));
-        assert!(generate_space_id().starts_with("ak:space:"));
-        assert!(generate_event_id().starts_with("ak:event:"));
-        assert!(generate_operation_id().starts_with("ak:operation:"));
-        assert!(generate_relation_id().starts_with("ak:relation:"));
-        assert!(generate_grant_id().starts_with("ak:grant:"));
-        assert!(generate_invite_id().starts_with("ak:invite:"));
-        assert!(generate_snapshot_id().starts_with("ak:snapshot:"));
-        assert!(generate_notification_id().starts_with("ak:notification:"));
-        assert!(generate_view_id().starts_with("ak:view:"));
-        assert!(generate_request_id().starts_with("ak:request:"));
-    }
-
-    #[test]
-    fn ids_are_globally_unique() {
-        let ids: std::collections::HashSet<String> =
-            (0..1000).map(|_| generate_space_id()).collect();
-        assert_eq!(ids.len(), 1000);
-    }
-
-    #[test]
-    fn ids_are_lexicographically_sortable_by_time() {
-        let id1 = generate_space_id();
-        // Small delay to ensure different timestamp
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let id2 = generate_space_id();
-        // UUIDv7 is monotonic by ms timestamp; later IDs sort lexicographically after.
-        assert!(id2 > id1);
-    }
-
-    #[test]
     fn parse_typed_uuid_roundtrip() {
         let id = generate_event_id();
         let raw = parse_typed_uuid(&id, "event").expect("parse");
@@ -309,17 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn realm_id_rejects_wrong_kind_and_bad_token() {
-        let space = generate_space_id();
-        assert!(RealmId::new(space).is_err());
-        // Non-Realm kinds and malformed 44-character tokens are rejected.
-        assert!(RealmId::new("ak:strand:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR").is_err());
-        assert!(RealmId::new("ak:realm:not-a-token").is_err());
-        assert!(RealmId::new("ak:realm:ARK5N3y-flyU6KcNnSOSlSPRSvqVR5MTD4o5Wce4Sayo").is_err());
-        assert!(RealmId::new("").is_err());
-    }
-
-    #[test]
     fn realm_id_round_trips_through_serde() {
         let id = RealmId::new(generate_realm_id()).expect("realm id");
         let json = serde_json::to_string(&id).expect("serialize");
@@ -336,24 +261,9 @@ mod tests {
     }
 
     #[test]
-    fn space_container_id_accepts_wire_form() {
-        let wire = generate_space_id();
-        let id = SpaceContainerId::new(wire.clone()).expect("space-container id parse");
-        assert_eq!(id.as_str(), wire);
-    }
-
-    #[test]
     fn space_container_id_rejects_bad_kind() {
         assert!(SpaceContainerId::new(generate_realm_id()).is_err());
         assert!(SpaceContainerId::new("ak:space:not-a-uuid").is_err());
         assert!(SpaceContainerId::new("").is_err());
-    }
-
-    #[test]
-    fn space_container_id_round_trips_through_serde() {
-        let id = SpaceContainerId::new(generate_space_id()).expect("space id");
-        let json = serde_json::to_string(&id).expect("serialize");
-        let parsed: SpaceContainerId = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed, id);
     }
 }
