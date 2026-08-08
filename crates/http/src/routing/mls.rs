@@ -76,7 +76,6 @@ const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyPackageTrustBinding {
-    ssk_generation: Option<u64>,
     device_authorize_event_id: Option<String>,
     agent_key_authorize_event_id: Option<String>,
 }
@@ -88,17 +87,8 @@ enum KeyPackageTrustSelector {
 }
 
 impl KeyPackageTrustBinding {
-    fn cross_signing(ssk_generation: u64) -> Self {
-        Self {
-            ssk_generation: Some(ssk_generation),
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: None,
-        }
-    }
-
     fn device_authorize(device_authorize_event_id: String) -> Self {
         Self {
-            ssk_generation: None,
             device_authorize_event_id: Some(device_authorize_event_id),
             agent_key_authorize_event_id: None,
         }
@@ -106,7 +96,6 @@ impl KeyPackageTrustBinding {
 
     fn agent_key_authorize(agent_key_authorize_event_id: String) -> Self {
         Self {
-            ssk_generation: None,
             device_authorize_event_id: None,
             agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
         }
@@ -114,7 +103,6 @@ impl KeyPackageTrustBinding {
 
     fn from_keypackage(kp: &MlsKeyPackageRow) -> Result<Self, AppError> {
         Self::from_parts(
-            kp.ssk_generation,
             kp.device_authorize_event_id.clone(),
             kp.agent_key_authorize_event_id.clone(),
             "KeyPackage trust binding is invalid",
@@ -123,7 +111,6 @@ impl KeyPackageTrustBinding {
 
     fn from_row(row: &MlsKeyPackageRow) -> Result<Self, AppError> {
         Self::from_parts(
-            row.ssk_generation,
             row.device_authorize_event_id.clone(),
             row.agent_key_authorize_event_id.clone(),
             "KeyPackage claim is missing a valid trust binding",
@@ -131,23 +118,15 @@ impl KeyPackageTrustBinding {
     }
 
     fn from_parts(
-        ssk_generation: Option<u64>,
         device_authorize_event_id: Option<String>,
         agent_key_authorize_event_id: Option<String>,
         message: &'static str,
     ) -> Result<Self, AppError> {
-        match (
-            ssk_generation,
-            device_authorize_event_id,
-            agent_key_authorize_event_id,
-        ) {
-            (Some(generation), None, None) if generation >= 1 => {
-                Ok(Self::cross_signing(generation))
-            }
-            (None, Some(event_id), None) if !event_id.trim().is_empty() => {
+        match (device_authorize_event_id, agent_key_authorize_event_id) {
+            (Some(event_id), None) if !event_id.trim().is_empty() => {
                 Ok(Self::device_authorize(event_id))
             }
-            (None, None, Some(event_id)) if !event_id.trim().is_empty() => {
+            (None, Some(event_id)) if !event_id.trim().is_empty() => {
                 Ok(Self::agent_key_authorize(event_id))
             }
             _ => Err(AppError::new(ErrorCode::FailedPrecondition, message)
@@ -159,9 +138,6 @@ impl KeyPackageTrustBinding {
         let Some(object) = value.as_object_mut() else {
             return;
         };
-        if let Some(generation) = self.ssk_generation {
-            object.insert("ssk_generation".to_owned(), json!(generation));
-        }
         if let Some(event_id) = self.device_authorize_event_id.as_deref() {
             object.insert(
                 "device_authorize_event_id".to_owned(),
@@ -177,8 +153,7 @@ impl KeyPackageTrustBinding {
     }
 
     fn matches_keypackage(&self, kp: &MlsKeyPackageRow) -> bool {
-        kp.ssk_generation == self.ssk_generation
-            && kp.device_authorize_event_id == self.device_authorize_event_id
+        kp.device_authorize_event_id == self.device_authorize_event_id
             && kp.agent_key_authorize_event_id == self.agent_key_authorize_event_id
     }
 }
@@ -673,7 +648,6 @@ async fn peer_claim_keypackage(
             .claim_peer_key_package(PeerKeyPackageClaimAttempt {
                 keypackage_id: &candidate_id,
                 mls_group_id: body.mls_group_id.as_str(),
-                ssk_generation: binding.ssk_generation,
                 device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
                 agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
                 claimed_at: now_secs,
@@ -925,31 +899,20 @@ async fn verify_peer_claim_participant_authorization(
         .map_err(|error| {
             AppError::internal(format!("peer claim authorization transcript: {error}"))
         })?;
-    let key = if let Some(generation) = authorization.ssk_generation {
-        let current = state.identities().current_cross_signing(&body.requester);
-        let Some(current) = current else {
-            return reject("cross_signing_missing");
-        };
-        if current.generation.get() != generation
-            || current.self_signing_key.kid.as_str() != authorization.verification_method.as_str()
-        {
-            return reject("cross_signing_binding");
-        }
-        crate::routing::identity::cross_signing::decode_ed25519_key(
-            current.self_signing_key.public_key.as_str(),
-            current.self_signing_key.key_format.as_str(),
-        )
-        .map_err(|_| peer_claim_failed())?
-    } else {
-        let Some(device_id) = authorization.requester_device_id.as_ref() else {
-            return reject("device_id_missing");
-        };
+    let key = {
+        let device_id = &authorization.requester_device_id;
         if let Some(evidence) = body.requester_signing_key_evidence.as_ref() {
             if evidence.actor_id != body.requester
                 || &evidence.device_id != device_id
                 || evidence.verification_method != authorization.verification_method.as_str()
-                || Some(evidence.device_authorize_event.event_id.as_str())
-                    != authorization.device_authorize_event_id.as_deref()
+                || evidence
+                    .current_device_projection
+                    .device_record
+                    .device_authorize_event_id
+                    .as_ref()
+                    .is_none_or(|event_id| {
+                        event_id.as_str() != authorization.device_authorize_event_id.as_str()
+                    })
             {
                 return reject("federated_evidence_binding");
             }
@@ -974,10 +937,10 @@ async fn verify_peer_claim_participant_authorization(
             else {
                 return reject("federated_evidence_key_format");
             };
-            crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
+            crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
                 .map_err(|_| peer_claim_failed())?
         } else {
-            let facet = crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+            let facet = crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
                 state,
                 body.requester.as_str(),
                 device_id.as_str(),
@@ -992,7 +955,7 @@ async fn verify_peer_claim_participant_authorization(
                 .as_ref()
                 .map(ToString::to_string)
                 .as_deref()
-                != authorization.device_authorize_event_id.as_deref()
+                != Some(authorization.device_authorize_event_id.as_str())
                 || authorization.verification_method.as_str()
                     != format!("{}#{}", body.requester, device_id).as_str()
             {
@@ -1005,11 +968,11 @@ async fn verify_peer_claim_participant_authorization(
             else {
                 return reject("local_device_directory_key_format");
             };
-            crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
+            crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
                 .map_err(|_| peer_claim_failed())?
         }
     };
-    let signature_valid = crate::routing::identity::cross_signing::ed25519_verify(
+    let signature_valid = crate::routing::identity::device_signing::ed25519_verify(
         &key,
         &signing_bytes,
         authorization.signature.sig.as_str(),
@@ -1221,7 +1184,7 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     }
     let signing_bytes = peer_keypackage_claim_receipt_signing_bytes(receipt)
         .map_err(|_| "peer_claim_welcome_invalid")?;
-    if !crate::routing::identity::cross_signing::ed25519_verify(
+    if !crate::routing::identity::device_signing::ed25519_verify(
         &state.notary_verifying_key(),
         &signing_bytes,
         receipt.signature.sig.as_str(),
@@ -1619,7 +1582,6 @@ async fn claim_keypackages_for_request_inner(
             .claim_peer_key_package(PeerKeyPackageClaimAttempt {
                 keypackage_id: &keypackage_id,
                 mls_group_id: &mls_group_ref,
-                ssk_generation: claim_binding.ssk_generation,
                 device_authorize_event_id: claim_binding.device_authorize_event_id.as_deref(),
                 agent_key_authorize_event_id: claim_binding.agent_key_authorize_event_id.as_deref(),
                 claimed_at: now_secs,
@@ -2507,7 +2469,6 @@ async fn revoke_keypackages(
                         id: &record.id,
                         target: soland_services::events::ClaimMlsKeyPackageTarget::Revoke,
                         intended_realm_id: None,
-                        ssk_generation: None,
                         device_authorize_event_id: None,
                         agent_key_authorize_event_id: None,
                         claimed_at: revoked_at,
@@ -2571,7 +2532,6 @@ pub(crate) async fn retire_device_keypackages(
                 id: &row.id,
                 target: soland_services::events::ClaimMlsKeyPackageTarget::Retire,
                 intended_realm_id: None,
-                ssk_generation: None,
                 device_authorize_event_id: None,
                 agent_key_authorize_event_id: None,
                 claimed_at: retired_at,
@@ -2775,11 +2735,11 @@ async fn verify_device_keypackage_signature(
             "KeyPackage signature kid does not point to the authorized device key",
         ));
     }
-    let verifying_key =
-        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
-            .map_err(|error| {
-                AppError::invalid_param(format!("device signing key is invalid: {error}"))
-            })?;
+    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
     arkret_signatures::keypackages::verify_keypackage_signing_input(
         &verifying_key.to_bytes(),
         signature.kid.as_str(),
@@ -2866,16 +2826,6 @@ fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, 
 fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bool {
     let published: BTreeSet<_> = published.iter().cloned().collect();
     required.is_subset(&published)
-}
-
-fn current_accepted_ssk_generation(
-    state: &AppState,
-    principal: &arkret_identifiers::Did,
-) -> Option<u64> {
-    state
-        .identities()
-        .current_cross_signing(principal)
-        .map(|publish| publish.generation.get())
 }
 
 async fn current_agent_keypackage_trust_binding(
@@ -2992,9 +2942,6 @@ async fn current_keypackage_trust_binding(
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
         return Ok(binding);
     }
-    if let Some(generation) = current_accepted_ssk_generation(state, principal) {
-        return Ok(KeyPackageTrustBinding::cross_signing(generation));
-    }
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
@@ -3027,12 +2974,6 @@ async fn current_keypackage_claim_trust_selector(
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
         return Ok(KeyPackageTrustSelector::Principal(binding));
     }
-    if let Some(generation) = current_accepted_ssk_generation(state, principal) {
-        return Ok(KeyPackageTrustSelector::Principal(
-            KeyPackageTrustBinding::cross_signing(generation),
-        ));
-    }
-
     let mut bindings = BTreeMap::new();
     if target_device_ids.is_empty() {
         for device in state
@@ -3185,7 +3126,7 @@ fn available_keypackage_count_from_records(
 /// Whether `actor_id` currently has a KeyPackage that the canonical Realm
 /// membership admission path can actually claim.
 ///
-/// This intentionally reuses the same accepted device / cross-signing trust
+/// This intentionally reuses the same accepted-device trust
 /// selector and capability-subset rules as `claim_keypackages_for_request`.
 /// Merely having an untrusted or capability-incomplete KeyPackage row is not
 /// sufficient for the native-agent `leave -> join` carve-out in actor.md
@@ -3293,7 +3234,6 @@ fn keypackage_claim_record(
         capabilities: record.capabilities.clone(),
         capabilities_digest: Hash::new(record.capabilities_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
-        ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
         expires_at: match record.claim_expires_at_unix_ms {
@@ -3341,22 +3281,17 @@ mod trust_binding_tests {
     use super::*;
 
     #[test]
-    fn native_agent_binding_is_a_third_exclusive_branch() {
+    fn native_agent_binding_is_an_exclusive_branch() {
         let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         let binding =
-            KeyPackageTrustBinding::from_parts(None, None, Some(event_id.to_owned()), "invalid")
-                .unwrap();
+            KeyPackageTrustBinding::from_parts(None, Some(event_id.to_owned()), "invalid").unwrap();
         assert_eq!(
             binding.agent_key_authorize_event_id.as_deref(),
             Some(event_id)
         );
-        assert!(
-            KeyPackageTrustBinding::from_parts(Some(1), None, Some(event_id.to_owned()), "invalid")
-                .is_err()
-        );
+        assert!(KeyPackageTrustBinding::from_parts(None, None, "invalid").is_err());
         assert!(
             KeyPackageTrustBinding::from_parts(
-                None,
                 Some(event_id.to_owned()),
                 Some(event_id.to_owned()),
                 "invalid"

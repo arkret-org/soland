@@ -29,9 +29,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use arkret_identifiers::{DeviceId, Did};
 use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
-use arkret_models_identity::session_credential::{
-    SessionGrantBootstrapBinding, SessionGrantCredentialClass, SessionGrantHolderBinding,
-};
+use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -545,7 +543,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
             grant_id: grant.id.clone(),
             issuer: grant.issuer.clone(),
             credential_class: grant.credential_class,
-            bootstrap_binding: grant.bootstrap_binding.clone(),
+            holder_binding: grant.holder_binding.clone(),
             cnf_jkt: grant.cnf_jkt.clone(),
         }),
         expires_at: grant.expires_at,
@@ -647,84 +645,13 @@ pub(crate) async fn grant_dpop_session(
     // 2. DPoP signature valid against the grant's cnf.jkt.
     verify_grant_dpop_request(state, req, grant_jwt, Some(&grant.cnf_jkt))?;
 
-    let session = session_from_verified_grant(state, grant_jwt, grant, device_id, agent_session);
-    validate_device_bootstrap_authorization(&session, req)?;
-    Ok(session)
-}
-
-const FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS: [&str; 4] = [
-    "ak.gate.account.command.enroll_device",
-    "ak.gate.account.command.cancel_device_bootstrap",
-    "ak.self.events.command.submit",
-    "ak.self.events.read.resolve",
-];
-
-fn founding_bootstrap_allowlist_is_exact(allowed_operation_ids: &[String]) -> bool {
-    let mut actual = allowed_operation_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let mut expected = FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS.to_vec();
-    actual.sort_unstable();
-    expected.sort_unstable();
-    actual == expected
-}
-
-fn validate_device_bootstrap_authorization(
-    session: &SessionRecord,
-    req: &Request,
-) -> Result<(), AuthError> {
-    let Some(context) = session.session_grant.as_ref() else {
-        return Ok(());
-    };
-    if context.credential_class != SessionGrantCredentialClass::DeviceBootstrap {
-        return Ok(());
-    }
-    let Some(SessionGrantBootstrapBinding::Founding {
-        principal_id,
+    Ok(session_from_verified_grant(
+        state,
+        grant_jwt,
+        grant,
         device_id,
-        holder_jkt,
-        allowed_operation_ids,
-        bootstrap_transaction_expires_at,
-        ..
-    }) = context.bootstrap_binding.as_ref()
-    else {
-        return Err(unauthenticated(
-            "principal service accepts only founding device-bootstrap grants",
-        ));
-    };
-    if !founding_bootstrap_allowlist_is_exact(allowed_operation_ids)
-        || principal_id.as_str() != session.actor
-        || device_id.as_str() != session.device_id
-        || holder_jkt != &context.cnf_jkt
-        || *bootstrap_transaction_expires_at <= crate::wire::now()
-    {
-        return Err(unauthenticated(
-            "device-bootstrap grant binding is invalid or expired",
-        ));
-    }
-    let current_operation = match (req.method().as_str(), req.uri().path()) {
-        ("POST", "/_arkret/self/events") => "ak.self.events.command.submit",
-        ("QUERY", "/_arkret/self/events/resolve") => "ak.self.events.read.resolve",
-        _ => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "device-bootstrap grant does not authorize this operation",
-            ));
-        }
-    };
-    if !allowed_operation_ids
-        .iter()
-        .any(|operation| operation == current_operation)
-    {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "device-bootstrap operation is absent from the grant allowlist",
-        ));
-    }
-    Ok(())
+        agent_session,
+    ))
 }
 
 /// Synthesize the request- or connection-scoped `SessionRecord` from an
@@ -744,7 +671,7 @@ pub(crate) fn session_from_verified_grant(
         grant_id: grant.id.clone(),
         issuer: grant.issuer.clone(),
         credential_class: grant.credential_class,
-        bootstrap_binding: grant.bootstrap_binding.clone(),
+        holder_binding: grant.holder_binding.clone(),
         cnf_jkt: grant.cnf_jkt.clone(),
     };
     SessionRecord {
@@ -823,27 +750,6 @@ mod tests {
         let a = introspection_cache_key("grant", "did:web:a");
         let b = introspection_cache_key("grant", "did:web:b");
         assert_ne!(a, b);
-    }
-
-    #[test]
-    fn founding_bootstrap_allowlist_rejects_missing_extra_and_duplicate_operations() {
-        let exact = FOUNDING_BOOTSTRAP_ALLOWED_OPERATIONS
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>();
-        assert!(founding_bootstrap_allowlist_is_exact(&exact));
-
-        let mut missing = exact.clone();
-        missing.pop();
-        assert!(!founding_bootstrap_allowlist_is_exact(&missing));
-
-        let mut extra = exact.clone();
-        extra.push("ak.self.events.read.scan".to_owned());
-        assert!(!founding_bootstrap_allowlist_is_exact(&extra));
-
-        let mut duplicate = exact.clone();
-        duplicate[3] = duplicate[2].clone();
-        assert!(!founding_bootstrap_allowlist_is_exact(&duplicate));
     }
 
     #[test]
@@ -930,7 +836,6 @@ mod tests {
             credential_class:
                 arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard,
             recovery_binding: None,
-            bootstrap_binding: None,
             holder_binding: Some(SessionGrantHolderBinding::HumanDevice {
                 device_binding: "accepted-device-binding".to_owned(),
             }),

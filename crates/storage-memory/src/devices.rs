@@ -3,8 +3,7 @@ use super::{
     DeviceMessageAckTokenRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     Mutex, OneTimeKeyStore, PersistenceResult, Utc, Value, VecDeque, async_trait,
-    cross_signing_reset_blocks_queued_message, device_message_expires_at, ensure_device_message_id,
-    fresh_device_message_ack_token,
+    device_message_expires_at, ensure_device_message_id, fresh_device_message_ack_token,
 };
 // In-memory device inventory store
 pub(crate) struct MemoryDeviceInventoryStore {
@@ -373,42 +372,6 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         self.ack_tokens
             .lock()
             .retain(|_, token| !(token.recipient == recipient && token.device_id == device_id));
-        Ok(before - queue.len())
-    }
-
-    async fn purge_cross_signing_reset_stale_messages(
-        &self,
-        recipient: &str,
-        new_generation: u64,
-    ) -> PersistenceResult<usize> {
-        let mut queue = self.queue.lock();
-        let before = queue.len();
-        let mut lost_by_device: BTreeMap<String, i64> = BTreeMap::new();
-        for message in queue.iter().filter(|message| {
-            message.recipient == recipient
-                && cross_signing_reset_blocks_queued_message(&message.content, new_generation)
-        }) {
-            let entry = lost_by_device.entry(message.device_id.clone()).or_default();
-            *entry = (*entry).max(message.position);
-        }
-        if lost_by_device.is_empty() {
-            return Ok(0);
-        }
-        {
-            let mut watermarks = self.lost_watermarks.lock();
-            for (device_id, lost_through) in &lost_by_device {
-                let key = (recipient.to_owned(), device_id.clone());
-                let entry = watermarks.entry(key).or_default();
-                *entry = (*entry).max(*lost_through);
-            }
-        }
-        queue.retain(|message| {
-            !(message.recipient == recipient
-                && cross_signing_reset_blocks_queued_message(&message.content, new_generation))
-        });
-        self.ack_tokens
-            .lock()
-            .retain(|_, token| token.recipient != recipient);
         Ok(before - queue.len())
     }
 }

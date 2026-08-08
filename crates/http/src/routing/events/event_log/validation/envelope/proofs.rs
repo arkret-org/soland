@@ -10,12 +10,14 @@ pub(crate) async fn validate_event_proofs(
     session: &SessionRecord,
     actor_id: &str,
     expected_payload_digest: &str,
+    digest_suite: arkret_canonical::DigestSuite,
     // The Event's canonical bytes with `proofs` / `unsigned` stripped — exactly
     // what `expected_payload_digest` was computed over. The SDK Event-proof
     // verifier re-derives `event_digest` from these and constant-time compares
     // it to `proof.event_digest`, so the transcript the signature covers is
     // never reconstructed by hand at this call site.
     envelope_bytes: &[u8],
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let proofs = object
@@ -47,6 +49,28 @@ pub(crate) async fn validate_event_proofs(
     // schema already requires `authorization_ref` whenever `executed_by` is
     // present, and the actor/executed_by DID validity + vm-DID==executed_by
     // checks ran earlier in this function.
+    let root_anchored_candidate_key = (object.get("kind").and_then(Value::as_str)
+        == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE)
+        && object
+            .get("payload")
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("authorization_binding_kind"))
+            .and_then(Value::as_str)
+            == Some("root_anchored"))
+    .then(|| {
+        realm_bootstrap_contexts.iter().find_map(|context| {
+            let candidate_key = context.identity_anchor_candidate_device_key.as_ref()?;
+            (context.actor_id == actor_id
+                && object
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .and_then(|payload| payload.get("device_public_key"))
+                    .and_then(Value::as_str)
+                    == Some(candidate_key.as_str()))
+            .then(|| candidate_key.clone())
+        })
+    })
+    .flatten();
     let ordinary_proof_root =
         event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
     let root_anchor_method = resolve_event_root_anchor_method(state, object, actor_id).await?;
@@ -130,6 +154,28 @@ pub(crate) async fn validate_event_proofs(
             .split_once('#')
             .map(|(did, _)| did)
             .expect("DidUrl always carries a fragment");
+        if root_anchored_candidate_key.is_some() {
+            let candidate_device_id = object
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("device_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "root-anchored device authorization requires device_id",
+                    )
+                })?;
+            let expected_method = format!("{actor_id}#{candidate_device_id}");
+            if verification_method_url.as_str() != expected_method {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "root-anchored candidate Event proof must use principal#device_id",
+                ));
+            }
+        }
         let signer_controller = if let Some(expected_root_method) = root_anchor_method.as_deref() {
             if verification_method_url != expected_root_method {
                 return Err(event_validation_error(
@@ -176,6 +222,39 @@ pub(crate) async fn validate_event_proofs(
                 &created_at,
                 proof_object,
             )?;
+            // Genesis and re-anchor authorize their candidate key in the same
+            // atomic unit in which it first signs. The durable device
+            // directory therefore cannot resolve it yet. Use a unit-local
+            // overlay only after the anchor/payload/possession precheck has
+            // succeeded; never reinterpret the did:key as the proof method.
+            if let Some(candidate_key) = root_anchored_candidate_key.as_deref() {
+                let multibase = candidate_key.strip_prefix("did:key:").ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "candidate device key must use did:key multibase encoding",
+                    )
+                })?;
+                let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+                    value: multibase.to_owned(),
+                };
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "candidate device Event proof verification failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "candidate device Event proof verification failed",
+                    )
+                })?;
+                continue;
+            }
             // §2.10.3 minimal-metadata branch: LeafNode trust anchor, pure
             // did:key fragment key material, zero DID-freshness / resolver /
             // principal-directory calls. Mutually exclusive with the
@@ -209,16 +288,6 @@ pub(crate) async fn validate_event_proofs(
                 internal_admission,
                 session,
                 object,
-                &verification_method,
-                &proof_binding_bytes,
-                &jws,
-            )? {
-                continue;
-            }
-            if verify_with_current_recovery_ssk(
-                state,
-                object,
-                actor_id,
                 &verification_method,
                 &proof_binding_bytes,
                 &jws,
@@ -288,85 +357,6 @@ pub(crate) async fn validate_event_proofs(
         }
     }
     Ok(())
-}
-
-fn verify_with_current_recovery_ssk(
-    state: &AppState,
-    object: &serde_json::Map<String, Value>,
-    actor_id: &str,
-    verification_method: &str,
-    canonical_bytes: &[u8],
-    jws: &str,
-) -> Result<bool, EventValidationError> {
-    let kind = object.get("kind").and_then(Value::as_str);
-    let is_recovery_authorize = kind == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE)
-        && object.get("payload").is_some_and(|payload| {
-            payload
-                .get("recovery_session_id")
-                .and_then(Value::as_str)
-                .is_some()
-                && payload.get("cross_signing_binding").is_some()
-                && payload.get("enrollment_authority_binding").is_none()
-        });
-    if !is_recovery_authorize && kind != Some(arkret_wire::EventKind::DEVICE_LIST_UPDATE) {
-        return Ok(false);
-    }
-    let principal = arkret_identifiers::Did::new(actor_id.to_owned()).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "recovery Event actor_id is not a valid DID",
-        )
-    })?;
-    let Some(publish) = state.identities().current_cross_signing(&principal) else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "recovery Event has no accepted cross-signing authority",
-        ));
-    };
-    if publish.self_signing_key.kid.as_str() != verification_method {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "recovery Event proof does not use the accepted self-signing key",
-        ));
-    }
-    let key = crate::routing::identity::cross_signing::decode_ed25519_key(
-        publish.self_signing_key.public_key.as_str(),
-        publish.self_signing_key.key_format.as_str(),
-    )
-    .map_err(|reason| {
-        tracing::debug!(%reason, "recovery SSK key decode failed");
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "recovery Event SSK is unavailable for verification",
-        )
-    })?;
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-        bytes: key.to_bytes().to_vec(),
-    };
-    // §3 — the key comes from the already-accepted cross-signing publish;
-    // zero resolver calls.
-    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
-        jws,
-        canonical_bytes,
-        &material,
-    );
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_RECOVERY_SSK,
-        outcome.is_ok(),
-    );
-    outcome.map_err(|error| {
-        tracing::debug!(%error, "recovery Event SSK proof verification failed");
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "recovery Event SSK proof verification failed",
-        )
-    })?;
-    Ok(true)
 }
 
 fn verify_with_federated_agent_signer_evidence(
@@ -737,7 +727,9 @@ mod tests {
                 &session,
                 actor,
                 &digest,
+                arkret_canonical::DigestSuite::Sha256,
                 ENVELOPE_BYTES,
+                &[],
                 None,
             )
             .await
@@ -768,7 +760,9 @@ mod tests {
             &session,
             actor,
             &digest,
+            arkret_canonical::DigestSuite::Sha256,
             ENVELOPE_BYTES,
+            &[],
             None,
         )
         .await

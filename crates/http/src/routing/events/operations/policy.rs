@@ -72,8 +72,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("message_redact_window")
         || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
-        || message.starts_with("cross_signing_reset_")
-        || message == "cross_signing_model_mismatch"
         || message == arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH
         || message == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
     {
@@ -213,27 +211,14 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_principal_control_realm_binding(operation)?;
         message_rules::validate_managed_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;
-        if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
-            crate::routing::identity::cross_signing::validate_cross_signing_publish(
-                state,
-                &operation.payload,
-            )
-            .await?;
-        }
-        if kinds::canonical_kind_string(operation) == "ak.cross_signing.reset" {
-            crate::routing::identity::cross_signing::validate_cross_signing_reset(
-                state,
-                &operation.payload,
-            )
-            .await?;
-        }
         crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
             state, operation,
         )
         .await?;
-        // Verify the cross_signing_binding on every ak.device.authorize at ingest.
+        // Verify the canonical device possession proof on every
+        // ak.device.authorize at ingest.
         if kinds::canonical_kind_string(operation) == "ak.device.authorize" {
-            crate::routing::identity::cross_signing::validate_device_authorize_binding(
+            crate::routing::identity::device_signing::validate_device_authorize_binding(
                 state,
                 &operation.payload,
             )?;

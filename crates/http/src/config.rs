@@ -228,9 +228,8 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
-    /// B-model enrollment authority DID pinned by this Principal Server's
-    /// deployment configuration and advertised to account-first clients.
-    pub account_authority_enrollment_did: Option<String>,
+    /// Account Authority service DID trusted for S2S account-status evidence.
+    pub account_authority_service_id: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -423,9 +422,9 @@ pub struct AppConfig {
     /// DAGs; further candidates are picked up on subsequent ticks.
     /// Env: `SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT` (default 50).
     pub compaction_prune_walk_per_realm_limit: usize,
-    /// Round R2/R3 (T08) — deployment trust domain id, used to bind
-    /// `ak.cross_signing.reset` events to this Principal Server so the
-    /// same proof bytes cannot be replayed cross-domain. Loaded from
+    /// Deployment trust domain id, used to bind peer authorization and
+    /// recovery transcripts to this Principal Server so the same proof bytes
+    /// cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
     /// Defaults to `ak:trust_domain:<host_of_service_id>`.
@@ -725,7 +724,7 @@ impl AppConfig {
             livekit: LiveKitConfig::default(),
             cors_allow_origin: None,
             account_authority_url: None,
-            account_authority_enrollment_did: None,
+            account_authority_service_id: None,
             oidc_client_id: None,
             development_mode: false,
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
@@ -800,16 +799,15 @@ impl AppConfig {
         let ice = load_ice_servers_config()?;
         let livekit = load_livekit_config()?;
         let account_authority_url = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_URL");
-        let account_authority_enrollment_did =
-            env_non_empty("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID");
-        if account_authority_url.is_none() && account_authority_enrollment_did.is_some() {
+        let account_authority_service_id = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
+        if account_authority_url.is_none() && account_authority_service_id.is_some() {
             anyhow::bail!(
-                "SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID requires SOLAND_ACCOUNT_AUTHORITY_URL"
+                "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
             );
         }
-        if let Some(value) = account_authority_enrollment_did.as_deref() {
+        if let Some(value) = account_authority_service_id.as_deref() {
             arkret_identifiers::Did::new(value.to_owned()).map_err(|error| {
-                anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID is invalid: {error}")
+                anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
         }
         let oidc_client_id = env_non_empty("SOLAND_OAUTH_CLIENT_ID");
@@ -1009,7 +1007,7 @@ impl AppConfig {
             livekit,
             cors_allow_origin,
             account_authority_url,
-            account_authority_enrollment_did,
+            account_authority_service_id,
             oidc_client_id,
             development_mode,
             failpoints,

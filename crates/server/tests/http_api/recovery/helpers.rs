@@ -127,47 +127,6 @@ async fn seed_realm_create_proposal_policy(
     event_id
 }
 
-/// Helper: seed an accepted v1 policy for `principal_id` and open a recovery
-/// session against it. Returns the session JSON body.
-pub(crate) async fn open_recovery_session(
-    state: AppState,
-    token: &str,
-    signing: &SigningKey,
-    principal_id: &str,
-    vm: &str,
-) -> Value {
-    ingest_pinned_recovery_did_document(&state, principal_id, vm, signing).await;
-    seed_recovery_policy(&state, principal_id, vm, 1, None).await;
-    ensure_cross_signing(state.clone(), principal_id, vm, signing).await;
-    let create_body = serde_json::json!({
-        "principal_id": principal_id,
-        "trust_domain": "ak:trust_domain:soland.local",
-        "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000099",
-    });
-    post_recovery(
-        state,
-        token,
-        "/_arkret/root/identity/recovery-sessions",
-        &create_body,
-        StatusCode::CREATED,
-    )
-    .await
-}
-
-pub(crate) async fn ensure_cross_signing(
-    state: AppState,
-    principal_id: &str,
-    vm: &str,
-    signing: &SigningKey,
-) {
-    let principal = Did::new(principal_id.to_owned()).unwrap();
-    if !state.test_has_current_cross_signing(&principal) {
-        let ssk = SigningKey::from_bytes(&[231u8; 32]);
-        let usk = SigningKey::from_bytes(&[232u8; 32]);
-        let _ = seed_cross_signing(&state, principal_id, vm, signing, &ssk, &usk).await;
-    }
-}
-
 /// Build the canonical recovery-proof transcript the server reconstructs, and
 /// return a base64url Ed25519 signature over it by `signing`.
 pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
@@ -283,96 +242,9 @@ pub(crate) fn recovery_unlock_proof(
 
 fn recovery_model_generation_ref(session: &Value) -> Value {
     match session["identity_model"].as_str() {
-        Some("cross_signing") => session["ssk_generation"].clone(),
-        Some("enrollment_authority") => session["current_device_generation_ref"].clone(),
+        Some("root_anchored") => session["current_device_generation_ref"].clone(),
         other => panic!("unexpected recovery identity model in fixture: {other:?}"),
     }
-}
-
-pub(crate) async fn seed_cross_signing(
-    state: &AppState,
-    principal_id: &str,
-    vm: &str,
-    psk: &SigningKey,
-    ssk: &SigningKey,
-    usk: &SigningKey,
-) -> String {
-    let publish = serde_json::json!({
-        "principal_id": principal_id,
-        "trust_domain": "ak:trust_domain:soland.local",
-        "principal_signing_key": {
-            "kid": vm, "algorithm": "Ed25519",
-            "public_key": test_ed25519_multibase_public(psk), "key_format": "multibase",
-        },
-        "self_signing_key": {
-            "kid": format!("{principal_id}#CK_self_signing_v1"), "algorithm": "Ed25519",
-            "public_key": test_ed25519_multibase_public(ssk), "key_format": "multibase",
-            "binding": { "verification_method": vm, "signature_algorithm": "Ed25519", "signature": "cGxhY2Vob2xkZXItc2ln" },
-        },
-        "user_signing_key": {
-            "kid": format!("{principal_id}#CK_user_signing_v1"), "algorithm": "Ed25519",
-            "public_key": test_ed25519_multibase_public(usk), "key_format": "multibase",
-            "binding": { "verification_method": vm, "signature_algorithm": "Ed25519", "signature": "cGxhY2Vob2xkZXItc2ln" },
-        },
-        "expected_previous_generation": 0,
-        "generation": 1,
-        "issued_at": "2026-05-30T00:00:00.000Z",
-    });
-    let content: arkret_models_identity::CrossSigningPublish =
-        serde_json::from_value(publish.clone()).expect("cross-signing publish content");
-    state
-        .test_record_cross_signing_publish(content)
-        .expect("seed cross-signing publish");
-
-    let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
-    let realm = RealmId::new(realm_id.clone()).unwrap();
-    let create_event_id = seed_realm_create_proposal_policy(state, &realm, principal_id).await;
-    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
-    let envelope = serde_json::json!({
-        "event_id": event_id,
-        "actor_id": principal_id,
-        "actor_seq": 1,
-        "realm_id": realm_id,
-        "kind": "ak.cross_signing.publish",
-        "prev_refs": [create_event_id],
-        "payload": publish,
-    });
-    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
-    let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
-    state
-        .test_persistence()
-        .events()
-        .put(CanonicalEventRecord {
-            event_id: event_id.clone(),
-            actor_id: principal_id.to_owned(),
-            actor_seq: 1,
-            realm_id: Some(realm_id.clone()),
-            kind: "ak.cross_signing.publish".to_owned(),
-            schema_id: "ak.schema.cross_signing_publish.v1".to_owned(),
-            canonical_digest: canonical_digest.clone(),
-            canonical_bytes,
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
-    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        [0x61; 32],
-        Did::new(principal_id.to_owned()).unwrap(),
-        arkret_wire::DidUrl::new(format!("{principal_id}#fixture-notary")).unwrap(),
-    );
-    let seal = arkret_wire::Seal::sign_single(
-        realm,
-        Vec::new(),
-        vec![Hash::new(canonical_digest).unwrap()],
-        Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned()).unwrap(),
-        arkret_identifiers::Hlc::new("019f00000000-0000-a11ce101").unwrap(),
-        &signer,
-    )
-    .unwrap();
-    state.test_put_seal(&seal).unwrap();
-    seed_local_notary_authority(state, &seal.realm_id, &seal);
-    event_id
 }
 
 pub(crate) fn fixture_recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
@@ -381,64 +253,7 @@ pub(crate) fn fixture_recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
     )
 }
 
-pub(crate) fn fixture_recovery_publication_authority_context(
-    principal_id: &str,
-) -> (
-    arkret_models_crypto::RecoveryPublicationAuthorityContext,
-    Hash,
-) {
-    let realm_id = RealmId::new(soland_test_support::principal_control_realm_for_did(
-        principal_id,
-    ))
-    .unwrap();
-    let scope_ref = arkret_wire::ScopeRef::Realm { realm_id };
-    let authority_set_policy = arkret_wire::AuthoritySetPolicy {
-        schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-        authority_set_id: arkret_wire::RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
-        policy_kind: arkret_wire::AuthoritySetPolicyKind::PrincipalControl,
-        scope_ref: scope_ref.clone(),
-        source: arkret_wire::AuthoritySetPolicySource {
-            source_kind: arkret_wire::AuthoritySetSourceKind::CrossSigningPublish,
-            source_ref: soland_test_support::fixture_content_bound_id("ak:event:"),
-            source_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
-            generation_ref: "1".to_owned(),
-        },
-        authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
-            rule_id: "cross_signing".to_owned(),
-            issuer_role: arkret_wire::AuthoritySetIssuerRole::CrossSigningSelfSigning,
-            allowed_actions: vec![
-                "ak.device.authorize".to_owned(),
-                "ak.device.list_update".to_owned(),
-            ],
-            issuers: vec![arkret_wire::AuthoritySetIssuer {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal_id}#CK_self_signing_v1"
-                ))
-                .unwrap(),
-            }],
-            threshold: 1,
-        }],
-    };
-    let authority_set_ref = arkret_wire::AuthoritySetRef {
-        authority_set_id: authority_set_policy.authority_set_id.clone(),
-        authority_set_digest: authority_set_policy.digest().unwrap(),
-    };
-    let context = arkret_models_crypto::RecoveryPublicationAuthorityContext {
-        identity_model: arkret_models_crypto::RecoveryIdentityModel::CrossSigning,
-        basis_ref: fixture_recovery_policy_basis(),
-        scope_ref,
-        authority_set_ref,
-        authority_set_policy,
-        allowed_actions: vec![
-            arkret_models_crypto::RecoveryPublicationAction::DeviceAuthorize,
-            arkret_models_crypto::RecoveryPublicationAction::DeviceListUpdate,
-        ],
-    };
-    let digest = context.digest().unwrap();
-    (context, digest)
-}
-
-/// Build a schema-conforming DID recovery backup fixture.
+/// Build a schema-conforming root-anchored DID recovery backup fixture.
 pub(crate) fn did_recovery_backup_body(
     principal_id: &str,
     backup_id: &str,
@@ -447,16 +262,17 @@ pub(crate) fn did_recovery_backup_body(
     serde_json::json!({
         "backup_id": backup_id,
         "actor_id": principal_id,
+        "device_id": RECOVERY_TEST_DEVICE,
         "backup_kind": "did_recovery",
+        "mixed_secret_storage": false,
         "backup_version": "kb_1",
         "created_at": "2026-05-30T00:00:00.000Z",
         "series_id": "ak:backup_series:01964137-0000-7000-8000-0000000000c5",
         "series_seq": 0,
         "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
         "encryption": {
-
             "recipient_method": "recovery_public_key",
-            "recipient_key_ref": "did:web:alice.example#recovery",
+            "recipient_key_ref": "did:key:z6MkrecoveryKey#z6MkrecoveryKey",
             "aead": {
                 "name": "chacha20_poly1305",
                 "aead_profile": "ak.aead.chacha20_poly1305.v1",
@@ -469,14 +285,14 @@ pub(crate) fn did_recovery_backup_body(
             "aead_aad": {
                 "schema": "ak.schema.key_backup.v1",
                 "actor_id": principal_id,
-                "device_id": "did:web:alice.example#recovery",
+                "device_id": RECOVERY_TEST_DEVICE,
                 "backup_kind": "did_recovery",
                 "backup_version": "kb_1",
                 "created_at": "2026-05-30T00:00:00.000Z",
-                "item_kinds": ["recovery_key_share"]
+                "item_kinds": ["recovery_secret"]
             }
         },
-        "contents": [{ "item_kind": "recovery_key_share", "secret_id": "test-secret" }],
+        "contents": [{ "item_kind": "recovery_secret" }],
         "ciphertext": "AAAA",
         "ciphertext_digest":
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -485,7 +301,8 @@ pub(crate) fn did_recovery_backup_body(
             "verification_method": format!("{principal_id}#device"),
             "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
-            "ssk_generation": 1,
+            "device_authorize_event_id":
+                "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
             "signed_fields": [
                 "backup_id",
                 "actor_id",
@@ -493,7 +310,6 @@ pub(crate) fn did_recovery_backup_body(
                 "backup_version",
                 "series_id",
                 "series_seq",
-                "supersedes",
                 "encryption",
                 "domain_separation",
                 "contents",
@@ -533,8 +349,8 @@ pub(crate) async fn put_key_backup(
 /// canonical delete-intent transcript with the principal's control key, then
 /// DELETE.
 ///
-/// It has to be the whole protocol. The previous helper posted a
-/// `dev-ssk-delete:v1:{actor}:{backup}` string, which `key-management.md` §7.8
+/// It has to be the whole protocol. The previous helper posted an
+/// unauthenticated actor/backup string, which `key-management.md` §7.8
 /// judged dead precisely because it carried no server-issued freshness — a
 /// helper that skipped the challenge would be testing a path the server no
 /// longer has.

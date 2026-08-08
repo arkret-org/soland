@@ -346,7 +346,7 @@ async fn verify_signal_device_proof(
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     let facet =
-        crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+        crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
             envelope.sender_actor_id.as_str(),
             envelope.sender_device_id.as_str(),

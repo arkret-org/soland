@@ -1106,6 +1106,8 @@ async fn gate_account_register(
             profile: None,
             registration_audit: Some(registration_audit),
             binding_receipt: None,
+            pcr_genesis_receipt: None,
+            session_grant_outcome: None,
         });
     }
     let account = AccountRecord {
@@ -1131,14 +1133,9 @@ async fn gate_account_register(
     }
     if let Some(device_id) = body.device_id.as_ref() {
         let registered_at = now();
-        // Device-identity B-model (decision 0002 / device-lifecycle.md §5.4): a
-        // device becomes `verified` ONLY through a projected `ak.device.authorize`
-        // (`project_device_authorize` writes `device_public_key` +
-        // `verification_state="verified"`). The founding device is NOT
-        // self-authorized: under the delegated account-authority model it is
-        // enrolled by the principal's designated enrollment authority (coauth),
-        // which mints a `service_attested` `ak.device.authorize` the client then
-        // submits. Minting a `verified`-without-key row here would carry no
+        // A device becomes `verified` only through an accepted and projected
+        // `ak.device.authorize` carrying its possession proof. Minting a
+        // `verified`-without-key row here would carry no
         // `device_public_key`, so recovery genesis
         // (`resolve_session_device_key_for_genesis_policy`) and every
         // projected-device-set verifier could not resolve a signing key for it.
@@ -1188,6 +1185,8 @@ async fn gate_account_register(
         profile: None,
         registration_audit: Some(registration_audit),
         binding_receipt: None,
+        pcr_genesis_receipt: None,
+        session_grant_outcome: None,
     })
 }
 

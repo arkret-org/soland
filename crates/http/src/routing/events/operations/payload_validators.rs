@@ -854,63 +854,15 @@ fn collect_nonempty_unique_string_array(
     Ok(values)
 }
 
-pub(crate) fn validate_cross_signing_reset_payload(
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    let reset: arkret_models_identity::CrossSigningResetPayload =
-        serde_json::from_value(projection_context_stripped_payload(&operation.payload))
-            .map_err(|_| "cross_signing reset payload violates reset profile")?;
-    reset
-        .validate_structure()
-        .map_err(|_| "cross_signing reset payload violates reset profile")?;
-    let now = chrono::Utc::now();
-    let skew = (now - *reset.issued_at()).num_seconds().abs();
-    if skew > CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS {
-        return Err("cross_signing_reset_clock_skew_exceeded");
-    }
-    Ok(())
-}
-
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
     let payload: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(&operation.payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
-    payload.validate_authorization_binding_one_of()
+    payload.validate_wire_constraints()
 }
 
 fn device_authorize_wire_payload(payload: &Value) -> Value {
     projection_context_stripped_payload(payload)
-}
-
-pub(crate) fn validate_cross_signing_reset_replay_batch(
-    operations: &[Operation],
-) -> Result<(), &'static str> {
-    let mut seen = std::collections::BTreeSet::new();
-    for operation in operations {
-        if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::CROSS_SIGNING_RESET)
-        {
-            continue;
-        }
-        let Some(principal_id) = operation
-            .payload
-            .get("principal_id")
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let Some(previous_generation) = operation
-            .payload
-            .get("previous_generation")
-            .and_then(serde_json::Value::as_u64)
-        else {
-            continue;
-        };
-        if !seen.insert((principal_id, previous_generation)) {
-            return Err("cross_signing_reset_replay");
-        }
-    }
-    Ok(())
 }
 
 pub fn validate_encrypted_payload_envelope(

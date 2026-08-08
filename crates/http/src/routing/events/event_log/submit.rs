@@ -29,10 +29,7 @@ static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = Once
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
-use identity_anchor::{
-    batch_contains_identity_anchor, submit_cross_signing_recovery_batch,
-    submit_identity_anchor_batch,
-};
+use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
 mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod sidecar_ensure;
@@ -276,6 +273,11 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) digest_algorithm: Option<String>,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
+    /// The candidate device public key used to verify the second slot of a
+    /// root-anchored genesis or re-anchor unit. The surrounding root-signed
+    /// anchor commits to this payload; the value is staged only for proof
+    /// verification before the atomic relationship check completes.
+    pub(in crate::routing) identity_anchor_candidate_device_key: Option<String>,
     /// The genesis authority-root value this unit's `ak.realm.create` derives.
     ///
     /// Present only for an ordinary Realm genesis unit: it is the staged root
@@ -1359,6 +1361,7 @@ async fn submit_event_batch_outcome_with_leases(
             envelopes,
             authorization_leases,
             control_proposal_acks,
+            None,
         )
         .await;
     }
@@ -1399,6 +1402,7 @@ async fn submit_event_batch_outcome_with_leases(
             digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
             identity_anchor_event_id: None,
             self_principal_pcr_bootstrap: false,
+            identity_anchor_candidate_device_key: None,
             authority_root: None,
         });
     }
@@ -1453,6 +1457,7 @@ async fn submit_event_batch_outcome_with_leases(
                         digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
+                        identity_anchor_candidate_device_key: None,
                         authority_root: None,
                     });
                 }
@@ -1509,12 +1514,6 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     for submission in &submissions {
         validate_initial_submission_in_context(submission, submit_context)?;
     }
-    if submissions.len() == 2
-        && submissions[0].event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
-        && submissions[1].event.kind == arkret_wire::EventKind::DEVICE_LIST_UPDATE
-    {
-        return submit_cross_signing_recovery_batch(state, session, submissions).await;
-    }
     let envelopes = submissions
         .iter()
         .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
@@ -1534,8 +1533,237 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         envelopes,
         Some(&leases),
         Some(&control_proposal_acks),
+        None,
     )
     .await
+}
+
+/// Accept the one registered pre-grant PCR genesis carrier after the peer
+/// transport has authenticated the Account Authority service.
+pub(in crate::routing) async fn submit_peer_pcr_genesis(
+    state: &AppState,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+) -> Result<
+    arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome,
+    SubmitOneError,
+> {
+    request.validate().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("invalid PCR genesis relay: {error}"),
+        )
+    })?;
+    let create_payload: arkret_models_collaboration::events_payloads::RealmCreatePayload = request
+        .genesis_unit
+        .create()
+        .payload_as()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("invalid PCR genesis create payload: {error}"),
+            )
+        })?;
+    let descriptor = create_payload
+        .object
+        .founding_device_descriptor
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "PCR genesis omits its founding device descriptor",
+            )
+        })?;
+    let accepted_device_id = descriptor.device_id.clone();
+    if let Some(outcome) =
+        existing_pcr_genesis_outcome(state, request, accepted_device_id.clone()).await?
+    {
+        return Ok(outcome);
+    }
+    // Only a new admission needs a currently valid creation proof. An exact
+    // replay of a durably accepted unit above remains replayable after the
+    // short-lived proof expires and returns the original signed receipt.
+    validate_identity_creation_control_proof(state, request).await?;
+    let now = Utc::now();
+    let session = SessionRecord {
+        token_hash: format!("principal-genesis:{}", request.idempotency_key),
+        actor: request.principal_id.to_string(),
+        device_id: accepted_device_id.to_string(),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: now + Duration::minutes(5),
+        created_at: now,
+        revoked_at: None,
+    };
+    let envelopes = request
+        .genesis_unit
+        .events
+        .iter()
+        .cloned()
+        .map(typed_event_to_canonical_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    submit_identity_anchor_batch(
+        state,
+        &session,
+        envelopes,
+        None,
+        None,
+        Some(&request.account_authority_id),
+    )
+    .await?;
+    existing_pcr_genesis_outcome(state, request, accepted_device_id)
+        .await?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "accepted PCR genesis receipt is unavailable",
+            )
+        })
+}
+
+async fn existing_pcr_genesis_outcome(
+    state: &AppState,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+    accepted_device_id: arkret_wire::DeviceId,
+) -> Result<
+    Option<arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome>,
+    SubmitOneError,
+> {
+    let authorize_event_id = request.genesis_unit.founding_authorize().event_id.as_str();
+    let receipt = state
+        .event_queries()
+        .canonical_batch_receipts_for_event(authorize_event_id)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("PCR genesis receipt lookup failed: {error}"),
+            )
+        })?
+        .into_iter()
+        .find(|receipt| {
+            receipt.issuer.as_str() == state.service_id()
+                && receipt.pcr_genesis_scope().is_ok_and(|scope| {
+                    scope.principal_id == request.principal_id
+                        && scope.realm_id == request.pcr_realm_id
+                        && scope.audience == request.account_authority_id
+                })
+        });
+    let Some(receipt) = receipt else {
+        return Ok(None);
+    };
+    let outcome = arkret_models_collaboration::principal_operations::PcrGenesisSubmitOutcome {
+        principal_id: request.principal_id.clone(),
+        pcr_realm_id: request.pcr_realm_id.clone(),
+        accepted_device_id,
+        receipt,
+    };
+    outcome.validate_against(request).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("accepted PCR genesis outcome is invalid: {error}"),
+        )
+    })?;
+    Ok(Some(outcome))
+}
+
+async fn validate_identity_creation_control_proof(
+    state: &AppState,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+) -> Result<(), SubmitOneError> {
+    let proof = &request.identity_creation_control_proof;
+    let now = Utc::now();
+    if proof.issued_at > now
+        || proof.expires_at <= now
+        || proof.expires_at - proof.issued_at > Duration::minutes(5)
+        || proof.audience != request.account_authority_id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation control proof is expired or has the wrong audience",
+        ));
+    }
+    let mut history = state
+        .dids()
+        .log_events(request.principal_id.as_str())
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stale_did_document",
+                format!("PCR genesis DID history is unavailable: {error}"),
+            )
+        })?;
+    history.sort_by_key(|entry| entry.seq);
+    let inception = history.first().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "PCR genesis requires the accepted DID inception entry",
+        )
+    })?;
+    if inception.seq != 0 {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "PCR genesis DID history does not begin at entry zero",
+        ));
+    }
+    let root_key = inception
+        .operation
+        .pointer("/parameters/updateKeys/0")
+        .or_else(|| inception.operation.pointer("/parameters/update_keys/0"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "DID inception does not expose one identity root",
+            )
+        })?;
+    if inception.event_digest != proof.operation_digest.as_str()
+        || root_key != proof.verification_key_multibase
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation control proof does not match the accepted DID inception",
+        ));
+    }
+    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            format!("identity creation proof transcript is invalid: {error}"),
+        )
+    })?;
+    let key = crate::routing::identity::device_signing::decode_ed25519_key(root_key, "multibase")
+        .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("identity root key is invalid: {error}"),
+        )
+    })?;
+    if !crate::routing::identity::device_signing::ed25519_verify(
+        &key,
+        &signing_bytes,
+        &proof.signature,
+    ) {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation control signature is invalid",
+        ));
+    }
+    Ok(())
 }
 
 async fn direct_bootstrap_source_is_contact_authority(
@@ -3129,6 +3357,7 @@ mod managed_agent_pcr_batch_tests {
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::principal_control(
+                None,
                 arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:managed-agent-pcr".to_owned(),
                 )

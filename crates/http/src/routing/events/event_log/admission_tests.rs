@@ -63,32 +63,6 @@ fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
 }
 
 #[test]
-fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
-    let payload = json!({
-        "trust_domain": "ak:trust_domain:other.example",
-    });
-    let err =
-        cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap_err();
-    assert_eq!(err.0, ErrorCode::Unauthenticated);
-}
-
-#[test]
-fn cross_signing_reset_replay_rejects_missing_trust_domain() {
-    let payload = json!({});
-    let err =
-        cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap_err();
-    assert_eq!(err.0, ErrorCode::SchemaViolation);
-}
-
-#[test]
-fn cross_signing_reset_replay_passes_when_matched() {
-    let payload = json!({
-        "trust_domain": "ak:trust_domain:soland.local",
-    });
-    cross_signing_reset_replay_check(&payload, "ak:trust_domain:soland.local").unwrap();
-}
-
-#[test]
 fn realm_policy_bundle_relaxed_window_ceiling() {
     let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
     let err = realm_policy_bundle_check(&payload, &[], false).unwrap_err();

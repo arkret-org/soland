@@ -596,58 +596,6 @@ pub(crate) const AGENT_ACTION_REJECT_REQUIREMENTS: &[PayloadRequirement] =
         "ak.agent.action_reject requires request_id or draft_id",
     )];
 
-pub(crate) const CROSS_SIGNING_RESET_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("principal_id", "cross_signing reset requires principal_id"),
-    PayloadRequirement::Required(
-        "previous_generation",
-        "cross_signing reset requires previous_generation",
-    ),
-    PayloadRequirement::Required(
-        "new_generation",
-        "cross_signing reset requires new_generation",
-    ),
-    PayloadRequirement::Required(
-        "reset_reason_code",
-        "cross_signing reset requires reset_reason_code",
-    ),
-    PayloadRequirement::Required("proof", "cross_signing reset requires proof"),
-    PayloadRequirement::Required("issued_at", "cross_signing reset requires issued_at"),
-    // Round R2/R3 (T08) — wire-breaking required fields.
-    PayloadRequirement::Required(
-        "trust_domain",
-        "cross_signing reset requires trust_domain (Round R2/R3 wire-break)",
-    ),
-];
-
-pub(crate) const CROSS_SIGNING_PUBLISH_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "principal_id",
-        "cross_signing publish requires principal_id",
-    ),
-    PayloadRequirement::Required(
-        "trust_domain",
-        "cross_signing publish requires trust_domain",
-    ),
-    PayloadRequirement::Required(
-        "principal_signing_key",
-        "cross_signing publish requires principal_signing_key",
-    ),
-    PayloadRequirement::Required(
-        "self_signing_key",
-        "cross_signing publish requires self_signing_key",
-    ),
-    PayloadRequirement::Required(
-        "user_signing_key",
-        "cross_signing publish requires user_signing_key",
-    ),
-    PayloadRequirement::Required("generation", "cross_signing publish requires generation"),
-    PayloadRequirement::Required(
-        "expected_previous_generation",
-        "cross_signing publish requires expected_previous_generation",
-    ),
-    PayloadRequirement::Required("issued_at", "cross_signing publish requires issued_at"),
-];
-
 pub(crate) const DEVICE_AUTHORIZE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("principal_id", "ak.device.authorize requires principal_id"),
     PayloadRequirement::Required("device_id", "ak.device.authorize requires device_id"),

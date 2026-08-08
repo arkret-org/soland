@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, DeviceId, Did, EventId, Hash};
-use arkret_identity::IdentityError;
+use arkret_identifiers::{BlobRef, Did, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_crypto::{
@@ -11,7 +10,6 @@ use arkret_models_crypto::{
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
-use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
 use arkret_wire::{
     DeviceReanchorPreFenceBasis, DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId,
 };
@@ -920,96 +918,10 @@ pub struct IdentityService {
     devices: Arc<dyn DeviceDirectoryPort>,
     agents: Arc<dyn AgentDirectoryPort>,
     account_registration_attempts: AccountRegistrationAttempts,
-    cross_signing_reset_replays: CrossSigningResetReplays,
-    cross_signing: Arc<Mutex<CrossSigningRegistry>>,
     account_lifecycles: Arc<Mutex<BTreeMap<String, AccountLifecycleState>>>,
 }
 
 type AccountRegistrationAttempts = Arc<Mutex<BTreeMap<String, (DateTime<Utc>, u32)>>>;
-type CrossSigningResetReplays = Arc<Mutex<BTreeMap<(String, u64), DateTime<Utc>>>>;
-
-#[derive(Clone, Debug, Default)]
-pub struct CrossSigningRegistry {
-    publishes: BTreeMap<Did, CrossSigningPublish>,
-    generation_high_water: BTreeMap<Did, u64>,
-    revoked_devices: BTreeMap<Did, BTreeMap<DeviceId, DateTime<Utc>>>,
-}
-
-impl CrossSigningRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn current_cross_signing(&self, principal: &Did) -> Option<&CrossSigningPublish> {
-        self.publishes.get(principal)
-    }
-
-    pub fn record_cross_signing_publish(
-        &mut self,
-        publish: CrossSigningPublish,
-    ) -> arkret_identity::Result<()> {
-        publish.validate_structure()?;
-        let principal = publish.principal_id.clone();
-        let current_generation = self
-            .generation_high_water
-            .get(&principal)
-            .copied()
-            .unwrap_or(0);
-        if publish.expected_previous_generation != current_generation {
-            return Err(IdentityError::Protocol(format!(
-                "cross-signing publish expected_previous_generation {} does not match accepted {} (cas_conflict)",
-                publish.expected_previous_generation, current_generation
-            )));
-        }
-        if publish.generation.get() != current_generation + 1 {
-            return Err(IdentityError::Protocol(format!(
-                "cross-signing publish generation {} must equal current {} + 1 (cas_conflict)",
-                publish.generation, current_generation
-            )));
-        }
-        self.generation_high_water
-            .insert(principal.clone(), publish.generation.get());
-        self.publishes.insert(principal, publish);
-        Ok(())
-    }
-
-    pub fn record_cross_signing_reset(
-        &mut self,
-        reset: &CrossSigningResetPayload,
-    ) -> arkret_identity::Result<()> {
-        reset.validate_structure()?;
-        let principal = reset.principal_id();
-        let current = self.publishes.get(principal).ok_or_else(|| {
-            IdentityError::Protocol(
-                "cannot reset cross-signing: no current publish accepted for principal".to_owned(),
-            )
-        })?;
-        if reset.previous_generation() != current.generation.get() {
-            return Err(IdentityError::Protocol(format!(
-                "cross-signing reset previous_generation {} does not match accepted {}",
-                reset.previous_generation(),
-                current.generation
-            )));
-        }
-        self.publishes.remove(principal);
-        self.generation_high_water
-            .insert(principal.clone(), reset.new_generation());
-        if let Some(device_ids) = reset.revoked_device_ids() {
-            let revoked = self.revoked_devices.entry(principal.clone()).or_default();
-            let now = Utc::now();
-            for device_id in device_ids {
-                revoked.insert(device_id.clone(), now);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn is_device_revoked(&self, principal: &Did, device_id: &DeviceId) -> bool {
-        self.revoked_devices
-            .get(principal)
-            .is_some_and(|devices| devices.contains_key(device_id))
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ActivateAgentRuntimeCommand {
@@ -1599,7 +1511,6 @@ pub struct RecoverySessionState {
     pub policy_id: String,
     pub policy_version: u32,
     pub identity_model: RecoveryIdentityModel,
-    pub ssk_generation: Option<u64>,
     pub current_device_generation_ref: Option<NonEmptyString>,
     pub device_generation_status: Option<DeviceGenerationStatus>,
     pub registry_head: Option<Hash>,
@@ -1898,8 +1809,8 @@ pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
     pub issuer: String,
     pub credential_class: arkret_models_identity::session_credential::SessionGrantCredentialClass,
-    pub bootstrap_binding:
-        Option<arkret_models_identity::session_credential::SessionGrantBootstrapBinding>,
+    pub holder_binding:
+        Option<arkret_models_identity::session_credential::SessionGrantHolderBinding>,
     pub cnf_jkt: String,
 }
 
@@ -2177,43 +2088,8 @@ impl IdentityService {
             devices,
             agents,
             account_registration_attempts: Arc::new(Mutex::new(BTreeMap::new())),
-            cross_signing_reset_replays: Arc::new(Mutex::new(BTreeMap::new())),
-            cross_signing: Arc::new(Mutex::new(CrossSigningRegistry::new())),
             account_lifecycles: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    pub fn install_cross_signing_registry(&self, registry: CrossSigningRegistry) {
-        *self.cross_signing.lock() = registry;
-    }
-
-    pub fn current_cross_signing(&self, principal: &Did) -> Option<CrossSigningPublish> {
-        self.cross_signing
-            .lock()
-            .current_cross_signing(principal)
-            .cloned()
-    }
-
-    pub fn record_cross_signing_publish(
-        &self,
-        publish: CrossSigningPublish,
-    ) -> arkret_identity::Result<()> {
-        self.cross_signing
-            .lock()
-            .record_cross_signing_publish(publish)
-    }
-
-    pub fn record_cross_signing_reset(
-        &self,
-        reset: &CrossSigningResetPayload,
-    ) -> arkret_identity::Result<()> {
-        self.cross_signing.lock().record_cross_signing_reset(reset)
-    }
-
-    pub fn is_cross_signing_device_revoked(&self, principal: &Did, device_id: &DeviceId) -> bool {
-        self.cross_signing
-            .lock()
-            .is_device_revoked(principal, device_id)
     }
 
     pub fn account_registration_retry_after_ms(
@@ -2243,32 +2119,6 @@ impl IdentityService {
         }
         entry.1 += 1;
         None
-    }
-
-    pub fn cross_signing_reset_replay_seen(
-        &self,
-        principal_id: &str,
-        previous_generation: u64,
-        now: DateTime<Utc>,
-        retention_seconds: i64,
-    ) -> bool {
-        let cutoff = now - chrono::Duration::seconds(retention_seconds);
-        let mut replays = self.cross_signing_reset_replays.lock();
-        replays.retain(|_, seen_at| *seen_at >= cutoff);
-        replays.contains_key(&(principal_id.to_owned(), previous_generation))
-    }
-
-    pub fn remember_cross_signing_reset_replay(
-        &self,
-        principal_id: String,
-        previous_generation: u64,
-        now: DateTime<Utc>,
-        retention_seconds: i64,
-    ) {
-        let cutoff = now - chrono::Duration::seconds(retention_seconds);
-        let mut replays = self.cross_signing_reset_replays.lock();
-        replays.retain(|_, seen_at| *seen_at >= cutoff);
-        replays.insert((principal_id, previous_generation), now);
     }
 
     pub async fn find_account_by_actor(

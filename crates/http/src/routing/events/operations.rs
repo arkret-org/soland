@@ -98,7 +98,6 @@ pub(crate) async fn lock_active_series_operations(
     guards
 }
 
-const CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS: i64 = 300;
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
 const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[

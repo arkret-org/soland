@@ -235,13 +235,6 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     pub version_time: Option<String>,
     #[serde(default)]
     pub proof: Option<Value>,
-    /// DID (`did:key:z…`) of the device enrollment authority the registering
-    /// client designates in the inception document via a
-    /// `ArkretDeviceEnrollmentAuthority` service entry (decision 0002 / D1).
-    /// When present it MUST be reflected in the reconstructed document so the
-    /// SCID + log proof verify; absent for callers that designate no authority.
-    #[serde(default)]
-    pub device_enrollment_authority_did: Option<String>,
     /// Genesis-declared organization governance threshold (identity-did.md §8).
     /// `{ "threshold": { "required": N, "eligible_methods": [...] } }`. When
     /// present it is written into `parameters.governance` so every later
@@ -392,7 +385,6 @@ pub(crate) async fn embedded_webvh_register(
         body.did_public_key_multibase.as_str(),
         &body.also_known_as,
         service_endpoint.as_str(),
-        body.device_enrollment_authority_did.as_deref(),
     );
     let mut parameters = json!({
         "scid": WEBVH_SCID_PLACEHOLDER,

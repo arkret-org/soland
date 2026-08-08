@@ -542,62 +542,6 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         .await
         .map_err(PersistenceError::database)
     }
-
-    async fn purge_cross_signing_reset_stale_messages(
-        &self,
-        recipient: &str,
-        new_generation: u64,
-    ) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let generation = new_generation.to_string();
-        let now = Utc::now();
-        sql_query(
-            "DELETE FROM device_message_ack_tokens \
-             WHERE recipient = $1",
-        )
-        .bind::<Text, _>(recipient)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        sql_query(
-            "WITH candidates AS ( \
-                 SELECT recipient, device_id, position \
-                 FROM device_messages \
-                 WHERE recipient = $1 \
-                   AND ( \
-                     COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ak.key.verification.%' \
-                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE 'ak.cross_signing.%' \
-                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust_bootstrap%' \
-                     OR COALESCE(content->>'kind', content->'content'->>'kind') LIKE '%trust.bootstrap%' \
-                   ) \
-                   AND COALESCE(content->>'new_generation', content->'content'->>'new_generation') IS DISTINCT FROM $2 \
-             ), evicted AS ( \
-                 SELECT recipient, device_id, MAX(position) AS lost_through \
-                 FROM candidates \
-                 GROUP BY recipient, device_id \
-             ), upserted AS ( \
-                 INSERT INTO device_message_lost_watermarks \
-                     (recipient, device_id, lost_through, updated_at) \
-                 SELECT recipient, device_id, lost_through, $3 FROM evicted \
-                 ON CONFLICT (recipient, device_id) DO UPDATE \
-                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
-                     updated_at = EXCLUDED.updated_at \
-                 RETURNING 1 \
-             ) \
-             DELETE FROM device_messages USING candidates \
-             WHERE device_messages.recipient = candidates.recipient \
-               AND device_messages.device_id = candidates.device_id \
-               AND device_messages.position = candidates.position",
-        )
-        .bind::<Text, _>(recipient)
-        .bind::<Text, _>(&generation)
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)
-    }
 }
 // ── G3.S1: in-memory MLS lifecycle stores ─────────────────────────────
 

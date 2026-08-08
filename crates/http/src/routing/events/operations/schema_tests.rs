@@ -435,11 +435,11 @@ mod key_backup_active_series_schema_tests {
                 "previous_series_ids": [],
                 "frontier_ref": {
                     "frontier_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                    "ssk_generation": 1
+                    "device_generation_ref": "device-generation-ref-1"
                 },
                 "issued_at": "2026-07-14T00:00:00.000Z",
                 "auth_data": {
-                    "verification_method": "did:web:alice.example#ssk-1",
+                    "verification_method": "did:web:alice.example#device-1",
                     "signature_algorithm": "Ed25519",
                     "signature": "c2lnbmF0dXJl",
                     "signed_fields": [
@@ -452,7 +452,7 @@ mod key_backup_active_series_schema_tests {
                         "frontier_ref",
                         "issued_at"
                     ],
-                    "ssk_generation": 1
+                    "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
                 },
                 "event_id": "ak:event:AcCMSYyN0E0pPQo-PMQieVA2q-YFJM04Vl30Mr5rK8zQ",
                 "sender": "did:web:alice.example",
@@ -1129,223 +1129,6 @@ mod spec_sync_validator_tests {
     }
 }
 
-mod sdk_artifact_schema_tests {
-    use arkret_event_draft::Operation;
-    use serde_json::json;
-
-    use super::super::*;
-
-    fn cross_signing_reset(payload: serde_json::Value) -> Operation {
-        Operation::create(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(
-                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
-            )
-            .unwrap(),
-            "ak.cross_signing.reset",
-            payload,
-        )
-    }
-
-    fn cross_signing_publish(payload: serde_json::Value) -> Operation {
-        Operation::create(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-57d7d85564c6",
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(
-                "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
-            )
-            .unwrap(),
-            "ak.cross_signing.publish",
-            payload,
-        )
-    }
-
-    #[test]
-    fn artifact_backed_kind_and_payload_validator_cover_cross_signing_publish() {
-        let issued_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
-        let operation = cross_signing_publish(json!({
-            "principal_id": "did:web:alice.example",
-            "trust_domain": "ak:trust_domain:soland.local",
-            "principal_signing_key": {
-                "kid": "did:web:alice.example#ak_principal_signing_v1",
-                "algorithm": "Ed25519",
-                "public_key": "z6MkPrincipalAlice",
-                "key_format": "multibase"
-            },
-            "self_signing_key": {
-                "kid": "did:web:alice.example#ak_self_signing_v1",
-                "algorithm": "Ed25519",
-                "public_key": "z6MkSelfAlice",
-                "key_format": "multibase",
-                "binding": {
-                    "verification_method": "did:web:alice.example#ak_principal_signing_v1",
-                    "signature_algorithm": "Ed25519",
-                    "signature": "c2ln"
-                }
-            },
-            "user_signing_key": {
-                "kid": "did:web:alice.example#ak_user_signing_v1",
-                "algorithm": "Ed25519",
-                "public_key": "z6MkUserAlice",
-                "key_format": "multibase",
-                "binding": {
-                    "verification_method": "did:web:alice.example#ak_principal_signing_v1",
-                    "signature_algorithm": "Ed25519",
-                    "signature": "c2ln"
-                }
-            },
-            "expected_previous_generation": 0,
-            "generation": 1,
-            "issued_at": issued_at
-        }));
-        assert_eq!(
-            kinds::canonical_kind_for_operation(&operation),
-            Some("ak.cross_signing.publish")
-        );
-        assert!(operation_schema_for_kind("ak.cross_signing.publish").is_some());
-        validate_operation_schema_from_sdk_artifact("ak.cross_signing.publish", &operation)
-            .unwrap();
-        validate_operation_schema(
-            &operation,
-            operation_schema_for_kind("ak.cross_signing.publish").unwrap(),
-        )
-        .unwrap();
-
-        let mut projected = operation.clone();
-        let projected_payload = projected
-            .payload
-            .as_object_mut()
-            .expect("cross-signing payload object");
-        projected_payload.insert(
-            "event_id".to_owned(),
-            json!("ak:event:Af9JH8lSetwmYmu7tlUrTdKiqIbZ9CoF-jW2NExAClSM"),
-        );
-        projected_payload.insert("sender".to_owned(), json!("did:web:alice.example"));
-        projected_payload.insert("hlc".to_owned(), json!("01970e589d21-0001-a13f9c2e"));
-        projected.canonical_event_digest = Some(
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
-        );
-        validate_operation_payload_schema("ak.cross_signing.publish", &projected).unwrap();
-    }
-
-    #[test]
-    fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
-        let issued_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
-        // Round R2/R3 (T08) — trust_domain is wire-breaking required. reset_event_id was
-        // retired: a payload cannot name the Event that carries it (encoding.md 6.0.1).
-        let operation = cross_signing_reset(json!({
-            "principal_id": "did:web:alice.example",
-            "previous_generation": 1,
-            "new_generation": 2,
-            "reset_reason_code": "rotation",
-            "proof": {
-                "kind": "principal_signing",
-                "verification_method": "did:web:alice.example#key-1",
-                "signature_algorithm": "Ed25519",
-                "signature": "abc"
-            },
-            "trust_domain": "ak:trust_domain:soland.local",
-            "issued_at": issued_at
-        }));
-        assert_eq!(
-            kinds::canonical_kind_for_operation(&operation),
-            Some("ak.cross_signing.reset")
-        );
-        assert!(operation_schema_for_kind("ak.cross_signing.reset").is_some());
-        validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &operation).unwrap();
-        validate_operation_schema(
-            &operation,
-            operation_schema_for_kind("ak.cross_signing.reset").unwrap(),
-        )
-        .unwrap();
-
-        let missing_proof = cross_signing_reset(json!({
-            "principal_id": "did:web:alice.example",
-            "previous_generation": 1,
-            "new_generation": 2,
-            "reset_reason_code": "rotation",
-            "trust_domain": "ak:trust_domain:soland.local",
-            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
-        }));
-        assert_eq!(
-            validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &missing_proof),
-            Err("operation payload violates SDK artifact schema")
-        );
-
-        // Round R2/R3 (T08) — missing trust_domain MUST hard-reject.
-        let missing_trust_domain = cross_signing_reset(json!({
-            "principal_id": "did:web:alice.example",
-            "previous_generation": 1,
-            "new_generation": 2,
-            "reset_reason_code": "rotation",
-            "proof": {
-                "kind": "principal_signing",
-                "verification_method": "did:web:alice.example#key-1",
-                "signature_algorithm": "Ed25519",
-                "signature": "abc"
-            },
-            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
-        }));
-        assert!(
-            validate_operation_schema(
-                &missing_trust_domain,
-                operation_schema_for_kind("ak.cross_signing.reset").unwrap(),
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn cross_signing_reset_profile_rejects_replay_and_clock_skew() {
-        let reset = cross_signing_reset(json!({
-            "principal_id": "did:web:alice.example",
-            "previous_generation": 1,
-            "new_generation": 2,
-            "reset_reason_code": "rotation",
-            "proof": {
-                "kind": "principal_signing",
-                "verification_method": "did:web:alice.example#key-1",
-                "signature_algorithm": "Ed25519",
-                "signature": "abc"
-            },
-            "trust_domain": "ak:trust_domain:soland.local",
-            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
-        }));
-        assert_eq!(
-            validate_cross_signing_reset_replay_batch(&[reset.clone(), reset.clone()]),
-            Err("cross_signing_reset_replay")
-        );
-
-        let stale = cross_signing_reset(json!({
-            "principal_id": "did:web:alice.example",
-            "previous_generation": 1,
-            "new_generation": 2,
-            "reset_reason_code": "rotation",
-            "proof": {
-                "kind": "principal_signing",
-                "verification_method": "did:web:alice.example#key-1",
-                "signature_algorithm": "Ed25519",
-                "signature": "abc"
-            },
-            "trust_domain": "ak:trust_domain:soland.local",
-            "issued_at": arkret_canonical::format_timestamp_canonical(
-                chrono::Utc::now() - chrono::Duration::seconds(
-                    CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1
-                )
-            )
-        }));
-        assert_eq!(
-            validate_cross_signing_reset_payload(&stale),
-            Err("cross_signing_reset_clock_skew_exceeded")
-        );
-    }
-}
-
 mod derived_relation_and_morph_immutability_tests {
     use arkret_event_draft::Operation;
     use serde_json::json;
@@ -1365,66 +1148,6 @@ mod derived_relation_and_morph_immutability_tests {
             kind,
             payload,
         )
-    }
-
-    #[test]
-    fn device_authorize_accepts_service_attested_did_key_authority() {
-        let operation = op(
-            arkret_wire::EventKind::DEVICE_AUTHORIZE,
-            json!({
-                "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-                "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
-                "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
-                "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-                "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-                "not_before": "2026-06-22T14:45:51.000Z",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-                    "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
-                },
-                "event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r",
-                "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-                "hlc": "019eefcb7d18-0000-8adcfdb5",
-                "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-                "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
-                "accepted_event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r"
-            }),
-        );
-        validate_device_authorize_payload(&operation).unwrap();
-    }
-
-    #[test]
-    fn device_authorize_rejects_multiple_authorization_bindings() {
-        let operation = op(
-            arkret_wire::EventKind::DEVICE_AUTHORIZE,
-            json!({
-                "principal_id": "did:web:alice.example",
-                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "device_public_key": "z6MkDeviceKey",
-                "hpke_key": "z6LSDeviceHpkeKey",
-                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-                "authorized_by": "did:web:alice.example",
-                "not_before": "2026-05-30T00:00:00.000Z",
-                "device_signature": "c2ln",
-                "cross_signing_binding": {
-                    "verification_method": "did:web:alice.example#ssk",
-                    "signature_algorithm": "Ed25519",
-                    "ssk_generation": 1,
-                    "signature": "c2ln"
-                },
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:web:enrollment.example",
-                    "authorization_ref": "did:web:alice.example#enrollment-authority"
-                }
-            }),
-        );
-        assert_eq!(
-            validate_device_authorize_payload(&operation),
-            Err("ak.device.authorize payload violates SDK artifact schema")
-        );
     }
 
     // relation.md §3.2 — `watches` is always a derived edge; a direct

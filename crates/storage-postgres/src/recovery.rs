@@ -259,8 +259,6 @@ struct RecoverySessionRow {
     policy_version: i32,
     #[diesel(sql_type = Text)]
     identity_model: String,
-    #[diesel(sql_type = Nullable<BigInt>)]
-    ssk_generation: Option<i64>,
     #[diesel(sql_type = Nullable<Text>)]
     current_device_generation_ref: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -307,17 +305,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                     row.recovery_session_id
                 ))
             })?;
-        let ssk_generation = row
-            .ssk_generation
-            .map(|generation| {
-                u64::try_from(generation).map_err(|_| {
-                    PersistenceError::Internal(format!(
-                        "recovery session `{}` has invalid ssk_generation {generation}",
-                        row.recovery_session_id
-                    ))
-                })
-            })
-            .transpose()?;
         let current_device_generation_ref = row
             .current_device_generation_ref
             .map(arkret_wire::NonEmptyString::new)
@@ -386,7 +373,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             policy_version,
             identity_model,
-            ssk_generation,
             current_device_generation_ref,
             device_generation_status,
             registry_head,
@@ -407,7 +393,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
     }
 }
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
-     trust_domain, policy_id, policy_version, identity_model, ssk_generation, \
+     trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
@@ -437,15 +423,6 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let ssk_generation = record
-            .ssk_generation
-            .map(i64::try_from)
-            .transpose()
-            .map_err(|_| {
-                PersistenceError::Internal(
-                    "recovery session ssk_generation exceeds PostgreSQL bigint".to_owned(),
-                )
-            })?;
         let device_generation_status = record.device_generation_status.map(|status| match status {
             arkret_models_crypto::DeviceGenerationStatus::Active => "active",
             arkret_models_crypto::DeviceGenerationStatus::Conflicted => "conflicted",
@@ -453,11 +430,11 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         sql_query(
             "INSERT INTO recovery_sessions \
              (id, principal_id, requesting_device_id, trust_domain, policy_id, \
-              policy_version, identity_model, ssk_generation, current_device_generation_ref, \
+              policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -468,12 +445,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(match record.identity_model {
-            arkret_models_crypto::RecoveryIdentityModel::CrossSigning => "cross_signing",
-            arkret_models_crypto::RecoveryIdentityModel::EnrollmentAuthority => {
-                "enrollment_authority"
-            }
+            arkret_models_crypto::RecoveryIdentityModel::RootAnchored => "root_anchored",
         })
-        .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(
             record
                 .current_device_generation_ref

@@ -7,13 +7,9 @@ use soland_storage::{PersistenceResult, PersistenceStore};
 use crate::delivery::{DeliveryService, ObjectStoragePort};
 use crate::events::RealmDirectoryIndex;
 use crate::governance::RuntimeSettingsPort;
-use crate::hydration::{
-    HydrationProjectionAdapter, hydrate_cross_signing_from_persistence,
-    hydrate_realms_from_canonical_events,
-};
+use crate::hydration::{HydrationProjectionAdapter, hydrate_realms_from_canonical_events};
 use crate::identity::{
-    CrossSigningRegistry, DidDocumentState, DidLogEvent, DidResolverPort,
-    ServiceRegistrationCommitResult,
+    DidDocumentState, DidLogEvent, DidResolverPort, ServiceRegistrationCommitResult,
 };
 use crate::jobs::RuntimeHealthPort;
 use crate::join_applications::JoinApplicationService;
@@ -232,10 +228,6 @@ impl PersistenceHandle {
         let mut realms = RealmDirectoryIndex::new();
         hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms).await;
         realms
-    }
-
-    pub async fn hydrate_cross_signing(&self) -> PersistenceResult<CrossSigningRegistry> {
-        hydrate_cross_signing_from_persistence(self.persistence.as_ref()).await
     }
 
     pub async fn hydrate_projection(

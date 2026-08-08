@@ -1766,7 +1766,6 @@ impl ProjectionService {
                 lifetime_not_before: row.lifetime.not_before,
                 lifetime_not_after: row.lifetime.not_after,
                 claimed_by_mls_group_id: row.claimed_by,
-                ssk_generation: row.ssk_generation,
                 device_authorize_event_id: row.device_authorize_event_id,
                 agent_key_authorize_event_id: row.agent_key_authorize_event_id,
                 claimed_at: row.claimed_at,

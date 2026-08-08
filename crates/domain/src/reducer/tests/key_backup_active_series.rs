@@ -18,7 +18,7 @@ fn active_series_payload() -> Value {
         "frontier_ref": {
             "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "ssk_generation": 2
+            "device_generation_ref": "device-generation-ref-2"
         },
         "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {
@@ -35,7 +35,7 @@ fn active_series_payload() -> Value {
                 "frontier_ref",
                 "issued_at"
             ],
-            "ssk_generation": 2
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         },
         "event_id": "ak:event:AX-v4iEo3aBBVhcKOJcDv4ck4TmUm1Wazh9WcL5bJkIB",
         "sender": ACTOR,
@@ -74,11 +74,10 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.active_series_id, ACTIVE_SERIES);
     assert_eq!(projected.series_pointer_version, 1);
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
-    assert!(matches!(
-        projected.auth_data.trust_binding,
-        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
-            if generation.get() == 2
-    ));
+    assert_eq!(
+        projected.auth_data.device_authorize_event_id.as_str(),
+        "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
+    );
 
     let subject = arkret_wire::composite_subject(&[ACTOR, "secret_storage"])
         .expect("active series composite subject");
@@ -145,29 +144,6 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
         effect,
         ProjectionEffect::Rejected { ref reason }
             if reason == "key_backup_active_series_active_in_previous"
-    ));
-}
-
-#[test]
-fn key_backup_active_series_rejects_frontier_ssk_mismatch() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("key-backup-active-series-ssk");
-    let mut payload = active_series_payload();
-    payload["frontier_ref"]["ssk_generation"] = json!(1);
-
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
-            REALM,
-            payload,
-        ),
-        &hlc,
-    );
-
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { ref reason }
-            if reason == "key_backup_active_series_generation_binding_mismatch"
     ));
 }
 

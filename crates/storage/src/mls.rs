@@ -24,7 +24,6 @@ pub struct MlsKeyPackageRow {
     pub lifetime_not_after: i64,
     /// MLS group id that claimed this row. `None` while claimable.
     pub claimed_by_mls_group_id: Option<String>,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<String>,
     pub agent_key_authorize_event_id: Option<String>,
     /// Unix seconds at which the single-use claim was accepted.
@@ -286,7 +285,6 @@ pub struct PeerKeyPackageClaimLedgerRecord {
 pub struct PeerKeyPackageClaimAttempt<'a> {
     pub keypackage_id: &'a str,
     pub mls_group_id: &'a str,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,
@@ -311,7 +309,6 @@ pub struct MlsKeyPackageClaim<'a> {
     pub id: &'a str,
     pub target: MlsKeyPackageClaimTarget<'a>,
     pub intended_realm_id: Option<&'a str>,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,
@@ -580,13 +577,4 @@ pub fn mls_effective_scope_parts(
             "MLS effective_scope has invalid kind".to_owned(),
         )),
     }
-}
-#[doc(hidden)]
-pub fn db_ssk_generation(generation: Option<u64>) -> PersistenceResult<Option<i64>> {
-    generation
-        .map(|generation| {
-            i64::try_from(generation)
-                .map_err(|_| PersistenceError::Internal("ssk_generation exceeds i64".to_owned()))
-        })
-        .transpose()
 }

@@ -94,7 +94,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": keypackage_digest,
             "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         },
         "claim_envelope": {
             "keypackage_ref": keypackage_ref,
@@ -102,12 +102,12 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
             "claim_id": "claim-01",
             "requester_did": "did:web:alice.example",
-            "ssk_generation": 7,
+            "requester_device_id": "ak:device:alice-desktop",
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
             "welcome_digest": arkret_canonical::sha256_digest(b"opaque-welcome-bytes"),
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
-                "kid": "did:web:alice.example#self-signing",
+                "kid": "did:web:alice.example#ak:device:alice-desktop",
                 "signature_algorithm": "Ed25519",
                 "sig": b64(b"welcome-claim-envelope-signature")
             }
@@ -175,7 +175,7 @@ fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde
         "actor_id": actor,
         "device_id": device,
         "lifetime": {"not_before": 1, "not_after": not_after},
-        "ssk_generation": 7,
+        "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
         "key_package_bytes_b64": b64(b"opaque-keypackage-bytes"),
     })
 }
@@ -215,7 +215,7 @@ fn keypackage_publish_then_claim_succeeds() {
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:01",
             "group_id": "ak:mls_group:abc",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     let claim_effect = apply_keypackage_claim(&mut state, &claim);
@@ -261,7 +261,7 @@ fn keypackage_claim_twice_second_fails() {
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:02",
             "group_id": "ak:mls_group:first",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     let e1 = apply_keypackage_claim(&mut state, &claim1);
@@ -278,7 +278,7 @@ fn keypackage_claim_twice_second_fails() {
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:02",
             "group_id": "ak:mls_group:second",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     let e2 = apply_keypackage_claim(&mut state, &claim2);
@@ -318,7 +318,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
                 "action": "claim",
                 "keypackage_id": "ak:mls_keypackage:renew",
                 "group_id": "ak:mls_group:same",
-                "ssk_generation": 7,
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
                 "claim_expires_at_unix_ms": (at + 300) * 1000
             }),
         )
@@ -352,7 +352,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:renew",
             "group_id": "ak:mls_group:other",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     match apply_keypackage_claim(&mut state, &other) {
@@ -385,7 +385,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
                 "keypackage_id": "ak:mls_keypackage:last-resort",
                 "group_id": group_id,
                 "intended_realm_id": "ak:realm:alpha",
-                "ssk_generation": 7
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
             }),
         );
         assert!(matches!(
@@ -413,7 +413,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
             "keypackage_id": "ak:mls_keypackage:last-resort",
             "group_id": "ak:mls_group:other",
             "intended_realm_id": "ak:realm:beta",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     match apply_keypackage_claim(&mut state, &cross_realm) {
@@ -450,7 +450,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
             "keypackage_id": "ak:mls_keypackage:revoked-last-resort",
             "group_id": "ak:mls_group:first",
             "intended_realm_id": "ak:realm:alpha",
-            "ssk_generation": 7
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         }),
     );
     match apply_keypackage_claim(&mut state, &claim) {
@@ -462,7 +462,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
 }
 
 #[test]
-fn keypackage_claim_rejects_stale_cross_signing_generation() {
+fn keypackage_claim_rejects_mismatched_device_authorization() {
     let mut state = ProjectionState::default();
     let publish = op_at(
         100,
@@ -483,7 +483,7 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
             "action": "claim",
             "keypackage_id": "ak:mls_keypackage:03",
             "group_id": "ak:mls_group:abc",
-            "ssk_generation": 8
+            "device_authorize_event_id": "ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt"
         }),
     );
     let effect = apply_keypackage_claim(&mut state, &claim);
@@ -495,7 +495,10 @@ fn keypackage_claim_rejects_stale_cross_signing_generation() {
     }
     let row = state.mls_key_packages.get("ak:mls_keypackage:03").unwrap();
     assert!(row.claimed_by.is_none());
-    assert_eq!(row.ssk_generation, Some(7));
+    assert_eq!(
+        row.device_authorize_event_id.as_deref(),
+        Some("ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa")
+    );
 }
 
 #[test]
@@ -547,7 +550,7 @@ fn agent_bound_welcome_payload(welcome_id: &str, authorize_event_id: &str) -> Va
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
         .unwrap();
-    claim_ref.remove("ssk_generation");
+    claim_ref.remove("device_authorize_event_id");
     claim_ref.insert(
         "agent_key_authorize_event_id".to_owned(),
         json!(authorize_event_id),
@@ -606,7 +609,6 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
         .unwrap();
-    claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
         json!("ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"),
@@ -615,7 +617,6 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
         .get_mut("claim_envelope")
         .and_then(Value::as_object_mut)
         .unwrap();
-    claim_envelope.remove("ssk_generation");
     claim_envelope.insert(
         "requester_device_id".to_owned(),
         json!("ak:device:alice-desktop"),
@@ -640,7 +641,6 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
         .get_mut("claim_ref")
         .and_then(Value::as_object_mut)
         .unwrap();
-    claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
         json!("ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"),
@@ -649,7 +649,6 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
         .get_mut("claim_envelope")
         .and_then(Value::as_object_mut)
         .unwrap();
-    claim_envelope.remove("ssk_generation");
     claim_envelope.insert(
         "requester_device_id".to_owned(),
         json!("ak:device:alice-desktop"),

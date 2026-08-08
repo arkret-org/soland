@@ -33,7 +33,7 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = "ak:realm:AVRxFKYQlThLJddurruDUltKZAxQ7_57zKeEz9z-Y-tH";
+const DEMO_REALM_ID: &str = "ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG";
 const SEEDED_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 

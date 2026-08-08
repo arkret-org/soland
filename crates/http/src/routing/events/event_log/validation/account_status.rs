@@ -36,7 +36,7 @@ pub(super) async fn validate_account_status_service_binding(
 
     let authoritative_service = state
         .config()
-        .account_authority_enrollment_did
+        .account_authority_service_id
         .as_deref()
         .unwrap_or_else(|| state.service_id().as_str());
     let authoritative_service_id = arkret_identifiers::Did::new(authoritative_service.to_owned())
@@ -65,7 +65,7 @@ pub(super) async fn validate_account_status_service_binding(
                 .any(|method| method.get("id").and_then(Value::as_str) == Some(verification_method))
         });
     let delegated = authoritative_service_id.as_str() == state.service_id().as_str()
-        || state.config().account_authority_enrollment_did.as_deref()
+        || state.config().account_authority_service_id.as_deref()
             == Some(authoritative_service_id.as_str());
     payload
         .validate_service_binding(&AccountStatusServiceBinding {

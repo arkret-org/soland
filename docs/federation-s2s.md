@@ -29,8 +29,11 @@ cannot change. Wire events whose `trust_domain` does not match the
 locked value reject with `cross_domain_replay_rejected`. This means:
 
 - An operator who renames `SOLAND_TRUST_DOMAIN` mid-lifetime invalidates
-  every outstanding `ak.cross_signing.reset` proof for that deployment.
-  Do not rename without a planned key-rotation ceremony.
+  peer header pins and previously assembled federated device-signing evidence.
+  A receiver accepts a remote signer only after replaying the complete accepted
+  PCR device-control chain from its signed genesis receipt through a covering
+  Seal, current device projection, and range-completeness evidence. Do not
+  rename without a planned peer-pinning and key-rotation ceremony.
 - Federation peers see the trust domain on `/_arkret/describe`
   and pin it into the `Destination-Trust-Domain` header on every
   outbound request. Cross-deployment renames need a coordinated

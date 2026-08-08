@@ -18,6 +18,82 @@ pub(crate) fn genesis_projector(
         .map_err(|error| error.to_string())
 }
 
+fn controller_founding_authorize_payload(
+    actor: &arkret_identifiers::Did,
+    created_at: chrono::DateTime<chrono::Utc>,
+    signing_key: &SigningKey,
+) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
+    use arkret_models_collaboration::events_payloads::SignatureMaterial;
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
+    };
+
+    let mut payload = DeviceAuthorizePayload {
+        principal_id: actor.clone(),
+        device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
+        device_public_key: arkret_wire::NonEmptyString::new(format!(
+            "did:key:{}",
+            test_ed25519_multibase_public(signing_key),
+        ))
+        .unwrap(),
+        hpke_key: arkret_wire::NonEmptyString::new("z6LSDeviceHpkeKey").unwrap(),
+        algorithms: vec![
+            arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
+        ],
+        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        authorized_by: DeviceOrPrincipalRef::Did(actor.clone()),
+        scopes: None,
+        not_before: created_at,
+        expires_at: None,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RootAnchored,
+        device_signature: SignatureMaterial::NonEmptyString(
+            arkret_wire::NonEmptyString::new("pending").unwrap(),
+        ),
+        recovery_session_id: None,
+    };
+    let possession_input = payload.device_possession_signature_input().unwrap();
+    payload.device_signature = SignatureMaterial::NonEmptyString(
+        arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(
+            ed25519_dalek::Signer::sign(signing_key, &possession_input).to_bytes(),
+        ))
+        .unwrap(),
+    );
+    payload
+}
+
+fn controller_founding_device_descriptor(
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
+) -> arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
+    use arkret_models_collaboration::events_payloads::{
+        FoundingDeviceHpkeKeyAlgorithm, FoundingDeviceKeyAlgorithm, FoundingDeviceKeyPurpose,
+    };
+
+    let payload_value = serde_json::to_value(payload).unwrap();
+    arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
+        descriptor_version: 1,
+        device_id: payload.device_id.clone(),
+        device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            payload.device_public_key.as_bytes(),
+        ))
+        .unwrap(),
+        device_public_key: payload.device_public_key.clone(),
+        device_key_algorithm: FoundingDeviceKeyAlgorithm::Ed25519,
+        device_key_purpose: FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
+        hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            payload.hpke_key.as_bytes(),
+        ))
+        .unwrap(),
+        hpke_key: payload.hpke_key.clone(),
+        hpke_key_algorithm: FoundingDeviceHpkeKeyAlgorithm::X25519,
+        algorithms: payload.algorithms.clone(),
+        founding_authorize_payload_digest: arkret_models_collaboration::events_payloads::device_identity::device_authorize_payload_digest(
+            &payload_value,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
+    }
+}
+
 fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(audience.as_bytes());
@@ -79,13 +155,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             seq: 1,
             operation: serde_json::json!({
                 "versionId": generation_ref,
-                "state": {
-                    "service": [{
-                        "id": format!("{controller}#device-enrollment-authority"),
-                        "type": arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
-                        "serviceEndpoint": "did:web:device-authority.example"
-                    }]
-                }
+                "state": { "id": controller }
             }),
             created_at: now,
         })
@@ -114,6 +184,8 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
     let realm = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
+    let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: actor.clone(),
@@ -126,6 +198,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
                 format!("sha256:{}", "1".repeat(64)),
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
+            founding_device_descriptor,
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
             created_at,
@@ -145,42 +218,14 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     arkret_signatures::sign_event(
         &mut bootstrap,
         &bootstrap_signer,
-        &arkret_wire::DidUrl::new(
-            "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
-        )
+        &arkret_wire::DidUrl::new(format!(
+            "did:key:{0}#{0}",
+            test_ed25519_multibase_public(&signing_key)
+        ))
         .unwrap(),
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
-    let authorization_ref =
-        arkret_wire::NonEmptyString::new(format!("{controller}#device-enrollment-authority"))
-            .unwrap();
-    let authorize_payload = arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
-        principal_id: actor.clone(),
-        device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
-        device_public_key: arkret_wire::NonEmptyString::new(test_ed25519_multibase_public(
-            &signing_key,
-        ))
-        .unwrap(),
-        hpke_key: arkret_wire::NonEmptyString::new("z6LSDeviceHpkeKey").unwrap(),
-        algorithms: vec![
-            arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
-        ],
-        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-        authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(actor.clone()),
-        scopes: None,
-        not_before: created_at,
-        expires_at: None,
-        device_signature: None,
-        proof: None,
-        cross_signing_binding: None,
-        enrollment_authority_binding: Some(arkret_models_identity::DeviceEnrollmentAuthorityBinding {
-            kind: arkret_models_identity::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
-            authority_did: actor.clone(),
-            authorization_ref: authorization_ref.clone(),
-        }),
-        recovery_session_id: None,
-    };
     let mut authorize = arkret_wire::Event::new_at(
         arkret_wire::EventKind::DEVICE_AUTHORIZE,
         arkret_wire::ScopeRef::Realm { realm_id: realm },
@@ -192,9 +237,6 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     )
     .unwrap();
     authorize.prev_refs = vec![bootstrap.event_id.clone()];
-    authorize.executed_by = Some(actor);
-    authorize.authorization_ref =
-        Some(arkret_wire::AuthorizationRef::new(authorization_ref.to_string()).unwrap());
     arkret_signatures::sign_event(
         &mut authorize,
         &bootstrap_signer,

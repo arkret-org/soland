@@ -140,18 +140,6 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         })
     }
 
-    async fn purge_stale_cross_signing_messages(
-        &self,
-        actor_id: &str,
-        new_generation: u64,
-    ) -> crate::ServiceResult<usize> {
-        Ok(self
-            .0
-            .device_messages()
-            .purge_cross_signing_reset_stale_messages(actor_id, new_generation)
-            .await?)
-    }
-
     async fn register_push_device(&self, registration: Value) -> crate::ServiceResult<()> {
         self.0.push_devices().register(registration).await?;
         Ok(())

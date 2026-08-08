@@ -136,7 +136,7 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(not_bound)?;
-    crate::routing::identity::cross_signing::decode_ed25519_key(material, "multibase")
+    crate::routing::identity::device_signing::decode_ed25519_key(material, "multibase")
         .map_err(|error| AppError::internal(format!("session device key invalid: {error}")))
 }
 

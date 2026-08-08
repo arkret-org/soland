@@ -35,7 +35,7 @@ async fn authorize_account_device_pair(
         generation.status
             == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
     });
-    let generation_projection = active_generation
+    let authorized_generation_ref = active_generation
         .as_ref()
         .map(|generation| {
             let authorizer_generation = authorizing_device
@@ -48,18 +48,7 @@ async fn authorize_account_device_pair(
                 )
                 .with_wire_code("device_not_authorized"));
             }
-            let binding = authorizing_device
-                .payload
-                .get("enrollment_authority_binding")
-                .filter(|binding| binding.is_object())
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::capability_denied(
-                        "authorizing device has no enrollment authority binding",
-                    )
-                    .with_wire_code("device_not_authorized")
-                })?;
-            Ok((generation.current_ref.clone(), binding))
+            Ok(generation.current_ref.clone())
         })
         .transpose()?;
     let pairing_code = body.pairing_code.as_str().trim();
@@ -190,16 +179,12 @@ async fn authorize_account_device_pair(
             "device_metadata": body.device_metadata,
         }
     });
-    if let Some((generation_ref, enrollment_binding)) = generation_projection
+    if let Some(generation_ref) = authorized_generation_ref
         && let Some(payload) = device_payload.as_object_mut()
     {
         payload.insert(
             "authorized_generation_ref".to_owned(),
             Value::String(generation_ref),
-        );
-        payload.insert(
-            "enrollment_authority_binding".to_owned(),
-            enrollment_binding,
         );
     }
     let device = soland_services::identity::SaveDeviceCommand {

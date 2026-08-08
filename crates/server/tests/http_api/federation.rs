@@ -1085,7 +1085,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": keypackage_digest,
             "capabilities_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-            "ssk_generation": 1
+            "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
         },
         "claim_envelope": {
             "keypackage_ref": keypackage_ref,
@@ -1093,12 +1093,12 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "intended_realm_id": TEST_REALM_ID,
             "claim_id": claim_id,
             "requester_did": "did:web:alice.example",
-            "ssk_generation": 1,
+            "requester_device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
             "welcome_digest": arkret_canonical::sha256_digest(ciphertext.as_bytes()),
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
-                "kid": "did:web:alice.example#self-signing",
+                "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
                 "signature_algorithm": "Ed25519",
                 "sig": b64(format!("{claim_id}-signature").as_bytes())
             }

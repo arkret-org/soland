@@ -27,9 +27,8 @@ use arkret_models_crypto::{
 use arkret_wire::{
     AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy,
     AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind,
-    DidUrl, LeaseBasisRef, NonEmptyString, RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID,
-    RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, SecurityTransaction,
-    SecurityTransactionCreateRequest, TransactionId,
+    DidUrl, LeaseBasisRef, NonEmptyString, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID,
+    SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -133,7 +132,6 @@ pub(super) fn protocol_router() -> Router {
 /// `/_arkret/self`.
 pub(super) fn self_protocol_router() -> Router {
     Router::new()
-        .push(Router::with_path("recovery-authority-tickets").post(recovery_authority_ticket_issue))
         .push(Router::with_path("security-transactions").post(security_transaction_create))
         .push(
             Router::with_path("security-transactions/{transaction_id}")

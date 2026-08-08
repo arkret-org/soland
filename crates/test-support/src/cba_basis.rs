@@ -157,6 +157,76 @@ fn fixture_notary_did() -> String {
     crate::app_state(crate::app_config()).service_id().clone()
 }
 
+fn fixture_pcr_founding_device_descriptor(
+    principal: &Did,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
+        device_authorize_payload_digest,
+    };
+    use arkret_models_collaboration::events_payloads::{
+        FoundingDeviceHpkeKeyAlgorithm, FoundingDeviceKeyAlgorithm, FoundingDeviceKeyPurpose,
+        SignatureMaterial,
+    };
+
+    let device_id = arkret_identifiers::DeviceId::new(
+        "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+    )
+    .expect("fixture PCR device id");
+    let device_public_key = arkret_wire::NonEmptyString::new(
+        "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ".to_owned(),
+    )
+    .expect("fixture PCR device key");
+    let hpke_key = arkret_wire::NonEmptyString::new("z6LSDeviceHpkeKey".to_owned())
+        .expect("fixture PCR HPKE key");
+    let algorithms = vec![
+        arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned())
+            .expect("fixture PCR algorithm"),
+    ];
+    let authorize = DeviceAuthorizePayload {
+        principal_id: principal.clone(),
+        device_id: device_id.clone(),
+        device_public_key: device_public_key.clone(),
+        hpke_key: hpke_key.clone(),
+        algorithms: algorithms.clone(),
+        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        authorized_by: DeviceOrPrincipalRef::Did(principal.clone()),
+        scopes: None,
+        not_before: created_at,
+        expires_at: None,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RootAnchored,
+        device_signature: SignatureMaterial::NonEmptyString(
+            arkret_wire::NonEmptyString::new("fixture-signature").unwrap(),
+        ),
+        recovery_session_id: None,
+    };
+    let authorize = serde_json::to_value(authorize).expect("fixture PCR authorize payload");
+    arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
+        descriptor_version: 1,
+        device_id,
+        device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            device_public_key.as_bytes(),
+        ))
+        .unwrap(),
+        device_public_key,
+        device_key_algorithm: FoundingDeviceKeyAlgorithm::Ed25519,
+        device_key_purpose: FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
+        hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            hpke_key.as_bytes(),
+        ))
+        .unwrap(),
+        hpke_key,
+        hpke_key_algorithm: FoundingDeviceHpkeKeyAlgorithm::X25519,
+        algorithms,
+        founding_authorize_payload_digest: device_authorize_payload_digest(
+            &authorize,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
+    }
+}
+
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
@@ -308,9 +378,10 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .expect("fixture PCR genesis timestamp")
             .with_timezone(&chrono::Utc);
+        let principal = Did::new(subject.to_owned()).expect("fixture PCR principal DID");
         let event = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
-                principal_id: Did::new(subject.to_owned()).expect("fixture PCR principal DID"),
+                principal_id: principal.clone(),
                 realm_id: realm.clone(),
                 trust_domain: arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:soland.test".to_owned(),
@@ -319,6 +390,9 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
                 did_inception_ref: arkret_wire::EventRef::new(
                     format!("sha256:{}", "1".repeat(64)),
                     arkret_bootstrap::DID_INCEPTION_REF_ROLE,
+                ),
+                founding_device_descriptor: fixture_pcr_founding_device_descriptor(
+                    &principal, created_at,
                 ),
                 capability_action_registry_digest:
                     arkret_policy::current_capability_action_registry_digest()

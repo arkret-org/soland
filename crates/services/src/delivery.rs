@@ -79,11 +79,6 @@ pub trait DeviceDeliveryPort: Send + Sync {
         actor_id: &str,
         device_id: &str,
     ) -> ServiceResult<DeviceDeliveryPurgeResult>;
-    async fn purge_stale_cross_signing_messages(
-        &self,
-        actor_id: &str,
-        new_generation: u64,
-    ) -> ServiceResult<usize>;
     async fn register_push_device(&self, registration: Value) -> ServiceResult<()>;
     async fn unregister_push_device(
         &self,
@@ -435,16 +430,6 @@ impl DeliveryService {
     ) -> ServiceResult<DeviceDeliveryPurgeResult> {
         self.device_delivery
             .purge_device_delivery(actor_id, device_id)
-            .await
-    }
-
-    pub async fn purge_stale_cross_signing_messages(
-        &self,
-        actor_id: &str,
-        new_generation: u64,
-    ) -> ServiceResult<usize> {
-        self.device_delivery
-            .purge_stale_cross_signing_messages(actor_id, new_generation)
             .await
     }
 
@@ -866,13 +851,6 @@ mod tests {
             Ok(DeviceDeliveryPurgeResult::default())
         }
 
-        async fn purge_stale_cross_signing_messages(
-            &self,
-            _actor_id: &str,
-            _new_generation: u64,
-        ) -> ServiceResult<usize> {
-            Ok(0)
-        }
         async fn register_push_device(&self, _registration: Value) -> ServiceResult<()> {
             Ok(())
         }

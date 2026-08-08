@@ -354,7 +354,6 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
         state.jobs().storage_mode(),
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
-        state.config().account_authority_enrollment_did.as_deref(),
         state.config().oidc_client_id.as_deref(),
         &state.config().trust_domain,
         state.config().resumable_upload_incomplete_ttl_seconds,
@@ -398,71 +397,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
 }
 
 async fn build_server_description_resolved(state: &AppState) -> ServiceDescribe {
-    let mut description = build_server_description(state);
-    let configured = state
-        .config()
-        .account_authority_enrollment_did
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    if configured {
-        return description;
-    }
-    let Some(authority_base) = state
-        .config()
-        .account_authority_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return description;
-    };
-    let Ok(authority_url) = url::Url::parse(authority_base) else {
-        tracing::warn!(
-            authority_base,
-            "cannot resolve Account Authority enrollment identity for describe"
-        );
-        return description;
-    };
-    let authority_client = arkret_http_client::ClientBuilder::new(authority_url)
-        .allow_insecure_localhost()
-        .build();
-    let authority_description = match authority_client {
-        Ok(client) => client.describe().await,
-        Err(error) => {
-            tracing::warn!(
-                authority_base,
-                error = %error,
-                "cannot build Account Authority describe client"
-            );
-            return description;
-        }
-    };
-    match authority_description {
-        Ok(authority_description) => {
-            let enrollment_authority_did = authority_description
-                .auth_metadata
-                .account_authority
-                .and_then(|authority| authority.enrollment_authority_did);
-            if let (Some(authority), Some(enrollment_authority_did)) = (
-                description.auth_metadata.account_authority.as_mut(),
-                enrollment_authority_did,
-            ) {
-                authority.enrollment_authority_did = Some(enrollment_authority_did);
-            } else {
-                tracing::warn!(
-                    authority_base,
-                    "Account Authority describe omitted enrollment authority DID"
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                authority_base,
-                error = %error,
-                "failed to fetch Account Authority describe"
-            );
-        }
-    }
-    description
+    build_server_description(state)
 }
 
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,

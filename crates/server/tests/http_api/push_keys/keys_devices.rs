@@ -835,8 +835,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let device_key = SigningKey::from_bytes(&[202u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
 
-    // Exercise the delegated-authority (A-model) projection directly. The
-    // accepted authorize must carry exactly one trust binding.
+    // Exercise accepted device authorization projection directly.
     let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
@@ -858,11 +857,8 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "enrollment_authority_binding": {
-                "kind": "service_attested",
-                "authority_did": alice,
-                "authorization_ref": format!("{alice}#device-enrollment")
-            }
+            "authorization_binding_kind": "root_anchored",
+            "device_signature": "c2ln"
         }),
     );
     soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
@@ -925,11 +921,8 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "enrollment_authority_binding": {
-                "kind": "service_attested",
-                "authority_did": alice,
-                "authorization_ref": format!("{alice}#device-enrollment")
-            }
+            "authorization_binding_kind": "root_anchored",
+            "device_signature": "c2ln"
         }),
     );
 
@@ -949,7 +942,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
 }
 
 #[tokio::test]
-async fn keys_query_exposes_service_attested_device_anchor() {
+async fn keys_query_exposes_accepted_device_anchor() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:managed-alice.example";
@@ -964,8 +957,8 @@ async fn keys_query_exposes_service_attested_device_anchor() {
         RealmId::new(control_realm).unwrap(),
         "ak.device.authorize",
         serde_json::json!({
-            // device-lifecycle.md §5.4: a service_attested ak.device.authorize
-            // MUST carry device_public_key + hpke_key + canonical algorithms
+            // An accepted ak.device.authorize carries device_public_key,
+            // hpke_key, and canonical algorithms
             // (receiver rejects missing hpke_key/algorithms), plus the §5.2
             // authorized_by + not_before payload fields required by the typed
             // DeviceAuthorizePayload the projection parses.
@@ -974,13 +967,10 @@ async fn keys_query_exposes_service_attested_device_anchor() {
             "device_public_key": multibase,
             "hpke_key": "z6LSTestServiceAttestedHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": "did:web:auth.example",
+            "authorized_by": alice,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "enrollment_authority_binding": {
-                "kind": "service_attested",
-                "authority_did": "did:web:auth.example",
-                "authorization_ref": "did:web:managed-alice.example#device-enrollment"
-            }
+            "authorization_binding_kind": "root_anchored",
+            "device_signature": "c2ln"
         }),
     );
     soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
@@ -1006,272 +996,9 @@ async fn keys_query_exposes_service_attested_device_anchor() {
     assert_eq!(entry["device_status"], "active", "entry: {query}");
     assert_eq!(entry["device_signing_key"], format!("did:key:{multibase}"));
     assert_eq!(
-        entry["enrollment_authority_binding"]["kind"],
-        "service_attested"
-    );
-    assert_eq!(
         entry["device_authorize_event_id"],
         expected_authorize_event_id
     );
-    assert!(
-        entry["cross_signing_binding"].is_null(),
-        "service-attested query record must not invent cross-signing material: {query}"
-    );
-}
-
-/// Build a real, fully-signed `(ak.cross_signing.publish payload,
-/// ak.device.authorize cross_signing_binding)` pair for `principal` / `device`
-/// using the supplied PSK / SSK keypairs and the SDK canonical-input
-/// constructors (the same ones the server's `check_device_cross_signing_binding`
-/// uses). Returns `(publish_payload_json, device_authorize_payload_json,
-/// psk_public_multibase, device_public_key_multibase)`.
-fn tier2_publish_and_authorize(
-    principal: &str,
-    device: &str,
-    psk: &SigningKey,
-    ssk: &SigningKey,
-    device_signing: &SigningKey,
-) -> (Value, Value, String, String) {
-    use arkret_crypto::DeviceTrustBinding;
-    use arkret_identifiers::DeviceId;
-    use arkret_models_identity::{
-        CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey,
-        SubordinateSignedKeyBinding,
-    };
-    use arkret_wire::{DidUrl, NonEmptyString};
-
-    let principal_did = Did::new(principal.to_owned()).unwrap();
-    let device_id = DeviceId::new(device.to_owned()).unwrap();
-    let psk_multibase = test_ed25519_multibase_public(psk);
-    let ssk_multibase = test_ed25519_multibase_public(ssk);
-    let device_public_key = test_ed25519_multibase_public(device_signing);
-
-    let mut publish = CrossSigningPublish {
-        principal_id: principal_did.clone(),
-        trust_domain: arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net")
-            .unwrap(),
-        principal_signing_key: PublishedKey {
-            kid: DidUrl::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new(psk_multibase.clone()).unwrap(),
-            key_format: KeyFormat::Multibase,
-        },
-        self_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#ak_self_signing_v1")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new(ssk_multibase.clone()).unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#ak_principal_signing_v1"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new("pending").unwrap(),
-            },
-        },
-        user_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#ak_user_signing_v1")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkUserDistinctKey").unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#ak_principal_signing_v1"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new("dW51c2Vk").unwrap(),
-            },
-        },
-        expected_previous_generation: 0,
-        generation: std::num::NonZeroU64::new(1).unwrap(),
-        issued_at: chrono::Utc::now(),
-    };
-    // PSK signs the SSK record over the §5.1 canonical input.
-    let ssk_input = publish.self_signing_binding_input().unwrap();
-    publish.self_signing_key.binding.signature = NonEmptyString::new(
-        arkret_canonical::base64url_encode(psk.sign(&ssk_input).to_bytes()),
-    )
-    .unwrap();
-
-    // SSK signs the device binding over the §5.2 canonical input.
-    let device_input = DeviceTrustBinding::canonical_input(
-        &principal_did,
-        &device_id,
-        &device_public_key,
-        "z6LSTestTier2HpkeKey",
-        &[
-            "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-            "ak.mls.v1".to_owned(),
-        ],
-        1,
-    )
-    .unwrap();
-    let binding_signature = arkret_canonical::base64url_encode(ssk.sign(&device_input).to_bytes());
-
-    let publish_payload = serde_json::to_value(&publish).unwrap();
-    let authorize_payload = serde_json::json!({
-        // device-lifecycle.md §5.2: authorized_by + not_before are payload
-        // fields of ak.device.authorize; the projection parses the typed
-        // DeviceAuthorizePayload, which requires them alongside the
-        // trust-binding material below.
-        "principal_id": principal,
-        "device_id": device,
-        "device_public_key": device_public_key,
-        "hpke_key": "z6LSTestTier2HpkeKey",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-        "authorized_by": principal,
-        "not_before": "2026-05-08T10:00:00.000Z",
-        "device_signature": "c2ln",
-        "cross_signing_binding": {
-            "verification_method": format!("{principal}#ak_self_signing_v1"),
-            "signature_algorithm": "Ed25519",
-            "ssk_generation": 1,
-            "signature": binding_signature,
-        },
-    });
-    (
-        publish_payload,
-        authorize_payload,
-        psk_multibase,
-        device_public_key,
-    )
-}
-
-/// Tier-2 (device-lifecycle.md §8.2 / §8.3) — `keys/query` echoes the per-device
-/// `cross_signing_binding` and the per-principal `cross_signing` publish payload,
-/// and the SDK chain verifier accepts the returned material (simulating a inkson
-/// client that DID-anchored the PSK), while a tampered device binding fails.
-#[tokio::test]
-async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
-    use arkret_crypto::{
-        DeviceCrossSigningChainVerification, DeviceTrustBinding, DeviceTrustState,
-        verify_device_cross_signing_chain,
-    };
-    use arkret_identifiers::DeviceId;
-    use arkret_models_crypto::QueryDeviceCrossSigningBinding;
-    use arkret_models_identity::CrossSigningPublish;
-    use arkret_signatures::PublicKeyMaterial;
-
-    let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
-    let psk = SigningKey::from_bytes(&[210u8; 32]);
-    let ssk = SigningKey::from_bytes(&[211u8; 32]);
-    let device_signing = SigningKey::from_bytes(&[212u8; 32]);
-
-    let (publish_payload, authorize_payload, psk_multibase, device_public_key) =
-        tier2_publish_and_authorize(alice, alice_device, &psk, &ssk, &device_signing);
-
-    // Project the cross_signing.publish (records PSK→{SSK,USK} into the
-    // cross-signing registry) and the device.authorize (persists device_public_key +
-    // cross_signing_binding into the devices table) through the real pipeline.
-    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
-    let publish_op = Operation::create(
-        OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
-        RealmId::new(control_realm.clone()).unwrap(),
-        "ak.cross_signing.publish",
-        publish_payload,
-    );
-    let authorize_op = Operation::create(
-        OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
-        RealmId::new(control_realm).unwrap(),
-        "ak.device.authorize",
-        authorize_payload,
-    );
-    soland_test_support::project_accepted_operations(&state, alice, &[publish_op, authorize_op])
-        .await;
-
-    // Member B queries A's directory.
-    let bob = dev_token_for_device(
-        state.clone(),
-        "did:web:bob.example",
-        "ak:device:01904100-0000-7000-8000-b0b000000003",
-        "Bob Desktop",
-    )
-    .await;
-    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({ "device_keys": { alice: [alice_device] } }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-
-    let entry = &query["device_keys"][alice][alice_device];
-    assert_eq!(entry["device_status"], "active", "entry: {query}");
-    assert_eq!(
-        entry["device_signing_key"],
-        format!("did:key:{device_public_key}")
-    );
-    // Per-device cross_signing_binding echoed.
-    assert!(
-        entry["cross_signing_binding"].is_object(),
-        "expected cross_signing_binding echo: {query}"
-    );
-    // Per-principal cross_signing publish payload echoed.
-    assert!(
-        query["cross_signing"][alice].is_object(),
-        "expected per-principal cross_signing publish: {query}"
-    );
-
-    // Reconstruct the SDK inputs from the response and run the chain verifier,
-    // anchoring the PSK to the published key (a inkson client would instead
-    // resolve A's DID and confirm this PSK is in A's control set).
-    let publish: CrossSigningPublish =
-        serde_json::from_value(query["cross_signing"][alice].clone()).unwrap();
-    let binding: QueryDeviceCrossSigningBinding =
-        serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();
-    let trust_binding = DeviceTrustBinding {
-        verification_method: binding.verification_method.clone(),
-        signature_algorithm: binding
-            .signature_algorithm
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "Ed25519".to_owned()),
-        ssk_generation: binding.ssk_generation,
-        signature: binding.signature.to_string(),
-    };
-    let device_id_typed = DeviceId::new(alice_device.to_owned()).unwrap();
-    let principal_did = Did::new(alice.to_owned()).unwrap();
-    let anchored_psk = PublicKeyMaterial::Ed25519Multibase {
-        value: psk_multibase,
-    };
-    let algorithms = [
-        "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-        "ak.mls.v1".to_owned(),
-    ];
-    let state_ok = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
-        publish: &publish,
-        binding: &trust_binding,
-        principal_id: &principal_did,
-        device_id: &device_id_typed,
-        device_public_key: &device_public_key,
-        hpke_key: "z6LSTestTier2HpkeKey",
-        algorithms: &algorithms,
-        anchored_psk: &anchored_psk,
-    });
-    assert_eq!(state_ok, DeviceTrustState::CrossSigned);
-
-    // Tampering the device binding signature → not CrossSigned (fail-closed).
-    let mut tampered = trust_binding.clone();
-    let mut raw = arkret_canonical::base64url_decode(&tampered.signature).unwrap();
-    raw[0] ^= 0xff;
-    tampered.signature = arkret_canonical::base64url_encode(&raw);
-    let state_bad = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
-        publish: &publish,
-        binding: &tampered,
-        principal_id: &principal_did,
-        device_id: &device_id_typed,
-        device_public_key: &device_public_key,
-        hpke_key: "z6LSTestTier2HpkeKey",
-        algorithms: &algorithms,
-        anchored_psk: &anchored_psk,
-    });
-    assert_ne!(state_bad, DeviceTrustState::CrossSigned);
 }
 
 #[tokio::test]

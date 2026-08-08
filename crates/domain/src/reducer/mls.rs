@@ -38,8 +38,7 @@ pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str = "mls_keypackage_already_clai
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str = "mls_keypackage_not_found";
 /// Reason code emitted when a published KeyPackage's lifetime window
 /// is already past `not_after`. Mirrors RFC 9420 §10.
-/// Reason code emitted when a KeyPackage publish/claim is missing the
-/// accepted cross-signing generation or attempts to consume an older one.
+/// Reason code emitted when a KeyPackage publish/claim carries a Realm mismatch.
 pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str = "mls_keypackage_realm_mismatch";
 /// Reason code emitted when a commit's `expected_prev_epoch` does not
 /// match the group's stored epoch (out-of-order / stale / replay).
@@ -168,7 +167,6 @@ pub fn apply_keypackage_publish(
         last_resort,
         last_resort_realm_id,
         claimed_by: None,
-        ssk_generation: trust_binding.ssk_generation,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
         claimed_at: None,
@@ -242,8 +240,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
         Ok(binding) => binding,
         Err(reason) => return reject(reason),
     };
-    if row.ssk_generation != trust_binding.ssk_generation
-        || row.device_authorize_event_id != trust_binding.device_authorize_event_id
+    if row.device_authorize_event_id != trust_binding.device_authorize_event_id
         || row.agent_key_authorize_event_id != trust_binding.agent_key_authorize_event_id
     {
         return reject(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
@@ -1088,11 +1085,7 @@ fn validate_welcome_trust_binding(
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
     let envelope_signing_binding = welcome_requester_signature_binding(envelope)?;
-    if envelope_signing_binding.ssk_generation.is_some() {
-        // Cross-signing requester path: the cryptographic preflight verifies
-        // the accepted requester SSK generation.
-    } else if let Some(requester_device_id) =
-        envelope_signing_binding.requester_device_id.as_deref()
+    if let Some(requester_device_id) = envelope_signing_binding.requester_device_id.as_deref()
         && let Some(sender_device_id) = payload
             .get("sender_device_id")
             .and_then(Value::as_str)
@@ -1102,11 +1095,10 @@ fn validate_welcome_trust_binding(
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    if claim_ref.get("ssk_generation").and_then(Value::as_u64) != claim_trust_binding.ssk_generation
-        || claim_ref
-            .get("device_authorize_event_id")
-            .and_then(Value::as_str)
-            != claim_trust_binding.device_authorize_event_id.as_deref()
+    if claim_ref
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        != claim_trust_binding.device_authorize_event_id.as_deref()
         || claim_ref
             .get("agent_key_authorize_event_id")
             .and_then(Value::as_str)
@@ -1239,14 +1231,12 @@ fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetime, &'static str>
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyPackageTrustBinding {
-    ssk_generation: Option<u64>,
     device_authorize_event_id: Option<String>,
     agent_key_authorize_event_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WelcomeRequesterSignatureBinding {
-    ssk_generation: Option<u64>,
     requester_device_id: Option<String>,
 }
 
@@ -1260,10 +1250,6 @@ fn keypackage_claim_trust_binding(payload: &Value) -> Result<KeyPackageTrustBind
 fn keypackage_claim_trust_binding_object(
     object: &Map<String, Value>,
 ) -> Result<KeyPackageTrustBinding, &'static str> {
-    let ssk_generation = object
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .filter(|generation| *generation >= 1);
     let device_authorize_event_id = object
         .get("device_authorize_event_id")
         .and_then(Value::as_str)
@@ -1276,23 +1262,12 @@ fn keypackage_claim_trust_binding_object(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    match (
-        ssk_generation,
-        device_authorize_event_id,
-        agent_key_authorize_event_id,
-    ) {
-        (Some(ssk_generation), None, None) => Ok(KeyPackageTrustBinding {
-            ssk_generation: Some(ssk_generation),
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: None,
-        }),
-        (None, Some(device_authorize_event_id), None) => Ok(KeyPackageTrustBinding {
-            ssk_generation: None,
+    match (device_authorize_event_id, agent_key_authorize_event_id) {
+        (Some(device_authorize_event_id), None) => Ok(KeyPackageTrustBinding {
             device_authorize_event_id: Some(device_authorize_event_id),
             agent_key_authorize_event_id: None,
         }),
-        (None, None, Some(agent_key_authorize_event_id)) => Ok(KeyPackageTrustBinding {
-            ssk_generation: None,
+        (None, Some(agent_key_authorize_event_id)) => Ok(KeyPackageTrustBinding {
             device_authorize_event_id: None,
             agent_key_authorize_event_id: Some(agent_key_authorize_event_id),
         }),
@@ -1303,23 +1278,14 @@ fn keypackage_claim_trust_binding_object(
 fn welcome_requester_signature_binding(
     object: &Map<String, Value>,
 ) -> Result<WelcomeRequesterSignatureBinding, &'static str> {
-    let ssk_generation = object
-        .get("ssk_generation")
-        .and_then(Value::as_u64)
-        .filter(|generation| *generation >= 1);
     let requester_device_id = object
         .get("requester_device_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    match (ssk_generation, requester_device_id) {
-        (Some(ssk_generation), None) => Ok(WelcomeRequesterSignatureBinding {
-            ssk_generation: Some(ssk_generation),
-            requester_device_id: None,
-        }),
-        (None, Some(requester_device_id)) => Ok(WelcomeRequesterSignatureBinding {
-            ssk_generation: None,
+    match requester_device_id {
+        Some(requester_device_id) => Ok(WelcomeRequesterSignatureBinding {
             requester_device_id: Some(requester_device_id),
         }),
         _ => Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH),

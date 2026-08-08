@@ -48,7 +48,6 @@ pub fn validate_operation_semantics(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    validate_cross_signing_reset_replay_batch(operations)?;
     let mut active_series_heads = BTreeMap::<
         (String, String),
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead,
@@ -129,7 +128,6 @@ fn active_series_transition_reason(
         Error::SignedFieldsIncomplete => "key_backup_active_series_signed_fields_incomplete",
         Error::ActiveInPrevious => "key_backup_active_series_active_in_previous",
         Error::PreviousSeriesDuplicate => "key_backup_active_series_previous_series_duplicate",
-        Error::GenerationBindingMismatch => "key_backup_active_series_generation_binding_mismatch",
         Error::ActorOrClassMismatch => "key_backup_active_series_actor_or_class_mismatch",
         Error::PointerVersionRollback => "key_backup_active_series_pointer_version_rollback",
         Error::PointerVersionGap => "key_backup_active_series_pointer_version_gap",
@@ -291,37 +289,6 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             validate_consent_revoke_payload(&wire_payload)
                 .map(|_| ())
                 .map_err(|_| "ak.consent.revoke payload violates its canonical typed shape")
-        }
-        // ak.cross_signing.publish — round 4 CAS-register cell with
-        // required `expected_previous_generation`. The reducer accepts
-        // only when expected_previous_generation == current_generation
-        // and new_generation == current_generation + 1. We enforce
-        // schema shape here; the actual CAS comparison happens during
-        // reducer apply once the cell row is read.
-        arkret_wire::EventKind::CROSS_SIGNING_PUBLISH => {
-            if operation
-                .payload
-                .get("expected_previous_generation")
-                .is_none()
-            {
-                return Err(
-                    "ak.cross_signing.publish payload requires expected_previous_generation \
-                     (round-4 CAS wire break)",
-                );
-            }
-            if operation.payload.get("generation").is_none() {
-                // DRIFT-ALLOW: error message string for the round-4 CAS contract.
-                // Spec cross-signing-publish.schema.json uses `generation`
-                // (monotonic counter) + `expected_previous_generation` (CAS).
-                return Err("ak.cross_signing.publish payload requires generation (round-4 CAS)");
-            }
-            if operation.payload.get("trust_domain").is_none() {
-                // DRIFT-ALLOW: error message string for the round-4 wire break.
-                return Err(
-                    "ak.cross_signing.publish payload requires trust_domain (round-4 wire break)",
-                );
-            }
-            Ok(())
         }
         // ak.audit.policy_access — when `access_kind=e2ee_late_recovery`
         // the payload MUST carry `late_recovery_original_event_id`.
@@ -531,7 +498,6 @@ fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> 
         arkret_wire::EventKind::MORPH_CREATE => Some(validate_morph_create_payload),
         arkret_wire::EventKind::MORPH_UPDATE => Some(validate_morph_update_payload),
         arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE => Some(validate_morph_schema_migrate_payload),
-        arkret_wire::EventKind::CROSS_SIGNING_RESET => Some(validate_cross_signing_reset_payload),
         arkret_wire::EventKind::DEVICE_AUTHORIZE => Some(validate_device_authorize_payload),
         _ => None,
     }
@@ -948,14 +914,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: AGENT_ACTION_REJECT_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
         },
-        arkret_wire::EventKind::CROSS_SIGNING_PUBLISH => OperationPayloadSchema {
-            requirements: CROSS_SIGNING_PUBLISH_REQUIREMENTS,
-            validate: None,
-        },
-        arkret_wire::EventKind::CROSS_SIGNING_RESET => OperationPayloadSchema {
-            requirements: CROSS_SIGNING_RESET_REQUIREMENTS,
-            validate: Some(validate_cross_signing_reset_payload),
-        },
         // Device-identity — `ak.device.authorize` maps to the
         // `ak.component.device.authorization.v1` lattice cell. Registering an
         // Operation here is what lets `project_accepted_operations` run
@@ -963,8 +921,8 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         // `device_public_key` + verified state into the devices inventory
         // (without it the device row stays `unverified` with no key and the
         // client falsely shows the "existing device approval" gate). The SDK
-        // validator owns payload shape and binding oneOf; policy validation then
-        // verifies any cross_signing_binding at ingest.
+        // validator owns payload shape and policy validation verifies the
+        // mandatory device possession proof at ingest.
         arkret_wire::EventKind::DEVICE_AUTHORIZE => OperationPayloadSchema {
             requirements: DEVICE_AUTHORIZE_REQUIREMENTS,
             validate: Some(validate_device_authorize_payload),

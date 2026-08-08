@@ -168,7 +168,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     id: keypackage_id,
                     target: soland_services::events::ClaimMlsKeyPackageTarget::Group(group_id),
                     intended_realm_id: intended_realm_id.as_deref(),
-                    ssk_generation: None,
                     device_authorize_event_id: None,
                     agent_key_authorize_event_id: None,
                     claimed_at: *claimed_at,
@@ -504,21 +503,6 @@ async fn project_accepted_operations_inner(
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
-        // Phase 4 — materialize accepted cross-signing publishes into the
-        // cross-signing registry (CAS bookkeeping). Validation already ran pre-acceptance.
-        if kinds::canonical_kind_string(operation) == "ak.cross_signing.publish" {
-            crate::routing::identity::cross_signing::project_cross_signing_publish(
-                state,
-                &operation.payload,
-            );
-        }
-        if kinds::canonical_kind_string(operation) == "ak.cross_signing.reset" {
-            crate::routing::identity::cross_signing::project_cross_signing_reset(
-                state,
-                &operation.payload,
-            )
-            .await;
-        }
         // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
         // `payload.device_public_key` into the devices table so the
         // `keys/query` signing-key directory resolves devices that were
@@ -930,9 +914,8 @@ fn realm_key_share_device_message_content(
 /// a device that was authorized but never opened a session. Idempotent and
 /// non-destructive: an existing row keeps its `created_at`, `display_name`,
 /// revocation, any already-recorded `device_public_key`, and an atomically
-/// projected B-model generation binding; a verified state is never downgraded.
-/// The `cross_signing_binding` was already verified at ingest
-/// (`validate_device_authorize_binding`).
+/// projected generation binding; a verified state is never downgraded. The
+/// device possession proof was already verified at ingest.
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
     use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
     let payload = &operation.payload;
@@ -940,7 +923,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     // parse the wire shape (projection-injected envelope fields stripped)
     // into the typed SDK counterpart so field access is checked, not stringly.
     let wire_payload =
-        crate::routing::identity::cross_signing::device_authorize_wire_payload(payload);
+        crate::routing::identity::device_signing::device_authorize_wire_payload(payload);
     let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
         Ok(typed) => typed,
         Err(error) => {
@@ -1049,27 +1032,14 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
                 Value::String(generation_ref),
             );
         }
-        // Tier-2 (device-lifecycle.md §5.2 / §8.2): persist the authoritative
-        // `cross_signing_binding` verbatim so keys/query can echo it for
-        // client-side chain verification.
-        match payload.get("cross_signing_binding") {
-            Some(binding @ Value::Object(_)) => {
-                map.insert("cross_signing_binding".to_owned(), binding.clone());
-            }
-            _ => {
-                map.remove("cross_signing_binding");
-            }
+        if let Some(binding_kind) = payload.get("authorization_binding_kind") {
+            map.insert(
+                "authorization_binding_kind".to_owned(),
+                binding_kind.clone(),
+            );
         }
-        // Service-attested devices carry the delegated enrollment authority
-        // binding instead of cross-signing material. Persist it verbatim so
-        // keys/query can expose the current device-set trust anchor.
-        match payload.get("enrollment_authority_binding") {
-            Some(binding @ Value::Object(_)) => {
-                map.insert("enrollment_authority_binding".to_owned(), binding.clone());
-            }
-            _ => {
-                map.remove("enrollment_authority_binding");
-            }
+        if let Some(authorized_by) = payload.get("authorized_by") {
+            map.insert("authorized_by".to_owned(), authorized_by.clone());
         }
     }
     let device = DeviceIdentity {

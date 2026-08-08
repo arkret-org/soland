@@ -18,12 +18,8 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{Did, TypedTrustDomainId};
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
-use arkret_models_identity::{
-    CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
-};
-use arkret_wire::{CORE_REDUCER_PROFILE, DidUrl, NonEmptyString, ProfileId};
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
@@ -55,10 +51,6 @@ fn app_from_state(state: AppState) -> salvo::Service {
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn test_ssk_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&[42_u8; 32])
 }
 
 fn ed25519_public_multibase(signing: &SigningKey) -> String {
@@ -270,60 +262,6 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
-    let principal_id = Did::new(principal.to_owned()).unwrap();
-    let self_signing_public_key = ed25519_public_multibase(&test_ssk_signing_key());
-    CrossSigningPublish {
-        principal_id: principal_id.clone(),
-        trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-mls-test.local").unwrap(),
-        principal_signing_key: PublishedKey {
-            kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkPrincipalAlice").unwrap(),
-            key_format: KeyFormat::Multibase,
-        },
-        self_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new(self_signing_public_key).unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
-            },
-        },
-        user_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
-            },
-        },
-        expected_previous_generation: generation.saturating_sub(1),
-        generation: std::num::NonZeroU64::new(generation).unwrap(),
-        issued_at: Utc::now(),
-    }
-}
-
-fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    for current in 1..=generation {
-        state
-            .test_record_cross_signing_publish(cross_signing_publish(principal, current))
-            .unwrap();
-    }
-}
-
 #[tokio::test]
 async fn mls_lifecycle_end_to_end() {
     let state = soland_test_support::app_state(test_config());
@@ -349,7 +287,10 @@ async fn mls_lifecycle_end_to_end() {
         .put(&alice_device_record)
         .await
         .unwrap();
-    seed_cross_signing_generation(&state, alice_did, 3);
+    let alice_device_authorize_event_id = alice_device_record.payload["device_authorize_event_id"]
+        .as_str()
+        .expect("Alice dev-login device authorization")
+        .to_owned();
     let realm_id = "ak:realm:AWDtuhfsBukRRXYAkoACK2sW1KkTZUS7yUJa-rdG5_1F";
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
@@ -438,7 +379,10 @@ async fn mls_lifecycle_end_to_end() {
         ]
     );
     assert_eq!(published_row.capabilities_digest, capabilities_digest);
-    assert_eq!(published_row.ssk_generation, Some(3));
+    assert_eq!(
+        published_row.device_authorize_event_id.as_deref(),
+        Some(alice_device_authorize_event_id.as_str())
+    );
 
     // ── 2a. atomic claim wins (W1C: ak.self.keys.keypackages.command.claim) ───
     let claim_url = "http://server/_arkret/self/keys/keypackages/claim".to_owned();
@@ -473,7 +417,10 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(claims[0]["keypackage_digest"], json!(keypackage_digest));
     assert_eq!(claims[0]["capabilities"], capabilities);
     assert_eq!(claims[0]["capabilities_digest"], json!(capabilities_digest));
-    assert_eq!(claims[0]["ssk_generation"], json!(3));
+    assert_eq!(
+        claims[0]["device_authorize_event_id"],
+        json!(alice_device_authorize_event_id)
+    );
     assert_eq!(claims[0]["device_signature"], device_signature);
     // ── 2b. a new request cannot re-claim the package for the same group ─
     let same_group_claim = signed_keypackage_claim_request(
@@ -553,7 +500,6 @@ async fn mls_lifecycle_end_to_end() {
         .put(&bob_device_record)
         .await
         .unwrap();
-    seed_cross_signing_generation(&state, bob_did, 3);
 
     let group_id = "ak:mls_group:abc";
     let lifecycle_keypackage_id = "ak:mls_keypackage:lifecycle-bob";
@@ -657,6 +603,11 @@ async fn mls_lifecycle_end_to_end() {
         .as_str()
         .unwrap()
         .to_owned();
+    let claimed_device_authorize_event_id =
+        lifecycle_claim["claims"][0]["device_authorize_event_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let keypackage_ref = claimed_keypackage_ref;
@@ -790,12 +741,12 @@ async fn mls_lifecycle_end_to_end() {
         "intended_realm_id": realm_id,
         "claim_id": claim_id,
         "requester_did": alice_did,
-        "ssk_generation": 3,
+        "requester_device_id": alice_device,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
-            "kid": format!("{alice_did}#self-signing"),
+            "kid": format!("{alice_did}#{alice_device}"),
             "signature_algorithm": "Ed25519",
             "sig": b64(&[0_u8; 64])
         }
@@ -803,7 +754,7 @@ async fn mls_lifecycle_end_to_end() {
     let claim_envelope_model: MlsWelcomeClaimEnvelope =
         serde_json::from_value(claim_envelope.clone()).unwrap();
     let claim_envelope_signature = sign_b64(
-        &test_ssk_signing_key(),
+        &event_signing_key,
         &claim_envelope_model.canonical_signing_bytes().unwrap(),
     );
     claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
@@ -828,7 +779,7 @@ async fn mls_lifecycle_end_to_end() {
                 "keypackage_ref": keypackage_ref,
                 "keypackage_digest": claimed_keypackage_digest,
                 "capabilities_digest": claimed_capabilities_digest,
-                "ssk_generation": 3
+                "device_authorize_event_id": claimed_device_authorize_event_id
             },
             "claim_envelope": claim_envelope,
             "welcome_ref": welcome_ref,

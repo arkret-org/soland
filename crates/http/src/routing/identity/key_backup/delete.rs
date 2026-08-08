@@ -4,7 +4,7 @@
 //!
 //! §7.8 judged the previous shape dead: a `DetachedJws` proof over a
 //! locally-invented transcript, plus a `Development` branch whose "proof" was
-//! the unauthenticated string `dev-ssk-delete:v1:{actor}:{backup}`. Neither
+//! an unauthenticated actor/backup string. Neither
 //! carried server-issued freshness, so both were replayable for as long as the
 //! envelope existed.
 //!
@@ -34,7 +34,7 @@ use chrono::{DateTime, Duration, Utc};
 use rand::RngExt as _;
 
 use super::*;
-use crate::routing::identity::cross_signing::decode_ed25519_key;
+use crate::routing::identity::device_signing::decode_ed25519_key;
 
 /// §7.8.1: "TTL 不超过 300 秒".
 pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
@@ -614,8 +614,7 @@ async fn current_recovery_policy(
 
 /// The `k` of the principal's currently accepted device-quorum recovery policy.
 ///
-/// Same pointer set the cross-signing reset path reads, so one policy document
-/// cannot mean two different quorums depending on which endpoint asks.
+/// The same recovery-policy pointer set governs every destructive endpoint.
 async fn current_device_quorum_k(state: &AppState, principal_id: &str) -> Result<u32, AppError> {
     let policy = current_recovery_policy(state, principal_id).await?;
     if !policy
@@ -627,7 +626,7 @@ async fn current_device_quorum_k(state: &AppState, principal_id: &str) -> Result
             "the accepted recovery policy does not allow device_quorum",
         ));
     }
-    crate::routing::identity::cross_signing::policy_device_quorum_threshold(&policy).ok_or_else(
+    crate::routing::identity::device_signing::policy_device_quorum_threshold(&policy).ok_or_else(
         || {
             AppError::capability_denied(
                 "the accepted recovery policy declares device_quorum without a k",
@@ -640,7 +639,7 @@ fn policy_mentions_recovery_service(
     policy: &soland_services::identity::RecoveryPolicyState,
     service_id: &str,
 ) -> bool {
-    crate::routing::identity::cross_signing::policy_mentions_identifier(
+    crate::routing::identity::device_signing::policy_mentions_identifier(
         policy,
         &[
             "trusted_recovery_service",
@@ -655,7 +654,7 @@ fn policy_mentions_recovery_service(
 fn policy_requires_service_attestation(
     policy: &soland_services::identity::RecoveryPolicyState,
 ) -> bool {
-    crate::routing::identity::cross_signing::policy_requires_trusted_service_attestation(policy)
+    crate::routing::identity::device_signing::policy_requires_trusted_service_attestation(policy)
 }
 
 fn quorum_verification_method_matches(
@@ -664,7 +663,7 @@ fn quorum_verification_method_matches(
     device_public_key: &str,
     verification_method: &str,
 ) -> bool {
-    crate::routing::identity::cross_signing::device_quorum_method_matches(
+    crate::routing::identity::device_signing::device_quorum_method_matches(
         principal_id,
         device_id,
         device_public_key,

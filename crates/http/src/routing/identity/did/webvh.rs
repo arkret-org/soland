@@ -297,26 +297,17 @@ pub(super) fn embedded_webvh_document_value(
     did_public_key_multibase: &str,
     also_known_as: &[String],
     service_endpoint: &str,
-    enrollment_authority_did: Option<&str>,
 ) -> Value {
     // The service array order + entry shape MUST match the registering client's
     // document byte-for-byte (canonical JSON does not sort array elements), or
     // the SCID / entry hash / log proof recomputed here will not verify. coauth's
-    // embedded_webvh provider (coauth services/soland_webvh.rs) appends the
-    // ArkretDeviceEnrollmentAuthority service after ArkretPrincipalServer when it
-    // designates an enrollment authority; mirror that exactly.
-    let mut service = vec![json!({
+    // embedded_webvh provider (coauth services/soland_webvh.rs) emits the same
+    // principal-server service entry; mirror that exactly.
+    let service = vec![json!({
         "id": format!("{did}#soland"),
         "type": "ArkretPrincipalServer",
         "serviceEndpoint": service_endpoint,
     })];
-    if let Some(authority_did) = enrollment_authority_did {
-        service.push(json!({
-            "id": format!("{did}#enrollment-authority"),
-            "type": "ArkretDeviceEnrollmentAuthority",
-            "serviceEndpoint": authority_did,
-        }));
-    }
     json!({
         "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,

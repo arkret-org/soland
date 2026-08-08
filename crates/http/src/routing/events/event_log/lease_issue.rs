@@ -315,7 +315,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             .get(1)
             .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::DEVICE_AUTHORIZE)
     {
-        arkret_bootstrap::validate_self_principal_bootstrap_unit(
+        arkret_bootstrap::validate_self_principal_pcr_genesis_unit(
             &events[0],
             &events[1],
             &genesis_cell_write_projector,
@@ -421,6 +421,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
                 None
             },
             self_principal_pcr_bootstrap,
+            identity_anchor_candidate_device_key: None,
             authority_root,
         },
         basis,

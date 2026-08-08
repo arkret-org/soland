@@ -1,7 +1,7 @@
 use super::super::*;
 use super::account_status::validate_account_status_service_binding;
 use super::audit::{validate_audit_accessed_payload, validate_strand_watch_manage_others_levels};
-use super::enrollment::validate_device_enrollment_authority_binding;
+use super::enrollment::validate_device_authorization_binding;
 use super::mls_governance::projected_media_plaintext_service_present;
 use super::payload_shape::{
     validate_event_audience_fields, validate_pre_schema_wire_shape,

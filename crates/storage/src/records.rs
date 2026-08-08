@@ -141,7 +141,6 @@ pub struct RecoverySessionRecord {
     pub policy_id: String,
     pub policy_version: u32,
     pub identity_model: RecoveryIdentityModel,
-    pub ssk_generation: Option<u64>,
     pub current_device_generation_ref: Option<NonEmptyString>,
     pub device_generation_status: Option<DeviceGenerationStatus>,
     pub registry_head: Option<Hash>,

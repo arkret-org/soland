@@ -522,7 +522,7 @@ async fn materialize_realm_control_with_transported_seals(
         record.kind == arkret_wire::EventKind::REALM_CREATE
             && record
                 .envelope
-                .pointer("/payload/object/fields/purpose")
+                .pointer("/payload/object/purpose")
                 .and_then(serde_json::Value::as_str)
                 == Some("principal_control")
             && record
@@ -540,7 +540,7 @@ async fn materialize_realm_control_with_transported_seals(
             record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record
                     .envelope
-                    .pointer("/payload/object/fields/purpose")
+                    .pointer("/payload/object/purpose")
                     .and_then(serde_json::Value::as_str)
                     == Some("principal_control")
         })
@@ -633,7 +633,7 @@ async fn materialize_realm_control_with_transported_seals(
         record.kind == arkret_wire::EventKind::REALM_CREATE
             && record
                 .envelope
-                .pointer("/payload/object/fields/purpose")
+                .pointer("/payload/object/purpose")
                 .and_then(serde_json::Value::as_str)
                 == Some("principal_control")
     }) {

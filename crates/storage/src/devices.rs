@@ -84,13 +84,6 @@ pub trait DeviceMessageStore: Send + Sync {
     ) -> PersistenceResult<Option<i64>>;
     /// Drop everything queued for the recipient+device (used on session revoke).
     async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
-    /// Drop queued verification / cross-signing bootstrap messages for this
-    /// principal unless they are explicitly bound to `new_generation`.
-    async fn purge_cross_signing_reset_stale_messages(
-        &self,
-        recipient: &str,
-        new_generation: u64,
-    ) -> PersistenceResult<usize>;
 }
 /// Long-term device key bundles (one per `(actor, device_id)`).
 #[async_trait]
@@ -143,42 +136,4 @@ pub fn ensure_device_message_id(message: &mut DeviceMessageRecord) {
             Value::String(crate::ids::generate("device_message")),
         );
     }
-}
-#[doc(hidden)]
-pub fn queued_reset_message_generation(content: &Value) -> Option<u64> {
-    content
-        .get("new_generation")
-        .and_then(value_as_u64_or_string)
-        .or_else(|| {
-            content
-                .get("content")
-                .and_then(|inner| inner.get("new_generation"))
-                .and_then(value_as_u64_or_string)
-        })
-}
-#[doc(hidden)]
-pub fn value_as_u64_or_string(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
-}
-#[doc(hidden)]
-pub fn queued_message_kind(content: &Value) -> Option<&str> {
-    content
-        .get("kind")
-        .and_then(Value::as_str)
-        .or_else(|| content.get("content")?.get("kind")?.as_str())
-}
-#[doc(hidden)]
-pub fn cross_signing_reset_blocks_queued_message(content: &Value, new_generation: u64) -> bool {
-    if queued_reset_message_generation(content) == Some(new_generation) {
-        return false;
-    }
-    let Some(kind) = queued_message_kind(content) else {
-        return false;
-    };
-    kind.starts_with("ak.key.verification.")
-        || kind.starts_with("ak.cross_signing.")
-        || kind.contains("trust_bootstrap")
-        || kind.contains("trust.bootstrap")
 }

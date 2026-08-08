@@ -238,8 +238,6 @@ pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
     "ak.device.authorize",
     "ak.device.list_update",
     "ak.device.revoke",
-    "ak.cross_signing.publish",
-    "ak.cross_signing.reset",
 ];
 
 /// Phase 2 — principal control realm isolation (key-management.md §4.1). A

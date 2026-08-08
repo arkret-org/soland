@@ -201,9 +201,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
         deliveries: Vec<crate::events::FederationDelivery>,
-        bootstrap_decision: Option<
-            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-        >,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
@@ -238,36 +235,11 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 }),
                 publication_evidence,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
-                bootstrap_decision,
             )
             .await?;
         Ok(crate::events::IdentityAnchorCommitResult {
             reanchor_conflict: outcome.reanchor_conflict,
         })
-    }
-    async fn device_bootstrap_decision(
-        &self,
-        account_authority_id: &str,
-        transaction_id: &str,
-    ) -> crate::ServiceResult<
-        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
-    > {
-        Ok(self
-            .0
-            .events()
-            .device_bootstrap_decision(account_authority_id, transaction_id)
-            .await?)
-    }
-    async fn put_device_bootstrap_decision(
-        &self,
-        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
-        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-    ) -> crate::ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome> {
-        Ok(self
-            .0
-            .events()
-            .put_device_bootstrap_decision_atomic(request, record)
-            .await?)
     }
     async fn canonical_event(
         &self,
@@ -974,7 +946,6 @@ fn application_mls_key_package(
         lifetime_not_before: row.lifetime_not_before,
         lifetime_not_after: row.lifetime_not_after,
         claimed_by_mls_group_id: row.claimed_by_mls_group_id,
-        ssk_generation: row.ssk_generation,
         device_authorize_event_id: row.device_authorize_event_id,
         agent_key_authorize_event_id: row.agent_key_authorize_event_id,
         claimed_at: row.claimed_at,
@@ -1002,7 +973,6 @@ fn persistence_mls_key_package(
         lifetime_not_before: row.lifetime_not_before,
         lifetime_not_after: row.lifetime_not_after,
         claimed_by_mls_group_id: row.claimed_by_mls_group_id.clone(),
-        ssk_generation: row.ssk_generation,
         device_authorize_event_id: row.device_authorize_event_id.clone(),
         agent_key_authorize_event_id: row.agent_key_authorize_event_id.clone(),
         claimed_at: row.claimed_at,
@@ -1103,7 +1073,6 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     }
                 },
                 intended_realm_id: command.intended_realm_id,
-                ssk_generation: command.ssk_generation,
                 device_authorize_event_id: command.device_authorize_event_id,
                 agent_key_authorize_event_id: command.agent_key_authorize_event_id,
                 claimed_at: command.claimed_at,
@@ -1150,7 +1119,6 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 .try_claim_peer(soland_storage::PeerKeyPackageClaimAttempt {
                     keypackage_id: attempt.keypackage_id,
                     mls_group_id: attempt.mls_group_id,
-                    ssk_generation: attempt.ssk_generation,
                     device_authorize_event_id: attempt.device_authorize_event_id,
                     agent_key_authorize_event_id: attempt.agent_key_authorize_event_id,
                     claimed_at: attempt.claimed_at,
@@ -1271,7 +1239,6 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     id: &row.id,
                     target: soland_storage::MlsKeyPackageClaimTarget::Retire,
                     intended_realm_id: None,
-                    ssk_generation: None,
                     device_authorize_event_id: None,
                     agent_key_authorize_event_id: None,
                     claimed_at: retired_at,

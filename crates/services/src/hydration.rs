@@ -3,14 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CircleId, Did, OperationId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
 use arkret_wire::{Event, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
 
 use crate::events::{DirectoryProvenance, RealmDirectoryEntry, RealmDirectoryIndex};
-use crate::identity::CrossSigningRegistry;
 
 /// The Realm's effective digest suite as the already-hydrated projection sees
 /// it. `digest_of` members in the registry projection are derived under it, so
@@ -44,27 +42,6 @@ fn application_canonical_event(
         envelope: record.envelope.clone(),
         received_at: record.received_at,
     }
-}
-
-fn projection_context_stripped_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        for field in [
-            "event_id",
-            "sender",
-            "hlc",
-            "executed_by",
-            "authorization_ref",
-            "seal_ref",
-            "seal_basis",
-            "preconditions",
-            "accepted_event_id",
-            soland_domain::reducer::READ_CURSOR_CAUSAL_RELATION_CONTEXT,
-        ] {
-            object.remove(field);
-        }
-    }
-    wire_payload
 }
 
 fn plaintext_service_classes_from_value(
@@ -150,54 +127,6 @@ pub fn parse_child_scope_policy(
         _ => return Err("invalid_child_scope_policy"),
     };
     Ok(Some(policy))
-}
-
-pub async fn hydrate_cross_signing_from_persistence(
-    persistence: &dyn soland_storage::PersistenceStore,
-) -> PersistenceResult<CrossSigningRegistry> {
-    let mut manager = CrossSigningRegistry::new();
-    for event in persistence.projection_events().snapshot_all().await? {
-        let payload = projection_context_stripped_payload(&event.payload);
-        match event.event_kind.as_str() {
-            arkret_wire::EventKind::CROSS_SIGNING_PUBLISH => {
-                let publish =
-                    serde_json::from_value::<CrossSigningPublish>(payload).map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing publish {} failed hydration decode: {error}",
-                            event.event_id
-                        ))
-                    })?;
-                manager
-                    .record_cross_signing_publish(publish)
-                    .map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing publish {} failed deterministic hydration: {error}",
-                            event.event_id
-                        ))
-                    })?;
-            }
-            arkret_wire::EventKind::CROSS_SIGNING_RESET => {
-                let reset = serde_json::from_value::<CrossSigningResetPayload>(payload).map_err(
-                    |error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing reset {} failed hydration decode: {error}",
-                            event.event_id
-                        ))
-                    },
-                )?;
-                manager
-                    .record_cross_signing_reset(&reset)
-                    .map_err(|error| {
-                        soland_storage::PersistenceError::Internal(format!(
-                            "cross-signing reset {} failed deterministic hydration: {error}",
-                            event.event_id
-                        ))
-                    })?;
-            }
-            _ => {}
-        }
-    }
-    Ok(manager)
 }
 
 fn operation_from_projection_event(
@@ -929,7 +858,6 @@ pub async fn hydrate_projections_from_persistence(
                     last_resort: row.last_resort,
                     last_resort_realm_id: row.last_resort_realm_id,
                     claimed_by: row.claimed_by_mls_group_id,
-                    ssk_generation: row.ssk_generation,
                     device_authorize_event_id: row.device_authorize_event_id,
                     agent_key_authorize_event_id: row.agent_key_authorize_event_id,
                     claimed_at: row.claimed_at,

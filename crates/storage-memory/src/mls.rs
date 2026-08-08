@@ -59,7 +59,6 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             id,
             target,
             intended_realm_id,
-            ssk_generation,
             device_authorize_event_id,
             agent_key_authorize_event_id,
             claimed_at,
@@ -99,11 +98,6 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             // Already claimed by a different group — CAS loser path. A repeat
             // claim by the same group is idempotent renewal (mirrors the
             // reducer and the postgres try_claim guard).
-            return Ok(None);
-        }
-        if let Some(generation) = ssk_generation
-            && row.ssk_generation != Some(generation)
-        {
             return Ok(None);
         }
         if let Some(event_id) = device_authorize_event_id
@@ -231,11 +225,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
         }
         if attempt
-            .ssk_generation
-            .is_some_and(|generation| row.ssk_generation != Some(generation))
-            || attempt
-                .device_authorize_event_id
-                .is_some_and(|event_id| row.device_authorize_event_id.as_deref() != Some(event_id))
+            .device_authorize_event_id
+            .is_some_and(|event_id| row.device_authorize_event_id.as_deref() != Some(event_id))
             || attempt
                 .agent_key_authorize_event_id
                 .is_some_and(|event_id| {
@@ -508,8 +499,9 @@ mod tests {
             lifetime_not_before: 1,
             lifetime_not_after: i64::MAX,
             claimed_by_mls_group_id: None,
-            ssk_generation: Some(1),
-            device_authorize_event_id: None,
+            device_authorize_event_id: Some(
+                "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
+            ),
             agent_key_authorize_event_id: None,
             claimed_at: None,
             claim_expires_at_unix_ms: None,
@@ -563,8 +555,9 @@ mod tests {
             store.try_claim_peer(PeerKeyPackageClaimAttempt {
                 keypackage_id: "kp-1",
                 mls_group_id: "group-1",
-                ssk_generation: Some(1),
-                device_authorize_event_id: None,
+                device_authorize_event_id: Some(
+                    "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
+                ),
                 agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
@@ -573,8 +566,9 @@ mod tests {
             store.try_claim_peer(PeerKeyPackageClaimAttempt {
                 keypackage_id: "kp-2",
                 mls_group_id: "group-2",
-                ssk_generation: Some(1),
-                device_authorize_event_id: None,
+                device_authorize_event_id: Some(
+                    "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
+                ),
                 agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
@@ -615,8 +609,9 @@ mod tests {
             .try_claim_peer(PeerKeyPackageClaimAttempt {
                 keypackage_id: "last-resort",
                 mls_group_id: "group-1",
-                ssk_generation: Some(1),
-                device_authorize_event_id: None,
+                device_authorize_event_id: Some(
+                    "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
+                ),
                 agent_key_authorize_event_id: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
@@ -719,8 +714,9 @@ mod tests {
                     .try_claim_peer(PeerKeyPackageClaimAttempt {
                         keypackage_id: id,
                         mls_group_id: group,
-                        ssk_generation: Some(1),
-                        device_authorize_event_id: None,
+                        device_authorize_event_id: Some(
+                            "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
+                        ),
                         agent_key_authorize_event_id: None,
                         claimed_at: 10,
                         claim_expires_at_unix_ms: 20_000,

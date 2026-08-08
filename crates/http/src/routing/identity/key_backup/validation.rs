@@ -439,21 +439,6 @@ pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<
         .auth_data
         .as_ref()
         .ok_or_else(|| schema_error("key backup auth_data is required"))?;
-    let has_ssk_generation = auth.ssk_generation.is_some();
-    let has_device_authorize_event_id = auth.device_authorize_event_id.is_some();
-    match (has_ssk_generation, has_device_authorize_event_id) {
-        (true, false) | (false, true) => {}
-        (false, false) => {
-            return Err(schema_error(
-                "auth_data must include exactly one device trust anchor",
-            ));
-        }
-        (true, true) => {
-            return Err(schema_error(
-                "auth_data.ssk_generation and auth_data.device_authorize_event_id are mutually exclusive",
-            ));
-        }
-    }
     for field in KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS {
         if !auth
             .signed_fields

@@ -524,29 +524,13 @@ async fn validate_event_envelope_with_ingress(
             .await?;
     }
     if kind == "ak.device.authorize" {
-        validate_device_enrollment_authority_binding(state, object, &actor_id).await?;
+        validate_device_authorization_binding(state, object, &actor_id, realm_bootstrap_contexts)
+            .await?;
     }
     if kind == arkret_wire::EventKind::ACCOUNT_STATUS {
         validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
-    // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
-    // signature check (verified below in `validate_event_proofs`). Aggressive
-    // mode: payload missing the new required fields surfaces as
-    // schema_violation here; payload with mismatched trust_domain surfaces as
-    // the registered `cross_domain_replay_rejected` (409) code.
-    if kind == "ak.cross_signing.reset" {
-        let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-        if let Err((code, reason)) =
-            cross_signing_reset_replay_check(&payload, &state.config().trust_domain)
-        {
-            return Err(event_validation_error(
-                error_http_status(code),
-                code.as_str(),
-                &reason,
-            ));
-        }
-    }
     // Round R2/R3 (T09 + T12) — realm.policy_bundle hard ceiling,
     // e2ee_relaxed mutex, and media plaintext triple binding. Active
     // profile set comes from the submitted policy-components payload;
@@ -625,7 +609,9 @@ async fn validate_event_envelope_with_ingress(
         session,
         &actor_id,
         &canonical_digest,
+        typed_digest_suite,
         &canonical_bytes,
+        realm_bootstrap_contexts,
         internal_admission,
     )
     .await?;

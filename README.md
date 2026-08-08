@@ -62,9 +62,6 @@ Operator-visible highlights:
 - **Delivery-binding handover error codes** —
   `delivery_binding_stale` (with `new_recipient_service_id` +
   `handover_frontier`) and `delivery_binding_handed_over`.
-- **`ak.cross_signing.publish` CAS** —
-  `expected_previous_generation == current && new = current + 1`,
-  verified before signature.
 
 ## Round R2/R3 deployment requirements
 
@@ -75,9 +72,8 @@ operator must address at boot — see
 normative source. The key operational hooks:
 
 - **`SOLAND_TRUST_DOMAIN`** — required `ak:trust_domain:<scope>` value
-  (defaults to a value derived from the configured `service_id`).
-  Enters the canonical transcript of every `ak.cross_signing.reset`
-  proof; rotating this value invalidates outstanding proofs.
+  (defaults to a value derived from the configured `service_id`) and binds
+  peer authorization and recovery transcripts to this deployment.
 - **Ephemeral kinds rejected on `POST /_arkret/self/events`** — producers
   must route the 12 ephemeral kinds (`ak.call.signal`, `ak.presence`,
   `ak.typing`, `ak.receipt.read`, `ak.key.verification.*`) through
@@ -170,7 +166,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_KEYSTORE_MASTER_KEY_FILE=/run/secrets/soland-keystore-master-key \
   -e SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=/var/lib/soland/identity-bundle \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  -e SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID=did:key:z6Mk... \
+  -e SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk... \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
@@ -212,7 +208,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER` / `_FILE` | unset | When set with the external Provider URL, stores Soland's own service identity there (class A); no first-provisioning flag or configured DID is used |
 | `SOLAND_DEFAULT_WEBVH_PROVIDER_ID` | unset | Optional coauth default provider id: `soland.embedded` or `external.webvh` |
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
-| `SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID` | unset | Deployment-pinned B-model enrollment authority DID; required together with `SOLAND_ACCOUNT_AUTHORITY_URL` |
+| `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` | unset | Account Authority service DID trusted for S2S account-status evidence; required together with `SOLAND_ACCOUNT_AUTHORITY_URL` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | If set, enables PostgreSQL and runs migrations; a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
@@ -314,7 +310,7 @@ SOLAND_KEYSTORE_MASTER_KEY_FILE=../.secrets/soland-keystore-master-key
 SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
-SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID=did:key:z6Mk...
+SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_arkret/gate/account/session-grants/introspect
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection

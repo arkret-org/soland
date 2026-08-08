@@ -322,40 +322,15 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
-#[test]
-fn service_attested_device_authorize_binding_accepts_projection_metadata() {
-    let state = test_state();
-    let payload = json!({
-        "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
-        "device_public_key": "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG",
-        "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-        "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-        "not_before": "2026-06-22T14:45:51.000Z",
-        "enrollment_authority_binding": {
-            "kind": "service_attested",
-            "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-            "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
-        },
-        "event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r",
-        "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "hlc": "019eefcb7d18-0000-8adcfdb5",
-        "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-        "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
-        "accepted_event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r"
-    });
-
-    crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
-        .unwrap();
-}
-
-fn signed_service_attested_device_authorize_payload(
+fn signed_device_authorize_payload(
     device_signer: &SigningKey,
     signing_key: &SigningKey,
 ) -> serde_json::Value {
-    let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-        device_signer.verifying_key().as_bytes(),
+    let device_public_key = format!(
+        "did:key:{}",
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            device_signer.verifying_key().as_bytes(),
+        )
     );
     let mut payload = json!({
         "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
@@ -364,13 +339,10 @@ fn signed_service_attested_device_authorize_payload(
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
         "device_key_algorithm": "Ed25519",
-        "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
+        "authorized_by": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "not_before": "2026-06-22T14:45:51.000Z",
-        "enrollment_authority_binding": {
-            "kind": "service_attested",
-            "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
-            "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
-        }
+        "authorization_binding_kind": "root_anchored",
+        "device_signature": "cGVuZGluZw"
     });
     let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(payload.clone()).expect("typed device authorize payload");
@@ -386,9 +358,9 @@ fn signed_service_attested_device_authorize_payload(
 fn device_authorize_validates_device_possession_signature() {
     let state = test_state();
     let device_signer = SigningKey::from_bytes(&[7u8; 32]);
-    let payload = signed_service_attested_device_authorize_payload(&device_signer, &device_signer);
+    let payload = signed_device_authorize_payload(&device_signer, &device_signer);
 
-    crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
+    crate::routing::identity::device_signing::validate_device_authorize_binding(&state, &payload)
         .unwrap();
 }
 
@@ -397,10 +369,10 @@ fn device_authorize_rejects_signature_from_wrong_device_key() {
     let state = test_state();
     let device_signer = SigningKey::from_bytes(&[7u8; 32]);
     let wrong_signer = SigningKey::from_bytes(&[8u8; 32]);
-    let payload = signed_service_attested_device_authorize_payload(&device_signer, &wrong_signer);
+    let payload = signed_device_authorize_payload(&device_signer, &wrong_signer);
 
     assert_eq!(
-        crate::routing::identity::cross_signing::validate_device_authorize_binding(
+        crate::routing::identity::device_signing::validate_device_authorize_binding(
             &state, &payload
         ),
         Err("device_authorize_device_signature_invalid")
@@ -1058,7 +1030,6 @@ async fn register_native_agent_membership_context(
             last_resort: false,
             last_resort_realm_id: None,
             claimed_by: None,
-            ssk_generation: None,
             device_authorize_event_id: None,
             agent_key_authorize_event_id: Some(authorize_event_id.to_owned()),
             claimed_at: None,

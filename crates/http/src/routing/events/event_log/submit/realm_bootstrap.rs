@@ -99,6 +99,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
         identity_anchor_event_id: None,
         self_principal_pcr_bootstrap: false,
+        identity_anchor_candidate_device_key: None,
         authority_root: Some(unit.authority_root.clone()),
     };
     let contexts = std::slice::from_ref(&context);

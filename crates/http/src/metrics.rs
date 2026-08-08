@@ -83,7 +83,6 @@ pub const SIGNATURE_SCHEME_MINIMAL_METADATA: &str = "ed25519_minimal_metadata";
 pub const SIGNATURE_SCHEME_AGENT_SESSION: &str = "ed25519_agent_session";
 pub const SIGNATURE_SCHEME_FEDERATED_AGENT_EVIDENCE: &str = "ed25519_federated_agent_evidence";
 pub const SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE: &str = "ed25519_federated_signer_evidence";
-pub const SIGNATURE_SCHEME_RECOVERY_SSK: &str = "ed25519_recovery_ssk";
 pub const SIGNATURE_SCHEME_DEVELOPMENT: &str = "ed25519_development";
 
 /// Buckets for `soland_federation_retry_delay_seconds` — spans the whole

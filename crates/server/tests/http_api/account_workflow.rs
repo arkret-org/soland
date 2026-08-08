@@ -257,12 +257,9 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
 
 #[tokio::test]
 async fn account_viewer_authorizes_founding_device_registered_with_account() {
-    // Device-identity B-model (decision 0002 / device-lifecycle.md §5.4): a
-    // device becomes `verified` ONLY through a projected `ak.device.authorize`.
-    // The founding device is NOT self-authorized — registration creates an
-    // `unverified`, key-less placeholder (a `verified`-without-key row would
-    // break recovery genesis and projected-device-set verification), and the
-    // enrollment authority's `service_attested` authorize event flips it later.
+    // A device becomes `verified` only through an accepted and projected
+    // `ak.device.authorize`; account registration alone creates an unverified
+    // placeholder until that possession-bound authorization is accepted.
     let state = soland_test_support::app_state(test_config());
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let did = "did:web:bob.example";

@@ -164,7 +164,7 @@ async fn bootstrap_generation_ref(
             && record.kind == arkret_wire::EventKind::REALM_CREATE
             && record
                 .envelope
-                .pointer("/payload/object/fields/purpose")
+                .pointer("/payload/object/purpose")
                 .and_then(Value::as_str)
                 == Some("principal_control")
             && record
@@ -200,27 +200,6 @@ async fn bootstrap_generation_ref(
         .await
         .map_err(|error| ServiceError::internal(error.to_string()))?;
     entries.sort_by_key(|entry| entry.seq);
-    let is_external_enrollment_model = entries.first().is_some_and(|entry| {
-        entry
-            .operation
-            .get("state")
-            .or_else(|| entry.operation.get("did_document"))
-            .and_then(|document| document.get("service"))
-            .and_then(Value::as_array)
-            .is_some_and(|services| {
-                services.iter().any(|service| {
-                    service.get("type").and_then(Value::as_str)
-                        == Some(arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY)
-                        && service
-                            .get("serviceEndpoint")
-                            .and_then(Value::as_str)
-                            .is_some_and(|authority| authority != principal_id)
-                })
-            })
-    });
-    if !is_external_enrollment_model {
-        return Ok(None);
-    }
     Ok(entries
         .first()
         .and_then(|entry| entry.operation.get("versionId"))

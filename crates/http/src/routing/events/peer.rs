@@ -10,6 +10,9 @@ use arkret_models_collaboration::event_sync::{
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
 };
+use arkret_models_collaboration::principal_operations::{
+    PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
+};
 use arkret_wire::{CbaProofBundle, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
@@ -61,12 +64,77 @@ pub(super) fn router() -> Router {
         )
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
-        .push(
-            Router::with_path("device-bootstrap-decisions")
-                .post(super::device_bootstrap_decision::decide_device_bootstrap),
-        )
+        .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(Router::with_path("signal").post(peer_signal_relay))
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.principal_genesis.command.submit",
+    tags("events")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.principal_genesis.command.submit"))]
+async fn peer_principal_genesis(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PcrGenesisSubmitOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let source_trust_domain = required_header(req, "source-trust-domain")?;
+    let header_idempotency_key = required_header(req, "idempotency-key")?;
+    let request = parse_json_body::<PcrGenesisSubmitRequestBody>(
+        req,
+        "invalid ak.peer.principal_genesis.command.submit request body",
+    )
+    .await?;
+    request
+        .validate()
+        .map_err(|error| schema_violation(error.to_string()))?;
+    let configured_authority = state
+        .config()
+        .account_authority_service_id
+        .as_deref()
+        .ok_or_else(|| {
+            AppError::capability_denied("Account Authority service identity is not configured")
+        })?;
+    if source_service_id != request.account_authority_id.as_str()
+        || configured_authority != request.account_authority_id.as_str()
+    {
+        return Err(AppError::capability_denied(
+            "PCR genesis relay source is not the configured Account Authority",
+        ));
+    }
+    if header_idempotency_key != request.idempotency_key.as_str()
+        || source_trust_domain
+            != request
+                .identity_creation_control_proof
+                .trust_domain
+                .as_str()
+    {
+        return Err(cross_domain_replay(
+            "PCR genesis relay transport binding mismatch",
+        ));
+    }
+    if let Some(authority_url) = state.config().account_authority_url.as_deref()
+        && request
+            .identity_creation_control_proof
+            .origin
+            .trim_end_matches('/')
+            != authority_url.trim_end_matches('/')
+    {
+        return Err(cross_domain_replay(
+            "PCR genesis creation-proof origin does not match the configured Account Authority",
+        ));
+    }
+    super::event_log::submit_peer_pcr_genesis(state, &request)
+        .await
+        .map_err(|error| {
+            AppError::internal(error.message)
+                .with_status(error.status)
+                .with_wire_code(error.code)
+        })
+        .and_then(json_ok)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]

@@ -38,7 +38,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
     let signer_key_evidence = internal_admission.and_then(|admission| {
         admission.signer_key_evidence(session, object, envelope.signature.kid.as_str())
     });
-    crate::routing::identity::cross_signing::verify_mls_welcome_claim_envelope_signature(
+    crate::routing::identity::device_signing::verify_mls_welcome_claim_envelope_signature(
         state,
         &envelope,
         sender_device_id,

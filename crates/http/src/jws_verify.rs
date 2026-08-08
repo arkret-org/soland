@@ -24,6 +24,7 @@ use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use serde_json::Value;
 use soland_services::identity::{
     DID_DOCUMENT_HIGH_RISK_TTL_SECS, DidDocumentFreshness, evaluate_did_document_freshness,
 };
@@ -294,7 +295,7 @@ pub fn verify_jws_with_pinned_document(
 /// the principal-control device-set projection instead of the DID document.
 /// A verification method shaped as `{principal}#{device_id}` therefore MUST
 /// resolve through that projection. Non-device methods (identity control,
-/// delegated enrollment authority, service notary, and similar methods) keep
+/// service notary and similar methods) keep
 /// using the DID-document verifier and its high-risk freshness gate.
 #[derive(Debug)]
 pub enum PrincipalAuthorizedJwsError {
@@ -355,7 +356,7 @@ async fn principal_verification_source(
         && arkret_identifiers::DeviceId::new(device_id.to_owned()).is_ok()
     {
         let facet =
-            crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+            crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
                 state,
                 principal_id,
                 device_id,
@@ -801,52 +802,390 @@ pub async fn federated_device_signing_key_evidence(
     device_id: &arkret_identifiers::DeviceId,
     verification_method: &str,
 ) -> Result<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence, String> {
-    let expected_method = format!("{actor_id}#{device_id}");
-    if verification_method != expected_method {
+    use arkret_wire::event_envelope::{
+        FederatedCurrentDeviceProjection, FederatedDeviceGenerationState,
+        FederatedDeviceGenerationStatus, FederatedDeviceRecord, FederatedDeviceSigningKeyEvidence,
+        FederatedDeviceStatus,
+    };
+    use std::collections::BTreeMap;
+
+    if verification_method != format!("{actor_id}#{device_id}") {
         return Err("device signing verification method is not actor_id#device_id".to_owned());
     }
     let facet =
-        crate::routing::identity::cross_signing::try_resolve_device_signing_directory_facet(
+        crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
             actor_id.as_str(),
             device_id.as_str(),
         )
         .await
         .map_err(|error| format!("device signing directory unavailable: {error}"))?;
-    if !matches!(
-        facet.status,
-        arkret_models_crypto::keys::DeviceStatus::Active
-    ) {
+    if facet.status != arkret_models_crypto::keys::DeviceStatus::Active {
         return Err("device signer is not active".to_owned());
     }
-    let device_signing_key = facet
-        .signing_key_did
-        .ok_or_else(|| "device signer key is unavailable".to_owned())?;
-    let device_authorize_event_id = facet
+    let device_signing_key = arkret_wire::DidKey::new(
+        facet
+            .signing_key_did
+            .ok_or_else(|| "device signer key is unavailable".to_owned())?,
+    )
+    .map_err(|error| format!("device signer key is invalid: {error}"))?;
+    let authorize_event_id = facet
         .device_authorize_event_id
         .ok_or_else(|| "device signer has no accepted authorization Event".to_owned())?;
-    let device_authorize_record = state
-        .event_queries()
-        .canonical_event(device_authorize_event_id.as_str())
-        .await
-        .map_err(|error| format!("device authorization Event lookup failed: {error}"))?
-        .ok_or_else(|| "device authorization Event is unavailable".to_owned())?;
-    let device_authorize_event =
-        serde_json::from_value::<arkret_wire::Event>(device_authorize_record.envelope)
-            .map_err(|error| format!("device authorization Event is invalid: {error}"))?;
-    Ok(
-        arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence {
-            actor_id: actor_id.clone(),
-            device_id: device_id.clone(),
-            verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(
-                |error| format!("device signing verification method is not a DID URL: {error}"),
-            )?,
-            device_signing_key: arkret_wire::DidKey::new(device_signing_key)
-                .map_err(|error| format!("device signer key is invalid: {error}"))?,
-            authorization_accepted_at: device_authorize_record.received_at,
-            device_authorize_event: Box::new(device_authorize_event),
-        },
+    let generation_ref = facet
+        .authorized_generation_ref
+        .ok_or_else(|| "device signer has no active generation binding".to_owned())?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        actor_id.as_str(),
     )
+    .await
+    .map_err(|error| format!("device generation unavailable: {error}"))?
+    .ok_or_else(|| "device generation is unavailable".to_owned())?;
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || generation.current_ref != generation_ref.as_str()
+    {
+        return Err("device signer is outside the active device generation".to_owned());
+    }
+
+    let control_realm =
+        soland_services::identity::principal_control_realm_for_did(actor_id.as_str());
+    let mut realm_records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| format!("PCR Realm history lookup failed: {error}"))?;
+    realm_records.retain(|record| record.realm_id.as_deref() == Some(control_realm.as_str()));
+    let mut records = state
+        .event_queries()
+        .canonical_events_for_realm_actor(&control_realm, actor_id.as_str())
+        .await
+        .map_err(|error| format!("PCR history lookup failed: {error}"))?;
+    records.sort_by(|a, b| {
+        a.actor_seq
+            .cmp(&b.actor_seq)
+            .then_with(|| a.event_id.cmp(&b.event_id))
+    });
+    let create = records
+        .iter()
+        .find(|record| {
+            record.kind == arkret_wire::EventKind::REALM_CREATE
+                && record
+                    .envelope
+                    .pointer("/payload/object/purpose")
+                    .and_then(Value::as_str)
+                    == Some("principal_control")
+        })
+        .ok_or_else(|| "PCR genesis Event is unavailable".to_owned())?;
+    let create_event_id = create.event_id.clone();
+    let create_actor_seq = create.actor_seq;
+    let mut authorization_chain = records
+        .iter()
+        .filter(|record| {
+            record.actor_seq >= create_actor_seq
+                && matches!(
+                    record.kind.as_str(),
+                    arkret_wire::EventKind::REALM_CREATE
+                        | arkret_wire::EventKind::DEVICE_AUTHORIZE
+                        | arkret_wire::EventKind::DEVICE_REVOKE
+                        | arkret_wire::EventKind::DEVICE_REANCHOR
+                        | arkret_wire::EventKind::DEVICE_LIST_UPDATE
+                )
+        })
+        .map(|record| {
+            crate::routing::events::event_log::sdk_event_for_state(state, record)
+                .map_err(|error| format!("PCR authorization Event is invalid: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    authorization_chain.sort_by(|a, b| {
+        a.actor_seq
+            .cmp(&b.actor_seq)
+            .then_with(|| a.event_id.as_str().cmp(b.event_id.as_str()))
+    });
+    if authorization_chain.len() < 2
+        || authorization_chain[0].event_id.as_str() != create_event_id
+        || !authorization_chain
+            .iter()
+            .any(|event| event.event_id == authorize_event_id)
+    {
+        return Err("PCR authorization chain is incomplete".to_owned());
+    }
+    let genesis_receipt = state
+        .event_queries()
+        .canonical_batch_receipts_for_event(&create_event_id)
+        .await
+        .map_err(|error| format!("PCR genesis receipt lookup failed: {error}"))?
+        .into_iter()
+        .find(|receipt| {
+            receipt.pcr_genesis_scope().is_ok_and(|scope| {
+                scope.principal_id == *actor_id && scope.realm_id.as_str() == control_realm
+            })
+        })
+        .ok_or_else(|| "PCR genesis receipt is unavailable".to_owned())?;
+    let realm_id = arkret_identifiers::RealmId::new(control_realm)
+        .map_err(|error| format!("PCR Realm id is invalid: {error}"))?;
+    let chain_digests = authorization_chain
+        .iter()
+        .map(|event| event.event_digest().map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let device_key_fragment = device_signing_key
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| "device signer key is not did:key".to_owned())?;
+    let did_key_method = format!("{}#{device_key_fragment}", device_signing_key);
+    let accepted_seal = state
+        .projections()
+        .realm_seal_leaves(&realm_id)
+        .map_err(|error| format!("PCR Seal lookup failed: {error}"))?
+        .into_iter()
+        .filter_map(|id| state.projections().seal_by_id(&id).ok().flatten())
+        .find(|seal| {
+            let signer_matches = matches!(
+                &seal.notary_signature,
+                arkret_wire::NotarySig::Single(signature)
+                    if signature.verification_method.as_str() == verification_method
+                        || signature.verification_method.as_str() == did_key_method.as_str()
+            );
+            signer_matches
+                && chain_digests.iter().all(|digest| {
+                    seal.covered_event_digests
+                        .iter()
+                        .any(|covered| covered.as_str() == digest)
+                })
+        })
+        .ok_or_else(|| {
+            "no target-device Seal covers the complete PCR authorization chain".to_owned()
+        })?;
+
+    let projection = FederatedCurrentDeviceProjection {
+        principal_id: actor_id.clone(),
+        device_id: device_id.clone(),
+        device_record: FederatedDeviceRecord {
+            algorithms: BTreeMap::new(),
+            device_signing_key: Some(device_signing_key.clone()),
+            hpke_key: facet
+                .hpke_key
+                .map(arkret_wire::NonEmptyString::new)
+                .transpose()
+                .map_err(|error| format!("device HPKE key is invalid: {error}"))?,
+            trust_algorithms: facet
+                .trust_algorithms
+                .map(|items| {
+                    items
+                        .into_iter()
+                        .map(arkret_wire::NonEmptyString::new)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(|error| format!("trust algorithm is invalid: {error}"))?,
+            device_status: Some(FederatedDeviceStatus::Active),
+            device_authorize_event_id: Some(authorize_event_id.clone()),
+            authorized_generation_ref: Some(generation_ref.clone()),
+        },
+        generation_state: FederatedDeviceGenerationState {
+            current_device_generation_ref: generation_ref,
+            device_generation_status: FederatedDeviceGenerationStatus::Active,
+        },
+    };
+    let accepted_at = records
+        .iter()
+        .find(|record| record.event_id == authorize_event_id.as_str())
+        .map(|record| record.received_at)
+        .ok_or_else(|| "device authorization acceptance timestamp is unavailable".to_owned())?;
+    let evidence = FederatedDeviceSigningKeyEvidence {
+        actor_id: actor_id.clone(),
+        device_id: device_id.clone(),
+        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
+            .map_err(|error| format!("verification method is invalid: {error}"))?,
+        device_signing_key,
+        authorization_accepted_at: accepted_at,
+        principal_genesis_receipt: genesis_receipt,
+        authorization_chain,
+        accepted_seal,
+        current_device_projection: projection,
+        range_completeness_evidence: federated_range_completeness_evidence(
+            state,
+            &realm_id,
+            &realm_records,
+        )?,
+    };
+    let replayed = arkret_signatures::replay_federated_device_authorization(&evidence)
+        .map_err(|error| format!("PCR device authorization replay failed: {error}"))?;
+    if replayed != evidence.current_device_projection {
+        return Err("PCR replay changed the current device projection".to_owned());
+    }
+    Ok(evidence)
+}
+
+fn federated_range_completeness_evidence(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    records: &[soland_services::events::CanonicalEventRecord],
+) -> Result<Vec<arkret_wire::Event>, String> {
+    use arkret_models_collaboration::sync_frames::snapshot::{
+        RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
+        RangeCompletenessAttestationEventRangeFromFrontier,
+        RangeCompletenessAttestationEventRangeToFrontier,
+        RangeCompletenessAttestationWitnessAttestation,
+        RangeCompletenessAttestationWitnessAttestationWitnessesItem,
+    };
+    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
+    use arkret_wire::{
+        Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, Proof,
+        ScopeRef, proof_kind,
+    };
+    use std::collections::BTreeMap;
+
+    let mut accepted_events = records
+        .iter()
+        .map(|record| {
+            crate::routing::events::event_log::sdk_event_for_state(state, record)
+                .map_err(|error| format!("PCR range Event is invalid: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    accepted_events.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.event_id.as_str().cmp(b.event_id.as_str()))
+    });
+    let (from_frontier, to_frontier) =
+        arkret_state::full_realm_range_frontiers(&accepted_events)
+            .map_err(|error| format!("PCR range frontier failed: {error}"))?;
+    let range_events = arkret_state::full_realm_range_events(&accepted_events)
+        .map_err(|error| format!("PCR range selection failed: {error}"))?;
+    let actor_seq_ranges = arkret_state::range_completeness_actor_seq_ranges(&range_events)
+        .map_err(|error| format!("PCR actor range failed: {error}"))?;
+    if actor_seq_ranges.is_empty() {
+        return Err("PCR range completeness has no actor sequence range".to_owned());
+    }
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let (root, covered_event_ids) =
+        arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
+            .map_err(|error| format!("PCR range root failed: {error}"))?;
+    let issuer = arkret_identifiers::Did::new(state.service_id().clone())
+        .map_err(|error| format!("service issuer DID is invalid: {error}"))?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{issuer}#notary-key"))
+        .map_err(|error| format!("service notary method is invalid: {error}"))?;
+    let observed_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let signer = Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        issuer.clone(),
+        verification_method.clone(),
+    );
+    let mut payload = RangeCompletenessAttestation {
+        attestation_id: crate::ids::generate("attestation"),
+        schema: "ak.schema.range_completeness_attestation.v1".to_owned(),
+        issuer: issuer.clone(),
+        issuer_role: "federation_device_evidence".to_owned(),
+        realm_id: realm_id.clone(),
+        event_range: RangeCompletenessAttestationEventRange {
+            from_frontier: RangeCompletenessAttestationEventRangeFromFrontier {
+                realm_frontier: from_frontier,
+                extra: BTreeMap::new(),
+            },
+            to_frontier: RangeCompletenessAttestationEventRangeToFrontier {
+                realm_frontier: to_frontier.clone(),
+                extra: BTreeMap::new(),
+            },
+            actor_seq_ranges,
+        },
+        root,
+        count: covered_event_ids.len() as u64,
+        observed_at,
+        witness_attestation: RangeCompletenessAttestationWitnessAttestation {
+            kind: "single_source".to_owned(),
+            witnesses: vec![
+                RangeCompletenessAttestationWitnessAttestationWitnessesItem {
+                    issuer: issuer.clone(),
+                    verification_method: verification_method.clone(),
+                    controlling_organization: issuer.clone(),
+                    attested_at: Some(observed_at),
+                    extra: BTreeMap::new(),
+                },
+            ],
+        },
+        proofs: Vec::new(),
+    };
+    let mut unsigned = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
+    unsigned
+        .as_object_mut()
+        .ok_or_else(|| "range payload is not an object".to_owned())?
+        .remove("proofs");
+    let canonical =
+        arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| error.to_string())?;
+    let mut proof = Proof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: verification_method.clone(),
+        event_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
+            .map_err(|error| error.to_string())?,
+        created_at: observed_at,
+        domain: None,
+        audience: None,
+        proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
+        jws: String::new(),
+    };
+    let binding = proof
+        .canonical_binding_bytes(&issuer)
+        .map_err(|error| error.to_string())?;
+    proof.jws = signer
+        .sign_payload(&binding)
+        .map_err(|error| error.to_string())?
+        .jws;
+    payload.proofs.push(proof);
+    let Value::Object(payload) =
+        serde_json::to_value(payload).map_err(|error| error.to_string())?
+    else {
+        return Err("range payload is not an object".to_owned());
+    };
+    let actor_seq = accepted_events
+        .iter()
+        .filter(|event| event.actor_id == issuer)
+        .map(|event| event.actor_seq)
+        .max()
+        .map_or(0, |seq| seq.saturating_add(1));
+    let mut event = Event {
+        event_id: EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
+            .map_err(|error| error.to_string())?,
+        kind: EventKind::AttestationRangeCompleteness,
+        realm_id: realm_id.clone(),
+        scope_ref: ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_id: issuer,
+        executed_by: None,
+        authorization_ref: None,
+        applet_id: None,
+        external_ref: None,
+        actor_kind: None,
+        actor_seq,
+        created_at: observed_at,
+        hlc: None,
+        prev_refs: to_frontier,
+        refs: Vec::new(),
+        causal_refs: Vec::new(),
+        preconditions: Vec::new(),
+        seal_ref: None,
+        auth_context: None,
+        seal_basis: None,
+        payload: payload.into_iter().collect(),
+        redacts: None,
+        unsigned: BTreeMap::new(),
+        proofs: Vec::new(),
+        requirements: EventRequirements::default(),
+    };
+    event.event_id = event
+        .derive_event_id_with_digest_suite(digest_suite)
+        .map_err(|error| error.to_string())?;
+    sign_event_with_digest_suite(
+        &mut event,
+        &signer,
+        &verification_method,
+        digest_suite,
+        SignEventOptions::new().with_created_at(observed_at),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(vec![event])
 }
 
 /// The local service notary is anchored by the configured service identity

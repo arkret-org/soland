@@ -425,7 +425,7 @@ pub fn replacement_authorize_payload_digest(
     let payload = authorize_envelope
         .get("payload")
         .ok_or_else(|| "authorize envelope carries no payload".to_owned())?;
-    arkret_models_collaboration::events_payloads::device_identity::device_authorize_replacement_payload_digest(
+    arkret_models_collaboration::events_payloads::device_identity::device_authorize_payload_digest(
         payload, suite,
     )
     .map_err(|error| format!("replacement authorize payload digest failed: {error}"))
@@ -870,22 +870,7 @@ pub trait EventReadPort: Send + Sync {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDelivery>,
-        bootstrap_decision: Option<
-            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-        >,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
-    async fn device_bootstrap_decision(
-        &self,
-        account_authority_id: &str,
-        transaction_id: &str,
-    ) -> ServiceResult<
-        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
-    >;
-    async fn put_device_bootstrap_decision(
-        &self,
-        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
-        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-    ) -> ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
@@ -1227,9 +1212,6 @@ impl EventQueryService {
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
         deliveries: Vec<FederationDelivery>,
-        bootstrap_decision: Option<
-            arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-        >,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -1241,28 +1223,7 @@ impl EventQueryService {
                 reanchor_slot,
                 publication_evidence,
                 deliveries,
-                bootstrap_decision,
             )
-            .await
-    }
-    pub async fn device_bootstrap_decision(
-        &self,
-        account_authority_id: &str,
-        transaction_id: &str,
-    ) -> ServiceResult<
-        Option<arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord>,
-    > {
-        self.events
-            .device_bootstrap_decision(account_authority_id, transaction_id)
-            .await
-    }
-    pub async fn put_device_bootstrap_decision(
-        &self,
-        request: &arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRequestBody,
-        record: arkret_models_collaboration::contact_operations::DeviceBootstrapDecisionRecord,
-    ) -> ServiceResult<soland_storage::DeviceBootstrapDecisionWriteOutcome> {
-        self.events
-            .put_device_bootstrap_decision(request, record)
             .await
     }
     pub async fn canonical_event(
@@ -1642,7 +1603,6 @@ pub struct ClaimMlsKeyPackageCommand<'a> {
     pub id: &'a str,
     pub target: ClaimMlsKeyPackageTarget<'a>,
     pub intended_realm_id: Option<&'a str>,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,
@@ -1673,7 +1633,6 @@ pub struct MlsKeyPackageState {
     pub lifetime_not_before: i64,
     pub lifetime_not_after: i64,
     pub claimed_by_mls_group_id: Option<String>,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<String>,
     pub agent_key_authorize_event_id: Option<String>,
     pub claimed_at: Option<i64>,
@@ -1713,7 +1672,6 @@ pub struct PeerKeyPackageClaimLedgerState {
 pub struct PeerKeyPackageClaimCommand<'a> {
     pub keypackage_id: &'a str,
     pub mls_group_id: &'a str,
-    pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
     pub claimed_at: i64,

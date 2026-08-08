@@ -3,7 +3,6 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 pub(crate) const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
-pub(super) mod device_bootstrap_decision;
 pub(crate) mod event_log;
 pub(super) mod frontier;
 pub(super) mod peer;
@@ -18,6 +17,7 @@ pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(crate) mod strand;
 pub(super) mod sync;
+pub(crate) mod test_chaos;
 
 use operations::{
     validate_agent_participation_ceiling, validate_agent_reply_participation,

@@ -713,7 +713,6 @@ diesel::table! {
         lifetime_not_before -> Int8,
         lifetime_not_after -> Int8,
         claimed_by_mls_group_id -> Nullable<Text>,
-        ssk_generation -> Nullable<Int8>,
         device_authorize_event_id -> Nullable<Bytea>,
         agent_key_authorize_event_id -> Nullable<Bytea>,
         claimed_at -> Nullable<Int8>,
@@ -1124,7 +1123,6 @@ diesel::table! {
         policy_id -> Uuid,
         policy_version -> Int4,
         identity_model -> Text,
-        ssk_generation -> Nullable<Int8>,
         current_device_generation_ref -> Nullable<Text>,
         device_generation_status -> Nullable<Text>,
         registry_head -> Nullable<Text>,
@@ -1401,18 +1399,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_bootstrap_decisions (account_authority_id, transaction_id) {
-        account_authority_id -> Text,
-        transaction_id -> Text,
-        decision -> Text,
-        binding_digest -> Text,
-        canonical_outcome_bytes -> Text,
-        receipt -> Jsonb,
-        decided_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     webvh_documents (id) {
         id -> Text,
         did_document -> Jsonb,
@@ -1479,7 +1465,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_message_txns,
     device_messages,
     device_pairings,
-    device_bootstrap_decisions,
     devices,
     event_batch_receipts,
     event_batch_receipt_events,

@@ -1039,7 +1039,6 @@ CREATE TABLE public.mls_key_packages (
     lifetime_not_before bigint NOT NULL,
     lifetime_not_after bigint NOT NULL,
     claimed_by_mls_group_id text,
-    ssk_generation bigint,
     -- Not `event_pk` keys: the trust binding is asserted by the uploading
     -- client, and a federated actor's device/agent-key authorization Event
     -- lives in its home service's log, not this one. Stored in the same
@@ -1051,8 +1050,7 @@ CREATE TABLE public.mls_key_packages (
     consumed_at bigint,
     created_at bigint NOT NULL,
     CONSTRAINT mls_key_packages_trust_binding_check CHECK (
-        num_nonnulls(ssk_generation, device_authorize_event_id, agent_key_authorize_event_id) = 1
-        AND (ssk_generation IS NULL OR ssk_generation >= 1)
+        num_nonnulls(device_authorize_event_id, agent_key_authorize_event_id) = 1
     )
 );
 
@@ -1791,7 +1789,6 @@ CREATE TABLE public.recovery_sessions (
     policy_id uuid NOT NULL,
     policy_version integer NOT NULL,
     identity_model text NOT NULL,
-    ssk_generation bigint,
     current_device_generation_ref text,
     device_generation_status text,
     registry_head text,
@@ -1807,8 +1804,8 @@ CREATE TABLE public.recovery_sessions (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
-    CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = ANY (ARRAY['cross_signing'::text, 'enrollment_authority'::text]))),
-    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((((identity_model = 'cross_signing'::text) AND (ssk_generation >= 1) AND (current_device_generation_ref IS NULL) AND (device_generation_status IS NULL) AND (registry_head IS NULL) AND (accepted_seal_frontier IS NULL)) OR ((identity_model = 'enrollment_authority'::text) AND (ssk_generation IS NULL) AND (current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)))),
+    CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'root_anchored'::text)),
+    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT recovery_sessions_transaction_id_key UNIQUE (transaction_id)
 );
@@ -2120,18 +2117,3 @@ CREATE TABLE public.direct_conversation_founding_equivocations (
     idempotency_key text NOT NULL,
     observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE TABLE public.device_bootstrap_decisions (
-    account_authority_id text NOT NULL,
-    transaction_id text NOT NULL,
-    decision text NOT NULL CHECK (decision IN ('accepted', 'cancelled', 'expired')),
-    binding_digest text NOT NULL,
-    canonical_outcome_bytes text NOT NULL,
-    receipt jsonb NOT NULL,
-    decided_at timestamptz NOT NULL,
-    PRIMARY KEY (account_authority_id, transaction_id)
-);
-
--- v1 terminal decision rows are retention tombstones. Deliberately no expiry
--- column and no cascading foreign key: cleanup must never make a terminal
--- founding transaction appear undecided again.

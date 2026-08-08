@@ -121,7 +121,7 @@ on the reducer / federation / state-machine surfaces. See
   `delivery_binding_stale` + `new_recipient_service_id` +
   `handover_frontier`; post-handover replays emit
   `delivery_binding_handed_over`.
-- **BREAKING** `ak.cross_signing.publish` reducer enforces CAS
+- **REMOVED LEGACY** the former device-hierarchy publish reducer enforced CAS
   (`expected_previous_generation == current && new_generation == current + 1`),
   evaluated before signature verification.
 - **BREAKING** `audit_policy_version_digest` switched to the 4-arg form
@@ -157,7 +157,7 @@ below. Producers on the old wire MUST upgrade.
   for every Round R2/R3 normative requirement (T01–T23).
 - **`AppConfig.trust_domain`** field plumbed from `SOLAND_TRUST_DOMAIN`
   env var (default derived from `service_id`). Required by the
-  `ak.cross_signing.reset` cross-domain replay defence (T08).
+  the now-removed legacy device-hierarchy reset replay defence (T08).
 - **15 new `ErrorCode` variants** mirroring the new spec registry:
   `RelaxedWindowExceedsCeiling`, `E2eeRelaxedDisallowedInComplianceProfile`,
   `CrossDomainReplayRejected`, `ResetEventIdMismatch`,
@@ -197,7 +197,7 @@ below. Producers on the old wire MUST upgrade.
 - **`POST /api/v1/events` terminal Realm reject** — any non-audit-class
   event on a Realm whose `ak.realm.destroy` has been applied returns
   `realm_terminal_state` (409) (T07).
-- **`ak.cross_signing.reset` payload** — `trust_domain` and
+- **REMOVED LEGACY device-hierarchy reset payload** — `trust_domain` and
   `reset_event_id` are now required wire fields. Verification order is
   `cross_domain_replay_rejected` → `reset_event_id_mismatch` →
   `invalid_signature` (T08).
@@ -230,11 +230,11 @@ below. Producers on the old wire MUST upgrade.
 #### Migration
 
 - Operators MUST set `SOLAND_TRUST_DOMAIN` (or rely on the
-  `service_id`-derived default) before processing `ak.cross_signing.reset`
+  `service_id`-derived default) before processing the removed legacy reset
   events. The boot path validates the value via the SDK
   `TypedTrustDomainId` regex.
 - Producers MUST move ephemeral kinds off `ak.self.events.command.submit`; the
   endpoint no longer accepts them under any compatibility flag.
 - Producers MUST add `trust_domain` and `reset_event_id` to every
-  `ak.cross_signing.reset` payload (matching the enclosing
+  removed legacy reset payload (matching the enclosing
   `Event.event_id`).

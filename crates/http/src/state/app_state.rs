@@ -239,7 +239,7 @@ pub struct AppStateRuntime {
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
-        let demo_realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+        let demo_realm_id = "ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG";
         let mut demo = RealmDirectoryEntry::new(
             RealmId::new(demo_realm_id.to_owned()).expect("valid demo Realm id"),
             "Arkret Demo Realm",
@@ -1153,14 +1153,6 @@ impl AppState {
             self.realm_directory.upsert(entry.clone());
         }
 
-        // A-model active-series signatures are bound to the current accepted
-        // SSK generation. Rebuild the cross-signing registry before restoring those
-        // pointers; otherwise a restart makes every correctly hydrated
-        // pointer appear stale because the generation cache is empty.
-        let cross_signing = self.persistence.hydrate_cross_signing().await?;
-        self.identities
-            .install_cross_signing_registry(cross_signing);
-
         let hydrated_realm_ids: Vec<RealmId> = {
             let realms = self.realm_directory.snapshot();
             realms
@@ -1618,21 +1610,6 @@ impl AppState {
         self.contacts.runtime_direct_binding_count()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_record_cross_signing_publish(
-        &self,
-        publish: arkret_models_identity::CrossSigningPublish,
-    ) -> arkret_identity::Result<()> {
-        self.identities.record_cross_signing_publish(publish)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_has_current_cross_signing(&self, principal: &arkret_identifiers::Did) -> bool {
-        self.identities.current_cross_signing(principal).is_some()
-    }
-
     /// Refresh one test fixture grant from the durable sealed-cell projection
     /// into the runtime authorization index.
     #[cfg(any(test, feature = "test-support"))]
@@ -1994,7 +1971,6 @@ mod membership_hydration_tests {
                 lifetime_not_before: 0,
                 lifetime_not_after: i64::MAX,
                 claimed_by_mls_group_id: None,
-                ssk_generation: None,
                 device_authorize_event_id: Some(
                     "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
                 ),
@@ -2023,7 +1999,6 @@ mod membership_hydration_tests {
                 lifetime_not_before: 0,
                 lifetime_not_after: i64::MAX,
                 claimed_by_mls_group_id: Some("retired".to_owned()),
-                ssk_generation: None,
                 device_authorize_event_id: Some(
                     "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
                 ),
@@ -2153,7 +2128,7 @@ mod membership_hydration_tests {
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "ssk_generation": 1
+                "device_generation_ref": "device-generation-ref-1"
             },
             "issued_at": "2026-07-18T00:00:00.000Z",
             "auth_data": {
@@ -2170,7 +2145,7 @@ mod membership_hydration_tests {
                     "frontier_ref",
                     "issued_at"
                 ],
-                "ssk_generation": 1
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
             }
         });
         let first_source = canonical_projection_source_event(
@@ -2224,7 +2199,7 @@ mod membership_hydration_tests {
             "previous_series_ids": [],
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "ssk_generation": 1
+                "device_generation_ref": "device-generation-ref-1"
             },
             "issued_at": "2026-07-18T00:01:00.000Z",
             "auth_data": {
@@ -2236,7 +2211,7 @@ mod membership_hydration_tests {
                     "series_pointer_version", "previous_series_ids", "frontier_ref",
                     "issued_at"
                 ],
-                "ssk_generation": 1
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
             }
         });
         let gap_source = canonical_projection_source_event(

@@ -28,7 +28,6 @@
         "authentication": [
           "did:webvh:QmXxi5SJLod9kfjyLztg632vmSYK6Wi951PWQRCe7k32Fo:example.com#P5RDjVJG"
         ],
-        "capabilityDelegation": [],
         "capabilityInvocation": [],
         "controller": "did:webvh:QmXxi5SJLod9kfjyLztg632vmSYK6Wi951PWQRCe7k32Fo:example.com",
         "id": "did:webvh:QmXxi5SJLod9kfjyLztg632vmSYK6Wi951PWQRCe7k32Fo:example.com",

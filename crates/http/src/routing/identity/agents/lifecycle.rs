@@ -524,14 +524,9 @@ pub(super) async fn provision_agent(
             .await?;
             debug_assert_eq!(accepted_provision_event_id, provision_event_id);
 
-            crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_binding(
+            crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_identity_anchor(
                 state,
                 agent_id.as_str(),
-                &controller_id,
-                &principal_control_realm_id,
-                controller_authorization_ref.as_str(),
-                &requested_scope_value,
-                &requested_scope_digest,
                 allocation.created_at,
             )
             .await?;

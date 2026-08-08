@@ -16,15 +16,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_identifiers::{Did, RealmId, SealId, TypedTrustDomainId};
+use arkret_identifiers::{Did, RealmId, SealId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmLinkCreateRequestBody, RealmPolicyServerDeleteRequestBody,
     RealmPolicyServerReplaceRequestBody,
 };
-use arkret_models_identity::{
-    CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
-};
-use arkret_wire::{DidUrl, NonEmptyString};
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use salvo::http::StatusCode;
@@ -82,52 +78,6 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
-    let principal_id = Did::new(principal.to_owned()).unwrap();
-    let ssk = SigningKey::from_bytes(&[42_u8; 32]);
-    CrossSigningPublish {
-        principal_id,
-        trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-policy-test.local").unwrap(),
-        principal_signing_key: PublishedKey {
-            kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkPrincipalAlice").unwrap(),
-            key_format: KeyFormat::Multibase,
-        },
-        self_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new(ed25519_public_multibase(&ssk)).unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
-            },
-        },
-        user_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
-            },
-        },
-        expected_previous_generation: generation.saturating_sub(1),
-        generation: std::num::NonZeroU64::new(generation).unwrap(),
-        issued_at: Utc::now(),
-    }
-}
-
 async fn prepare_alice(state: &AppState) -> String {
     let token = dev_token(state.clone(), ALICE, ALICE_DEVICE, "Alice").await;
     let signing = SigningKey::from_bytes(&EVENT_SIGNING_SEED);
@@ -145,9 +95,6 @@ async fn prepare_alice(state: &AppState) -> String {
         .devices()
         .put(&device)
         .await
-        .unwrap();
-    state
-        .test_record_cross_signing_publish(cross_signing_publish(ALICE, 1))
         .unwrap();
     token
 }

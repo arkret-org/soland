@@ -1,6 +1,6 @@
 //! Encrypted key-backup CRUD.
 
-use arkret_identifiers::{BackupId, DeviceId, Did, EventId};
+use arkret_identifiers::{BackupId, Did, EventId};
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
@@ -61,8 +61,6 @@ pub(crate) fn admin_router() -> Router {
 const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",
-    "self_signing_key",
-    "user_signing_key",
     "recovery_secret",
     "mls_account_secret",
     "mls_private_plaintext",
@@ -165,7 +163,7 @@ mod tests {
                 "verification_method": "did:web:alice.example#device",
                 "signature_algorithm": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
-                "ssk_generation": 1,
+                "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
                 "signed_fields": [
                     "backup_id",
                     "actor_id",
@@ -325,7 +323,7 @@ mod tests {
             "verification_method": "did:web:alice.example#device",
             "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
-            "ssk_generation": 1,
+            "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
             "signed_fields": did_recovery_signed_fields()
         })
     }
@@ -358,7 +356,7 @@ mod tests {
             "verification_method": "did:web:alice.example#device",
             "signature_algorithm": "Ed25519",
             "signature": "c2lnbmF0dXJl",
-            "ssk_generation": 1,
+            "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
             "signed_fields": ["backup_id", "encryption"]
         });
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
@@ -381,46 +379,18 @@ mod tests {
     }
 
     #[test]
-    fn auth_data_accepts_service_attested_device_authorize_anchor() {
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
-        body["auth_data"]
-            .as_object_mut()
-            .unwrap()
-            .remove("ssk_generation");
-        body["auth_data"]["device_authorize_event_id"] =
-            json!("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD");
-
-        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect("service-attested device_authorize_event_id anchor should validate");
-    }
-
-    #[test]
-    fn auth_data_rejects_multiple_device_trust_anchors() {
-        let mut body =
-            key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
-        body["auth_data"]["device_authorize_event_id"] =
-            json!("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD");
-
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("ssk_generation and device_authorize_event_id are exclusive");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("mutually exclusive"));
-    }
-
-    #[test]
     fn auth_data_rejects_missing_device_trust_anchor() {
         let mut body =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
         body["auth_data"]
             .as_object_mut()
             .unwrap()
-            .remove("ssk_generation");
+            .remove("device_authorize_event_id");
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("key backup auth_data must have one trust anchor");
+            .expect_err("key backup auth_data must have a device trust anchor");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("exactly one device trust anchor"));
+        assert!(err.message.contains("device_authorize_event_id"));
     }
 
     #[test]

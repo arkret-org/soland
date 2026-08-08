@@ -31,7 +31,7 @@ pub(crate) use soland_storage::{
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
-pub(crate) const DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+pub(crate) const DEMO_REALM_ID: &str = "ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
@@ -1445,12 +1445,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
                 "device_id": device_id,
                 "verification": "verified",
                 "device_public_key": device_public_key,
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:web:auth.example",
-                    "authorization_ref": format!("{actor}#device-enrollment")
-                }
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
             }),
             created_at: now,
             updated_at: now,
@@ -2110,7 +2105,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
         space.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
+            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
         });
         space
             .entry("created_at".to_owned())
@@ -2214,7 +2209,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
         strand.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
+            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
         });
         strand
             .entry("created_at".to_owned())
@@ -2294,7 +2289,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
         morph.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned())
+            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
         });
         morph
             .entry("created_at".to_owned())

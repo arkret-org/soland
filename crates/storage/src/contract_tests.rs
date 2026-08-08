@@ -1453,7 +1453,6 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
                 None,
                 Vec::new(),
                 colliding_outbox("anchor"),
-                None,
             )
             .await
             .is_err(),
@@ -1523,8 +1522,9 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         lifetime_not_before: 1,
         lifetime_not_after: 100,
         claimed_by_mls_group_id: None,
-        ssk_generation: Some(1),
-        device_authorize_event_id: None,
+        device_authorize_event_id: Some(
+            "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
+        ),
         agent_key_authorize_event_id: None,
         claimed_at: None,
         claim_expires_at_unix_ms: None,
@@ -1538,8 +1538,7 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
         id,
         target,
         intended_realm_id: None,
-        ssk_generation: Some(1),
-        device_authorize_event_id: None,
+        device_authorize_event_id: Some("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"),
         agent_key_authorize_event_id: None,
         claimed_at: 10,
         claim_expires_at_unix_ms: Some(20_000),

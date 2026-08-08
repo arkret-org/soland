@@ -6,8 +6,8 @@ use super::{
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait,
-    db_ssk_generation, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
+    PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait, ids,
+    json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -48,15 +48,14 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let ssk_generation = db_ssk_generation(record.ssk_generation)?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
              (id, keypackage_ref, keypackage_digest, actor_id, device_id, key_package_bytes, \
               capabilities, capabilities_digest, device_signature, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-              claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
               claim_expires_at_unix_ms, consumed_at, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<Text, _>(&record.id)
@@ -73,7 +72,6 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<BigInt, _>(record.lifetime_not_before)
         .bind::<BigInt, _>(record.lifetime_not_after)
         .bind::<Nullable<Text>, _>(&record.claimed_by_mls_group_id)
-        .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
             record.device_authorize_event_id.as_deref(),
         )?)
@@ -97,7 +95,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE id = $1",
         )
@@ -121,7 +119,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE keypackage_ref = $1",
         )
@@ -142,7 +140,6 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             id,
             target,
             intended_realm_id,
-            ssk_generation,
             device_authorize_event_id,
             agent_key_authorize_event_id,
             claimed_at,
@@ -157,16 +154,14 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let ssk_generation = db_ssk_generation(ssk_generation)?;
         sql_query(
             "UPDATE mls_key_packages \
              SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN claimed_by_mls_group_id ELSE $2 END, \
                  last_resort_realm_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
-                 ssk_generation = COALESCE($4, ssk_generation), \
-                 device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
-                 agent_key_authorize_event_id = COALESCE($6, agent_key_authorize_event_id), \
-                 claimed_at = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claimed_at ELSE $7 END, \
-                 claim_expires_at_unix_ms = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $8 END, \
+                 device_authorize_event_id = COALESCE($4, device_authorize_event_id), \
+                 agent_key_authorize_event_id = COALESCE($5, agent_key_authorize_event_id), \
+                 claimed_at = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claimed_at ELSE $6 END, \
+                 claim_expires_at_unix_ms = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $7 END, \
                  consumed_at = NULL \
              WHERE id = $1 \
                AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id NOT IN ('revoked', 'retired')) \
@@ -174,22 +169,20 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                     OR ($2 <> 'retired' AND (claimed_by_mls_group_id IS NULL \
                     OR claimed_by_mls_group_id = $2 \
                     OR (last_resort AND $2 <> 'revoked')))) \
-               AND ($4 IS NULL OR ssk_generation = $4) \
-               AND ($5 IS NULL OR device_authorize_event_id = $5) \
-               AND ($6 IS NULL OR agent_key_authorize_event_id = $6) \
-               AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $7 \
-                    AND ($8 IS NULL OR ($8 > $7 * 1000 AND $8 <= lifetime_not_after * 1000)))) \
+               AND ($4 IS NULL OR device_authorize_event_id = $4) \
+               AND ($5 IS NULL OR agent_key_authorize_event_id = $5) \
+               AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $6 \
+                    AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
         )
         .bind::<Text, _>(id)
         .bind::<Text, _>(group_id)
         .bind::<Nullable<Text>, _>(intended_realm_id)
-        .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Binary>, _>(parse_authorize_event_id(device_authorize_event_id)?)
         .bind::<Nullable<Binary>, _>(parse_authorize_event_id(agent_key_authorize_event_id)?)
         .bind::<BigInt, _>(claimed_at)
@@ -223,7 +216,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at",
                 )
                 .bind::<Text, _>(id)
@@ -279,7 +272,6 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let ssk_generation = db_ssk_generation(attempt.ssk_generation)?;
         let source_service_id = attempt.ledger.source_service_id.clone();
         let claim_request_id = attempt.ledger.claim_request_id.clone();
         let result = conn
@@ -295,24 +287,22 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \
-                 SET claimed_by_mls_group_id = $2, claimed_at = $6, claim_expires_at_unix_ms = $7, consumed_at = NULL \
+                 SET claimed_by_mls_group_id = $2, claimed_at = $5, claim_expires_at_unix_ms = $6, consumed_at = NULL \
                  WHERE id = $1 \
                    AND NOT last_resort \
                    AND claimed_by_mls_group_id IS NULL \
-                   AND ($3 IS NULL OR ssk_generation = $3) \
-                   AND ($4 IS NULL OR device_authorize_event_id = $4) \
-                   AND ($5 IS NULL OR agent_key_authorize_event_id = $5) \
-                   AND lifetime_not_after > $6 \
-                   AND $7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000 \
+                   AND ($3 IS NULL OR device_authorize_event_id = $3) \
+                   AND ($4 IS NULL OR agent_key_authorize_event_id = $4) \
+                   AND lifetime_not_after > $5 \
+                   AND $6 > $5 * 1000 AND $6 <= lifetime_not_after * 1000 \
                  RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \
                  key_package_bytes, capabilities, capabilities_digest, device_signature, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-                 claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+                 claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
                  claim_expires_at_unix_ms, consumed_at, created_at",
                 )
                 .bind::<Text, _>(attempt.keypackage_id)
                 .bind::<Text, _>(attempt.mls_group_id)
-                .bind::<Nullable<BigInt>, _>(ssk_generation)
                 .bind::<Nullable<Binary>, _>(parse_authorize_event_id(
                     attempt.device_authorize_event_id,
                 )?)
@@ -464,7 +454,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages ORDER BY created_at ASC, id ASC",
         )
@@ -490,7 +480,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
              key_package_bytes, capabilities, capabilities_digest, device_signature, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
              claim_expires_at_unix_ms, consumed_at, created_at \
              FROM mls_key_packages WHERE claimed_by_mls_group_id = $1 \
              ORDER BY claimed_at ASC NULLS FIRST, id ASC",
@@ -815,8 +805,6 @@ struct MlsKeyPackagePgRow {
     lifetime_not_after: i64,
     #[diesel(sql_type = Nullable<Text>)]
     claimed_by_mls_group_id: Option<String>,
-    #[diesel(sql_type = Nullable<BigInt>)]
-    ssk_generation: Option<i64>,
     #[diesel(sql_type = Nullable<Binary>)]
     device_authorize_event_id: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<Binary>)]
@@ -891,10 +879,6 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             lifetime_not_before: row.lifetime_not_before,
             lifetime_not_after: row.lifetime_not_after,
             claimed_by_mls_group_id: row.claimed_by_mls_group_id,
-            ssk_generation: row
-                .ssk_generation
-                .and_then(|generation| u64::try_from(generation).ok())
-                .filter(|generation| *generation >= 1),
             device_authorize_event_id: row
                 .device_authorize_event_id
                 .as_deref()

@@ -178,7 +178,7 @@ async fn device_generation_event_seal_context(
             record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record
                     .envelope
-                    .pointer("/payload/object/fields/purpose")
+                    .pointer("/payload/object/purpose")
                     .and_then(serde_json::Value::as_str)
                     == Some("principal_control")
         })
@@ -348,8 +348,14 @@ fn device_verification_method_matches(
     // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
     // be a DID URL with a `#fragment`; a bare DID never names a concrete
     // verification method.
+    let did_key = device_public_key
+        .strip_prefix("did:key:")
+        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
+    let fragment = did_key
+        .strip_prefix("did:key:")
+        .unwrap_or(device_public_key);
     verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
+        || verification_method == format!("{did_key}#{fragment}")
 }
 
 fn first_seal_signer_matches(

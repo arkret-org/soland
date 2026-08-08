@@ -733,13 +733,6 @@ async fn verify_authenticate(
     if grant.audience.as_str() != state.service_id() || grant.expires_at <= chrono::Utc::now() {
         return Err("grant");
     }
-    if grant.credential_class
-        == arkret_models_identity::session_credential::SessionGrantCredentialClass::DeviceBootstrap
-    {
-        // The founding credential's exact four-operation allowlist contains no
-        // WebSocket subscribe/reauth operation.
-        return Err("grant");
-    }
     let cnf_jkt = grant.cnf_jkt.clone();
     if cnf_jkt.is_empty() {
         return Err("grant");

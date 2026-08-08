@@ -11,10 +11,9 @@ fn key_backup_untrusted_signature() -> AppError {
 
 /// key-management.md §7.4.1 (normative): a device signature alone cannot defend
 /// against a malicious/compromised server injecting or substituting a backup
-/// envelope signed by a revoked old device key. Before a receiver trusts/uses an
-/// envelope (recovery or read), it MUST anchor `auth_data.signature` to exactly
-/// one actor device trust root: either the current cross-signing generation or
-/// the accepted service-attested `ak.device.authorize` event for the device.
+/// envelope signed by a revoked old device key. Before a receiver trusts an
+/// envelope, it anchors `auth_data.signature` to the accepted
+/// `ak.device.authorize` event for the device.
 pub(super) async fn anchor_key_backup_auth_data_trust_root(
     state: &AppState,
     actor_id: &str,
@@ -36,92 +35,14 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         .get("verification_method")
         .and_then(Value::as_str)
         .ok_or_else(key_backup_untrusted_signature)?;
-    let claimed_generation = auth.get("ssk_generation").and_then(Value::as_u64);
     let claimed_device_authorize_event_id = auth
         .get("device_authorize_event_id")
-        .and_then(Value::as_str);
-
-    match (claimed_generation, claimed_device_authorize_event_id) {
-        (Some(generation), None) if generation >= 1 => {}
-        (None, Some(event_id)) if !event_id.trim().is_empty() => {}
-        _ => {
-            return Err(AppError::new(
-                ErrorCode::InvalidSignature,
-                "key backup auth_data must carry exactly one accepted device trust anchor",
-            )
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_wire_code("untrusted_backup_signature"));
-        }
-    }
-
-    let principal = Did::new(actor_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
-    let device =
-        DeviceId::new(device_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
-
-    if let Some(event_id) = claimed_device_authorize_event_id {
-        EventId::new(event_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
-        let record = state
-            .identities()
-            .find_device(soland_services::identity::FindDeviceQuery {
-                actor_id: actor_id.to_owned(),
-                device_id: device_id.to_owned(),
-            })
-            .await
-            .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::InvalidSignature,
-                    "key backup device-authorize trust anchor has no durable device record",
-                )
-                .with_status(StatusCode::UNAUTHORIZED)
-                .with_wire_code("untrusted_backup_signature")
-            })?;
-        if record.revoked_at.is_some() || record.verification_state != "verified" {
-            return Err(AppError::new(
-                ErrorCode::InvalidSignature,
-                "key backup device-authorize trust anchor names an inactive device",
-            )
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_wire_code("untrusted_backup_signature"));
-        }
-        let projected_event_id = record
-            .payload
-            .get("device_authorize_event_id")
-            .and_then(Value::as_str)
-            .ok_or_else(key_backup_untrusted_signature)?;
-        if projected_event_id != event_id {
-            return Err(AppError::new(
-                ErrorCode::InvalidSignature,
-                "key backup device-authorize event does not match the durable device projection",
-            )
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_wire_code("untrusted_backup_signature"));
-        }
-        let device_public_key = record
-            .payload
-            .get("device_public_key")
-            .and_then(Value::as_str)
-            .ok_or_else(key_backup_untrusted_signature)?;
-        if !key_backup_verification_method_matches_device_key(
-            actor_id,
-            device_id,
-            device_public_key,
-            verification_method,
-        ) {
-            return Err(AppError::new(
-                ErrorCode::InvalidSignature,
-                "key backup verification method does not match the device-authorize key",
-            )
-            .with_status(StatusCode::UNAUTHORIZED)
-            .with_wire_code("untrusted_backup_signature"));
-        }
-        verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)?;
-        return Ok(());
-    }
-
-    // Resolve the device public key and confirm it is anchored under the actor's
-    // current published SSK generation (cross-signing trust root).
-    let device_record = state
+        .and_then(Value::as_str)
+        .filter(|event_id| !event_id.trim().is_empty())
+        .ok_or_else(key_backup_untrusted_signature)?;
+    EventId::new(claimed_device_authorize_event_id.to_owned())
+        .map_err(|_| key_backup_untrusted_signature())?;
+    let record = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: actor_id.to_owned(),
@@ -130,69 +51,36 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         .await
         .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
         .ok_or_else(key_backup_untrusted_signature)?;
-    if device_record.revoked_at.is_some() || device_record.verification_state != "verified" {
+    if record.revoked_at.is_some() || record.verification_state != "verified" {
         return Err(key_backup_untrusted_signature());
     }
-    let device_public_key = device_record
+    let projected_event_id = record
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(key_backup_untrusted_signature)?;
+    if projected_event_id != claimed_device_authorize_event_id {
+        return Err(key_backup_untrusted_signature());
+    }
+    let device_public_key = record
         .payload
         .get("device_public_key")
         .and_then(Value::as_str)
-        .ok_or_else(key_backup_untrusted_signature)?
-        .to_owned();
-    let binding: arkret_crypto::DeviceTrustBinding = serde_json::from_value(
-        device_record
-            .payload
-            .get("cross_signing_binding")
-            .cloned()
-            .ok_or_else(key_backup_untrusted_signature)?,
-    )
-    .map_err(|_| key_backup_untrusted_signature())?;
-    {
-        if state
-            .identities()
-            .is_cross_signing_device_revoked(&principal, &device)
-        {
-            return Err(key_backup_untrusted_signature());
-        }
-        let published = state
-            .identities()
-            .current_cross_signing(&principal)
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::InvalidSignature,
-                    "key backup SSK trust anchor has no durable device record",
-                )
-                .with_status(StatusCode::UNAUTHORIZED)
-                .with_wire_code("untrusted_backup_signature")
-            })?;
-        let published_generation = published.generation.get();
-        // The device MUST participate in the cross-signed trust chain (a bootstrap
-        // binding alone is not a cross-signing anchor) and that binding MUST chain
-        // to the *current* published generation.
-        if binding.ssk_generation != published_generation {
-            return Err(key_backup_untrusted_signature());
-        }
-        // When the envelope declares an ssk_generation it MUST match the binding.
-        if let Some(generation) = claimed_generation
-            && generation != published_generation
-        {
-            return Err(key_backup_untrusted_signature());
-        }
-    }
+        .ok_or_else(key_backup_untrusted_signature)?;
     if !key_backup_verification_method_matches_device_key(
         actor_id,
         device_id,
-        &device_public_key,
+        device_public_key,
         verification_method,
     ) {
         return Err(AppError::new(
             ErrorCode::InvalidSignature,
-            "key backup SSK trust anchor names an inactive device",
+            "key backup verification method does not match the authorized device key",
         )
         .with_status(StatusCode::UNAUTHORIZED)
         .with_wire_code("untrusted_backup_signature"));
     }
-    verify_key_backup_auth_data_signature(backup, &device_public_key, signature_b64)
+    verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)
 }
 
 fn verify_key_backup_auth_data_signature(
@@ -200,9 +88,11 @@ fn verify_key_backup_auth_data_signature(
     device_public_key: &str,
     signature_b64: &str,
 ) -> Result<(), AppError> {
-    let verifying_key =
-        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
-            .map_err(|_| key_backup_untrusted_signature())?;
+    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|_| key_backup_untrusted_signature())?;
     let mut unsigned = backup.clone();
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
@@ -231,9 +121,15 @@ fn key_backup_verification_method_matches_device_key(
     // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
     // be a DID URL with a `#fragment`; a bare DID never names a concrete
     // verification method.
+    let did_key = device_public_key
+        .strip_prefix("did:key:")
+        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
+    let fragment = did_key
+        .strip_prefix("did:key:")
+        .unwrap_or(device_public_key);
     verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
-        || verification_method == format!("did:key:{device_public_key}#device")
+        || verification_method == format!("{did_key}#{fragment}")
+        || verification_method == format!("{did_key}#device")
 }
 
 pub(super) fn key_backup_canonical_digest_without_signature(

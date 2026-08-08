@@ -2,11 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::TypedTrustDomainId;
-use arkret_models_identity::{
-    CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
-};
-use arkret_wire::{DidUrl, NonEmptyString};
 use chrono::Utc;
 
 use super::common::*;
@@ -46,12 +41,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:web:auth.example",
-                    "authorization_ref": format!("{actor}#device-enrollment")
-                }
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
             }),
             created_at: now,
             updated_at: now,
@@ -137,12 +127,7 @@ async fn submit_direct_event_draft(
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:web:auth.example",
-                    "authorization_ref": format!("{actor}#device-enrollment")
-                }
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
             }),
             created_at: now,
             updated_at: now,
@@ -213,63 +198,7 @@ async fn submit_direct_event_draft(
     body
 }
 
-fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublish {
-    let principal_id = Did::new(principal.to_owned()).unwrap();
-    CrossSigningPublish {
-        principal_id: principal_id.clone(),
-        trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland.local".to_owned()).unwrap(),
-        principal_signing_key: PublishedKey {
-            kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkPrincipalDirect").unwrap(),
-            key_format: KeyFormat::Multibase,
-        },
-        self_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkSelfDirect").unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("direct-psk-sig-ssk-gen-{generation}"))
-                    .unwrap(),
-            },
-        },
-        user_signing_key: SubordinateSignedKey {
-            kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
-            algorithm: NonEmptyString::new("Ed25519").unwrap(),
-            public_key: NonEmptyString::new("z6MkUserDirect").unwrap(),
-            key_format: KeyFormat::Multibase,
-            binding: SubordinateSignedKeyBinding {
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{principal}#principal-signing"
-                ))
-                .unwrap(),
-                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
-                signature: NonEmptyString::new(format!("direct-psk-sig-usk-gen-{generation}"))
-                    .unwrap(),
-            },
-        },
-        expected_previous_generation: generation.saturating_sub(1),
-        generation: std::num::NonZeroU64::new(generation).unwrap(),
-        issued_at: Utc::now(),
-    }
-}
-
-fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: u64) {
-    for current in 1..=generation {
-        state
-            .test_record_cross_signing_publish(cross_signing_publish(principal, current))
-            .unwrap();
-    }
-}
-
 async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
-    seed_cross_signing_generation(&state, BOB_DID, 1);
     let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
     let mut device = state
         .test_persistence()
@@ -342,12 +271,7 @@ async fn seed_remote_claim_prerequisites(
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": source_service_id,
-                    "authorization_ref": format!("{alice}#peer-claim")
-                }
+                "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC"
             }),
             created_at: now,
             updated_at: now,
@@ -819,7 +743,6 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    seed_cross_signing_generation(&state, BOB_DID, 1);
 
     let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
         .add_header("authorization", format!("Bearer {alice}"), true)

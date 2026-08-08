@@ -510,10 +510,6 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
                 .with_timezone(&chrono::Utc),
             root_seed: &[51u8; 32],
             next_root_public_key_multibase: &test_ed25519_multibase_public(&next_root),
-            enrollment:
-                arkret_signatures::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
-                    authority_did: "did:web:enrollment.example",
-                },
         },
     )
     .unwrap();
@@ -705,10 +701,6 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
                 .with_timezone(&chrono::Utc),
             root_seed: &root_seed,
             next_root_public_key_multibase: &committed_root_public,
-            enrollment:
-                arkret_signatures::webvh::PrincipalEnrollmentDelegation::ExternalAuthority {
-                    authority_did: "did:web:enrollment.example",
-                },
         },
     )
     .unwrap();

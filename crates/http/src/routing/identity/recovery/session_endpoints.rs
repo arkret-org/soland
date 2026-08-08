@@ -52,12 +52,7 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> 
         "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     });
     match record.identity_model {
-        RecoveryIdentityModel::CrossSigning => {
-            out["ssk_generation"] = record
-                .ssk_generation
-                .map_or(Value::Null, |value| json!(value));
-        }
-        RecoveryIdentityModel::EnrollmentAuthority => {
+        RecoveryIdentityModel::RootAnchored => {
             out["current_device_generation_ref"] = record
                 .current_device_generation_ref
                 .as_ref()
@@ -164,10 +159,7 @@ pub(super) fn recovery_session_state_from_record(
 
 fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value {
     match record.identity_model {
-        RecoveryIdentityModel::CrossSigning => record
-            .ssk_generation
-            .map_or(Value::Null, |generation| json!(generation)),
-        RecoveryIdentityModel::EnrollmentAuthority => record
+        RecoveryIdentityModel::RootAnchored => record
             .current_device_generation_ref
             .as_ref()
             .map_or(Value::Null, |generation| json!(generation)),
@@ -271,7 +263,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
     Ok(())
 }
 
-async fn enrollment_recovery_publication_authority_context(
+async fn root_anchored_recovery_publication_authority_context(
     state: &AppState,
     active: &RecoveryPolicyState,
     realm_id: &RealmId,
@@ -323,7 +315,7 @@ async fn enrollment_recovery_publication_authority_context(
         })?,
     };
     let context = RecoveryPublicationAuthorityContext {
-        identity_model: RecoveryIdentityModel::EnrollmentAuthority,
+        identity_model: RecoveryIdentityModel::RootAnchored,
         basis_ref: active.acceptance_basis.clone(),
         scope_ref: authority_set_policy.scope_ref.clone(),
         authority_set_ref,
@@ -331,105 +323,10 @@ async fn enrollment_recovery_publication_authority_context(
         allowed_actions: vec![RecoveryPublicationAction::DeviceReanchor],
     };
     context
-        .validate_for(RecoveryIdentityModel::EnrollmentAuthority)
+        .validate_for(RecoveryIdentityModel::RootAnchored)
         .map_err(|error| {
             AppError::conflict(format!(
                 "recovery publication authority context is invalid: {error}"
-            ))
-            .with_wire_code("recovery_publication_authority_invalid")
-        })?;
-    Ok(context)
-}
-
-async fn cross_signing_recovery_publication_authority_context(
-    state: &AppState,
-    principal_id: &str,
-    realm_id: &RealmId,
-    generation: u64,
-) -> Result<RecoveryPublicationAuthorityContext, AppError> {
-    let events = state
-        .event_queries()
-        .accepted_events_for_actor(principal_id)
-        .await
-        .map_err(recovery_service_error)?;
-    let source = events
-        .iter()
-        .filter(|event| {
-            event.kind == arkret_wire::EventKind::CROSS_SIGNING_PUBLISH
-                && event.envelope["payload"]["generation"].as_u64() == Some(generation)
-        })
-        .max_by_key(|event| event.actor_seq)
-        .ok_or_else(|| {
-            AppError::conflict(
-                "accepted cross-signing generation has no canonical publish Event source",
-            )
-            .with_wire_code("cross_signing_state_missing")
-        })?;
-    let source_digest = Hash::new(source.canonical_digest.clone())
-        .map_err(|error| AppError::internal(format!("cross-signing Event digest: {error}")))?;
-    let basis_ref = recovery_policy_acceptance_basis(state, realm_id, &source_digest)?;
-    let issuer = source.envelope["payload"]["self_signing_key"]["kid"]
-        .as_str()
-        .ok_or_else(|| {
-            AppError::conflict("accepted cross-signing publish has no self-signing method")
-                .with_wire_code("cross_signing_state_missing")
-        })?;
-    let scope_ref = arkret_wire::ScopeRef::Realm {
-        realm_id: realm_id.clone(),
-    };
-    let authority_set_policy = AuthoritySetPolicy {
-        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-        authority_set_id: RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
-        policy_kind: AuthoritySetPolicyKind::PrincipalControl,
-        scope_ref: scope_ref.clone(),
-        source: AuthoritySetPolicySource {
-            source_kind: AuthoritySetSourceKind::CrossSigningPublish,
-            source_ref: source.event_id.clone(),
-            source_digest,
-            generation_ref: generation.to_string(),
-        },
-        authorization_rules: vec![AuthoritySetAuthorizationRule {
-            rule_id: "cross_signing".to_owned(),
-            issuer_role: AuthoritySetIssuerRole::CrossSigningSelfSigning,
-            allowed_actions: vec![
-                arkret_wire::EventKind::DEVICE_AUTHORIZE.to_owned(),
-                arkret_wire::EventKind::DEVICE_LIST_UPDATE.to_owned(),
-            ],
-            issuers: vec![AuthoritySetIssuer {
-                verification_method: DidUrl::new(issuer.to_owned()).map_err(|error| {
-                    AppError::conflict(format!(
-                        "accepted cross-signing self-signing method is invalid: {error}"
-                    ))
-                    .with_wire_code("cross_signing_state_missing")
-                })?,
-            }],
-            threshold: 1,
-        }],
-    };
-    let authority_set_ref = AuthoritySetRef {
-        authority_set_id: RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
-        authority_set_digest: authority_set_policy.digest().map_err(|error| {
-            AppError::internal(format!(
-                "cross-signing authority policy digest failed: {error}"
-            ))
-        })?,
-    };
-    let context = RecoveryPublicationAuthorityContext {
-        identity_model: RecoveryIdentityModel::CrossSigning,
-        basis_ref,
-        scope_ref,
-        authority_set_ref,
-        authority_set_policy,
-        allowed_actions: vec![
-            RecoveryPublicationAction::DeviceAuthorize,
-            RecoveryPublicationAction::DeviceListUpdate,
-        ],
-    };
-    context
-        .validate_for(RecoveryIdentityModel::CrossSigning)
-        .map_err(|error| {
-            AppError::conflict(format!(
-                "cross-signing publication authority context is invalid: {error}"
             ))
             .with_wire_code("recovery_publication_authority_invalid")
         })?;
@@ -562,7 +459,6 @@ pub(super) async fn recovery_session_create(
         .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
     let (
         identity_model,
-        ssk_generation,
         current_device_generation_ref,
         device_generation_status,
         registry_head,
@@ -608,8 +504,7 @@ pub(super) async fn recovery_session_create(
             })
         };
         (
-            RecoveryIdentityModel::EnrollmentAuthority,
-            None,
+            RecoveryIdentityModel::RootAnchored,
             Some(
                 NonEmptyString::new(generation.current_ref).map_err(|error| {
                     AppError::internal(format!("invalid accepted device generation ref: {error}"))
@@ -629,37 +524,14 @@ pub(super) async fn recovery_session_create(
             accepted_seal_frontier,
         )
     } else {
-        let generation = crate::routing::identity::cross_signing::current_accepted_ssk_generation(
-            state, &principal,
-        )
-        .ok_or_else(|| {
-            AppError::conflict("A-model recovery requires an accepted cross-signing generation")
-                .with_wire_code("cross_signing_state_missing")
-        })?;
-        (
-            RecoveryIdentityModel::CrossSigning,
-            Some(generation),
-            None,
-            None,
-            None,
-            None,
-        )
+        return Err(
+            AppError::conflict("recovery requires an accepted device generation")
+                .with_wire_code("device_generation_missing"),
+        );
     };
 
-    let publication_authority_context = match identity_model {
-        RecoveryIdentityModel::CrossSigning => {
-            cross_signing_recovery_publication_authority_context(
-                state,
-                &principal,
-                &realm_id,
-                ssk_generation.expect("cross-signing branch fixes ssk_generation"),
-            )
-            .await?
-        }
-        RecoveryIdentityModel::EnrollmentAuthority => {
-            enrollment_recovery_publication_authority_context(state, &active, &realm_id).await?
-        }
-    };
+    let publication_authority_context =
+        root_anchored_recovery_publication_authority_context(state, &active, &realm_id).await?;
     let publication_authority_context_digest =
         publication_authority_context.digest().map_err(|error| {
             AppError::internal(format!(
@@ -676,7 +548,6 @@ pub(super) async fn recovery_session_create(
         policy_id: active.policy_id.clone(),
         policy_version: active.version,
         identity_model,
-        ssk_generation,
         current_device_generation_ref,
         device_generation_status,
         registry_head,
@@ -887,7 +758,7 @@ pub(super) async fn recovery_session_proof_submit(
 /// The proof MUST carry an Ed25519 signature by the principal's signing key
 /// over the canonical recovery-proof transcript, which binds every
 /// session-defining field: `(principal_id, requesting_device_id, trust_domain,
-/// policy_id, policy_version, recovery_session_id, ssk_generation, challenge,
+/// policy_id, policy_version, recovery_session_id, device generation, challenge,
 /// created_at, expires_at)`.
 /// Because the transcript is reconstructed server-side from the stored session,
 /// any proof signed over a different binding (stale policy, replayed across
@@ -1217,7 +1088,7 @@ pub(super) fn decode_recovery_key_public_key(
                 "recovery key entry does not carry public_key_multibase",
             )
         })?;
-    crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
+    crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
         .map_err(|error| recovery_evidence_unbound_error(format!("recovery key invalid: {error}")))
 }
 

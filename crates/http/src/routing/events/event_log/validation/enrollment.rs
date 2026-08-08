@@ -1,119 +1,134 @@
 use super::super::*;
 
-/// Device-identity B-model (device-lifecycle.md §5.4 / key-management.md §5.0.6):
-/// admit a `service_attested` `ak.device.authorize` whose trust root is the
-/// enrollment authority designated by the principal DID document, rather than a
-/// client-held SSK (§5.2) or DID inception key (§5.3).
-///
-/// Only the `enrollment_authority_binding` branch is validated here; payloads
-/// carrying `cross_signing_binding` are validated by
-/// `cross_signing::validate_device_authorize_binding` and pass through this
-/// gate untouched.
-///
-/// MUST check (device-lifecycle.md §5.4 receiver rules):
-/// `executed_by` (== `binding.authority_did`) is the DID that the principal (`actor_id`) DID
-/// document designates via its `ArkretDeviceEnrollmentAuthority` service `serviceEndpoint`, and
-/// `authorization_ref` matches that service entry id (else
-/// `device_enrollment_authority_not_designated`).
-///
-/// The cryptographic proof (signed by the authority, rooted in `executed_by`)
-/// is verified by `validate_event_proofs`; the envelope `executed_by`/`proofs`
-/// vm-DID alignment ran earlier in `validate_event_envelope`.
-pub(crate) async fn validate_device_enrollment_authority_binding(
+/// Enforce the closed device-authorization source model. Root-anchored
+/// authorizations exist only inside the exact genesis/re-anchor unit passed by
+/// the batch validator. Pairing requires a current, accepted authorizing
+/// device; DID service/delegation state is never consulted.
+pub(crate) async fn validate_device_authorization_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<(), EventValidationError> {
-    let payload = object.get("payload").and_then(Value::as_object);
-    let Some(binding) = payload
-        .and_then(|payload| payload.get("enrollment_authority_binding"))
-        .and_then(Value::as_object)
-    else {
-        // Not a service_attested enrollment; cross_signing / bootstrap branch.
-        return Ok(());
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
     };
 
-    let invalid = |code: &'static str, message: &'static str, status: StatusCode| {
-        event_validation_error(status, code, message)
-    };
-
-    // executed_by must be the DID-document-designated enrollment authority.
-    let authority_did = event_string_field(binding, &["authority_did"]).ok_or_else(|| {
-        invalid(
-            "device_enrollment_authority_not_designated",
-            "enrollment_authority_binding requires authority_did",
-            StatusCode::FORBIDDEN,
+    let payload: DeviceAuthorizePayload = serde_json::from_value(
+        object.get("payload").cloned().unwrap_or(Value::Null),
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("invalid ak.device.authorize payload: {error}"),
         )
     })?;
-    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
-        invalid(
-            "device_enrollment_authority_not_designated",
-            "service_attested ak.device.authorize requires envelope executed_by",
-            StatusCode::FORBIDDEN,
-        )
-    })?;
-    if executed_by != authority_did {
-        return Err(invalid(
-            "device_enrollment_authority_not_designated",
-            "envelope executed_by must equal enrollment_authority_binding.authority_did",
-            StatusCode::FORBIDDEN,
+    if payload.principal_id.as_str() != actor_id {
+        return Err(device_authorization_invalid(
+            "device authorization principal does not match actor_id",
         ));
     }
-    let authorization_ref =
-        event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
-            invalid(
-                "device_enrollment_authority_not_designated",
-                "service_attested ak.device.authorize requires envelope authorization_ref",
-                StatusCode::FORBIDDEN,
+    match (&payload.authorization_binding_kind, &payload.authorized_by) {
+        (DeviceAuthorizationBindingKind::RootAnchored, DeviceOrPrincipalRef::Did(root)) => {
+            let staged = realm_bootstrap_contexts.iter().any(|context| {
+                context.actor_id == actor_id
+                    && context.identity_anchor_event_id.is_some()
+                    && context.identity_anchor_candidate_device_key.as_deref()
+                        == Some(payload.device_public_key.as_str())
+            });
+            if root.as_str() != actor_id || !staged {
+                return Err(device_authorization_invalid(
+                    "root_anchored authorization is outside a closed identity-anchor unit",
+                ));
+            }
+        }
+        (
+            DeviceAuthorizationBindingKind::AcceptedDevice,
+            DeviceOrPrincipalRef::DeviceId(authorizer),
+        ) => {
+            let expected_method = format!("{actor_id}#{authorizer}");
+            let proof_methods = object
+                .get("proofs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|proof| proof.get("verification_method").and_then(Value::as_str))
+                .collect::<Vec<_>>();
+            if proof_methods.is_empty()
+                || proof_methods
+                    .iter()
+                    .any(|method| *method != expected_method.as_str())
+            {
+                return Err(device_authorization_invalid(
+                    "accepted_device authorization must be Event-signed by the declared authorizing device",
+                ));
+            }
+            let record = state
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: actor_id.to_owned(),
+                    device_id: authorizer.to_string(),
+                })
+                .await
+                .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "failed_precondition",
+                        format!("authorizing device lookup failed: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    device_authorization_invalid("authorizing device is not accepted")
+                })?;
+            let current = crate::routing::identity::device_generation::current_device_generation(
+                state, actor_id,
             )
-        })?;
-    // The binding echoes the envelope authorization_ref; reject divergence so the
-    // designation evidence is unambiguous.
-    if event_string_field(binding, &["authorization_ref"]).as_deref()
-        != Some(authorization_ref.as_str())
-    {
-        return Err(invalid(
-            "device_enrollment_authority_not_designated",
-            "enrollment_authority_binding.authorization_ref must equal envelope authorization_ref",
-            StatusCode::FORBIDDEN,
-        ));
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "failed_precondition",
+                    format!("device generation state unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| device_authorization_invalid("device generation is unavailable"))?;
+            if record.verification_state != "verified"
+                || record.revoked_at.is_some()
+                || record
+                    .payload
+                    .get("authorized_generation_ref")
+                    .and_then(Value::as_str)
+                    != Some(current.current_ref.as_str())
+            {
+                return Err(device_authorization_invalid(
+                    "authorizing device is not active at the current generation",
+                ));
+            }
+        }
+        _ => {
+            return Err(device_authorization_invalid(
+                "device authorization binding is not a closed v1 variant",
+            ));
+        }
     }
-
-    // Resolve the principal DID document and read its one narrow enrollment
-    // delegation: an external ArkretDeviceEnrollmentAuthority service (B
-    // model), or a principal-owned capabilityDelegation method (A model).
-    let designated = resolve_enrollment_authority_designation(state, actor_id)
-        .await
-        .ok_or_else(|| {
-            invalid(
-                "device_enrollment_authority_not_designated",
-                "principal DID document does not designate a ArkretDeviceEnrollmentAuthority",
-                StatusCode::FORBIDDEN,
-            )
-        })?;
-    if designated.service_endpoint != authority_did {
-        return Err(invalid(
-            "device_enrollment_authority_not_designated",
-            "executed_by is not the enrollment authority designated by the principal DID document",
-            StatusCode::FORBIDDEN,
-        ));
-    }
-    if designated.service_id != authorization_ref {
-        return Err(invalid(
-            "device_enrollment_authority_not_designated",
-            "authorization_ref does not match the ArkretDeviceEnrollmentAuthority service entry id",
-            StatusCode::FORBIDDEN,
-        ));
-    }
-    Ok(())
+    crate::routing::identity::device_signing::validate_device_authorize_binding(
+        state,
+        object.get("payload").unwrap_or(&Value::Null),
+    )
+    .map_err(device_authorization_invalid)
 }
 
-/// Verify the portable trust anchor carried with a federated device key.
+fn device_authorization_invalid(message: impl Into<String>) -> EventValidationError {
+    event_validation_error(StatusCode::FORBIDDEN, "failed_precondition", message)
+}
+
+/// Verify the complete portable PCR device-authorization evidence.
 ///
-/// The source Principal Server attests only that this authorization remains
-/// active. The destination independently verifies that the original
-/// `ak.device.authorize` Event binds the advertised key to the principal and
-/// was signed by the DID-designated enrollment authority.
+/// The SDK replay proves the root/device signature chain and derives the
+/// current device projection. Soland additionally verifies the service-owned
+/// genesis receipt, accepted Seal, and full-range attestation against its
+/// configured federation trust before accepting that replay.
 pub(crate) async fn validate_federated_device_signing_key_evidence(
     state: &AppState,
     evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
@@ -121,119 +136,39 @@ pub(crate) async fn validate_federated_device_signing_key_evidence(
     evidence
         .validate_shape()
         .map_err(|error| error.to_string())?;
-    evidence
-        .device_authorize_event
-        .validate_proof_bindings()
-        .map_err(|error| format!("device authorization proof binding: {error}"))?;
-    if evidence.device_authorize_event.proofs.is_empty() {
-        return Err("portable device authorization must contain an authority proof".to_owned());
-    }
     if evidence.authorization_accepted_at > crate::wire::now() + chrono::Duration::minutes(5) {
         return Err("device authorization accepted_at is in the future".to_owned());
     }
 
-    let envelope = serde_json::to_value(evidence.device_authorize_event.as_ref())
-        .map_err(|error| format!("device authorization Event serialize: {error}"))?;
-    let object = envelope
-        .as_object()
-        .ok_or_else(|| "device authorization Event must be an object".to_owned())?;
-    let binding = object
-        .get("payload")
-        .and_then(Value::as_object)
-        .and_then(|payload| payload.get("enrollment_authority_binding"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| "device authorization enrollment binding is missing".to_owned())?;
-    let historical_designation = resolve_enrollment_authority_designation_at(
-        state,
-        evidence.actor_id.as_str(),
-        evidence.authorization_accepted_at,
-    )
-    .await
-    .map_err(|error| format!("principal DID accepted-at resolution failed: {error}"))?
-    .ok_or_else(|| {
-        "principal DID enrollment designation is unavailable at authorization accepted_at"
-            .to_owned()
-    })?;
-    if event_string_field(binding, &["authority_did"]).as_deref()
-        != Some(historical_designation.service_endpoint.as_str())
-        || event_string_field(binding, &["authorization_ref"]).as_deref()
-            != Some(historical_designation.service_id.as_str())
-    {
-        return Err(
-            "device authorization does not match the accepted-at DID enrollment designation"
-                .to_owned(),
-        );
+    verify_federated_genesis_receipt(state, &evidence.principal_genesis_receipt).await?;
+    verify_federated_accepted_seal(evidence)?;
+
+    let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
+        .map_err(|error| format!("PCR device authorization replay failed: {error}"))?;
+    if replayed != evidence.current_device_projection {
+        return Err("PCR replay changed the current device projection".to_owned());
     }
 
-    let executed_by = evidence
-        .device_authorize_event
-        .executed_by
-        .as_ref()
-        .ok_or_else(|| "service-attested device authorization requires executed_by".to_owned())?;
-    let authorization_ref = evidence
-        .device_authorize_event
-        .authorization_ref
-        .as_ref()
-        .ok_or_else(|| {
-            "service-attested device authorization requires authorization_ref".to_owned()
-        })?;
-    if event_string_field(binding, &["authority_did"]).as_deref() != Some(executed_by.as_str())
-        || event_string_field(binding, &["authorization_ref"]).as_deref()
-            != Some(authorization_ref.as_str())
-    {
-        return Err("device authorization envelope and enrollment binding do not match".to_owned());
-    }
-    for proof in &evidence.device_authorize_event.proofs {
-        if proof.domain.is_some() || proof.audience.is_some() {
-            return Err(
-                "portable device authorization proofs must omit service-specific domain and audience"
-                    .to_owned(),
-            );
-        }
-        let proof_controller = proof
-            .verification_method
-            .split_once('#')
-            .map_or(proof.verification_method.as_str(), |(did, _)| did);
-        if proof_controller != executed_by.as_str() {
-            return Err("device authorization proof is not rooted in executed_by".to_owned());
-        }
-        let signing_bytes = proof
-            .canonical_binding_bytes(&evidence.actor_id)
-            .map_err(|error| format!("device authorization proof transcript: {error}"))?;
-        let authority_document = did_document_at(
+    for attestation in &evidence.range_completeness_evidence {
+        verify_federated_range_attestation(
             state,
-            executed_by.as_str(),
-            evidence.authorization_accepted_at,
+            attestation,
+            &evidence.principal_genesis_receipt.issuer,
         )
         .await?;
-        // §4 row 4 / §3 — replay of an already-accepted portable device
-        // authorization is verified against the DID document pinned to the
-        // acceptance time. `verify_jws_with_pinned_document` delegates to the
-        // SDK's resolver-free verifier, so this path never resolves a DID.
-        let authority_document =
-            crate::jws_verify::decode_pinned_did_document(&authority_document)?;
-        crate::jws_verify::verify_jws_with_pinned_document(
-            &signing_bytes,
-            &proof.jws,
-            &proof.verification_method,
-            executed_by.as_str(),
-            &authority_document,
-        )
-        .map_err(|error| format!("device authorization authority proof: {error}"))?;
     }
-    device_generation_ref_at(
-        state,
-        evidence.actor_id.as_str(),
-        evidence.authorization_accepted_at,
-    )
-    .await
+
+    Ok(replayed
+        .generation_state
+        .current_device_generation_ref
+        .to_string())
 }
 
-/// Persist an independently verified portable device authorization as a
-/// derived remote directory projection. This does not add the authorization
-/// Event to a Realm timeline or alter a transported Event; it only gives local
-/// clients the same `(principal, device)` trust anchor that federation ingress
-/// already used to verify the canonical Event proof.
+/// Persist a replay-verified remote device as a derived directory projection.
+///
+/// Local authoritative rows always win. The portable PCR Event remains the
+/// source of key material; Soland stores only the replay result needed by
+/// normal device-signature lookup.
 pub(crate) async fn project_federated_device_signing_key_evidence(
     state: &AppState,
     evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
@@ -242,13 +177,23 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
 ) -> Result<(), String> {
     use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 
+    let authorize_event_id = evidence
+        .current_device_projection
+        .device_record
+        .device_authorize_event_id
+        .as_ref()
+        .ok_or_else(|| "portable device projection omits authorization Event".to_owned())?;
+    let authorize_event = evidence
+        .authorization_chain
+        .iter()
+        .find(|event| &event.event_id == authorize_event_id)
+        .ok_or_else(|| "portable device authorization Event is unavailable".to_owned())?;
     let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        serde_json::from_value(Value::Object(
-            evidence.device_authorize_event.payload.clone().into_iter().collect(),
-        ))
-        .map_err(|error| format!("portable device authorization payload: {error}"))?;
-    let principal_id = typed.principal_id.as_str();
-    let device_id = typed.device_id.as_str();
+        authorize_event
+            .typed_payload(arkret_wire::EventKind::DEVICE_AUTHORIZE)
+            .map_err(|error| format!("portable device authorization payload: {error}"))?;
+    let principal_id = evidence.actor_id.as_str();
+    let device_id = evidence.device_id.as_str();
     let existing = state
         .identities()
         .find_device(FindDeviceQuery {
@@ -261,9 +206,6 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
     if let Some(existing) = &existing
         && existing.payload.get("federated_authorization").is_none()
     {
-        // A local authoritative projection always wins over derived remote
-        // evidence. Matching local rows already expose the same key; a
-        // mismatch must never be overwritten by a peer assertion.
         let local_key = existing
             .payload
             .get("device_public_key")
@@ -274,7 +216,6 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
             Err("portable device authorization conflicts with local device projection".to_owned())
         };
     }
-
     if let Some(existing_accepted_at) = existing
         .as_ref()
         .and_then(|record| {
@@ -290,10 +231,7 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
     }
 
     let now = crate::wire::now();
-    let created_at = existing
-        .as_ref()
-        .map(|record| record.created_at)
-        .unwrap_or(now);
+    let created_at = existing.as_ref().map_or(now, |record| record.created_at);
     let display_name = existing
         .as_ref()
         .and_then(|record| record.display_name.clone());
@@ -325,18 +263,8 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
         ),
     );
     object.insert(
-        "enrollment_authority_binding".to_owned(),
-        serde_json::to_value(
-            typed
-                .enrollment_authority_binding
-                .as_ref()
-                .ok_or_else(|| "portable enrollment binding is missing".to_owned())?,
-        )
-        .map_err(|error| format!("portable enrollment binding: {error}"))?,
-    );
-    object.insert(
         "device_authorize_event_id".to_owned(),
-        Value::String(evidence.device_authorize_event.event_id.to_string()),
+        Value::String(authorize_event_id.to_string()),
     );
     object.insert(
         "authorized_generation_ref".to_owned(),
@@ -350,7 +278,6 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
             "verification_method": evidence.verification_method,
         }),
     );
-    object.remove("cross_signing_binding");
 
     state
         .identities()
@@ -373,83 +300,205 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
         .map_err(|error| error.to_string())
 }
 
-async fn device_generation_ref_at(
+async fn verify_federated_genesis_receipt(
     state: &AppState,
-    principal_did: &str,
-    accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<String, String> {
-    let mut history = state
-        .dids()
-        .log_events(principal_did)
-        .await
-        .map_err(|error| format!("DID history lookup failed: {error}"))?;
-    history.sort_by_key(|entry| (entry.created_at, entry.seq));
-    if let Some(version_id) = history.into_iter().rev().find_map(|entry| {
-        (entry.created_at <= accepted_at)
-            .then(|| {
-                entry
-                    .operation
-                    .get("versionId")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .flatten()
-    }) {
-        return Ok(version_id);
+    receipt: &arkret_wire::EventBatchReceipt,
+) -> Result<(), String> {
+    receipt
+        .validate()
+        .map_err(|error| format!("PCR genesis receipt is invalid: {error}"))?;
+    let mut unsigned = serde_json::to_value(receipt)
+        .map_err(|error| format!("PCR genesis receipt encode failed: {error}"))?;
+    unsigned
+        .as_object_mut()
+        .ok_or_else(|| "PCR genesis receipt is not an object".to_owned())?
+        .remove("proofs");
+    let digest = arkret_canonical::canonical_sha256(&unsigned)
+        .map_err(|error| format!("PCR genesis receipt digest failed: {error}"))?;
+    for proof in &receipt.proofs {
+        if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
+            || proof.event_digest.as_str() != digest
+            || proof.created_at != receipt.created_at
+        {
+            return Err("PCR genesis receipt proof binding is invalid".to_owned());
+        }
+        let signer = arkret_identity::verification_method_did(&proof.verification_method)
+            .map_err(|error| format!("PCR genesis receipt signer is invalid: {error}"))?;
+        if signer != receipt.issuer {
+            return Err("PCR genesis receipt signer does not match issuer".to_owned());
+        }
+        let binding = json!({
+            "context": "ak.receipt-proof-v1",
+            "payload_digest": digest,
+            "issuer": receipt.issuer,
+            "verification_method": proof.verification_method,
+            "created_at": receipt.created_at,
+        });
+        let binding = arkret_canonical::canonical_json_bytes(&binding)
+            .map_err(|error| format!("PCR genesis receipt proof transcript failed: {error}"))?;
+        verify_federated_service_jws(
+            state,
+            &binding,
+            &proof.jws,
+            proof.verification_method.as_str(),
+            receipt.issuer.as_str(),
+        )
+        .await?;
     }
-    if let Some(current) = state
-        .dids()
-        .document(principal_did)
-        .await
-        .map_err(|error| format!("DID document lookup failed: {error}"))?
-        && current.updated_at <= accepted_at
-        && let Some(version_id) = current.key_log_head
+    Ok(())
+}
+
+fn verify_federated_accepted_seal(
+    evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
+) -> Result<(), String> {
+    let seal = &evidence.accepted_seal;
+    seal.validate_structural()
+        .map_err(|error| format!("PCR accepted Seal is invalid: {error}"))?;
+    seal.validate_id()
+        .map_err(|error| format!("PCR accepted Seal id is invalid: {error}"))?;
+    let canonical = seal
+        .canonical_bytes_for_id()
+        .map_err(|error| format!("PCR accepted Seal transcript failed: {error}"))?;
+    let digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
+        .map_err(|error| format!("PCR accepted Seal digest failed: {error}"))?;
+    let arkret_wire::NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err("PCR accepted Seal must have one device signature".to_owned());
+    };
+    let multibase = evidence
+        .device_signing_key
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| "PCR device signing key is not did:key".to_owned())?;
+    let expected_did_key_method = format!("{}#{multibase}", evidence.device_signing_key);
+    if signature.payload_digest != digest
+        || (signature.verification_method != evidence.verification_method
+            && signature.verification_method.as_str() != expected_did_key_method)
     {
-        return Ok(version_id);
+        return Err("PCR accepted Seal is not signed by the evidenced device".to_owned());
     }
-    let typed_did =
-        arkret_identifiers::Did::new(principal_did.to_owned()).map_err(|e| e.to_string())?;
-    if typed_did.method() != "webvh" {
-        return Err(
-            "portable device authorization has no accepted-at device generation".to_owned(),
-        );
+    let key = arkret_canonical::decode_ed25519_multibase(multibase)
+        .map_err(|error| format!("PCR device signing key is invalid: {error}"))?;
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &signature.jws,
+            &canonical,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: key.to_vec(),
+            },
+        )
+        .map_err(|error| format!("PCR accepted Seal signature is invalid: {error}"))
+}
+
+async fn verify_federated_range_attestation(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    expected_issuer: &arkret_identifiers::Did,
+) -> Result<(), String> {
+    event
+        .validate_proof_bindings()
+        .map_err(|error| format!("PCR range Event proof binding failed: {error}"))?;
+    if event.proofs.is_empty() || &event.actor_id != expected_issuer {
+        return Err("PCR range attestation actor does not match receipt issuer".to_owned());
     }
-    resolve_remote_webvh_generation_at(state, &typed_did, accepted_at).await
+    let digest_payload = event
+        .digest_payload()
+        .map_err(|error| format!("PCR range Event digest payload failed: {error}"))?;
+    let event_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
+        .map_err(|error| format!("PCR range Event transcript failed: {error}"))?;
+    for proof in &event.proofs {
+        let binding = proof
+            .canonical_binding_bytes(&event.actor_id)
+            .map_err(|error| format!("PCR range Event proof transcript failed: {error}"))?;
+        verify_federated_service_jws(
+            state,
+            &binding,
+            &proof.jws,
+            proof.verification_method.as_str(),
+            expected_issuer.as_str(),
+        )
+        .await?;
+        if proof.event_digest.as_str() != arkret_canonical::sha256_digest(&event_bytes) {
+            return Err("PCR range Event proof digest is invalid".to_owned());
+        }
+    }
+
+    let payload: arkret_models_collaboration::sync_frames::snapshot::RangeCompletenessAttestation =
+        event
+            .payload_as()
+            .map_err(|error| format!("PCR range attestation payload is invalid: {error}"))?;
+    if &payload.issuer != expected_issuer
+        || payload.realm_id != event.realm_id
+        || payload.schema != arkret_wire::SchemaId::RANGE_COMPLETENESS_ATTESTATION_V1
+        || payload.count == 0
+        || payload.witness_attestation.witnesses.is_empty()
+        || payload
+            .witness_attestation
+            .witnesses
+            .iter()
+            .any(|witness| &witness.issuer != expected_issuer)
+    {
+        return Err("PCR range payload binding is invalid".to_owned());
+    }
+    let mut unsigned = serde_json::to_value(&payload)
+        .map_err(|error| format!("PCR range payload encode failed: {error}"))?;
+    unsigned
+        .as_object_mut()
+        .ok_or_else(|| "PCR range payload is not an object".to_owned())?
+        .remove("proofs");
+    let payload_digest = arkret_canonical::canonical_sha256(&unsigned)
+        .map_err(|error| format!("PCR range payload digest failed: {error}"))?;
+    if payload.proofs.is_empty() {
+        return Err("PCR range payload has no issuer proof".to_owned());
+    }
+    for proof in &payload.proofs {
+        if proof.event_digest.as_str() != payload_digest {
+            return Err("PCR range payload proof digest is invalid".to_owned());
+        }
+        let binding = proof
+            .canonical_binding_bytes(expected_issuer)
+            .map_err(|error| format!("PCR range payload proof transcript failed: {error}"))?;
+        verify_federated_service_jws(
+            state,
+            &binding,
+            &proof.jws,
+            proof.verification_method.as_str(),
+            expected_issuer.as_str(),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
-/// The `ArkretDeviceEnrollmentAuthority` designation read from a principal DID
-/// document's `service` array: the entry `id` (matched against
-/// `authorization_ref`) and its `serviceEndpoint` DID (matched against
-/// `executed_by` / `authority_did`).
-struct EnrollmentAuthorityDesignation {
-    service_id: String,
-    service_endpoint: String,
-}
-
-/// Read the principal DID document `service` entry of type
-/// `ArkretDeviceEnrollmentAuthority` (identity-did.md §3.2). Returns `None` when
-/// the document is not ingested or carries no such designation. The persisted
-/// raw `did_document` value retains the full `service` array (the SDK
-/// `DidDocument` projection only keeps verificationMethod/alsoKnownAs), so the
-/// designation is read from the raw record.
-async fn resolve_enrollment_authority_designation(
+async fn verify_federated_service_jws(
     state: &AppState,
-    principal_did: &str,
-) -> Option<EnrollmentAuthorityDesignation> {
-    let record = state.dids().document(principal_did).await.ok().flatten()?;
-    enrollment_authority_designation_from_document(&record.did_document, principal_did)
-}
-
-async fn resolve_enrollment_authority_designation_at(
-    state: &AppState,
-    principal_did: &str,
-    accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<EnrollmentAuthorityDesignation>, String> {
-    let document = did_document_at(state, principal_did, accepted_at).await?;
-    Ok(enrollment_authority_designation_from_document(
-        &document,
-        principal_did,
-    ))
+    binding: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    crate::jws_verify::validate_verification_method_controller(issuer, verification_method)?;
+    if let Some(key) = state
+        .federation_peer_verification_method_key(verification_method)
+        .or_else(|| state.federation_peer_verifying_key(issuer))
+    {
+        return arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(
+                jws,
+                binding,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: key.to_bytes().to_vec(),
+                },
+            )
+            .map_err(|error| error.to_string());
+    }
+    crate::jws_verify::verify_did_controlled_jws_async(
+        binding,
+        jws,
+        verification_method,
+        issuer,
+        state,
+    )
+    .await
 }
 
 pub(super) async fn did_document_at(
@@ -610,50 +659,6 @@ fn webvh_document_at(
         .rev()
         .find(|entry| entry.version_time <= accepted_at)
         .map(|entry| entry.state.clone())
-}
-
-fn enrollment_authority_designation_from_document(
-    did_document: &Value,
-    principal_did: &str,
-) -> Option<EnrollmentAuthorityDesignation> {
-    if let Some(services) = did_document.get("service").and_then(Value::as_array) {
-        for service in services {
-            let service_kind = service.get("type").and_then(Value::as_str);
-            if service_kind
-                != Some(
-                    arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
-                )
-            {
-                continue;
-            }
-            let service_id = service.get("id").and_then(Value::as_str)?;
-            let service_endpoint = service
-                .get("serviceEndpoint")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            return Some(EnrollmentAuthorityDesignation {
-                service_id: service_id.to_owned(),
-                service_endpoint: service_endpoint.to_owned(),
-            });
-        }
-    }
-    let delegated_method = did_document
-        .get("capabilityDelegation")
-        .and_then(Value::as_array)?
-        .iter()
-        .find_map(|entry| {
-            entry
-                .as_str()
-                .or_else(|| entry.get("id").and_then(Value::as_str))
-        })?;
-    let controller = delegated_method
-        .split_once('#')
-        .map_or(delegated_method, |(did, _)| did);
-    (controller == principal_did).then(|| EnrollmentAuthorityDesignation {
-        service_id: delegated_method.to_owned(),
-        service_endpoint: principal_did.to_owned(),
-    })
 }
 
 #[cfg(test)]

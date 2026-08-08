@@ -75,7 +75,7 @@ async fn keys_upload(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let current_facet =
-        crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+        crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
             state,
             &session.actor,
             &device_id,
@@ -223,23 +223,10 @@ async fn keys_query(
 
     let body = body.into_inner();
     let mut result = BTreeMap::new();
-    let mut cross_signing = BTreeMap::new();
     let mut device_generations = BTreeMap::new();
     for (actor, devices) in body.device_keys {
         if !keys_query_actor_visible_to_requester(state, &session.actor, actor.as_str()) {
             continue;
-        }
-        // Tier-2 (device-lifecycle.md §8.2): attach this principal's current
-        // accepted cross_signing.publish payload so the client can DID-anchor
-        // the SSK before trusting any per-device binding. Inserted once per
-        // principal, only when a publish is accepted.
-        if let Some(publish) =
-            crate::routing::identity::cross_signing::resolve_current_cross_signing_publish(
-                state,
-                actor.as_str(),
-            )
-        {
-            cross_signing.insert(actor.clone(), publish);
         }
         if let Some(generation) =
             crate::routing::identity::device_generation::current_device_generation(
@@ -306,7 +293,7 @@ async fn keys_query(
             // verified, non-revoked device. Shared with the recovery receipt
             // predicate via `resolve_device_signing_directory_facet`.
             let facet =
-                crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+                crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
                     state,
                     actor.as_str(),
                     device_id.as_str(),
@@ -350,8 +337,6 @@ async fn keys_query(
                             ))
                         })?,
                     device_status: Some(facet.status),
-                    cross_signing_binding: facet.cross_signing_binding,
-                    enrollment_authority_binding: facet.enrollment_authority_binding,
                     device_authorize_event_id: facet.device_authorize_event_id,
                     authorized_generation_ref: facet.authorized_generation_ref,
                 },
@@ -362,7 +347,6 @@ async fn keys_query(
     json_ok(KeysQueryOutcome {
         device_keys: result,
         failures: Vec::new(),
-        cross_signing,
         device_generations,
     })
 }
@@ -408,7 +392,9 @@ pub(crate) fn device_signature_kid_points_to_device_key(
     actor: &str,
     device_public_key: &str,
 ) -> bool {
-    let expected_did_key = format!("did:key:{device_public_key}");
+    let expected_did_key = device_public_key
+        .strip_prefix("did:key:")
+        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
     kid == expected_did_key
         || kid
             .strip_prefix(&expected_did_key)
@@ -462,11 +448,11 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::invalid_param("keys/upload signature is not base64url"))?;
     let signature = Signature::from_slice(&signature_bytes)
         .map_err(|_| AppError::invalid_param("keys/upload signature must be 64 bytes"))?;
-    let verifying_key =
-        crate::routing::identity::cross_signing::decode_ed25519_key(device_public_key, "multibase")
-            .map_err(|error| {
-                AppError::invalid_param(format!("device signing key is invalid: {error}"))
-            })?;
+    let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
+        device_public_key,
+        "multibase",
+    )
+    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
     use ed25519_dalek::Verifier as _;
     verifying_key
         .verify(&signing_input, &signature)
@@ -490,7 +476,7 @@ async fn keys_claim(
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {
             let facet =
-                crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+                crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
                     state,
                     actor.as_str(),
                     device_id.as_str(),
@@ -601,7 +587,7 @@ async fn device_signing_keys_query(
         // revoked / unverified device yields no `signing_key_did`, so it never
         // surfaces here.
         let facet =
-            crate::routing::identity::cross_signing::resolve_device_signing_directory_facet(
+            crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
                 state,
                 principal_id.as_str(),
                 &device_id,

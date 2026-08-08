@@ -310,11 +310,9 @@ pub struct MlsKeyPackage {
     /// after a successful CAS claim. The CAS guarantees at-most-one
     /// claim across concurrent Welcomes.
     pub claimed_by: Option<String>,
-    /// Claimed device trust binding captured when the KeyPackage was
-    /// published. Exactly one of `ssk_generation`,
-    /// `device_authorize_event_id`, or `agent_key_authorize_event_id` is
-    /// present.
-    pub ssk_generation: Option<u64>,
+    /// Claimed trust binding captured when the KeyPackage was published.
+    /// Exactly one of `device_authorize_event_id` or
+    /// `agent_key_authorize_event_id` is present.
     pub device_authorize_event_id: Option<String>,
     pub agent_key_authorize_event_id: Option<String>,
     /// Unix seconds at which the CAS claim happened (mirrors `claimed_by`).
