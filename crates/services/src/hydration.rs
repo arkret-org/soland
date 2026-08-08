@@ -452,11 +452,16 @@ async fn hydrate_canonical_realm_bootstraps(
                     record.event_id
                 ))
             })?;
-            let effect = if index > 0
-                && crate::projection::uses_validated_realm_bootstrap_facet_reducer(
+            let effect = if index > 0 {
+                if crate::projection::uses_validated_realm_bootstrap_facet_reducer(
                     operation.object_kind.as_str(),
                 ) {
-                staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
+                    staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
+                } else if operation.object_kind == arkret_wire::EventKind::MEMBER_STATE {
+                    staged.apply_validated_realm_bootstrap_membership(&operation, &cell_writes)
+                } else {
+                    staged.apply_projected(&operation, &cell_writes, hydration_hlc)
+                }
             } else {
                 staged.apply_projected(&operation, &cell_writes, hydration_hlc)
             };

@@ -153,6 +153,55 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
 }
 
 #[test]
+fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let actor = "did:web:reducer-test.example";
+    let payload = serde_json::json!({
+        "actor_id": actor,
+        "membership": "join",
+        "delivery_status": "unroutable"
+    });
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::MEMBER_STATE, realm_id, &payload);
+    let mut operation = make_operation(arkret_wire::EventKind::MEMBER_STATE, realm_id, payload);
+    operation.payload["sender"] = Value::String(actor.to_owned());
+
+    let mut ordinary = ProjectionState::new();
+    ordinary
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "invite".to_owned());
+    assert!(matches!(
+        ordinary.apply_projected(&operation, &writes, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { reason } if reason == "gate_check_failed"
+    ));
+    assert!(ordinary.member(realm_id, actor).is_none());
+
+    let mut bootstrap = ProjectionState::new();
+    bootstrap
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "invite".to_owned());
+    assert!(matches!(
+        bootstrap.apply_validated_realm_bootstrap_membership(&operation, &writes),
+        ProjectionEffect::MembershipChanged { ref member, ref action, .. }
+            if member == actor && action == "join"
+    ));
+    assert_eq!(
+        bootstrap
+            .member(realm_id, actor)
+            .map(|member| member.state.as_str()),
+        Some("join")
+    );
+
+    let mut mismatched = operation;
+    mismatched.payload["sender"] = Value::String("did:web:mallory.example".to_owned());
+    assert!(matches!(
+        ProjectionState::new()
+            .apply_validated_realm_bootstrap_membership(&mismatched, &writes),
+        ProjectionEffect::Rejected { reason } if reason == "out_of_order_bootstrap"
+    ));
+}
+
+#[test]
 fn bare_member_state_cannot_transition_ban_to_invite() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

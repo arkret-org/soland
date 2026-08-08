@@ -388,6 +388,69 @@ impl ProjectionState {
         self.project_accepted_membership(operation, now, new_state.to_owned(), member, realm_id)
     }
 
+    /// Project the final creator-membership slot of an already-validated
+    /// ordinary Realm bootstrap unit.
+    ///
+    /// The closed unit validator has established that this is the genesis
+    /// actor's own `leave -> join` transition. Re-running the ordinary join
+    /// gate here would reject every invite-only Realm before it can acquire
+    /// its first member. Keep the bypass narrow by independently checking the
+    /// accepted envelope actor and the receiver-derived FSM write before
+    /// materializing the membership projection.
+    pub fn apply_validated_realm_bootstrap_membership(
+        &mut self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> ProjectionEffect {
+        if operation.object_kind != arkret_wire::EventKind::MEMBER_STATE {
+            return ProjectionEffect::Rejected {
+                reason: "out_of_order_bootstrap".to_owned(),
+            };
+        }
+        let Some(member) = operation
+            .payload
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .filter(|member| !member.is_empty())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if operation.payload.get("sender").and_then(Value::as_str) != Some(member)
+            || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
+            || self.member(operation.realm_id.as_str(), member).is_some()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "out_of_order_bootstrap".to_owned(),
+            };
+        }
+        let [write] = cell_writes else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let Ok(cell_id) = arkret_wire::CellId::from_ref(&write.cell) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
+            || cell_id.subject() != member
+            || !matches!(
+                &write.op,
+                arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                    if to == &Value::String("join".to_owned())
+            )
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        }
+
+        self.restore_accepted_membership(operation, operation.created_at)
+    }
+
     fn direct_conversation_bootstrap_delivery_policy(
         &self,
         realm_id: &str,

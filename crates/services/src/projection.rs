@@ -1327,6 +1327,11 @@ impl ProjectionService {
             let effect =
                 if uses_validated_realm_bootstrap_facet_reducer(operation.object_kind.as_str()) {
                     staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
+                } else if operation.object_kind == arkret_wire::EventKind::MEMBER_STATE {
+                    staged.apply_validated_realm_bootstrap_membership(
+                        operation,
+                        &projected.cell_writes,
+                    )
                 } else {
                     staged.apply_projected(operation, &projected.cell_writes, self.clock())
                 };
