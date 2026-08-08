@@ -365,7 +365,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
 #[tokio::test]
@@ -725,8 +725,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     .await;
     let realm_a = create_plaintext_realm(state.clone(), &alice_actor, "Parent Realm").await;
     let realm_b = create_plaintext_realm(state.clone(), &alice_actor, "Discussion Realm").await;
-    let event_a = "ak:event:01904100-0000-8000-8000-0000000000aa";
-    let event_b = "ak:event:01904100-0000-8000-8000-0000000000bb";
+    let event_a = "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml";
+    let event_b = "ak:event:AQ5uuUVXlrGqR79MEUmEPOIMYQIdRhgBIsTAtH3mgNpC";
 
     let marker_a = submit_actor_private_event(
         state.clone(),
@@ -851,7 +851,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "push_target_id": push_target_id,
                 "wakeup_kind": "message",
                 "timing_profile_hint": "default",
-                "event_id": "ak:event:01904100-0000-8000-8000-0000000000ee",
+                "event_id": "ak:event:AT4Mf1sJBtwy4lOrQHfsPt7KtsUYo1LogrjcZnl5oAco",
                 "realm_id": "ak:realm:AWRb-Bbhs1lJYMdAAkBJQ7GGxWqzFGTYiQRGUA3wq0Z5",
                 "sender_actor_id": "did:web:bob.example",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]

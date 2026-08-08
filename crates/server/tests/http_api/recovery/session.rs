@@ -275,8 +275,8 @@ async fn recovery_session_derives_enrollment_authority_model() {
     let inception_version = format!("1-{}", "a".repeat(64));
     let inception_digest = format!("sha256:{}", "b".repeat(64));
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
-    let create_event_id = "ak:event:01964137-0000-8000-8000-00000000b001";
-    let authorize_event_id = "ak:event:01964137-0000-8000-8000-00000000b002";
+    let create_event_id = "ak:event:ATP95vWap7E8crKUBFDqhbdBGILBIXRL9Va4iF_OWRyX";
+    let authorize_event_id = "ak:event:AfB806xtiM9YnEBScceTbYkFHtIANaCSzMgskQrvVsXL";
     let now = chrono::Utc::now();
 
     state

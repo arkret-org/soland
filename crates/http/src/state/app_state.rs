@@ -1851,7 +1851,7 @@ mod membership_hydration_tests {
         store
             .events()
             .put(CanonicalEventRecord {
-                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775901".to_owned(),
+                event_id: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
                 actor_id: "did:web:alice.example".to_owned(),
                 actor_seq: 2,
                 realm_id: Some(realm_id.to_owned()),
@@ -1860,7 +1860,7 @@ mod membership_hydration_tests {
                 canonical_digest: "sha256:membership".to_owned(),
                 canonical_bytes: Vec::new(),
                 envelope: serde_json::json!({
-                    "event_id": "ak:event:019f0dd3-081c-8f03-b388-e0399e775901",
+                    "event_id": "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn",
                     "actor_id": "did:web:alice.example",
                     "actor_seq": 2,
                     "realm_id": realm_id,
@@ -2039,7 +2039,7 @@ mod membership_hydration_tests {
 
     #[test]
     fn child_scope_policy_hydration_uses_the_sdk_wire_type_and_fails_closed() {
-        let circle_id = "ak:circle:0196419b-0000-8000-8000-000000000003";
+        let circle_id = "ak:circle:AV624IkuHj3HmxAYE6uyYmBa4Est3gGGdnOsjn71z5L2";
         assert_eq!(
             soland_services::hydration::parse_child_scope_policy(None, None).unwrap(),
             None
@@ -2089,7 +2089,7 @@ mod membership_hydration_tests {
         let appended = store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775902".to_owned(),
+                event_id: "ak:event:ASNT62Xkv9o-f5_gN8QAmANltuCZ9s6J-SOPbXj3IlUR".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2148,7 +2148,7 @@ mod membership_hydration_tests {
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775904".to_owned(),
+                event_id: "ak:event:AYmpBR6Q5rYN9q69X2PTNt_Yn1M8K-gXk1VQCbr67p3q".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2206,9 +2206,9 @@ mod membership_hydration_tests {
         let agent_id =
             "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
         let realm_id = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
-        let event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775903";
+        let event_id = "ak:event:AXqMJt-NK9AYFKgQFnV62RNHBIZVFu8PeZDP8jqje1xd";
         let key_id = format!("{agent_id}#runtime-1");
-        let replacement_event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775907";
+        let replacement_event_id = "ak:event:AXkBchgWu3Ok8yCekmeRd4JBehZVbP3uS4X7LQZ7DTpC";
         let replacement_key_id = format!("{agent_id}#runtime-2");
         let now = chrono::Utc::now();
         let appended = store
@@ -2234,7 +2234,7 @@ mod membership_hydration_tests {
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775905".to_owned(),
+                event_id: "ak:event:AWqDVkXtcVnsb68rvZhxe1yKpstTL8E5-wU_3B7gvpqx".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::AGENT_KEY_REVOKE.to_owned(),
                 operation_kind: "event".to_owned(),

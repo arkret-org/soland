@@ -708,7 +708,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
 fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {

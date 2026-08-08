@@ -1407,7 +1407,7 @@ mod tests {
             "status":"partial",
             "accepted":[],
             "rejected":[{
-                "id":"ak:event:019f0000-0000-8000-8000-000000000001",
+                "id":"ak:event:AR-4MwpAcHt7pmjO-Cab9s-33ymPZefvcpl666_jGxiY",
                 "reason_code":"dependency_missing",
                 "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
             }]

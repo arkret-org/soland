@@ -1116,7 +1116,7 @@ mod tests {
             let result = engine.check(
                 "did:web:alice",
                 action,
-                "ak:circle:01904100-0000-8000-8000-000000000001",
+                "ak:circle:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 Some("did:web:alice"),
                 &[],

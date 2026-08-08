@@ -314,11 +314,11 @@ mod cba_capability_cell_tests {
 
     #[test]
     fn engine_grant_reads_registry_projected_wrapper() {
-        let grant_id = "ak:grant:019fa9d5-0000-8000-8000-000000000001";
+        let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
         let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let state = CellState::Value(Value::Array(vec![json!({
-            "tag": "ak:event:019fa9d5-0000-8000-8000-000000000003:0",
+            "tag": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk:0",
             "value": {
                 "grant_id": grant_id,
                 "grant": {
@@ -2077,10 +2077,10 @@ mod agent_key_tests {
 
     const AGENT: &str = "did:web:agent.example";
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
-    const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000a1";
-    const GRANT_2: &str = "ak:grant:01970000-0000-8000-8000-0000000000a2";
-    const GRANT_3: &str = "ak:grant:01970000-0000-8000-8000-0000000000a3";
-    const OWNER_GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000a0";
+    const GRANT: &str = "ak:grant:AYOGN6zLytw3AP-JRSpnGwuq8CjgA5Tq_YDSH1IzUT77";
+    const GRANT_2: &str = "ak:grant:AWj0q-Z4gw_sS6wsl8gtEwhi3abA99IaQU-csCcBHFVz";
+    const GRANT_3: &str = "ak:grant:Af-etF0vTHwlpJOwEu53s_Pq08WOwxuO7UxIWltAiAmk";
+    const OWNER_GRANT: &str = "ak:grant:Aam5L1XcrHrrRfNk_9wOcpOu9263GPwRPTjzYXdIgYb0";
     const REALM_OWNER: &str = "did:web:alice.example";
 
     #[test]
@@ -2226,8 +2226,8 @@ mod agent_key_tests {
     #[test]
     fn runtime_replacement_requires_exact_supersedes_and_is_atomic() {
         let mut state = ProjectionState::default();
-        let old_event = "ak:event:01970000-0000-8000-8000-000000000011";
-        let new_event = "ak:event:01970000-0000-8000-8000-000000000012";
+        let old_event = "ak:event:AVI3AO2X2rB2hMfALczp6qgYt73z3AwmGo2isSyuWZGo";
+        let new_event = "ak:event:AQ985E-2w6lvWUxeIPTXvhe07EuX-DPPiDaS3_w-r37V";
         let old_key = "ak:agent_key:old";
         let new_key = "ak:agent_key:new";
 
@@ -2287,8 +2287,8 @@ mod agent_key_tests {
     #[test]
     fn pairing_replacement_of_same_key_requires_exact_supersedes() {
         let mut state = ProjectionState::default();
-        let old_event = "ak:event:01970000-0000-8000-8000-000000000021";
-        let new_event = "ak:event:01970000-0000-8000-8000-000000000022";
+        let old_event = "ak:event:AV97PI2Y6Qum1pZ62jB1P6M_I7KjPy5KVQxs3bDBUkws";
+        let new_event = "ak:event:AcQWkV0enAXbpr18oGw1oRi_yX4oOxV_-eTJTh_5RzRv";
         let key_id = "ak:agent_key:stable";
 
         assert!(matches!(
@@ -2812,9 +2812,9 @@ mod authority_cycle_tests {
     use crate::reducer::{ProjectionState, SolandRealmState};
 
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
-    const G_A: &str = "ak:grant:01970000-0000-8000-8000-00000000a001";
-    const G_B: &str = "ak:grant:01970000-0000-8000-8000-00000000b002";
-    const G_C: &str = "ak:grant:01970000-0000-8000-8000-00000000c003";
+    const G_A: &str = "ak:grant:AY8nTS0IYFI6o2WxxtlIGtu1bu_J1zcv4KXXmyb5hV1q";
+    const G_B: &str = "ak:grant:AVi9st41v9B8lGcU9SB244GCIBji2eJm4HrPJo16jLcS";
+    const G_C: &str = "ak:grant:AdWiF-Xct4sJV_hkG8VRIEzHTssfJ4YBilfE98t_Perb";
 
     /// A re-grant: same `ak.capability.grant` kind as a root issue, with a
     /// `grant` authority ref instead of a `realm_root` one. That ref type is
@@ -3082,8 +3082,8 @@ mod federation_revoke_fanout_tests {
     const OTHER_REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_ID: &str = "did:web:beta.example";
-    const GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000d1";
-    const OWNER_GRANT: &str = "ak:grant:01970000-0000-8000-8000-0000000000d0";
+    const GRANT: &str = "ak:grant:AZqtjPe_dBMbCiO1AaO3pl249mYTX42jAeK7WbxsUOP_";
+    const OWNER_GRANT: &str = "ak:grant:AftcsV-S3Qgkuf_flS2xTzy_TzSq42hZip4BUCG8D6qv";
 
     fn capability_op(operation_id: &str, kind: &str, mut payload: serde_json::Value) -> Operation {
         let object = payload.as_object_mut().expect("test payload object");

@@ -1584,10 +1584,10 @@ mod tests {
             created_at,
         );
         record.provision_event_refs = Some(json!({
-            "provision_event_id": "ak:event:019f0000-0000-8000-8000-000000000003"
+            "provision_event_id": "ak:event:AUvEs_-d1tc81yDszBZAVWapgIr3Gs6ofbmtZSLQNejL"
         }));
         record.authorized_event_ref =
-            Some("ak:event:019f0000-0000-8000-8000-000000000005".to_owned());
+            Some("ak:event:AVeCvdcuh1hDJWwYlZJb_1yRzWQwN1-pXxgZYTyd7BGT".to_owned());
 
         let basis = managed_agent_direct_authorization_basis_from_record(&record).unwrap();
         assert_eq!(
@@ -1601,8 +1601,8 @@ mod tests {
                 .map(EventId::as_str)
                 .collect::<Vec<_>>(),
             vec![
-                "ak:event:019f0000-0000-8000-8000-000000000003",
-                "ak:event:019f0000-0000-8000-8000-000000000005",
+                "ak:event:AUvEs_-d1tc81yDszBZAVWapgIr3Gs6ofbmtZSLQNejL",
+                "ak:event:AVeCvdcuh1hDJWwYlZJb_1yRzWQwN1-pXxgZYTyd7BGT",
             ]
         );
 

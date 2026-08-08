@@ -136,7 +136,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 /// admission, but Control Proposal Ack admission still resolves the accepted
 /// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
-    const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-8000-8000-000000000001";
+    const ADMIN_GRANT_ID: &str = "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
     let create = arkret_wire::Event::new(
@@ -368,7 +368,7 @@ fn signed_ghost_provision_body(
             "ak.applet.ghost.provision",
         )
     } else {
-        "ak:grant:01904100-0000-8000-8000-000000000099".to_owned()
+        "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk".to_owned()
     };
     let verification_method = arkret_wire::DidUrl::new(package.webhook_auth.key_ref.clone())
         .expect("fixture verification method is a DID URL");
@@ -1257,7 +1257,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
 #[tokio::test]

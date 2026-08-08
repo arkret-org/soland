@@ -301,7 +301,7 @@ async fn agent_session_without_submit_scope_cannot_submit_events() {
     let token = "agent-local-session-submit";
     seed_agent_session_with_scopes(&state, token, &["ak.self.events.read.scan"]).await;
     let event = signed_event_envelope(
-        "ak:event:01904100-0000-8000-8000-5c0fedead001",
+        "ak:event:AfepkcDJ52VnnpuZZLL_gaOAp8uRP2_whpmBukWi9roZ",
         0,
         Vec::new(),
     );
@@ -415,7 +415,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["limits"]["max_resolve"], 100);
 
     let first = signed_event_envelope(
-        "ak:event:01904100-0000-8000-8000-f15c8ea06c11",
+        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
         0,
         Vec::new(),
     );
@@ -431,7 +431,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(submitted["status"], "accepted", "response: {submitted}");
     assert_eq!(
         submitted["accepted"][0],
-        "ak:event:01904100-0000-8000-8000-f15c8ea06c11"
+        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"
     );
     let committed_idempotency = state
         .test_persistence()
@@ -468,7 +468,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["duplicate"][0], first["event_id"]);
 
     let fetched: Value = TestClient::get(
-        "http://server/_arkret/self/events/ak:event:01904100-0000-8000-8000-f15c8ea06c11",
+        "http://server/_arkret/self/events/ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
     )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
@@ -478,7 +478,7 @@ async fn events_describe_and_single_event_submit_work() {
     .unwrap();
     assert_eq!(
         fetched["event"]["event_id"],
-        "ak:event:01904100-0000-8000-8000-f15c8ea06c11"
+        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"
     );
     assert_eq!(
         fetched["event"]["proofs"][0]["event_digest"],
@@ -490,9 +490,9 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let second = signed_event_envelope(
-        "ak:event:01904100-0000-8000-8000-63f16896f0b0",
+        "ak:event:AanwG47_5YIVZhlCrSwi8avR_TKxfhlP_D8oZhAqjlMe",
         1,
-        vec!["ak:event:01904100-0000-8000-8000-f15c8ea06c11"],
+        vec!["ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"],
     );
     let second_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -511,7 +511,7 @@ async fn events_describe_and_single_event_submit_work() {
     // accept path (kind/schema combo distinct from `ak.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
-            "id": "ak:strand:01904100-0000-8000-8000-aa11ccff0001",
+            "id": "ak:strand:AeeSWtWZ776ZVn6TQPyYl6TOTEjSNsd6a6lH9B6Qi36-",
             "schema": "ak.schema.strand.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding strand" },
@@ -527,13 +527,13 @@ async fn events_describe_and_single_event_submit_work() {
         }
     });
     let artifact_kind_event = signed_canonical_event(
-        "ak:event:01904100-0000-8000-8000-df827a7269a3",
+        "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG",
         "ak.strand.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         2,
-        vec!["ak:event:01904100-0000-8000-8000-63f16896f0b0"],
+        vec!["ak:event:AanwG47_5YIVZhlCrSwi8avR_TKxfhlP_D8oZhAqjlMe"],
         artifact_kind_payload,
     );
     let artifact_kind_submitted: Value = TestClient::post("http://server/_arkret/self/events")
@@ -547,7 +547,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(artifact_kind_submitted["status"], "accepted");
 
     let mut unknown_schema = signed_event_envelope(
-        "ak:event:01904100-0000-8000-8000-80be9d943c27",
+        "ak:event:ATsZ3vasJNhrTVCtZDqkPNZOffJwkjo0lE5CcbfNfpeC",
         3,
         Vec::new(),
     );
@@ -570,7 +570,7 @@ async fn events_describe_and_single_event_submit_work() {
     let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "event_ids": ["ak:event:01904100-0000-8000-8000-f15c8ea06c11", "ak:event:01904100-0000-8000-8000-30f4e405b35e"]
+            "event_ids": ["ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth", "ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -580,7 +580,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(batch["events"].as_array().unwrap().len(), 1);
     assert_eq!(
         batch["missing"],
-        serde_json::json!(["ak:event:01904100-0000-8000-8000-30f4e405b35e"])
+        serde_json::json!(["ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"])
     );
 
     // `max_resolve` is one budget across every selector kind: Seal selectors
@@ -629,7 +629,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
         listed_events.last().unwrap()["event_id"],
-        "ak:event:01904100-0000-8000-8000-df827a7269a3"
+        "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG"
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
@@ -652,7 +652,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(frontier.realms[0].next_actor_seq, 3);
     assert_eq!(
         frontier.realms[0].frontier_event_ids[0].as_str(),
-        "ak:event:01904100-0000-8000-8000-df827a7269a3"
+        "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG"
     );
 
     // Realm selector exposes only an accepted Seal. A projection-only fixture
@@ -699,7 +699,7 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(hidden_body["error"]["code"], "not_found");
 
     let mut conflicting = signed_event_envelope(
-        "ak:event:01904100-0000-8000-8000-f15c8ea06c11",
+        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
         3,
         Vec::new(),
     );
@@ -762,7 +762,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         }
     });
     let mut event = signed_canonical_event(
-        "ak:event:01904100-0000-8000-8000-c7ea7e000001",
+        "ak:event:AV5_QniwkONkUo-T3ozZOD82m0p6GNJtF5aC3u4im2t3",
         "ak.realm.create",
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
@@ -798,7 +798,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         .expect("create payload object")
         .remove("capability_action_registry_digest");
     let mut rootless_create = signed_canonical_event(
-        "ak:event:01904100-0000-8000-8000-c7ea7e00000a",
+        "ak:event:AXwY2viN_ZBBgUXbg1IZTi65k92ZKPSCpvoFzVGxn0SS",
         "ak.realm.create",
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
@@ -852,21 +852,21 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
             event
         };
     let join_rule = facet(
-        "ak:event:01904100-0000-8000-8000-c7ea7e000003",
+        "ak:event:AZRlZE5JthE3KquWLYKHPFK4laz-no_wvbrsG8zcnred",
         1,
         event["event_id"].as_str().unwrap(),
         arkret_wire::EventKind::REALM_JOIN_RULE,
         serde_json::json!("invite"),
     );
     let history_visibility = facet(
-        "ak:event:01904100-0000-8000-8000-c7ea7e000004",
+        "ak:event:AQ8G9_7uKyOa6WgCrr2JSwpak-ZXthUPvlEYYfq9ly6J",
         2,
         join_rule["event_id"].as_str().unwrap(),
         arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
         serde_json::json!("shared"),
     );
     let discovery = facet(
-        "ak:event:01904100-0000-8000-8000-c7ea7e000005",
+        "ak:event:AWHHtQ_zeyyLrPe4nUr4pXlfcl-e0TUgIWVA9hJ0czYC",
         3,
         history_visibility["event_id"].as_str().unwrap(),
         arkret_wire::EventKind::REALM_DISCOVERY,
@@ -2011,7 +2011,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
     let mut event = signed_canonical_event(
-        "ak:event:01904100-0000-8000-8000-1e0c1a7e0001",
+        "ak:event:AQP6VTZp5qLA0ZHh7k55JiMpQYsOMWXQ_bOl9X_3cVUp",
         "ak.invite.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
@@ -2203,7 +2203,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "actors": [actor],
-            "after": "ak:event:01904100-0000-8000-8000-b8ab57920a67"
+            "after": "ak:event:AWNDYdZJJKnSYHxTY2Yye1ERF3ydKwe5EXA6UzTu5DAc"
         }))
         .send(&app_from_state(state.clone()))
         .await;

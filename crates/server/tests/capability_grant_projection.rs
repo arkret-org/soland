@@ -22,12 +22,12 @@ use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState
 use soland_http::authz::SolandAuthzEngine;
 
 const REALM: &str = "ak:realm:Aemw9elq19fDvIg-i7BJI44N3RJHLqzlZ0EYQW_cgutY";
-const GRANT_ID: &str = "ak:grant:01904100-0000-8000-8000-dddddddddddd";
+const GRANT_ID: &str = "ak:grant:ARle858WIq1Q6tyqPUeacCaK06rWbVcvzG37T12U0-yi";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
-const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-eeeeeeeeeeee";
-const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-c1c1c1c1c1c1";
-const CIRCLE_B: &str = "ak:circle:01904100-0000-8000-8000-c2c2c2c2c2c2";
+const STRAND_ID: &str = "ak:strand:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
+const CIRCLE_A: &str = "ak:circle:AV0qavYDFj4YHrrFZnfkfneXMs0JkzjUEmCj7wbVmzN4";
+const CIRCLE_B: &str = "ak:circle:AbSfcRhN4egzL0N5Mj2zIGUOB-2ng3vazhVmP7lFmJXo";
 
 fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
     let operation_uuid = uuid::Uuid::now_v7().to_string();
@@ -424,7 +424,7 @@ fn canonical_strand_selector_projects_to_exact_resource() {
         &state,
         GRANT_ID,
         "ak.strand.read",
-        "ak:strand:01904100-0000-8000-8000-ffffffffffff"
+        "ak:strand:AQZU3LOaSy4GhEHnYFmJaYYvDYn2WVDsPLSUYwGHDZ7Q"
     ));
 }
 
@@ -433,7 +433,7 @@ fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
     let mut state = ProjectionState::new();
     seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
-    let other_strand = "ak:strand:01904100-0000-8000-8000-ffffffffffff";
+    let other_strand = "ak:strand:AQZU3LOaSy4GhEHnYFmJaYYvDYn2WVDsPLSUYwGHDZ7Q";
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,

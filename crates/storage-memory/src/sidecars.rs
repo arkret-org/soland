@@ -119,8 +119,8 @@ mod tests {
     #[tokio::test]
     async fn singleton_insert_reuses_realm_controller_record() {
         let store = MemorySidecarStore::new();
-        let first = record("ak:sidecar:01964137-0000-8000-8000-000000000031");
-        let second = record("ak:sidecar:01964137-0000-8000-8000-000000000033");
+        let first = record("ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo");
+        let second = record("ak:sidecar:AZPBH49ODdi_61brIlJPzrsjJcH4ceL69iMsgFzGScTq");
         assert_eq!(store.insert_or_get(first.clone()).await.unwrap(), first);
         assert_eq!(store.insert_or_get(second).await.unwrap(), first);
         assert_eq!(store.snapshot_all().await.unwrap().len(), 1);
@@ -130,16 +130,17 @@ mod tests {
     async fn context_insert_is_idempotent_by_version_and_reads_latest() {
         let store = MemorySidecarStore::new();
         let first = AgentSidecarContextRecord {
-            sidecar_id: "ak:sidecar:01964137-0000-8000-8000-000000000031".to_owned(),
+            sidecar_id: "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo".to_owned(),
             normalized_context_ref_digest: "sha256:context".to_owned(),
-            normalized_context_ref: serde_json::json!({"kind": "strand", "strand_id": "ak:strand:01964137-0000-8000-8000-000000000032"}),
+            normalized_context_ref: serde_json::json!({"kind": "strand", "strand_id": "ak:strand:ATxk9k3t-DqTNiiB9n8GoSjjar3vZJvO3Dtpd1SzdHZF"}),
             version: 1,
             predecessor_event_ref: None,
-            attach_event_ref: "ak:event:01964137-0000-8000-8000-000000000033".to_owned(),
+            attach_event_ref: "ak:event:AZPBH49ODdi_61brIlJPzrsjJcH4ceL69iMsgFzGScTq".to_owned(),
             created_at: chrono::Utc::now(),
         };
         let mut duplicate = first.clone();
-        duplicate.attach_event_ref = "ak:event:01964137-0000-8000-8000-000000000034".to_owned();
+        duplicate.attach_event_ref =
+            "ak:event:AX0TNnklqIlzhGa2OXRoCVE1dmOt3VUwpuOvqt4iPt5F".to_owned();
         assert_eq!(
             store.insert_or_get_context(first.clone()).await.unwrap(),
             first
@@ -149,7 +150,7 @@ mod tests {
         let second = AgentSidecarContextRecord {
             version: 2,
             predecessor_event_ref: Some(first.attach_event_ref.clone()),
-            attach_event_ref: "ak:event:01964137-0000-8000-8000-000000000035".to_owned(),
+            attach_event_ref: "ak:event:ARIqxK3jWXYxpb544UphWaZm_ti9wclu9_0-eSuyZ2e_".to_owned(),
             ..first.clone()
         };
         assert_eq!(

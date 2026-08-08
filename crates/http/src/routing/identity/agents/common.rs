@@ -370,7 +370,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
+                "strand_id": "ak:strand:AXlnhO71nCU_y9RTHGx2TeHh9MFM1lET2qISAIeB4lI7"
             }))],
             &[]
         ));
@@ -397,7 +397,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
+                "strand_id": "ak:strand:AXlnhO71nCU_y9RTHGx2TeHh9MFM1lET2qISAIeB4lI7"
             }))],
             &[]
         ));
@@ -412,7 +412,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:AcfJ22TN854ffqakmmJoe3b28anqpie2rFilRgurW7wC",
-                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
+                "strand_id": "ak:strand:AXlnhO71nCU_y9RTHGx2TeHh9MFM1lET2qISAIeB4lI7"
             }))],
             &[]
         ));
@@ -422,7 +422,7 @@ mod requested_scope_tests {
             "resources": [{
                 "kind": "circle",
                 "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-                "resource_ref": "ak:circle:019f6000-0000-8000-8000-000000000003"
+                "resource_ref": "ak:circle:AfIEekeSLx-Ai7SaUc0Xi2ia757PQNByOFKfeuSIpLNw"
             }]
         }));
         assert!(agent_grant_within_requested_scope(
@@ -431,7 +431,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-                "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000003"
+                "circle_id": "ak:circle:AfIEekeSLx-Ai7SaUc0Xi2ia757PQNByOFKfeuSIpLNw"
             }))],
             &[]
         ));
@@ -441,7 +441,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-                "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000004"
+                "circle_id": "ak:circle:AcnPOZq8RRwOX2ep1JRrdBjYFCyVhwQeG8N3_N3YkArT"
             }))],
             &[]
         ));
@@ -467,7 +467,7 @@ mod requested_scope_tests {
         let resources = [resource(json!({
             "kind": "strand",
             "realm_id": "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX",
-            "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
+            "strand_id": "ak:strand:AXlnhO71nCU_y9RTHGx2TeHh9MFM1lET2qISAIeB4lI7"
         }))];
 
         assert!(agent_grant_within_requested_scope(

@@ -67,7 +67,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     );
     assert_eq!(
         organizations["organizations"][0]["source_refs"][0],
-        "ak:event:0196419b-0000-8000-8000-0000000000d0"
+        "ak:event:AbyMki5ktjJoPFPuzhe-f4rb2rhjWdtfyMrbjIdb4qsO"
     );
     assert_eq!(
         organizations["organizations"][0]["policy_revision"],
@@ -716,7 +716,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "call_id": "ak:call:01964137-0000-8000-8000-000000000001",
+            "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: mode is required.

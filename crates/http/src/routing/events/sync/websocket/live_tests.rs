@@ -192,7 +192,7 @@ async fn run_introspection_mock(
             "proof_required": false,
             "one_time_use_consumed": false,
             "grant": {
-                "id": "ak:grant:0196419b-0000-8000-8000-000000000001",
+                "id": "ak:grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
                 "issuer": "did:web:coauth.local",
                 "subject": "did:web:alice.example",
                 "service_account_id": "alice",
@@ -308,7 +308,7 @@ fn signal_record() -> soland_services::delivery::SignalRelayState {
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),

@@ -1689,7 +1689,7 @@ mod invite_locator_security_tests {
             soland_storage_postgres::Db { pool: None },
         );
         let realm_id = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
-        let invite_id = "ak:invite:01904100-0000-8000-8000-000000000402";
+        let invite_id = "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K";
         let subject = "did:web:bob.example";
         let body = json!({
             "invite_event": {
@@ -1707,7 +1707,7 @@ mod invite_locator_security_tests {
             }
         });
         let validated = crate::routing::events::event_log::ValidatedEventEnvelope {
-            event_id: "ak:event:01904100-0000-8000-8000-000000000403".to_owned(),
+            event_id: "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
             actor_seq: 7,

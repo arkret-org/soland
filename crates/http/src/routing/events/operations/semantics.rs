@@ -1175,8 +1175,8 @@ mod tests {
         let legacy = operation(
             arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
             serde_json::json!({
-                "object_ref": "ak:morph:01904100-0000-8000-8000-000000000201",
-                "to_container_id": "ak:morph:01904100-0000-8000-8000-000000000101",
+                "object_ref": "ak:morph:AXh0mpVGb536xVxbSPfM4Wc_1WuXAxTYgmtXEncKM9T0",
+                "to_container_id": "ak:morph:AfqXI4jyBJWA5HRhSr3SdFP5Qb_2V210Q00mFqUjA7_z",
                 "relation_kind": "contains",
                 "rank": "A"
             }),
@@ -1255,9 +1255,9 @@ mod tests {
                     "pairing_request_id": "agent_pairing_request:test",
                     "approved_by": "did:web:controller.example"
                 },
-                "event_id": "ak:event:019f8012-cd0c-8233-9106-954399185e19",
+                "event_id": "ak:event:AVb60AtT2YnMY2xyvugmpgEdA3jeEBV_sbKrGkd73mQE",
                 "sender": "did:web:agent.example",
-                "accepted_event_id": "ak:event:019f8012-cd0c-8233-9106-954399185e19"
+                "accepted_event_id": "ak:event:AVb60AtT2YnMY2xyvugmpgEdA3jeEBV_sbKrGkd73mQE"
             }),
         );
         projected.canonical_event_digest = Some(

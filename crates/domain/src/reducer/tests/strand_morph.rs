@@ -10,7 +10,7 @@ fn strand_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-1fb50799ad50";
+    let strand_id = "ak:strand:ARkwFWDTPrObvpqVAL9kBsWkK8GrMr5FDO--3PcMFEwU";
 
     let create_effect = state.apply(
         &make_operation(
@@ -82,7 +82,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-1fb50799ad51";
+    let strand_id = "ak:strand:AUzgWk6FQOO5CNGEhXKtRw7FKYOAXGqzSVCLuwh5qmkk";
 
     state.apply(
         &make_operation(
@@ -166,7 +166,7 @@ fn morph_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-1fb50799ad60";
+    let morph_id = "ak:morph:AS1d_Z6XKI-1kUKHJzhW03e-rwaqgz8YKTgrTuK1QHRX";
 
     let create_effect = state.apply(
         &make_operation(
@@ -219,7 +219,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-1fb50799ad61";
+    let morph_id = "ak:morph:AUG8WH2O5_vvqyBBXa6ohDqo0UIPecDCuYTH5WNez0yG";
 
     state.apply(
         &make_operation(
@@ -306,8 +306,8 @@ fn strand_position_events_touch_projection_without_changing_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-2fb50799ad50";
-    let board_space_id = "ak:space:01904100-0000-8000-8000-c10dc0000001";
+    let strand_id = "ak:strand:AU_4I9g0iCGP2wBQxEHHsqgKsyHl7hlCZ78tlwZ4LaoG";
+    let board_space_id = "ak:space:AWxSgbLLtif391fvK_KYoPG0O0dFZnh9BWozK_Z3AoCj";
 
     state.apply(
         &make_operation(
@@ -340,7 +340,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
             serde_json::json!({
                 "strand_id": strand_id,
                 "board_space_id": board_space_id,
-                "target_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002",
+                "target_space_id": "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
                 "rank": "a1",
                 "sender": "did:web:alice.example",
             }),
@@ -372,7 +372,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
             serde_json::json!({
                 "strand_id": strand_id,
                 "board_space_id": board_space_id,
-                "space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002",
+                "space_id": "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
                 "rank": "a2",
                 "sender": "did:web:alice.example",
             }),
@@ -395,15 +395,15 @@ fn strand_position_events_queue_unknown_strand() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-2fb50799ad51";
+    let strand_id = "ak:strand:AfPOoNzailKc-Iv8HrKJc7cV-a6XBnZOJ6gkRV2XI7xm";
     let effect = state.apply(
         &make_operation(
             arkret_wire::EventKind::STRAND_MOVE,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
-                "board_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000001",
-                "target_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002",
+                "board_space_id": "ak:space:AWxSgbLLtif391fvK_KYoPG0O0dFZnh9BWozK_Z3AoCj",
+                "target_space_id": "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
                 "rank": "a1",
             }),
         ),
@@ -442,7 +442,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-3fb50799ad50";
+    let strand_id = "ak:strand:AXyMATIk6ItFEFuxUFYiQILj_V_BJrSnUrD_z8WqOcYU";
 
     state.apply(
         &make_operation(
@@ -466,7 +466,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
             arkret_wire::EventKind::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000001",
+                "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
                 "object_ref": strand_id,
                 "by": "did:web:alice.example",
                 "reason": "policy violation",
@@ -494,7 +494,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-3fb50799ad60";
+    let morph_id = "ak:morph:AZmU4Qxl4gM7TMnZH9Rg-nhGrZKjik5PC0e5O60tqnRj";
 
     state.apply(
         &make_operation(
@@ -517,7 +517,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
             arkret_wire::EventKind::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000002",
+                "target_event_id": "ak:event:AUYmiWygi5zNhCFs6fat_lSDpnktIttb8rT9AIwOHC5i",
                 "object_ref": morph_id,
                 "sender": "did:web:alice.example",
             }),
@@ -541,8 +541,8 @@ fn redaction_preflight_rejects_against_already_terminal() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-3fb50799ad51";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-3fb50799ad61";
+    let strand_id = "ak:strand:Af26wSYmVuaAU2oycakc40XzzWvvIBtczB9u8WHCju7C";
+    let morph_id = "ak:morph:Ab3bL3vz55RjfKkZe1F1bZrx5n61CznPWoHlcPph9VpZ";
 
     // Materialise + redact a Strand once (legal first redaction).
     state.apply(
@@ -565,7 +565,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             arkret_wire::EventKind::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000003",
+                "target_event_id": "ak:event:AUjlgn4nYH_fSr1KSG7RGczLy67WEbCUAwgZxRWSWeVV",
                 "object_ref": strand_id,
             }),
         ),
@@ -581,7 +581,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         arkret_wire::EventKind::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000004",
+            "target_event_id": "ak:event:AcJZwpHoLnl8gt3a7i-eGe5eXRORCzvRNhbunn_arfUk",
             "object_ref": strand_id,
         }),
     );
@@ -612,7 +612,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
             arkret_wire::EventKind::REDACTION,
             realm_id,
             serde_json::json!({
-                "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000005",
+                "target_event_id": "ak:event:AUoKFAblyZ8FTmGILTwrp8-QvuGeSJ3_9PJ0uQl4S6Da",
                 "object_ref": morph_id,
             }),
         ),
@@ -622,7 +622,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         arkret_wire::EventKind::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000006",
+            "target_event_id": "ak:event:AWOSoyRcAABZT-emSL_OMbFhcDghvn0yier07wSAVfmk",
             "object_ref": morph_id,
         }),
     );
@@ -643,7 +643,7 @@ fn strand_tracks_update_touches_active_strand_only() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad50";
+    let strand_id = "ak:strand:Ab7vkkGszG32SQl5XNFwIalW1i5pxeEJuYWaOB_jG07M";
 
     state.apply(
         &make_operation(
@@ -693,7 +693,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad52";
+    let strand_id = "ak:strand:Aa5iB1RxjJQGRA3dEWqQw_NLIlApcNM43DChfY6e3zSS";
 
     state.apply(
         &make_operation(
@@ -760,7 +760,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-4fb50799ad51";
+    let strand_id = "ak:strand:AcCWYj-xM3efHJWNJUyHf3deWiGljyO_OxLC6SxHaa1q";
 
     state.apply(
         &make_operation(
@@ -838,7 +838,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         arkret_wire::EventKind::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000007",
+            "target_event_id": "ak:event:Ab9oE_tzbcCqFJMmwLq9c6rt2grDdJgQy1JXeT9W5nH-",
             "object_ref": "ak:strand:nope-not-here",
         }),
     );
@@ -848,7 +848,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
         arkret_wire::EventKind::REDACTION,
         realm_id,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-1d10dc000008",
+            "target_event_id": "ak:event:Ac0LRpyxnIykXaDwQskZnvwSYer8TAeFhe0YNbbfj1Ec",
         }),
     );
     assert_eq!(

@@ -809,7 +809,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             "body": "structured hello",
             "mentions": [
                 "did:web:bob.example",
-                {"type": "strand", "strand_id": "ak:strand:01904100-0000-8000-8000-170d4f3bfc7b"}
+                {"type": "strand", "strand_id": "ak:strand:ATXMmec6gP5RFzDDw_bd6wat0rywpK-YNn9PqqX7WYWb"}
             ],
             "parts": [
                 {"kind": "ak.content.text", "body": "structured hello"},

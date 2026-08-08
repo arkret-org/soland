@@ -548,7 +548,7 @@ mod tests {
                 realm_id: REALM.to_owned(),
                 applicant: "did:web:applicant.example".to_owned(),
                 receipt_digest: APPLICATION.to_owned(),
-                knock_ref: "ak:event:0196419b-0000-8000-8000-000000000001".to_owned(),
+                knock_ref: "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-".to_owned(),
                 policy_version_digest:
                     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                         .to_owned(),
@@ -558,7 +558,9 @@ mod tests {
                 private_body: json!({"mode": "server_protected", "answers": []}),
                 status: "accepted".to_owned(),
                 accepted_by: Some("did:web:reviewer.example".to_owned()),
-                accepted_grant_id: Some("ak:grant:0196419b-0000-8000-8000-000000000010".to_owned()),
+                accepted_grant_id: Some(
+                    "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo".to_owned(),
+                ),
                 review_receipt_digests: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
                 required_accept_refs: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
                 invite_consumed: false,

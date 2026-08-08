@@ -530,7 +530,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let unauthenticated_report = TestClient::post("http://server/_arkret/self/moderation/report")
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
-            "target_ref": "ak:event:01904100-0000-8000-8000-4a4116cba4e8",
+            "target_ref": "ak:event:AVBEDgK8PBa2Re0BFMUv_vNsZ5PfPzJOBnuPK1nMUgx7",
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
         }))
@@ -630,7 +630,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
 async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
     let state = soland_test_support::app_state(test_config());
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
-    let circle_id = "ak:circle:01904100-0000-8000-8000-c17c1e000001";
+    let circle_id = "ak:circle:AbKyOtwLpbgxFjQKemj8jLsHIcHewEJYmageMo-mkx7R";
     // The Circle exists in the parent Realm but Alice is not a member of it.
     seed_test_circle(&state, DEMO_REALM_ID, circle_id, &["did:web:bob.example"]);
 
@@ -1008,7 +1008,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
     );
 
     // Alice and Bob share a Circle; Carol does not.
-    let circle_id = "ak:circle:01904100-0000-8000-8000-c17c1e000002";
+    let circle_id = "ak:circle:AfCTSVBDc4fkPpvjN8PIuTeDXjkUZrniW8KdpconEUVE";
     seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, bob]);
     let accepted = post_signal(
         state.clone(),

@@ -561,7 +561,7 @@ mod tests {
         let mut payload = active_payload(REALM, ORG, "governance", &["moderation_policy"]);
         payload["authorization"]["issuer_role"] = json!("account_authority");
         payload["authorization"]["delegation_ref"] =
-            json!("ak:grant:01904100-0000-8000-8000-000000000001");
+            json!("ak:grant:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19");
         let effect = apply(&mut state, payload);
         assert!(matches!(effect, ProjectionEffect::Rejected { .. }));
     }

@@ -89,7 +89,7 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000a";
+    let call_id = "ak:call:AU9VDQu1sjP8qOSxIJQFAs4NIBcuMF-hCYYGzgzCvD28";
     let participant = serde_json::json!({
         "actor_id": "did:web:bob.example",
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000001"
@@ -146,7 +146,7 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000b";
+    let call_id = "ak:call:ASJvJjNHSrLihxsjbs4YgLqii-k87Bnh6wB_Ut9gIlOJ";
     let first = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -183,7 +183,7 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000c";
+    let call_id = "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj";
     let removal = serde_json::json!({
         "actor_id": "did:web:bob.example",
         "action": "ban",
@@ -252,7 +252,7 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000d";
+    let call_id = "ak:call:AVVUw63Ofuk60rwuYS80ycxwQ3N-ktzns8CmQDMZq1xJ";
     let recording_id = "capture-1";
     let subject = arkret_wire::composite_subject(&[call_id, recording_id]).unwrap();
     // `call-state.md` §6 — `payload.result` MUST NOT carry
@@ -306,7 +306,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000f";
+    let call_id = "ak:call:ASEgVa_u0qFhi6iIFn9EfzHXcIPR5apmezSCOewcB9Vv";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -360,7 +360,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c00000000010";
+    let call_id = "ak:call:AUpx7jJEjRU7iQXaC0uYvYWiJBQSgQFPt1aXgWqBx5mg";
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
@@ -438,7 +438,7 @@ fn terminal_summary_reads_the_split_state_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
-    let call_id = "ak:call:01904100-0000-8000-8000-c0000000000e";
+    let call_id = "ak:call:ARs50SawRVVzZtkqDNcij3Lr46cEjrFQAKyyhn2-9T_R";
     for (from, to) in [
         (Value::Null, "connecting"),
         (Value::String("connecting".to_owned()), "active"),

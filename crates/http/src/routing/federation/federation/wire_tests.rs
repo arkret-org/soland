@@ -5,10 +5,10 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     let response = delivery_binding_stale_response(
         &Did::new("did:web:bob.example").unwrap(),
         &Did::new("did:web:alice.example").unwrap(),
-        &[
-            arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001")
-                .unwrap(),
-        ],
+        &[arkret_identifiers::EventId::new(
+            "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+        )
+        .unwrap()],
         json!({
             "kind": "member_delivery_binding_projection",
             "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -28,13 +28,13 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         response
             .pointer("/error/details/handover_frontier/0")
             .and_then(Value::as_str),
-        Some("ak:event:01904100-0000-8000-8000-000000000001")
+        Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
     );
     assert_eq!(
         response
             .pointer("/error/details/handover_proof/frontier/0")
             .and_then(Value::as_str),
-        Some("ak:event:01904100-0000-8000-8000-000000000001")
+        Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
     );
     assert_eq!(
         response

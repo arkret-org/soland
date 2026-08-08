@@ -1166,7 +1166,7 @@ async fn range_completeness_for_query(
         .map_or(0, |sequence| sequence.saturating_add(1));
     let mut attestation_event = Event {
         // Placeholder: stamped from the finished envelope below.
-        event_id: EventId::new("ak:event:00000000-0000-8000-8000-000000000000")
+        event_id: EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
             .expect("placeholder Event id is canonical"),
         kind: EventKind::AttestationRangeCompleteness,
         realm_id: realm_id.clone(),
@@ -1352,10 +1352,10 @@ mod tests {
 
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
-    const TEST_MESSAGE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa11";
-    const TEST_REVISE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa12";
-    const TEST_MESSAGE_ID: &str = "ak:message:01904100-0000-8000-8000-00000000aa21";
-    const TEST_REDACTION_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa31";
+    const TEST_MESSAGE_EVENT: &str = "ak:event:ASujRpecNrAE0Lej07fc2eG0erjXRqjyVSMXIKUTqhhn";
+    const TEST_REVISE_EVENT: &str = "ak:event:AZVG8Uz9VGRmh7iKimxdulm4DWQLsZ6w6yT2eosMkZkK";
+    const TEST_MESSAGE_ID: &str = "ak:message:AdP3qdD6rtaQn2ZJ6yiIDmdR8kxzJAPmtR-kgRjkiaHB";
+    const TEST_REDACTION_EVENT: &str = "ak:event:AZ8d8ta-b8eG0YNUzUy_tCrhrGyHc9zGBQRFsfspSPpt";
 
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
@@ -1374,7 +1374,7 @@ mod tests {
         let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
-        let sidecar_id = "ak:sidecar:01904100-0000-8000-8000-00000000aa41";
+        let sidecar_id = "ak:sidecar:AQYqC06461HNyfIIzUY8eXmafXvmC9i29nNObXCIbj0-";
         let event = arkret_wire::Event::new_with_derived_id_at(
             arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
             arkret_wire::ScopeRef::Sidecar {
@@ -1388,7 +1388,7 @@ mod tests {
                 "sidecar_id": sidecar_id,
                 "source_context_ref": {
                     "kind": "strand",
-                    "strand_id": "ak:strand:01904100-0000-8000-8000-00000000aa42"
+                    "strand_id": "ak:strand:AWc6STOZP9GTGlkpfVSYBsWGd0eNukyDV6phslEwPfMB"
                 },
                 "version": 1
             }),

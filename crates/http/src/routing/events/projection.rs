@@ -111,14 +111,14 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let event = soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-8000-8000-0000000000f1".to_owned(),
+            event_id: "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000f2",
+                "strand_id": "ak:strand:ATz4yMg8D3eSMJ7kiPNr0BF70hg3o_DBZklFZd5GZSuJ",
                 "patch": {"synthesis": {"$op": "set", "value": "bob update"}}
             }),
             created_at,
@@ -218,7 +218,7 @@ mod tests {
             arkret_wire::EventKind::SPACE_CREATE,
             json!({
                 "object": {
-                    "id": "ak:space:01904100-0000-8000-8000-000000000003",
+                    "id": "ak:space:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy",
                     "kind": "list",
                     "title": "ee",
                     "summary": "List summary"
@@ -228,7 +228,7 @@ mod tests {
         let update = op(
             arkret_wire::EventKind::SPACE_UPDATE,
             json!({
-                "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
+                "space_id": "ak:space:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy",
                 "patch": {
                     "title": { "$op": "set", "value": "renamed list" },
                     "summary": { "$op": "set", "value": "renamed summary" }
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
-        let invite_id = "ak:invite:01904100-0000-8000-8000-000000000003";
+        let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
         let operation = op(
             arkret_wire::EventKind::INVITE_ACCEPT,
             json!({

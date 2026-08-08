@@ -389,7 +389,7 @@ mod tests {
             .unwrap()
             .remove("ssk_generation");
         body["auth_data"]["device_authorize_event_id"] =
-            json!("ak:event:01964137-0000-8000-8000-000000000123");
+            json!("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD");
 
         validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect("service-attested device_authorize_event_id anchor should validate");
@@ -400,7 +400,7 @@ mod tests {
         let mut body =
             key_backup_body("secret_storage", "recovery_secret", passphrase_encryption());
         body["auth_data"]["device_authorize_event_id"] =
-            json!("ak:event:01964137-0000-8000-8000-000000000123");
+            json!("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD");
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("ssk_generation and device_authorize_event_id are exclusive");

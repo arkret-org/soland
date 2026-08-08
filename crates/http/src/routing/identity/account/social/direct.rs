@@ -643,16 +643,16 @@ mod binding_digest_tests {
                 "did:webvh:z6mkfixture:alice.example"
             ],
             "realm_id": "ak:realm:AdoahEryEldhLbQHY9vRcm90ddQW1gjDVrYmHsbaLIJc",
-            "main_strand_id": "ak:strand:0196419b-0000-8000-8000-000000000201",
+            "main_strand_id": "ak:strand:AVBgYTmzSkzTSd1dlFH4ZADaQRkVcx_iTAvXdxlTfxrg",
             "founding_unit_digest": format!("sha256:{}", "b".repeat(64)),
             "authorization_basis": {
                 "kind": "accepted_contact",
                 "event_refs": [
-                    "ak:event:0196419b-0000-8000-8000-000000000308",
-                    "ak:event:0196419b-0000-8000-8000-000000000301"
+                    "ak:event:AZEKWQk7S1IEVkTZjcT12MRjxvvR0En6bkVts-6J291j",
+                    "ak:event:AddAyvTWYHhm_lW7RsUuvnFIC5wTaJKbJH8n6pBR8k2x"
                 ]
             },
-            "initial_exact_pair_generation_ref": "ak:event:0196419b-0000-8000-8000-00000000030a",
+            "initial_exact_pair_generation_ref": "ak:event:AefZWnHGPzC81Ls7rpebhGyZbPHtT86zejsTwOZs24bH",
             "created_at": "2026-08-07T12:34:56.000Z"
         });
         let payload = serde_json::from_value(payload).unwrap();

@@ -221,7 +221,7 @@ mod tests {
 
     const REALM: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
     const APPLICANT: &str = "did:web:alice.example";
-    const KNOCK: &str = "ak:event:0196419b-0000-8000-8000-000000000001";
+    const KNOCK: &str = "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
 
     fn at(second: u32) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(&format!("2026-07-24T00:00:{second:02}.000Z"))
@@ -346,7 +346,7 @@ mod tests {
 
         let first = accept_review(
             "did:web:reviewer-one.example",
-            "ak:grant:0196419b-0000-8000-8000-000000000010",
+            "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
             '1',
             1,
         );
@@ -375,7 +375,7 @@ mod tests {
 
         let second = accept_review(
             "did:web:reviewer-two.example",
-            "ak:grant:0196419b-0000-8000-8000-000000000011",
+            "ak:grant:AeWYNl1hiGDuy4WCQ03g5lgs2NZzf_SFYgjsfhG-t9cg",
             '2',
             2,
         );
@@ -461,7 +461,7 @@ mod tests {
             .unwrap();
         let mut review_value = serde_json::to_value(accept_review(
             "did:web:reviewer.example",
-            "ak:grant:0196419b-0000-8000-8000-000000000010",
+            "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
             '3',
             1,
         ))

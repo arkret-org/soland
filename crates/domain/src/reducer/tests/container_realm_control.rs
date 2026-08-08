@@ -1,10 +1,10 @@
 use super::*;
 
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-const CONTAINER_A: &str = "ak:morph:01904100-0000-8000-8000-000000000101";
-const CONTAINER_B: &str = "ak:morph:01904100-0000-8000-8000-000000000102";
-const ITEM_A: &str = "ak:morph:01904100-0000-8000-8000-000000000201";
-const ITEM_B: &str = "ak:morph:01904100-0000-8000-8000-000000000202";
+const CONTAINER_A: &str = "ak:morph:AfqXI4jyBJWA5HRhSr3SdFP5Qb_2V210Q00mFqUjA7_z";
+const CONTAINER_B: &str = "ak:morph:AbHexNOxiiU334tA-ZHyM5pRxJxbMY0jvwlMVDY3Xjrz";
+const ITEM_A: &str = "ak:morph:AXh0mpVGb536xVxbSPfM4Wc_1WuXAxTYgmtXEncKM9T0";
+const ITEM_B: &str = "ak:morph:AaIJHtxd23N3TkS66mYyI4XGESjS7Gjt_fonMdJe9inQ";
 
 fn cell_digest(value: &Value) -> String {
     let bytes = arkret_canonical::canonical_json_bytes(value).unwrap();

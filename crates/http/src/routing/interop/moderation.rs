@@ -1000,8 +1000,8 @@ mod report_safety_tests {
     use crate::config::{AppConfig, ObjectStorageConfig};
 
     const REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
-    const TARGET: &str = "ak:message:01904100-0000-8000-8000-000000000777";
-    const FRANKING_EVENT: &str = "ak:event:01904100-0000-8000-8000-000000000222";
+    const TARGET: &str = "ak:message:AUDcGyskAu9_TgDdHy4-tLmIbJp1s_rpjKSw3apHadK8";
+    const FRANKING_EVENT: &str = "ak:event:AY3aEHEku45kFksenyEUUeJDYGC8pcxJwaT9PypXoEZw";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
     const REPORTER: &str = "did:web:alice.example";
 

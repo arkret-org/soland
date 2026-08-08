@@ -1539,7 +1539,7 @@ mod seal_delta_tests {
 
     #[test]
     fn seal_delta_rejects_event_id_form() {
-        let entries = vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()];
+        let entries = vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()];
         let err = validate_seal_delta_entries(&entries).unwrap_err();
         assert_eq!(err.0, ErrorCode::SchemaViolation);
     }

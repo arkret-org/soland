@@ -3332,7 +3332,7 @@ mod trust_binding_tests {
 
     #[test]
     fn native_agent_binding_is_a_third_exclusive_branch() {
-        let event_id = "ak:event:01904100-0000-8000-8000-000000000001";
+        let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         let binding =
             KeyPackageTrustBinding::from_parts(None, None, Some(event_id.to_owned()), "invalid")
                 .unwrap();

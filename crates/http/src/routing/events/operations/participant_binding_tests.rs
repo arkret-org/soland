@@ -12,7 +12,7 @@ use soland_storage_postgres::Db;
 use super::*;
 
 const REALM_ID: &str = "ak:realm:AWBLVNs9HeoGO5lSMOgHAujzyX_u-d_6wfDWF_3lEM2J";
-const CALL_ID: &str = "ak:call:01904100-0000-8000-8000-ca11ca11ca11";
+const CALL_ID: &str = "ak:call:Aa5NVuAPR6HTlIsZAgPhBnb3iRqz7fRvyOkiCWbdOaLa";
 const FOCUS_ID: &str = "ak:focus:arkret_native:green";
 const ACTOR_ID: &str = "did:web:alice.example";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";

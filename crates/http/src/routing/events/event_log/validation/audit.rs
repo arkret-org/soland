@@ -379,7 +379,7 @@ mod tests {
 
     fn parsed(kind: &str) -> ValidatedEventEnvelope {
         ValidatedEventEnvelope {
-            event_id: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
+            event_id: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
@@ -395,12 +395,12 @@ mod tests {
         }
     }
 
-    const WRITE_ID: &str = "ak:event:01904100-0000-8000-8000-00000000aa01";
+    const WRITE_ID: &str = "ak:event:AcLYVbj_1rgVJeGiPPDHp4GUgpcNGjkVCg8NW-2p21m6";
     const WRITE_DIGEST: &str =
         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const WRITER: &str = "did:web:alice.example";
     const TARGET: &str = "did:web:bob.example";
-    const STRAND: &str = "ak:strand:01904100-0000-8000-8000-00000000bb01";
+    const STRAND: &str = "ak:strand:AU6JCWNYlBGUETxX5NBB9hy8YgtevzngI2Yj3vKnYDWb";
 
     fn others_watch_write() -> Value {
         json!({
@@ -427,7 +427,7 @@ mod tests {
 
     fn paired_audit() -> Value {
         json!({
-            "event_id": "ak:event:01904100-0000-8000-8000-00000000aa02",
+            "event_id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
             "kind": arkret_wire::EventKind::AUDIT_ACCESSED,
             "actor_id": WRITER,
             "refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
@@ -535,7 +535,7 @@ mod tests {
     fn a_cross_actor_write_must_not_reference_its_audit() {
         let mut old_direction = others_watch_write();
         old_direction["refs"] = json!([{
-            "id": "ak:event:01904100-0000-8000-8000-00000000aa02",
+            "id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
             "role": "audit_pair",
             "critical": true
         }]);

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::*;
 
 const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
-const INVITE: &str = "ak:invite:0196419b-0000-8000-8000-000000000101";
+const INVITE: &str = "ak:invite:AUftf_3k2fRKMG0NFlHe5iEMBOUpxMwYMRu-yhMJl-yz";
 const INVITER: &str = "did:web:alice.example";
 const SUBJECT: &str = "did:web:bob.example";
 const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";

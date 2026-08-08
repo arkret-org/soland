@@ -46,7 +46,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000aa",
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": "did:web:auth.example",
@@ -137,7 +137,7 @@ async fn submit_direct_event_draft(
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000aa",
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": "did:web:auth.example",
@@ -342,7 +342,7 @@ async fn seed_remote_claim_prerequisites(
                 "device_id": ALICE_SIGNING_DEVICE,
                 "verification": "verified",
                 "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000bb",
+                "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": source_service_id,
@@ -366,8 +366,12 @@ async fn seed_remote_claim_prerequisites(
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
-            request_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000291".to_owned()),
-            response_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000292".to_owned()),
+            request_event_ref: Some(
+                "ak:event:Acx9CftNTe6TisGGTTxdWJzyq6sC2aepjyTE3zEUUu1n".to_owned(),
+            ),
+            response_event_ref: Some(
+                "ak:event:ASdFSPzJydPdkguSGl82Dm7-NKaEqHRAYWB7JneUkafN".to_owned(),
+            ),
             tombstone_event_ref: None,
             message: None,
             peer_service_id: Some(source_service_id.to_owned()),
@@ -376,7 +380,7 @@ async fn seed_remote_claim_prerequisites(
         })
         .await
         .unwrap();
-    let grant_dot = "ak:event:0196419b-0000-8000-8000-000000000293".to_owned();
+    let grant_dot = "ak:event:AaXcajxvV0xyRb1hS3GYF0wVyBZfAsmiYqTl3Zs1FYF2".to_owned();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_DID.to_owned(),
         peer: alice.to_owned(),
@@ -424,7 +428,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     )
     .unwrap();
     let strand_id = arkret_identifiers::StrandId::new(
-        "ak:strand:0196419b-0000-8000-8000-000000000295".to_owned(),
+        "ak:strand:AWUyhy7Zdn2PSWdHye9Ca2bwdped_bGzY_oivV5vsz1V".to_owned(),
     )
     .unwrap();
     let unsigned: arkret_models_crypto::PeerKeyPackagesClaimUnsignedRequest =
@@ -452,7 +456,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         serde_json::from_value(serde_json::json!({
             "verification_method": verification_method,
             "requester_device_id": ALICE_SIGNING_DEVICE,
-            "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000bb",
+            "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC",
             "signed_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
             "signature": {"kid": verification_method, "signature_algorithm": "Ed25519", "sig": "AA"}
         }))
@@ -656,8 +660,12 @@ async fn direct_resolve_fails_closed_when_consent_missing() {
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
-            request_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000211".to_owned()),
-            response_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000212".to_owned()),
+            request_event_ref: Some(
+                "ak:event:AQLZVNTH5h1dTCPA0JWySwKhBZr6gmEHML4mgJjAHRsO".to_owned(),
+            ),
+            response_event_ref: Some(
+                "ak:event:AaxCEPQfxM5yVi7J4LmJ60h6X-ueyXUdVZJDZDgav4zj".to_owned(),
+            ),
             tombstone_event_ref: None,
             message: None,
             peer_service_id: None,
@@ -698,8 +706,12 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
-            request_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000231".to_owned()),
-            response_event_ref: Some("ak:event:0196419b-0000-8000-8000-000000000232".to_owned()),
+            request_event_ref: Some(
+                "ak:event:ASxnqCNm9hNL8G1DsBz0eGfgY6FE2TDOGPCasXBVLUHM".to_owned(),
+            ),
+            response_event_ref: Some(
+                "ak:event:AdzkozRCpEE_UGhxpg9VTRUcovwPAC4VX9Qtpuh6Tsu0".to_owned(),
+            ),
             tombstone_event_ref: None,
             message: None,
             peer_service_id: None,
@@ -708,7 +720,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         })
         .await
         .unwrap();
-    let grant_dot = "ak:event:0196419b-0000-8000-8000-000000000233".to_owned();
+    let grant_dot = "ak:event:AVUB4Yqo-11Y3zJafc0FR3wa5VHL8lvouMS6wvai55e2".to_owned();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_PAIRWISE_DID.to_owned(),
         peer: "did:web:alice.example".to_owned(),

@@ -21,7 +21,7 @@ mod invite_create_schema_tests {
 
     fn invite_payload() -> serde_json::Value {
         json!({
-            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000701",
+            "invite_id": "ak:invite:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF",
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:web:local.host",
@@ -44,7 +44,7 @@ mod invite_create_schema_tests {
     fn invite_create_accepts_projection_internal_fields() {
         let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
-        payload["event_id"] = json!("ak:event:01904100-0000-8000-8000-000000000701");
+        payload["event_id"] = json!("ak:event:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF");
         payload["sender"] = json!("did:web:alice.example");
         payload["hlc"] = json!("2026-06-14T10:00:00.000Z/node/1");
         payload["seal_ref"] = json!(
@@ -156,7 +156,7 @@ mod event_projection_dto_boundary_tests {
     fn strict_event_schema_is_not_reapplied_to_enriched_projection_dto() {
         let mut projected = join_rule(json!({
             "value": "invite",
-            "event_id": "ak:event:01904100-0000-8000-8000-0000000007a1",
+            "event_id": "ak:event:AcCMSYyN0E0pPQo-PMQieVA2q-YFJM04Vl30Mr5rK8zQ",
             "sender": "did:web:alice.example",
             "effects": [{
                 "cell": "ak:cell:ak.component.realm.join_rule.v1:ak:realm:AY-NL3trYz8vjYLmWqHHbkR1liZa47Xd9S7NW2vlxEjW",
@@ -277,14 +277,14 @@ mod event_projection_dto_boundary_tests {
             .unwrap(),
             arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             json!({
-                "circle_id": "ak:circle:01904100-0000-8000-8000-0000000007a2",
+                "circle_id": "ak:circle:AVdfqhxRnk4959EgJEklIslgnTpVrvncd17v-s916y6P",
                 "actor_id": "did:web:bob.example",
                 "membership": "member",
                 "sender": "did:web:alice.example",
                 "manage_capability_verified": true,
                 "actor_capability": {
                     "action": "ak.circle.member.manage",
-                    "circle_id": "ak:circle:01904100-0000-8000-8000-0000000007a2",
+                    "circle_id": "ak:circle:AVdfqhxRnk4959EgJEklIslgnTpVrvncd17v-s916y6P",
                     "allowed": true
                 }
             }),
@@ -452,10 +452,10 @@ mod key_backup_active_series_schema_tests {
                     ],
                     "ssk_generation": 1
                 },
-                "event_id": "ak:event:01904100-0000-8000-8000-0000000007a1",
+                "event_id": "ak:event:AcCMSYyN0E0pPQo-PMQieVA2q-YFJM04Vl30Mr5rK8zQ",
                 "sender": "did:web:alice.example",
                 "hlc": "019041000000-0001-00000001",
-                "accepted_event_id": "ak:event:01904100-0000-8000-8000-0000000007a1"
+                "accepted_event_id": "ak:event:AcCMSYyN0E0pPQo-PMQieVA2q-YFJM04Vl30Mr5rK8zQ"
             }),
         );
 
@@ -518,7 +518,7 @@ mod realm_key_share_schema_tests {
             "recipient_principal_id": "did:web:bob.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-0000000000b1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-0000000000a1",
-            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-0000000000a1",
+            "source_authorization_ref": "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t",
             "sender_device_signature": {
                 "signature_algorithm": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
@@ -600,8 +600,8 @@ mod read_receipt_policy_schema_tests {
             operation_schema_for_kind(arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY).unwrap();
         let mut operation = op(json!({
             "disclosure": "required",
-            "event_id": "ak:event:01904100-0000-8000-8000-000000000702",
-            "accepted_event_id": "ak:event:01904100-0000-8000-8000-000000000702",
+            "event_id": "ak:event:AS7sAiMECgEJwCHUwE8S98ip6QzcGDeSpVFOk1xjb-u4",
+            "accepted_event_id": "ak:event:AS7sAiMECgEJwCHUwE8S98ip6QzcGDeSpVFOk1xjb-u4",
             "sender": "did:web:alice.example",
             "hlc": "2026-06-14T10:00:00.000Z/node/1",
             "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -708,8 +708,8 @@ mod realm_plaintext_visible_services_schema_tests {
                 },
                 "mode": "narrow_only",
                 "max_depth": 1,
-                "event_id": "ak:event:01904100-0000-8000-8000-000000000904",
-                "accepted_event_id": "ak:event:01904100-0000-8000-8000-000000000904",
+                "event_id": "ak:event:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
+                "accepted_event_id": "ak:event:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
                 "sender": "did:web:alice.example",
                 "hlc": "2026-07-06T00:00:00.000Z/node/1"
             }),
@@ -763,7 +763,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_DECISION,
                 json!({
-                    "target_ref": "ak:message:01904100-0000-8000-8000-000000000903",
+                    "target_ref": "ak:message:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
                     "decision": "quarantine",
                     "issuer": "did:web:moderator.example",
                     "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -772,16 +772,16 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_DECISION_LIFT,
                 json!({
-                    "target_ref": "ak:message:01904100-0000-8000-8000-000000000903",
-                    "decision_ref": "ak:event:01904100-0000-8000-8000-000000000903"
+                    "target_ref": "ak:message:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
+                    "decision_ref": "ak:event:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA"
                 }),
             ),
             (
                 arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
                 json!({
                     "realm_id": realm_id.as_str(),
-                    "decision_ref": "ak:event:01904100-0000-8000-8000-000000000903",
-                    "target_ref": "ak:message:01904100-0000-8000-8000-000000000903",
+                    "decision_ref": "ak:event:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
+                    "target_ref": "ak:message:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
                     "appellant": "did:web:appellant.example",
                     "reason_text_ref": "appeal",
                     "created_at": "2026-06-23T00:00:00.000Z"
@@ -790,7 +790,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
                 json!({
-                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:ARGahURPj1kQd_ufKsgVDl1Ns6X6lR9XhyOuwhTgVS-i",
                     "realm_id": realm_id.as_str(),
                     "reviewer": "did:web:reviewer.example",
                     "reviewed_at": "2026-06-23T00:00:00.000Z"
@@ -799,7 +799,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
                 json!({
-                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:ARGahURPj1kQd_ufKsgVDl1Ns6X6lR9XhyOuwhTgVS-i",
                     "realm_id": realm_id.as_str(),
                     "reviewer": "did:web:reviewer.example",
                     "verdict": "uphold",
@@ -810,7 +810,7 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
                 json!({
-                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
+                    "appeal_id": "ak:appeal:ARGahURPj1kQd_ufKsgVDl1Ns6X6lR9XhyOuwhTgVS-i",
                     "realm_id": realm_id.as_str(),
                     "closer": "did:web:reviewer.example",
                     "closed_at": "2026-06-23T00:00:00.000Z"
@@ -861,7 +861,7 @@ mod message_projection_schema_tests {
         let operation = op(
             arkret_wire::EventKind::MESSAGE_REVISE,
             json!({
-                "target_ref": "ak:event:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "content": {"kind": "ak.content.text", "body": "edited"}
             }),
         );
@@ -875,7 +875,7 @@ mod message_projection_schema_tests {
         let operation = op(
             arkret_wire::EventKind::REACTION_ADD,
             json!({
-                "target_ref": "ak:event:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
@@ -999,7 +999,7 @@ mod spec_sync_validator_tests {
             arkret_wire::EventKind::MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                    "id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "morph_kind": "document",
                     "schema_refs": ["ak.schema.morph.v1"],
                     "metadata": {"title": "Spec"},
@@ -1013,7 +1013,7 @@ mod spec_sync_validator_tests {
             arkret_wire::EventKind::MORPH_CREATE,
             json!({
                 "object": {
-                    "id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                    "id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "morph_kind": "document",
                     "schema_refs": ["ak.schema.morph.v1"],
                     "content": {},
@@ -1034,7 +1034,7 @@ mod spec_sync_validator_tests {
         let update = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "patch": {"schema_refs": ["ak.schema.new"]}
             }),
         );
@@ -1046,11 +1046,11 @@ mod spec_sync_validator_tests {
         let migrate = op(
             arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "morph_id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.old", "ak.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
                 "capability_action": "ak.morph.schema.migrate"
             }),
         );
@@ -1062,11 +1062,11 @@ mod spec_sync_validator_tests {
         let non_additive = op(
             arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "morph_id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "additive",
-                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
                 "capability_action": "ak.morph.schema.migrate"
             }),
         );
@@ -1078,7 +1078,7 @@ mod spec_sync_validator_tests {
         let missing_gate = op(
             arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "morph_id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "additive"
@@ -1097,11 +1097,11 @@ mod spec_sync_validator_tests {
         let breaking = op(
             arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "morph_id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "breaking",
-                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
                 "capability_action": "ak.morph.schema_migrate"
             }),
         );
@@ -1112,11 +1112,11 @@ mod spec_sync_validator_tests {
         let transformation_without_rules = op(
             arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
-                "morph_id": "ak:morph:01904100-0000-8000-8000-000000000001",
+                "morph_id": "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "from_schema_refs": ["ak.schema.old"],
                 "to_schema_refs": ["ak.schema.new"],
                 "compatibility_class": "transformation",
-                "authorization_ref": "ak:grant:01904100-0000-8000-8000-aaaaaaaaaaaa",
+                "authorization_ref": "ak:grant:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
                 "capability_action": "ak.morph.schema_migrate"
             }),
         );
@@ -1221,7 +1221,7 @@ mod sdk_artifact_schema_tests {
             .expect("cross-signing payload object");
         projected_payload.insert(
             "event_id".to_owned(),
-            json!("ak:event:01904100-0000-8000-8000-57d7d85564c6"),
+            json!("ak:event:Af9JH8lSetwmYmu7tlUrTdKiqIbZ9CoF-jW2NExAClSM"),
         );
         projected_payload.insert("sender".to_owned(), json!("did:web:alice.example"));
         projected_payload.insert("hlc".to_owned(), json!("01970e589d21-0001-a13f9c2e"));
@@ -1382,12 +1382,12 @@ mod derived_relation_and_morph_immutability_tests {
                     "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                     "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
                 },
-                "event_id": "ak:event:019eefcb-8fb2-8890-bffd-1f2035356fbf",
+                "event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r",
                 "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "hlc": "019eefcb7d18-0000-8adcfdb5",
                 "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
                 "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
-                "accepted_event_id": "ak:event:019eefcb-8fb2-8890-bffd-1f2035356fbf"
+                "accepted_event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r"
             }),
         );
         validate_device_authorize_payload(&operation).unwrap();
@@ -1432,10 +1432,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
-                "relation_id": "ak:relation:01904100-0000-8000-8000-000000000001",
+                "relation_id": "ak:relation:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "relation_kind": "watches",
                 "from_ref": "did:web:alice.example",
-                "to_ref": "ak:strand:01904100-0000-8000-8000-000000000002"
+                "to_ref": "ak:strand:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"
             }),
         );
         assert_eq!(
@@ -1451,10 +1451,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
-                "relation_id": "ak:relation:01904100-0000-8000-8000-000000000003",
+                "relation_id": "ak:relation:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy",
                 "relation_kind": "contains",
-                "from_ref": "ak:space:01904100-0000-8000-8000-000000000004",
-                "to_ref": "ak:strand:01904100-0000-8000-8000-000000000005"
+                "from_ref": "ak:space:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+                "to_ref": "ak:strand:AVWVGlDqGwJJ7DILnxJ4oq7JGdtoXGIQaK4PoiEf2yBZ"
             }),
         );
         assert_eq!(
@@ -1470,10 +1470,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
-                "relation_id": "ak:relation:01904100-0000-8000-8000-000000000006",
+                "relation_id": "ak:relation:AWgGCEbMHnelRQfzqg1C_onV9Ej_FdpdAZyM_JoFgAd3",
                 "relation_kind": "contains",
-                "from_ref": "ak:strand:01904100-0000-8000-8000-000000000007",
-                "to_ref": "ak:strand:01904100-0000-8000-8000-000000000008"
+                "from_ref": "ak:strand:ATFrN4sYtiDvJD5G4wKxYY3xMKfo-Xqa_o9Xkb-XnzFN",
+                "to_ref": "ak:strand:AemeC-S9hxNmOvsKHbhTUFcxu1dcUy2rKPJ-dWVot_KM"
             }),
         );
         assert!(validate_relation_operation_payload(&operation).is_ok());
@@ -1484,10 +1484,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
-                "relation_id": "ak:relation:01904100-0000-8000-8000-000000000009",
+                "relation_id": "ak:relation:AdGAhhjx8Y3XQNfetd3DTBNMzZje_RzjhvG3c5aMUs4g",
                 "relation_kind": "references",
-                "from_ref": "ak:strand:01904100-0000-8000-8000-00000000000a",
-                "to_ref": "ak:strand:01904100-0000-8000-8000-00000000000b"
+                "from_ref": "ak:strand:ATOz4l-vKJUCGZDmS_knGS9TjZ64pkOzx-HNGAgY5RGJ",
+                "to_ref": "ak:strand:ASyFf0qTUQ55a2qZp5fuTXRnIgf3ovKChQZ_XSkxdIPK"
             }),
         );
         assert!(validate_relation_operation_payload(&operation).is_ok());
@@ -1500,10 +1500,10 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
-                "relation_id": "ak:relation:01904100-0000-8000-8000-00000000000f",
+                "relation_id": "ak:relation:ARqNvcWYATpece6_sbb4Q7uWv69NgLVVEdYxo8OrmqyW",
                 "relation_kind": "references",
-                "from_ref": "ak:strand:01904100-0000-8000-8000-000000000010",
-                "to_ref": "ak:strand:01904100-0000-8000-8000-000000000011",
+                "from_ref": "ak:strand:AT3p9polsnQ_WOix32QZimMdE2zPe62HptJu2PaO3V1h",
+                "to_ref": "ak:strand:AU2FuZ5Cmuwsb0J0xuJwH47SCEL34D7oJWb4JivTH934",
                 "effective_scope": {"kind": "realm"}
             }),
         );
@@ -1519,10 +1519,10 @@ mod derived_relation_and_morph_immutability_tests {
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation": {
-                    "id": "ak:relation:01904100-0000-8000-8000-00000000001f",
+                    "id": "ak:relation:AYZ-1nAR6ucff-NrijNmnM9jj0Onxw7-hw45w5aZtAhZ",
                     "relation_kind": "references",
-                    "from_ref": "ak:strand:01904100-0000-8000-8000-000000000020",
-                    "to_ref": "ak:strand:01904100-0000-8000-8000-000000000021",
+                    "from_ref": "ak:strand:Af2HCFbsrVezIXsZGcgB3mjkpqGK-C4DmteWaG3H0Xbh",
+                    "to_ref": "ak:strand:AZngJaVQawCL7GPGhC0eyhLzcUFP-HyKX0TkoAd94RR-",
                     "effective_scope": {"kind": "realm"}
                 }
             }),
@@ -1539,7 +1539,7 @@ mod derived_relation_and_morph_immutability_tests {
         let bare = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000c",
+                "target_ref": "ak:morph:ASgi2U7PbVyNs4UpiQAoXKoHv84g07gpBvuddCGiMMG1",
                 "patch": {"morph_kind": "task"}
             }),
         );
@@ -1550,7 +1550,7 @@ mod derived_relation_and_morph_immutability_tests {
         let enveloped = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000c",
+                "target_ref": "ak:morph:ASgi2U7PbVyNs4UpiQAoXKoHv84g07gpBvuddCGiMMG1",
                 "patch": {"morph_kind": {"$op": "set", "value": "task"}}
             }),
         );
@@ -1568,7 +1568,7 @@ mod derived_relation_and_morph_immutability_tests {
         let top_stage = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000d",
+                "target_ref": "ak:morph:AZpUEIyW7TNKR7LXG3WwW7XhlXVKyRQXiuhWXSw19pzj",
                 "patch": {"stage": "done"}
             }),
         );
@@ -1579,7 +1579,7 @@ mod derived_relation_and_morph_immutability_tests {
         let dotted = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000d",
+                "target_ref": "ak:morph:AZpUEIyW7TNKR7LXG3WwW7XhlXVKyRQXiuhWXSw19pzj",
                 "patch": {"fields.lifecycle": "archived"}
             }),
         );
@@ -1590,7 +1590,7 @@ mod derived_relation_and_morph_immutability_tests {
         let object_replace = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000d",
+                "target_ref": "ak:morph:AZpUEIyW7TNKR7LXG3WwW7XhlXVKyRQXiuhWXSw19pzj",
                 "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
             }),
         );
@@ -1605,7 +1605,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::MORPH_UPDATE,
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-00000000000e",
+                "target_ref": "ak:morph:AZMiGxiOThkUT3Dwv05wKz3ho14d39lB0b9ep3sMSDrM",
                 "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
             }),
         );
@@ -1617,7 +1617,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
-                "target_ref": "ak:strand:01904100-0000-8000-8000-00000000000e",
+                "target_ref": "ak:strand:AZMiGxiOThkUT3Dwv05wKz3ho14d39lB0b9ep3sMSDrM",
                 "patch": {"state": {"$op": "set", "value": "archived"}}
             }),
         );
@@ -1632,7 +1632,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
-                "target_ref": "ak:strand:01904100-0000-8000-8000-00000000000e",
+                "target_ref": "ak:strand:AZMiGxiOThkUT3Dwv05wKz3ho14d39lB0b9ep3sMSDrM",
                 "patch": {"metadata.summary": {"$op": "unset"}}
             }),
         );
@@ -1647,7 +1647,7 @@ mod derived_relation_and_morph_immutability_tests {
         let operation = op(
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
-                "target_ref": "ak:strand:01904100-0000-8000-8000-00000000000e",
+                "target_ref": "ak:strand:AZMiGxiOThkUT3Dwv05wKz3ho14d39lB0b9ep3sMSDrM",
                 "patch": {"metadata.title": {"$op": "unset"}}
             }),
         );

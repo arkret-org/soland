@@ -1184,7 +1184,7 @@ mod tests {
 
     fn realm_lifecycle_event(kind: &str, actor: &str, realm_id: &str) -> arkret_wire::Event {
         serde_json::from_value(serde_json::json!({
-            "event_id": "ak:event:01964137-0000-8000-8000-000000000060",
+            "event_id": "ak:event:AdMGtDS93qeltLI_MYwQqXktcIXSzfonrtSShq1Ca8MX",
             "kind": kind,
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },

@@ -500,12 +500,12 @@ mod tests {
     #[test]
     fn same_height_siblings_and_causal_successors_are_all_quarantined() {
         let principal = "did:webvh:z6mkfixture:alice.example";
-        let reanchor_a = "ak:event:01904100-0000-8000-8000-000000000001";
-        let authorize_a = "ak:event:01904100-0000-8000-8000-000000000002";
-        let reanchor_b = "ak:event:01904100-0000-8000-8000-000000000003";
-        let authorize_b = "ak:event:01904100-0000-8000-8000-000000000004";
-        let successor = "ak:event:01904100-0000-8000-8000-000000000005";
-        let higher = "ak:event:01904100-0000-8000-8000-000000000006";
+        let reanchor_a = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+        let authorize_a = "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
+        let reanchor_b = "ak:event:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
+        let authorize_b = "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM";
+        let successor = "ak:event:AVWVGlDqGwJJ7DILnxJ4oq7JGdtoXGIQaK4PoiEf2yBZ";
+        let higher = "ak:event:AWgGCEbMHnelRQfzqg1C_onV9Ej_FdpdAZyM_JoFgAd3";
         let records = vec![
             record(
                 reanchor_a,
@@ -550,7 +550,7 @@ mod tests {
                 }}),
             ),
             record(
-                "ak:event:01904100-0000-8000-8000-000000000007",
+                "ak:event:ATFrN4sYtiDvJD5G4wKxYY3xMKfo-Xqa_o9Xkb-XnzFN",
                 "ak.device.authorize",
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 json!({"prev_refs": [higher]}),

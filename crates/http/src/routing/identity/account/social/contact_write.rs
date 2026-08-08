@@ -583,7 +583,7 @@ async fn prepare(
         &holder,
         // Placeholder: `new_unsigned_contact_event` needs an id up front; the
         // real one is derived from the finished envelope below.
-        EventId::new("ak:event:00000000-0000-8000-8000-000000000000")
+        EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
             .expect("placeholder Event id is canonical"),
         event_kind,
         realm_id,

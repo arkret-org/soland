@@ -17,7 +17,7 @@
 
 use super::common::*;
 
-const CALENDAR_STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-ca1e00000001";
+const CALENDAR_STRAND_ID: &str = "ak:strand:AeaMAB1tbnRV_V7aACq1aVvmkpnJS-PtriS9iX7aeg3I";
 const BASIS: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn rsvp_event(event_id: &str, step: u64) -> Value {
@@ -59,7 +59,7 @@ async fn rsvp_carrying_a_producer_effect_array_is_rejected() {
     // expressed in v1, because the producer no longer supplies effects at all.
     // What replaced it is stricter: `effects` is not a v1 Event Envelope field,
     // so *any* producer effect array fails the Event closed, empty or not.
-    let mut event = rsvp_event("ak:event:01904100-0000-8000-8000-ca1e00000101", 1);
+    let mut event = rsvp_event("ak:event:Abs3N2OvG_RHKINhp6lifM_b2u3AzIwVojMRHNGQ4uwc", 1);
     event["effects"] = serde_json::json!([]);
 
     let response = submit(&state, &token, &event).await;
@@ -82,7 +82,7 @@ async fn rsvp_without_payload_entry_is_rejected() {
     // `payload.entry` has nothing for the projection to write, and
     // `event-payload.schema.json#/$defs/rsvp_set_payload` makes the member
     // required, so it MUST fail closed rather than project a bare status.
-    let mut event = rsvp_event("ak:event:01904100-0000-8000-8000-ca1e00000102", 1);
+    let mut event = rsvp_event("ak:event:AaA7cVlIAh2V9PTlxwZKwkQm2SDQ1ELFB2XNu-s5RoiJ", 1);
     event["payload"]
         .as_object_mut()
         .expect("RSVP payload object")
@@ -102,7 +102,7 @@ async fn rsvp_projects_exactly_the_registered_cell_write() {
     let token = dev_token(state.clone()).await;
     seed_demo_realm_basis(&state).await;
 
-    let event = rsvp_event("ak:event:01904100-0000-8000-8000-ca1e00000103", 1);
+    let event = rsvp_event("ak:event:AUBglcng-HKFdf7edtewVHONWoiEiwNde7AEyCp1tNHI", 1);
     // The write set is the receiver's own registry projection of `kind +
     // payload` (`event-and-patch.md` §2.4.2) — the same evaluator admission
     // runs — not anything the envelope carries.

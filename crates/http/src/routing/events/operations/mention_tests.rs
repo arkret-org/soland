@@ -78,7 +78,7 @@ mod reaction_and_window_policy_tests {
         let op = reaction_op(
             arkret_wire::EventKind::REACTION_ADD,
             json!({
-                "target_ref": "ak:message:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
@@ -90,7 +90,7 @@ mod reaction_and_window_policy_tests {
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
             arkret_wire::EventKind::REACTION_ADD,
-            json!({ "target_ref": "ak:event:01904100-0000-8000-8000-000000000001" }),
+            json!({ "target_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19" }),
         );
         assert!(validate_reaction_target_kind(arkret_wire::EventKind::REACTION_ADD, &op).is_ok());
     }
@@ -98,9 +98,9 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_non_message_target_is_rejected() {
         for target in [
-            "ak:strand:01904100-0000-8000-8000-000000000001",
-            "ak:morph:01904100-0000-8000-8000-000000000001",
-            "ak:circle:01904100-0000-8000-8000-000000000001",
+            "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+            "ak:morph:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+            "ak:circle:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
         ] {
             let op = reaction_op(
                 arkret_wire::EventKind::REACTION_ADD,
@@ -118,7 +118,7 @@ mod reaction_and_window_policy_tests {
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
             arkret_wire::EventKind::MESSAGE_CREATE,
-            json!({ "target_ref": "ak:strand:01904100-0000-8000-8000-000000000001" }),
+            json!({ "target_ref": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19" }),
         );
         assert!(validate_reaction_target_kind(arkret_wire::EventKind::MESSAGE_CREATE, &op).is_ok());
     }
@@ -127,7 +127,7 @@ mod reaction_and_window_policy_tests {
     fn realm_id_alias_forms_match() {
         assert!(!realm_ids_match(
             "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
-            "ak:space:01904100-0000-8000-8000-668e2181b41d",
+            "ak:space:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
         ));
         assert!(realm_ids_match("ak:realm:abc", "ak:realm:abc"));
         assert!(!realm_ids_match("ak:realm:abc", "ak:realm:def"));

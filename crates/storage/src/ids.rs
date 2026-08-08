@@ -269,7 +269,9 @@ mod tests {
         assert_eq!(principal_parts.digest_suite, 1);
         assert_eq!(principal_parts.id[0], 0x11);
 
-        assert!(realm_identity_parts("ak:realm:01900000-0000-7000-8000-000000000000").is_err());
+        assert!(
+            realm_identity_parts("ak:realm:AWWQbbVm7_aLCY4FtbZaoYwiVLRoobQrJ_EabRKx-X0T").is_err()
+        );
     }
 
     #[test]

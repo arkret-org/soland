@@ -955,7 +955,7 @@ mod tests {
 
     const ACTOR: &str = "did:web:alice.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
-    const CREATE_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
+    const CREATE_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
     fn circle_create_event(object: Value) -> Event {
         serde_json::from_value(json!({
@@ -1003,14 +1003,14 @@ mod tests {
         // what makes the id something every receiver can recompute.
         assert_eq!(
             circle_id.as_str(),
-            "ak:circle:01964137-0000-8000-8000-000000000041"
+            "ak:circle:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV"
         );
     }
 
     #[test]
     fn a_create_payload_carrying_an_object_id_is_rejected() {
         let mut object = circle_object();
-        object["id"] = json!("ak:circle:01964137-0000-8000-8000-0000000000ff");
+        object["id"] = json!("ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy");
 
         let error = caller_signed_circle_create_id(ACTOR, &circle_create_event(object)).expect_err(
             "an actor-supplied object id must not be accepted as the Circle's identity",
@@ -1027,11 +1027,11 @@ mod tests {
         .expect_err("the submitted Event must be authored by the authenticated caller");
     }
 
-    const CIRCLE: &str = "ak:circle:01964137-0000-8000-8000-000000000041";
+    const CIRCLE: &str = "ak:circle:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
     fn member_state_event(actor: &str, payload: Value) -> Event {
         serde_json::from_value(json!({
-            "event_id": "ak:event:01964137-0000-8000-8000-000000000050",
+            "event_id": "ak:event:AQjIQt4hWgG0gHmho_Q8M--CUwYCFv3bpsg0dgfdcgs-",
             "kind": arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
@@ -1048,7 +1048,7 @@ mod tests {
 
     fn lifecycle_event(kind: &str, actor: &str, target_ref: &str) -> Event {
         serde_json::from_value(json!({
-            "event_id": "ak:event:01964137-0000-8000-8000-000000000051",
+            "event_id": "ak:event:ATGd5JrukD5xsqzxo2mPDYgWsgsvKfW0RmWdOZLa_hOO",
             "kind": kind,
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
@@ -1086,7 +1086,7 @@ mod tests {
         let event = member_state_event(
             ACTOR,
             json!({
-                "circle_id": "ak:circle:01964137-0000-8000-8000-0000000000ff",
+                "circle_id": "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
                 "actor_id": "did:web:bob.example",
                 "membership": "join",
             }),
@@ -1123,7 +1123,7 @@ mod tests {
             &lifecycle_event(
                 arkret_wire::EventKind::CIRCLE_ARCHIVE,
                 ACTOR,
-                "ak:circle:01964137-0000-8000-8000-0000000000ff",
+                "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
             ),
         )
         .expect_err("payload.target_ref must equal the path circle_id");

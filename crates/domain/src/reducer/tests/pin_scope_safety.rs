@@ -3,9 +3,9 @@ use arkret_identifiers::CellRef;
 use super::*;
 
 const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-const CIRCLE_ID: &str = "ak:circle:01904100-0000-8000-8000-00000000c001";
-const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-0000000000f1";
-const MESSAGE_EVENT_ID: &str = "ak:event:01904100-0000-8000-8000-0000000000a1";
+const CIRCLE_ID: &str = "ak:circle:AbdQDXGeR-uKf6HZP1Mt7cCkg1aM2OhVqu7lVR0WpgiI";
+const STRAND_ID: &str = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
+const MESSAGE_EVENT_ID: &str = "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t";
 
 fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.apply(
@@ -193,7 +193,7 @@ fn pin_rejects_active_moderation_decision_head() {
         CellState::Value(serde_json::json!([{
             "tag": "hard_deny:did:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "value": {
-                "decision_id": "ak:event:01904100-0000-8000-8000-000000000909",
+                "decision_id": "ak:event:AaCSkmkJGCJsdlTB9SXNQ9Ohes5_op9NMMetO0Trkf0q",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "hard_deny",
                 "issuer": "did:web:mod.example",
@@ -203,7 +203,7 @@ fn pin_rejects_active_moderation_decision_head() {
         }, {
             "tag": "require_review:did:web:other.example:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             "value": {
-                "decision_id": "ak:event:01904100-0000-8000-8000-000000000910",
+                "decision_id": "ak:event:AcOfKRN6NaqA5lqbkGhhOD5HiIfpgFRFDsl7ay0xainV",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "require_review",
                 "issuer": "did:web:other.example",

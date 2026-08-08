@@ -455,13 +455,14 @@ mod tests {
 
         let err = validate_encrypted_account_data_value(
             AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
-            &json!({"invite_event_id": "ak:event:0196419b-0000-8000-8000-000000000000"}),
+            &json!({"invite_event_id": "ak:event:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j"}),
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
     }
 
-    const PRIVATE_VIEW_KEY: &str = "ak.views.private.ak:view:0196419b-0000-8000-8000-000000000001";
+    const PRIVATE_VIEW_KEY: &str =
+        "ak.views.private.ak:view:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
     const NOTIFICATION_INBOX_KEY: &str =
         "ak.notifications.inbox.ak:notification:0196419b-0000-7000-8000-000000000002";
 
@@ -480,7 +481,7 @@ mod tests {
             PRIVATE_VIEW_KEY,
             &json!({
                 "schema": "ak.schema.view.v1",
-                "id": "ak:view:0196419b-0000-8000-8000-000000000001",
+                "id": "ak:view:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
                 "visibility": "private",
                 "title": "Quarterly plan",
                 "layout": {"columns": 3}
@@ -510,7 +511,7 @@ mod tests {
             "ak.views.private.quarterly-plan",
             "ak.notifications.inbox",
             "ak.notifications.inbox.",
-            "ak.notifications.inbox.ak:view:0196419b-0000-8000-8000-000000000001",
+            "ak.notifications.inbox.ak:view:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
         ] {
             assert_eq!(
                 validate_encrypted_account_data_key(key).unwrap_err(),
@@ -540,7 +541,7 @@ mod tests {
         for key in [
             "ak.agent.sidecar_projection.v1",
             "ak.agent.sidecar_projection.v1:did:web:alice.example",
-            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1:ak:strand:0196419b-0000-8000-8000-000000000001",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1:ak:strand:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
         ] {
             assert!(is_retired_encrypted_account_data_key(key));
             assert_eq!(
@@ -597,7 +598,7 @@ mod tests {
             key,
             &json!({
                 "kind": "reminder",
-                "target_ref": "ak:message:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "remind_at": "2026-06-19T08:00:00.000Z",
                 "note": "private reminder note",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
@@ -619,7 +620,7 @@ mod tests {
             key,
             &json!({
                 "kind": "snooze",
-                "target_ref": "ak:strand:01904100-0000-8000-8000-000000000001",
+                "target_ref": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "snooze_expires_at": "2026-06-19T09:00:00.000Z",
                 "updated_hlc": "01904100-0000-7000-8000-000000000001",
                 "encrypted_payload": encrypted_envelope(key)
@@ -632,7 +633,7 @@ mod tests {
 
     #[test]
     fn scheduled_send_rejects_plaintext_message_payload() {
-        let key = "ak.scheduled_send.v1:ak:message:01904100-0000-8000-8000-000000000001";
+        let key = "ak.scheduled_send.v1:ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         validate_encrypted_account_data_key(key).unwrap();
         validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
 
@@ -640,10 +641,10 @@ mod tests {
             key,
             &json!({
                 "kind": "scheduled_send",
-                "planned_message_id": "ak:message:01904100-0000-8000-8000-000000000001",
+                "planned_message_id": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "send_at": "2026-06-19T08:00:00.000Z",
                 "message_payload": {
-                    "message_id": "ak:message:01904100-0000-8000-8000-000000000001",
+                    "message_id": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "content": {"kind": "ak.content.text", "body": "secret"}
                 },
                 "message_payload_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",

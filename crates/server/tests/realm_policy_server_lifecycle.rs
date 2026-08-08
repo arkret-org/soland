@@ -855,7 +855,7 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
     // Seal: the derived set never invents coverage for an unresolved selector.
     let unknown: Value = TestClient::post("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"event_ids": ["ak:event:01904100-0000-8000-8000-30f4e405b35e"]}))
+        .json(&json!({"event_ids": ["ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"]}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

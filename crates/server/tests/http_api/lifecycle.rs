@@ -12,11 +12,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let container_space_id = "ak:space:01904100-0000-8000-8000-c10dc0000001";
+    let container_space_id = "ak:space:AWxSgbLLtif391fvK_KYoPG0O0dFZnh9BWozK_Z3AoCj";
 
     // 1) ak.space.create — Active.
     let create_event = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000001",
+        "ak:event:AaLLS5MBK9ZVOHxvl_O9aWN7Bz2217aW6vd5yNj2oMvJ",
         1,
         "ak.space.create",
         serde_json::json!({
@@ -42,11 +42,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 2) ak.space.restore on Active → 412 space_not_archived.
     let bad_restore = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000002",
+        "ak:event:AQqydUAtT4cUGYSa4edg4XtUcMVnfTmb_SZAsk-4mKUk",
         2,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000001"],
+        vec!["ak:event:AaLLS5MBK9ZVOHxvl_O9aWN7Bz2217aW6vd5yNj2oMvJ"],
     );
     let mut bad_restore_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -63,11 +63,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 3) ak.space.archive — legal (Active → Archived).
     let archive_event = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000003",
+        "ak:event:AakTFdudKJWfMQau5quUIGRBxMp44OqopWDjQB7nFbei",
         2,
         "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000001"],
+        vec!["ak:event:AaLLS5MBK9ZVOHxvl_O9aWN7Bz2217aW6vd5yNj2oMvJ"],
     );
     let archive_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -81,11 +81,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 4) ak.space.restore — legal now (Archived → Active).
     let good_restore = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000004",
+        "ak:event:AbbLE6SexdBTT4Kc_bEwvCiLCCD6z0IHeT_nAgfoy86_",
         3,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000003"],
+        vec!["ak:event:AakTFdudKJWfMQau5quUIGRBxMp44OqopWDjQB7nFbei"],
     );
     let restore_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -99,11 +99,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 5) ak.space.tombstone — legal (Active → Tombstoned).
     let tombstone_event = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000005",
+        "ak:event:AYbT2BPApw-fr0FoniIEJBMemO4EwBREcSF5fhYLwq-b",
         4,
         "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000004"],
+        vec!["ak:event:AbbLE6SexdBTT4Kc_bEwvCiLCCD6z0IHeT_nAgfoy86_"],
     );
     let tombstone_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -117,11 +117,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 
     // 6) ak.space.tombstone again on Tombstoned → 412 space_already_terminal.
     let bad_tombstone = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000006",
+        "ak:event:ARhZZVbQxuR1v7ah8wTKdzhxLe9tzc6DXrxV7BeAE-FI",
         5,
         "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000005"],
+        vec!["ak:event:AYbT2BPApw-fr0FoniIEJBMemO4EwBREcSF5fhYLwq-b"],
     );
     let mut bad_tombstone_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -140,11 +140,11 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // state cannot be revived even though tombstone-vs-restore are different
     // transitions).
     let bad_restore_terminal = signed_space_event(
-        "ak:event:01904100-0000-8000-8000-d10dc0000007",
+        "ak:event:AWI5bnKNGIfpSf3SEXUmq4MLSYfFz7xOtzQEcWAYHjdR",
         5,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:01904100-0000-8000-8000-d10dc0000005"],
+        vec!["ak:event:AYbT2BPApw-fr0FoniIEJBMemO4EwBREcSF5fhYLwq-b"],
     );
     let mut bad_restore_terminal_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -167,14 +167,14 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let strand_id = "ak:strand:01904100-0000-8000-8000-e10dc0000001";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-e20dc0000001";
+    let strand_id = "ak:strand:Acy-DPSIGIi9KANoXGjXu3X9bBgxivLknULoSLiY-P9t";
+    let morph_id = "ak:morph:AWXy37T6RUAz_UnYNka8OXvDnzvXotx3IHD3P1WLYfW1";
 
     // ── Strand path ────────────────────────────────────────────────────
 
     // 1) strand create — Active.
     let create_strand = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000001",
+        "ak:event:ATZD78F3yp8_BMkenKRQf-T0DVwuVrS0iTeBv37J4BjS",
         1,
         "ak.strand.create",
         serde_json::json!({
@@ -199,11 +199,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // 2) strand restore on Active → 412 strand_not_archived.
     let bad_restore = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000002",
+        "ak:event:AahY66rgDDqzUKbVoQoZ8lYUvURTufyOkN13hjUKJbG2",
         2,
         "ak.strand.restore",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000001"],
+        vec!["ak:event:ATZD78F3yp8_BMkenKRQf-T0DVwuVrS0iTeBv37J4BjS"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -216,11 +216,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // 3) strand archive — legal.
     let archive = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000003",
+        "ak:event:AZRNDKJ0_e8sAu2KTEq3-Rz5hmYnUtg-PowD_DWSYozH",
         2,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000001"],
+        vec!["ak:event:ATZD78F3yp8_BMkenKRQf-T0DVwuVrS0iTeBv37J4BjS"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -234,11 +234,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // 4) strand archive again on Archived → 412 strand_not_active.
     let bad_archive = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000004",
+        "ak:event:AZPkZX-ZWiKPMGSiQ9UGk4WLhLf7l8Y1StwwpxGBtTBM",
         3,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000003"],
+        vec!["ak:event:AZRNDKJ0_e8sAu2KTEq3-Rz5hmYnUtg-PowD_DWSYozH"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -251,14 +251,14 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // 5) strand update on Archived → 412 strand_not_active.
     let bad_update = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000005",
+        "ak:event:AfNCpTjcXlRqF0M6y3zXf3ADQStSnGjt15sgSI35lh25",
         3,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": strand_id,
             "patch": { "metadata": { "title": "Edit while archived" } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000003"],
+        vec!["ak:event:AZRNDKJ0_e8sAu2KTEq3-Rz5hmYnUtg-PowD_DWSYozH"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -271,11 +271,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // 6) strand restore — legal now.
     let good_restore = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e10ec0000006",
+        "ak:event:AVsys1otipNhlhja_WdYu8lBaiDjJyJ17aSo2_7I87sa",
         3,
         "ak.strand.restore",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000003"],
+        vec!["ak:event:AZRNDKJ0_e8sAu2KTEq3-Rz5hmYnUtg-PowD_DWSYozH"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -290,7 +290,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // ── Morph path ───────────────────────────────────────────────────
 
     let create_morph = signed_morph_event(
-        "ak:event:01904100-0000-8000-8000-e20ec0000001",
+        "ak:event:AWS4D20F26_660O-iwVuHxItkfWOJJtywb7amH5EWa5P",
         4,
         "ak.morph.create",
         serde_json::json!({
@@ -302,7 +302,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-e10ec0000006"],
+        vec!["ak:event:AVsys1otipNhlhja_WdYu8lBaiDjJyJ17aSo2_7I87sa"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -316,11 +316,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // morph restore on Active → 412 morph_not_archived.
     let bad_morph_restore = signed_morph_event(
-        "ak:event:01904100-0000-8000-8000-e20ec0000002",
+        "ak:event:AfHKvu9n9w6tlbjGZhTXcXOhc-1CUav2YR5xi22aaMK5",
         5,
         "ak.morph.restore",
         serde_json::json!({ "target_ref": morph_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e20ec0000001"],
+        vec!["ak:event:AWS4D20F26_660O-iwVuHxItkfWOJJtywb7amH5EWa5P"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -333,11 +333,11 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // morph archive — legal.
     let morph_archive = signed_morph_event(
-        "ak:event:01904100-0000-8000-8000-e20ec0000003",
+        "ak:event:Ae2E94jjYEWco-GK4wyBIaT0hY9Z2qauoP0V6mzUnHA-",
         5,
         "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
-        vec!["ak:event:01904100-0000-8000-8000-e20ec0000001"],
+        vec!["ak:event:AWS4D20F26_660O-iwVuHxItkfWOJJtywb7amH5EWa5P"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -351,14 +351,14 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 
     // morph update on Archived → 412 morph_not_active.
     let bad_morph_update = signed_morph_event(
-        "ak:event:01904100-0000-8000-8000-e20ec0000004",
+        "ak:event:Ace9y26dKliWWB5Ya_CivuvVkz5oyHfWJPmdK873UlIP",
         6,
         "ak.morph.update",
         serde_json::json!({
             "target_ref": morph_id,
             "patch": { "metadata": { "title": "Renamed" } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-e20ec0000003"],
+        vec!["ak:event:Ae2E94jjYEWco-GK4wyBIaT0hY9Z2qauoP0V6mzUnHA-"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -432,9 +432,9 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         );
     }
 
-    let strand_id = "ak:strand:01904100-0000-8000-8000-e30dc0000001";
+    let strand_id = "ak:strand:AZCb_Pr1yfktzr-dAGdr_fRTEdzCJdXz7wxgWPVOHAWz";
     let create_strand = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e30ec0000001",
+        "ak:event:AVCdPpKuXMmkhDTnoVs7_fgmwYo67vCJayKAPIjAK_n8",
         1,
         "ak.strand.create",
         serde_json::json!({
@@ -458,7 +458,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     assert_eq!(response["status"], "accepted");
 
     let plaintext_body_update = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-e30ec0000002",
+        "ak:event:AewChiBUHOonuK6nJ0FrjxCf0157tUGRV5B3-nNgwqxx",
         2,
         "ak.strand.update",
         serde_json::json!({
@@ -470,7 +470,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 }
             }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-e30ec0000001"],
+        vec!["ak:event:AVCdPpKuXMmkhDTnoVs7_fgmwYo67vCJayKAPIjAK_n8"],
     );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -484,7 +484,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         state
             .test_persistence()
             .events()
-            .get("ak:event:01904100-0000-8000-8000-e30ec0000002")
+            .get("ak:event:AewChiBUHOonuK6nJ0FrjxCf0157tUGRV5B3-nNgwqxx")
             .await
             .unwrap()
             .is_none(),
@@ -500,11 +500,11 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let task_strand_id = "ak:strand:01904100-0000-8000-8000-f51dc0000001";
-    let incident_strand_id = "ak:strand:01904100-0000-8000-8000-f51dc0000002";
+    let task_strand_id = "ak:strand:AaOT7O8FqPCQ3y_nsJtU3-JFO4DPzzLlZsxD7QEn4wKQ";
+    let incident_strand_id = "ak:strand:AdQpa5pApa8QdE4ul3RfP32FaMDXznee_Wa6zoqVWKNi";
 
     let create_task = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000001",
+        "ak:event:ARJp5CM3oF37j3lgzRCd3l8t_x6SRQnSAG48K1y3xzbk",
         1,
         "ak.strand.create",
         serde_json::json!({
@@ -528,14 +528,14 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let bad_done = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000002",
+        "ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A",
         2,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f51ec0000001"],
+        vec!["ak:event:ARJp5CM3oF37j3lgzRCd3l8t_x6SRQnSAG48K1y3xzbk"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -547,14 +547,14 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
 
     let good_in_progress = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000003",
+        "ak:event:AamjDwNA62hX10_JO_rxjuHZCdr-NgRw5mfVW6bO3gpy",
         2,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "in_progress" } } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f51ec0000001"],
+        vec!["ak:event:ARJp5CM3oF37j3lgzRCd3l8t_x6SRQnSAG48K1y3xzbk"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -567,14 +567,14 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let good_done = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000004",
+        "ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo",
         3,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
             "patch": { "metadata": { "fields": { "status": "done" } } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f51ec0000003"],
+        vec!["ak:event:AamjDwNA62hX10_JO_rxjuHZCdr-NgRw5mfVW6bO3gpy"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -587,7 +587,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let create_incident = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000005",
+        "ak:event:AYI1JZjpdWqmV2hd0UqAYUeE5pHza6VF7dhQ59-i71QI",
         4,
         "ak.strand.create",
         serde_json::json!({
@@ -598,7 +598,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f51ec0000004"],
+        vec!["ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -611,14 +611,14 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     assert_eq!(resp["status"], "accepted");
 
     let bad_resolved = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f51ec0000006",
+        "ak:event:AZEDuIop92Uk5E0Yz_JgYyLAgYJCi8-EMMOSdOC4Z1Zv",
         5,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": incident_strand_id,
             "patch": { "metadata": { "fields": { "status": "resolved" } } }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f51ec0000005"],
+        vec!["ak:event:AYI1JZjpdWqmV2hd0UqAYUeE5pHza6VF7dhQ59-i71QI"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -688,13 +688,13 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let strand_id = "ak:strand:01904100-0000-8000-8000-f10dc0000001";
-    let morph_id = "ak:morph:01904100-0000-8000-8000-f20dc0000001";
+    let strand_id = "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC";
+    let morph_id = "ak:morph:AcN8uv4yB_wPHVJb-tJ6pbtygm-nNhPC31AT-K8qT_3w";
 
     // ── Strand path ────────────────────────────────────────────────────
 
     let create_strand = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-f10ec0000001",
+        "ak:event:AUdcg_tWaOx2mq2N-8743W9xEP8Q35yxM87nNC95OxlN",
         1,
         "ak.strand.create",
         serde_json::json!({
@@ -719,15 +719,15 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     // First redaction — legal (Active source).
     let redact1 = signed_redaction_event(
-        "ak:event:01904100-0000-8000-8000-f10ec0000002",
+        "ak:event:AelSfWbyB8v5LgV4tW6Voo4vol9OLm5vk2JL25-09qH5",
         2,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-f10ec0000001",
+            "target_event_id": "ak:event:AUdcg_tWaOx2mq2N-8743W9xEP8Q35yxM87nNC95OxlN",
             "object_ref": strand_id,
             "by": "did:web:alice.example",
             "reason": "policy",
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f10ec0000001"],
+        vec!["ak:event:AUdcg_tWaOx2mq2N-8743W9xEP8Q35yxM87nNC95OxlN"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -752,13 +752,13 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     // Second redaction against terminal Strand → 412 strand_already_terminal.
     let redact2 = signed_redaction_event(
-        "ak:event:01904100-0000-8000-8000-f10ec0000003",
+        "ak:event:Af_iozNXHubayuuNSBTFtswzAG4pYMhCPxsig0BaqpcJ",
         3,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-f10ec0000001",
+            "target_event_id": "ak:event:AUdcg_tWaOx2mq2N-8743W9xEP8Q35yxM87nNC95OxlN",
             "object_ref": strand_id,
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f10ec0000002"],
+        vec!["ak:event:AelSfWbyB8v5LgV4tW6Voo4vol9OLm5vk2JL25-09qH5"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -772,7 +772,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     // ── Morph path ───────────────────────────────────────────────────
 
     let create_morph = signed_morph_event(
-        "ak:event:01904100-0000-8000-8000-f20ec0000001",
+        "ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW",
         3,
         "ak.morph.create",
         serde_json::json!({
@@ -784,7 +784,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f10ec0000002"],
+        vec!["ak:event:AelSfWbyB8v5LgV4tW6Voo4vol9OLm5vk2JL25-09qH5"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -797,13 +797,13 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     assert_eq!(resp["status"], "accepted");
 
     let morph_redact = signed_redaction_event(
-        "ak:event:01904100-0000-8000-8000-f20ec0000002",
+        "ak:event:AWdTHwE9vmQuc2JFQa19-QCQN3SOZO0jtz0V_9XHBaEm",
         4,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-f20ec0000001",
+            "target_event_id": "ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW",
             "object_ref": morph_id,
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f20ec0000001"],
+        vec!["ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -822,13 +822,13 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 
     // Second morph redaction → 412 morph_already_terminal.
     let bad_morph_redact = signed_redaction_event(
-        "ak:event:01904100-0000-8000-8000-f20ec0000003",
+        "ak:event:AVkZqRN5bQRdfamwQE6j990HnY7y06adtMhPMaxVAAyV",
         5,
         serde_json::json!({
-            "target_event_id": "ak:event:01904100-0000-8000-8000-f20ec0000001",
+            "target_event_id": "ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW",
             "object_ref": morph_id,
         }),
-        vec!["ak:event:01904100-0000-8000-8000-f20ec0000002"],
+        vec!["ak:event:AWdTHwE9vmQuc2JFQa19-QCQN3SOZO0jtz0V_9XHBaEm"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -848,10 +848,10 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let strand_id = "ak:strand:01904100-0000-8000-8000-aabbccdd0001";
+    let strand_id = "ak:strand:AWhAO4lRXWkMZ3BzVtuxQ2g03ppnLps3hcRNyrAhaXUe";
 
     let create_strand = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-aabbcc000001",
+        "ak:event:ATpaZ1zjrxoRo57u72V4mEAxUhkLtA_hT1yZrFUmss6m",
         1,
         "ak.strand.create",
         serde_json::json!({
@@ -875,14 +875,14 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     assert_eq!(resp["status"], "accepted");
 
     let tracks_active = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-aabbcc000002",
+        "ak:event:AVgyhwIJQd2GqlQhwdYb5iVK_6c73aQU6iR5ppKF5K77",
         2,
         "ak.strand.tracks.update",
         serde_json::json!({
             "strand_id": strand_id,
             "patch": {"tracks": {"discussion": {"profile": "discussion"}}}
         }),
-        vec!["ak:event:01904100-0000-8000-8000-aabbcc000001"],
+        vec!["ak:event:ATpaZ1zjrxoRo57u72V4mEAxUhkLtA_hT1yZrFUmss6m"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -895,11 +895,11 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     assert_eq!(resp["status"], "accepted", "tracks update response: {resp}");
 
     let archive = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-aabbcc000003",
+        "ak:event:AYstzDvHBVnvumPzWgZsRG-iI46FnNF1EwpelBrSP10E",
         3,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:01904100-0000-8000-8000-aabbcc000002"],
+        vec!["ak:event:AVgyhwIJQd2GqlQhwdYb5iVK_6c73aQU6iR5ppKF5K77"],
     );
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -912,14 +912,14 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     assert_eq!(resp["status"], "accepted");
 
     let tracks_archived = signed_strand_event(
-        "ak:event:01904100-0000-8000-8000-aabbcc000004",
+        "ak:event:AVPm8wEiPopL7E4JtCyB4z4LSZ9OZqHcjoCtMpd5QSkO",
         4,
         "ak.strand.tracks.update",
         serde_json::json!({
             "strand_id": strand_id,
             "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
         }),
-        vec!["ak:event:01904100-0000-8000-8000-aabbcc000003"],
+        vec!["ak:event:AYstzDvHBVnvumPzWgZsRG-iI46FnNF1EwpelBrSP10E"],
     );
     let mut resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)

@@ -1389,7 +1389,7 @@ mod tests {
             focus: None,
             moderation: Some(json!([
                 {
-                    "tag": "ak:event:01904100-0000-8000-8000-e00000000001",
+                    "tag": "ak:event:AcGlxGJUvk7f1IQL9A3Jlg9JcPIuUVquBS_eLDo7S71q",
                     "value": {
                         "actor_id": "did:web:bob.example",
                         "action": "ban"
@@ -1397,7 +1397,7 @@ mod tests {
                     "removed": true
                 },
                 {
-                    "tag": "ak:event:01904100-0000-8000-8000-e00000000002",
+                    "tag": "ak:event:AS4AFkLeK4cxIX2CmEC7OAwstCL0qkWN6ZHZB1fMNUMx",
                     "value": {
                         "actor_id": "did:web:carol.example",
                         "action": "ban"
@@ -1425,7 +1425,7 @@ mod tests {
         let request = MediaTokenIssueRequestBody {
             focus: &focus,
             realm_id: "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
-            call_id: "ak:call:01904100-0000-8000-8000-c0000000000c",
+            call_id: "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj",
             actor_id: "did:web:alice.example",
             device_id: "ak:device:01904100-0000-7000-8000-000000000001",
             participant_identity: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",

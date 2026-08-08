@@ -988,19 +988,19 @@ mod tests {
             .unwrap(),
             arkret_wire::EventKind::INVITE_CREATE,
             json!({
-                "invite_id": "ak:invite:01904100-0000-8000-8000-0000000000e2",
+                "invite_id": "ak:invite:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD",
                 "invitee": "did:web:bob.example",
                 "invite_delivery_target": {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
                 },
                 "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "expires_at": "2026-07-20T00:00:00.000Z",
-                "event_id": "ak:event:01904100-0000-8000-8000-0000000000e2",
+                "event_id": "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD",
                 "sender": "did:web:alice.example",
                 "hlc": "019041000000-0001-00000001",
                 "preconditions": {"expected_state": "pending"},
                 "effects": {"transition": "created"},
-                "accepted_event_id": "ak:event:01904100-0000-8000-8000-0000000000e2"
+                "accepted_event_id": "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD"
             }),
         );
 
@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(
             projection_context_stripped_payload(&operation.payload),
             json!({
-                "invite_id": "ak:invite:01904100-0000-8000-8000-0000000000e2",
+                "invite_id": "ak:invite:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD",
                 "invitee": "did:web:bob.example",
                 "invite_delivery_target": {
                     "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
@@ -1022,7 +1022,7 @@ mod tests {
     #[test]
     fn causal_projection_context_is_not_revalidated_as_wire_payload() {
         let payload = json!({
-            "event_ref": "ak:strand:01904100-0000-8000-8000-0000000000e3",
+            "event_ref": "ak:strand:AZjAeb1mLSt8cKVn8rw_kdOZBkHfWaxx_jcr4hc0atPJ",
             "occurrence": null,
             "entry": {
                 "schedule_basis_refs": [
@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(
             projection_context_stripped_payload(&payload),
             json!({
-                "event_ref": "ak:strand:01904100-0000-8000-8000-0000000000e3",
+                "event_ref": "ak:strand:AZjAeb1mLSt8cKVn8rw_kdOZBkHfWaxx_jcr4hc0atPJ",
                 "occurrence": null,
                 "entry": {
                     "schedule_basis_refs": [
@@ -1068,7 +1068,7 @@ mod tests {
             },
             "key_ref": {
                 "algorithm": "MLS-EXPORTER-AEAD",
-                "group_state_ref": "ak:event:01904100-0000-8000-8000-000000000001"
+                "group_state_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
             },
             // Required for `mls_exporter_aead_v1` and forbidden for
             // `mls_rfc9420` (`encryption-and-audit.md` §2.10.2). `aead_profile`

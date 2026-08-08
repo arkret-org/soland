@@ -1017,7 +1017,7 @@ pub(crate) fn make_realm_bootstrap_unit_member(event: &mut Value) {
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
-        "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+        "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
         "track_name": "discussion",
         "content": {
             "kind": "ak.content.text",
@@ -1445,7 +1445,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
                 "device_id": device_id,
                 "verification": "verified",
                 "device_public_key": device_public_key,
-                "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000aa",
+                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": "did:web:auth.example",
@@ -1789,7 +1789,7 @@ pub(crate) fn signed_signal_envelope(
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),

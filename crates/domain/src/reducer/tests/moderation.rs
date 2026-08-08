@@ -7,17 +7,17 @@ use super::*;
 // overturn-missing-lift rejections.
 
 const MOD_REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
-const MOD_DECISION_ID: &str = "ak:event:01904100-0000-8000-8000-0d0d0d0d0d01";
+const MOD_DECISION_ID: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-";
 const MOD_APPEAL_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 const MOD_APPEAL_ID: &str = "ak:appeal:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
-const MOD_TARGET_REF: &str = "ak:message:01904100-0000-8000-8000-000000000777";
+const MOD_TARGET_REF: &str = "ak:message:AUDcGyskAu9_TgDdHy4-tLmIbJp1s_rpjKSw3apHadK8";
 const MOD_REQUEST_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// The registered add dot of the seeded decision: `ak.moderation.decision`
 /// declares one `cell_writes[]` entry, so `event-and-patch.md` §2.4.2 makes it
 /// `<decision event id>:0`. `content-moderation.md` §2.6 requires the lift to
 /// name exactly this value in `observed_dots[]`.
-const MOD_DECISION_DOT: &str = "ak:event:01904100-0000-8000-8000-0d0d0d0d0d01:0";
+const MOD_DECISION_DOT: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-:0";
 
 fn mod_decision_cell_ref() -> CellRef {
     CellRef::new(format!(

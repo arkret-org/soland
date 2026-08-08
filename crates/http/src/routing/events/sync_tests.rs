@@ -13,7 +13,7 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
         actor_seq,
         arkret_identifiers::Hlc::new(hlc).unwrap(),
         json!({
-            "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+            "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
             "body": body,
         }),
     )
@@ -264,11 +264,11 @@ fn timeline_position_disambiguates_same_second_events() {
         .with_timezone(&Utc);
     let realm_create = timestamp_position_with_tie_breaker(
         created_at,
-        "ak:event:019e507b-16b2-819a-84fd-a9319ab43a36",
+        "ak:event:AdSEMuROttK4LOqkM58-n9-IoPYt49AdbtfNotnepAVd",
     );
     let welcome_message = timestamp_position_with_tie_breaker(
         created_at,
-        "ak:event:019e507b-1857-83b7-9579-a00706bf0af4",
+        "ak:event:AaoIV7frfdMcyZ_DS4-v9rSL4m-ejw11XJ0Vwo5M1f1E",
     );
 
     assert_ne!(realm_create, welcome_message);
@@ -309,7 +309,7 @@ fn signal_envelope(
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
@@ -675,11 +675,11 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         received_at,
     };
     let pre_join_event = event_at(
-        "ak:event:01904100-0000-8000-8000-0000000000e1",
+        "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc",
         pre_join_received_at,
     );
     let post_join_event = event_at(
-        "ak:event:01904100-0000-8000-8000-0000000000e2",
+        "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD",
         post_join_received_at,
     );
 
@@ -695,8 +695,8 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
 
 #[tokio::test]
 async fn native_sidecar_events_are_visible_only_to_the_controller() {
-    const SIDECAR_ID: &str = "ak:sidecar:01904100-0000-8000-8000-00000000a011";
-    const SOURCE_STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-00000000a013";
+    const SIDECAR_ID: &str = "ak:sidecar:Aa1Yl71lEGMItLkW6kUVdeM4tRXg6z3J69ELu9xrdCXp";
+    const SOURCE_STRAND_ID: &str = "ak:strand:AUUqer3HsddAU4x0pWkmcS8uDu88T4fD7QdPhL5IlxKX";
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
@@ -731,7 +731,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
         arkret_wire::EventKind::SIDECAR_CREATE,
         json!({
             "encryption_profile": "mls_rfc9420",
-            "event_id": "ak:event:01904100-0000-8000-8000-00000000a011",
+            "event_id": "ak:event:Aa1Yl71lEGMItLkW6kUVdeM4tRXg6z3J69ELu9xrdCXp",
             "sender": ROSTER_ACTOR
         }),
     );
@@ -755,7 +755,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
         received_at: created_at,
     };
     let attach_event = structural_event(
-        "ak:event:01904100-0000-8000-8000-00000000a021",
+        "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
         arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
         json!({
             "sidecar_id": SIDECAR_ID,
@@ -906,11 +906,11 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .lock()
         .apply(&member_join, state.hlc());
 
-    let pre_join_event_id = "ak:event:01904100-0000-8000-8000-0000000002e1";
-    let post_join_event_id = "ak:event:01904100-0000-8000-8000-0000000002e2";
+    let pre_join_event_id = "ak:event:AVV6l37w19px1OG38EezfM8o9OHU5l7oBFRL7LQ-nVgL";
+    let post_join_event_id = "ak:event:AfHt5VkfKW_5ttUcjqgiW0it2_6a8PcdTj07GonJ7YNW";
     let pre_join_payload = json!({
         "event_id": pre_join_event_id,
-        "message_id": "ak:message:01904100-0000-8000-8000-0000000002e1",
+        "message_id": "ak:message:AVV6l37w19px1OG38EezfM8o9OHU5l7oBFRL7LQ-nVgL",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -919,7 +919,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
-        "message_id": "ak:message:01904100-0000-8000-8000-0000000002e2",
+        "message_id": "ak:message:AfHt5VkfKW_5ttUcjqgiW0it2_6a8PcdTj07GonJ7YNW",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -997,7 +997,7 @@ fn insert_member_identity_subject(state: &AppState) {
         arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
     );
     state.test_insert_member_identity(MemberIdentityEventRecord {
-        event_id: "ak:event:01904100-0000-8000-8000-0000000000d1".to_owned(),
+        event_id: "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx".to_owned(),
         subject: MemberIdentitySubjectKey {
             realm_id: ROSTER_REALM.to_owned(),
             actor_id: ROSTER_ACTOR.to_owned(),
@@ -1006,7 +1006,7 @@ fn insert_member_identity_subject(state: &AppState) {
         payload_digest,
         replaces: Vec::new(),
         raw_event: json!({
-            "event_id": "ak:event:01904100-0000-8000-8000-0000000000d1",
+            "event_id": "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx",
             "event_kind": arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
             "realm_id": ROSTER_REALM,
             "created_at": now(),
@@ -1102,8 +1102,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let state = test_state();
     let realm = ROSTER_REALM;
     let actor = ROSTER_ACTOR;
-    let first_event_id = "ak:event:01904100-0000-8000-8000-0000000000e1";
-    let second_event_id = "ak:event:01904100-0000-8000-8000-0000000000e2";
+    let first_event_id = "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc";
+    let second_event_id = "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD";
 
     let first_identity = json!({
         "member_identity": {
@@ -1530,14 +1530,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-8000-8000-0000000000a1".to_owned(),
+            event_id: "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
+                "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
                 "patch": {"synthesis": {"$op": "set", "value": "first"}}
             }),
             created_at: first_created_at,
@@ -1548,11 +1548,11 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .expect("first state event appended");
     put_canonical_event_received_at(
         &state,
-        "ak:event:01904100-0000-8000-8000-0000000000a1",
+        "ak:event:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t",
         1,
         arkret_wire::EventKind::STRAND_UPDATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
+            "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
             "patch": {"synthesis": {"$op": "set", "value": "first"}}
         }),
         first_created_at,
@@ -1583,14 +1583,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-8000-8000-0000000000b1".to_owned(),
+            event_id: "ak:event:AZaaHAEvC1DejakImwHCcJHb0F1pgE-Jd-3_9BGirbuW".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
+                "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
                 "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
             }),
             created_at: second_created_at,
@@ -1601,11 +1601,11 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .expect("second state event appended");
     put_canonical_event_received_at_for_actor(
         &state,
-        "ak:event:01904100-0000-8000-8000-0000000000b1",
+        "ak:event:AZaaHAEvC1DejakImwHCcJHb0F1pgE-Jd-3_9BGirbuW",
         2,
         arkret_wire::EventKind::STRAND_UPDATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
+            "strand_id": "ak:strand:Af0cDOgrSK-qWEvQvEo_FnP9vdEMz6mEq0IN2aIOIege",
             "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
         }),
         ROSTER_CALLER,
@@ -1733,8 +1733,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
-    let message_event_id = "ak:event:01904100-0000-8000-8000-0000000000d1";
-    let message_id = "ak:message:01904100-0000-8000-8000-0000000000d1";
+    let message_event_id = "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx";
+    let message_id = "ak:message:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx";
     let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -1817,7 +1817,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
         arkret_wire::EventKind::PIN_ADD,
         json!({
-            "event_id": "ak:event:01904100-0000-8000-8000-0000000000d5",
+            "event_id": "ak:event:AQqtS_1B9tn79JSdpOpgZePeM0jFwBeojsZYHXc8gtQ_",
             "pin_scope": {"kind": "strand", "id": strand_id},
             "target_ref": message_id,
             "rank": "r1",
@@ -1833,7 +1833,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .await;
     put_canonical_event_received_at(
         &state,
-        "ak:event:01904100-0000-8000-8000-0000000000d5",
+        "ak:event:AQqtS_1B9tn79JSdpOpgZePeM0jFwBeojsZYHXc8gtQ_",
         5,
         arkret_wire::EventKind::PIN_ADD,
         json!({
@@ -1870,10 +1870,10 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM).expect("canonical fixture RealmId");
-    let message_event_id = "ak:event:01904100-0000-8000-8000-0000000001d1";
-    let revision_event_id = "ak:event:01904100-0000-8000-8000-0000000001d2";
-    let redaction_event_id = "ak:event:01904100-0000-8000-8000-0000000001d3";
-    let message_id = "ak:message:01904100-0000-8000-8000-0000000001d1";
+    let message_event_id = "ak:event:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
+    let revision_event_id = "ak:event:ATaNQm55rR2h94g5nZuJC7ZEFZVaBVNkdeDrcicqchII";
+    let redaction_event_id = "ak:event:ARd31VEuNctVD_m_3KpeoN5D_TuBpgHos97UPSApGL_6";
+    let message_id = "ak:message:AQ-IyBN9yVn52Yqaah8H-_0fuHhf3ImJTExtFDnU3ebQ";
     let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -2140,7 +2140,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
     let state = test_state();
     let now_ms = chrono::Utc::now().timestamp_millis();
     let error = parse_and_validate_events_query_cursor(
-        "ak:event:01904100-0000-8000-8000-0000000000e1",
+        "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc",
         &state,
         None,
         "digest-a",
@@ -2175,7 +2175,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         "filters": {"kind": "ak.message.create"},
         "order": "default",
     })));
-    let event_id = "ak:event:01904100-0000-8000-8000-0000000000e1";
+    let event_id = "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc";
     let token = sync_token_for_events_query(&state, Some(&session), &filter_a, event_id).await;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let token_value = decode_sync_cursor_value(&token).expect("events query cursor decodes");

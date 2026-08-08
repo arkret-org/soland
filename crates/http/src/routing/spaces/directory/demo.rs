@@ -37,7 +37,7 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
         "title": "Arkret Demo Organization",
         "display_name": "Arkret Demo Organization",
         "description": "Demo organization projected by soland",
-        "source_refs": ["ak:event:0196419b-0000-8000-8000-0000000000d0"],
+        "source_refs": ["ak:event:AbyMki5ktjJoPFPuzhe-f4rb2rhjWdtfyMrbjIdb4qsO"],
         "policy_revision": "local",
         "service_id": service_id,
         "realm_count": realms.len(),

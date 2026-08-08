@@ -507,7 +507,7 @@ mod tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ),
             (
-                "ak:event:01904100-0000-8000-8000-000000000002",
+                "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1",
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         ] {
@@ -533,7 +533,7 @@ mod tests {
             .expect("the valid record should still produce a snapshot");
         assert_eq!(
             snapshot.identity_event_ids,
-            ["ak:event:01904100-0000-8000-8000-000000000002"]
+            ["ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"]
         );
         assert_eq!(snapshot.effective_entries.len(), 1);
         assert_eq!(snapshot.identity_events.len(), 1);

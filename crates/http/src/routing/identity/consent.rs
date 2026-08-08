@@ -1472,7 +1472,7 @@ mod tests {
     const HOLDER: &str = "did:web:holder.example";
     const PEER: &str = "did:web:peer.example";
     const CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000041";
-    const GRANT_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
+    const GRANT_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
     const HOLDER_PCR: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn consent_event(kind: &str, actor: &str, payload: Value) -> Event {
@@ -1629,7 +1629,7 @@ mod tests {
             &state,
             bob,
             alice,
-            "ak:event:00000000-0000-8000-8000-000000000000",
+            "ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR",
             None,
             now
         ));

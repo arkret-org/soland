@@ -36,7 +36,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let alice = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
     let bob = arkret_identifiers::Did::new("did:web:bob.example".to_owned()).unwrap();
     let strand_id =
-        arkret_identifiers::StrandId::new("ak:strand:01904100-0000-8000-8000-000000000601")
+        arkret_identifiers::StrandId::new("ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D")
             .unwrap();
     let realm_create = op(
         realm_id.clone(),
@@ -82,7 +82,8 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     // `ak.strand.create` derives the Strand id from the Event
     // (`retype(event_id)`); an Operation without `event_id` is rejected with
     // `strand_create_missing_event_id` and the Strand never materializes.
-    strand_create.payload["event_id"] = json!("ak:event:01904100-0000-8000-8000-000000000601");
+    strand_create.payload["event_id"] =
+        json!("ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D");
     {
         let mut projection = state.test_projection().lock();
         projection.apply(&realm_create, state.hlc());
@@ -98,12 +99,12 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: realm_id.to_string(),
-            main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000601".to_owned(),
+            main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: now,
         },
         DirectConversationEndorsement {
             actor_id: "did:web:alice.example".to_owned(),
-            binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000601".to_owned(),
+            binding_event_ref: "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
         },
     );
     (state, realm_id)
@@ -258,7 +259,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
             "000000000611",
             arkret_wire::EventKind::VIEW_UPDATE,
             json!({
-                "view_id": "ak:view:01904100-0000-8000-8000-000000000611",
+                "view_id": "ak:view:AfNNPHw8rPLcSH3j2BXOmYhEGZkLo7yx1Wcc_ah5qVyn",
                 "patch": definition
             }),
         );
@@ -272,7 +273,7 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
         "000000000612",
         arkret_wire::EventKind::VIEW_UPDATE,
         json!({
-            "view_id": "ak:view:01904100-0000-8000-8000-000000000611",
+            "view_id": "ak:view:AfNNPHw8rPLcSH3j2BXOmYhEGZkLo7yx1Wcc_ah5qVyn",
             "patch": {"state": "tombstoned"}
         }),
     );
@@ -290,7 +291,7 @@ fn shared_view_events_never_carry_a_private_view() {
         arkret_identifiers::RealmId::new("ak:realm:AcRoZR8_hwxZ-nwNkJO-TrgIrOADX-V8ZP_ETuQAFZNc")
             .unwrap();
     let private_view = json!({
-        "id": "ak:view:01904100-0000-8000-8000-000000000613",
+        "id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
         "schema": "ak.schema.view.v1",
         "realm_id": realm_id.as_str(),
         "kind": "collection",
@@ -305,7 +306,7 @@ fn shared_view_events_never_carry_a_private_view() {
             "000000000613",
             arkret_wire::EventKind::VIEW_CREATE,
             json!({
-                "view_id": "ak:view:01904100-0000-8000-8000-000000000613",
+                "view_id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
                 "object": private_view.clone()
             }),
         ),
@@ -313,7 +314,7 @@ fn shared_view_events_never_carry_a_private_view() {
             "000000000614",
             arkret_wire::EventKind::VIEW_UPDATE,
             json!({
-                "view_id": "ak:view:01904100-0000-8000-8000-000000000613",
+                "view_id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
                 "patch": {"visibility": "private"}
             }),
         ),
@@ -321,7 +322,7 @@ fn shared_view_events_never_carry_a_private_view() {
             "000000000615",
             arkret_wire::EventKind::VIEW_RECONCILE,
             json!({
-                "view_id": "ak:view:01904100-0000-8000-8000-000000000613",
+                "view_id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
                 "definition": private_view.clone()
             }),
         ),
@@ -329,7 +330,7 @@ fn shared_view_events_never_carry_a_private_view() {
             "000000000616",
             arkret_wire::EventKind::VIEW_UPDATE,
             json!({
-                "view_id": "ak:view:01904100-0000-8000-8000-000000000613",
+                "view_id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
                 "visibility": "private"
             }),
         ),
@@ -351,7 +352,7 @@ fn shared_view_events_never_carry_a_private_view() {
         "000000000617",
         arkret_wire::EventKind::VIEW_CREATE,
         json!({
-            "view_id": "ak:view:01904100-0000-8000-8000-000000000613",
+            "view_id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
             "object": shared_view
         }),
     );
@@ -378,12 +379,12 @@ fn service_attested_device_authorize_binding_accepts_projection_metadata() {
             "authority_did": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
             "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority"
         },
-        "event_id": "ak:event:019eefcb-8fb2-8890-bffd-1f2035356fbf",
+        "event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r",
         "sender": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
         "hlc": "019eefcb7d18-0000-8adcfdb5",
         "executed_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "authorization_ref": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x#enrollment-authority",
-        "accepted_event_id": "ak:event:019eefcb-8fb2-8890-bffd-1f2035356fbf"
+        "accepted_event_id": "ak:event:AUKcXBtUsS4OjYG1eEkgJMVJjQCwEDQdvFOz2Y6xlJ7r"
     });
 
     crate::routing::identity::cross_signing::validate_device_authorize_binding(&state, &payload)
@@ -723,8 +724,8 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
         "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh".to_owned(),
     )
     .unwrap();
-    let circle_id = "ak:circle:01904100-0000-8000-8000-000000009952";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-000000009953";
+    let circle_id = "ak:circle:AYzqeQ1hbLexQxBuFmhDzV2R1jsnUEvB0ELJR10hOgtK";
+    let strand_id = "ak:strand:Afi2EiRHW33xFiFy_zIBtdd1aCF7PHRGPjpsj-e4AWBC";
     put_agent_participation_ceiling(
         &state,
         "circle",
@@ -775,9 +776,9 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
         "ak:realm:AXwMLE98Oc2dOnJY9S9B1SAxdb1aEynHmeXriuZR3FXU".to_owned(),
     )
     .unwrap();
-    let circle_id = "ak:circle:01904100-0000-8000-8000-000000009962";
+    let circle_id = "ak:circle:AaUAN_rEJJKU7XaSLZMiAC3dbFtb6rKXV-89cGay4X9e";
     let strand_id = arkret_identifiers::StrandId::new(
-        "ak:strand:01904100-0000-8000-8000-000000009963".to_owned(),
+        "ak:strand:Ab1XwDyGoarexWM5f2N9k9zOpOIkgMjf0Ky-ngz87YjD".to_owned(),
     )
     .unwrap();
     {
@@ -911,7 +912,7 @@ async fn register_native_agent_membership_context(
         now,
     );
     record.agent_slug = Some("summary".to_owned());
-    let authorize_event_id = "ak:event:01904100-0000-8000-8000-0000000007d2";
+    let authorize_event_id = "ak:event:AfDDdHscw1t6MBiARodVU-OB1MKSNBVOhVZ_QpsX0Sov";
     let verification_method = "did:web:agent.example#runtime-1";
     if with_claimable_keypackage {
         record.authorized_event_ref = Some(authorize_event_id.to_owned());
@@ -947,7 +948,7 @@ async fn register_native_agent_membership_context(
         .test_persistence()
         .events()
         .put(soland_storage::CanonicalEventRecord {
-            event_id: "ak:event:01904100-0000-8000-8000-0000000007d1".to_owned(),
+            event_id: "ak:event:ASpivoHxwC3V_nT9UCImH0gC3QnCozFZGCCqXBqPBhPG".to_owned(),
             actor_id: controller.to_owned(),
             actor_seq: 1,
             realm_id: Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned()),
@@ -1254,7 +1255,9 @@ fn insert_approved_agent_action(
             status: soland_domain::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),
-            resolution_event_id: Some("ak:event:01904100-0000-8000-8000-0000000007aa".to_owned()),
+            resolution_event_id: Some(
+                "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5".to_owned(),
+            ),
             cancel_reason: None,
             approval: Some(soland_domain::reducer::AgentActionApprovalProjection {
                 approval_id: "ak:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
@@ -1280,7 +1283,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000601",
+            "invite_id": "ak:invite:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D",
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
@@ -1302,7 +1305,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000602",
         arkret_wire::EventKind::SPACE_CREATE,
         json!({
-            "space_id": "ak:space:01904100-0000-8000-8000-000000000602",
+            "space_id": "ak:space:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1",
             "title": "Third participant space"
         }),
     );
@@ -1341,7 +1344,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000604",
         arkret_wire::EventKind::INVITE_CREATE,
         json!({
-            "invite_id": "ak:invite:01904100-0000-8000-8000-000000000604",
+            "invite_id": "ak:invite:AVJ3Urc46gK-WoiuktJ0Mv8wBM6XEiuM_6aRXU9iBbMU",
             "inviter": "did:web:alice.example",
             "invitee": "did:web:charlie.example"
         }),
@@ -1429,12 +1432,12 @@ async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: realm_id.to_string(),
-            main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000601".to_owned(),
+            main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
             actor_id: "did:web:bob.example".to_owned(),
-            binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000602".to_owned(),
+            binding_event_ref: "ak:event:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1".to_owned(),
         },
     );
 
@@ -1448,7 +1451,7 @@ async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
         .expect("the pair stays settled");
     assert_eq!(settled.realm_id, realm_id.to_string());
     assert_eq!(
-        settled.binding_event_ref, "ak:event:01904100-0000-8000-8000-000000000601",
+        settled.binding_event_ref, "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D",
         "the named endorsement is the lowest actor id's, so replicas agree"
     );
     assert!(
@@ -1480,12 +1483,12 @@ async fn two_distinct_endorsement_digests_freeze_the_pair() {
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: "ak:realm:ARM1n3PTeYfi_CEquXWAA_goRY85bAGIYUrIFzp-2oey".to_owned(),
-            main_strand_id: "ak:strand:01904100-0000-8000-8000-0000000006ff".to_owned(),
+            main_strand_id: "ak:strand:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
             actor_id: "did:web:bob.example".to_owned(),
-            binding_event_ref: "ak:event:01904100-0000-8000-8000-0000000006ff".to_owned(),
+            binding_event_ref: "ak:event:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
         },
     );
 
@@ -1591,7 +1594,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
             "sender": "did:web:alice.example",
             "executed_by": agent,
             "object": {
-                "id": "ak:strand:01904100-0000-8000-8000-0000000007a2",
+                "id": "ak:strand:AVdfqhxRnk4959EgJEklIslgnTpVrvncd17v-s916y6P",
                 "metadata": {"title": "Work"}
             }
         }),
@@ -1632,7 +1635,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
             "executed_by": agent,
             "authorization_ref": grant.grant_id,
             "object": {
-                "id": "ak:strand:01904100-0000-8000-8000-0000000007c1",
+                "id": "ak:strand:AS9MRCiS8US6IL2jyf4nBx20bazdnIA8RcwS3yCwHc-h",
                 "metadata": {"title": "Work"}
             }
         }),
@@ -1709,10 +1712,10 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
             "executed_by": agent,
             "authorization_ref": envelope_grant.grant_id,
             "agent_context": agent_context(agent, context_grant.grant_id.as_str()),
-            "relation_id": "ak:relation:01904100-0000-8000-8000-0000000007c2",
+            "relation_id": "ak:relation:AT9MgV4wqtfFSX-ooCQnZocjO8g6OURDSEk1JujmyrNf",
             "relation_kind": "references",
-            "from_ref": "ak:strand:01904100-0000-8000-8000-0000000007c2",
-            "to_ref": "ak:strand:01904100-0000-8000-8000-0000000007c3"
+            "from_ref": "ak:strand:AT9MgV4wqtfFSX-ooCQnZocjO8g6OURDSEk1JujmyrNf",
+            "to_ref": "ak:strand:AXDTq-UrA4iZU_0Xw6aOv4uWM8yGmnIpTstlVPn9zSLd"
         }),
     );
 
@@ -1740,10 +1743,10 @@ async fn provenance_actor_kind_agent_requires_agent_context_for_non_message_writ
             "provenance": {
                 "actor_kind": "agent"
             },
-            "relation_id": "ak:relation:01904100-0000-8000-8000-0000000007c3",
+            "relation_id": "ak:relation:AXDTq-UrA4iZU_0Xw6aOv4uWM8yGmnIpTstlVPn9zSLd",
             "relation_kind": "references",
-            "from_ref": "ak:strand:01904100-0000-8000-8000-0000000007c4",
-            "to_ref": "ak:strand:01904100-0000-8000-8000-0000000007c5"
+            "from_ref": "ak:strand:AaV0Wjp3LhZKUfcpa_CaAadjRsbPDxliKCkc9QbmZsyu",
+            "to_ref": "ak:strand:AVlYG1Uzsm35_Y5x72KDPQXIcI3zCL4H2HF_bh3DgMMy"
         }),
     );
 
@@ -1783,7 +1786,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
             "executed_by": agent,
             "authorization_ref": grant_id.as_str(),
             "agent_context": agent_context(agent, grant_id.as_str()),
-            "view_id": "ak:view:01904100-0000-8000-8000-0000000007c4",
+            "view_id": "ak:view:AaV0Wjp3LhZKUfcpa_CaAadjRsbPDxliKCkc9QbmZsyu",
             "approval_request_id": "request-7c4",
             "approval_nonce": "nonce-7c4"
         }),
@@ -2121,7 +2124,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
     state
         .event_queries()
         .store_canonical_event(CanonicalEventRecord {
-            event_id: "ak:event:01904100-0000-8000-8000-0000000007a6".to_owned(),
+            event_id: "ak:event:AV7K8qoFD_RwtiKYfMe26-5D6csWJ6XQ8qUhD5IjjPT3".to_owned(),
             actor_id: "did:web:mallory.example".to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
@@ -2178,13 +2181,13 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
         arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
         json!({
             "sender": "did:web:alice.example",
-            "circle_id": "ak:circle:01904100-0000-8000-8000-000000000881",
+            "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
             "actor_id": "did:web:bob.example",
             "membership": "join",
             "manage_capability_verified": true,
             "actor_capability": {
                 "action": "ak.circle.member.manage",
-                "circle_id": "ak:circle:01904100-0000-8000-8000-000000000881",
+                "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
                 "allowed": true
             }
         }),
@@ -2205,7 +2208,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         "ak:realm:AW2Ebs3FRn6VzpiCswpoViFTHh-iDZrF_UzakuV14ZSm".to_owned(),
     )
     .unwrap();
-    let circle_id = "ak:circle:01904100-0000-8000-8000-000000000882";
+    let circle_id = "ak:circle:AbPMdhKXl6Pe1lcCeCC_k_V5tvHDt1LAFRB6g6WrpDLJ";
     grant_circle_action(
         &state,
         &realm_id,
@@ -2243,7 +2246,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         "ak:realm:ASS8zG4z3bNJuUr3YrKuhVUKUOTpX3PhfV-JrJ56QMzs".to_owned(),
     )
     .unwrap();
-    let circle_id = "ak:circle:01904100-0000-8000-8000-000000000883";
+    let circle_id = "ak:circle:AT2LoQ65P6bU2ZDxq9XbubTSMDrqzlK8EFJNmM_pxt62";
     let tombstone = op(
         realm_id.clone(),
         "000000000883",
@@ -2384,8 +2387,8 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         "ak:realm:AaGPy5t1BAnukci5lpGNiOlo7TufaF-ociC1LVnQpv5B".to_owned(),
     )
     .unwrap();
-    let circle_id = "ak:circle:01904100-0000-8000-8000-000000000801";
-    let relation_id = "ak:relation:01904100-0000-8000-8000-000000000801";
+    let circle_id = "ak:circle:AfF5Vi42N83lUBU2d9UbQFWzHxX2vlXkKpR-Ctx0Oh6D";
+    let relation_id = "ak:relation:AfF5Vi42N83lUBU2d9UbQFWzHxX2vlXkKpR-Ctx0Oh6D";
     let now = chrono::Utc::now();
     {
         let mut projection = state.test_projection().lock();
@@ -2423,11 +2426,13 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 realm_id: realm_id.to_string(),
                 relation_kind: "confidential_discussion_of".to_owned(),
                 scope_circle_id: Some(circle_id.to_owned()),
-                from_ref: Some("ak:strand:01904100-0000-8000-8000-000000000811".to_owned()),
-                to_ref: Some("ak:strand:01904100-0000-8000-8000-000000000812".to_owned()),
+                from_ref: Some("ak:strand:AYmJuuenMIJ2dTgMqUL3AoeJJOHo5Iap70ImQUPzbJhY".to_owned()),
+                to_ref: Some("ak:strand:AcTTTDFcIiz-Tmjh-sPdibSEwAhireChqYZJzVM0K1MY".to_owned()),
                 fields: Default::default(),
                 state: "active".to_owned(),
-                source_event_id: Some("ak:event:01904100-0000-8000-8000-000000000801".to_owned()),
+                source_event_id: Some(
+                    "ak:event:AfF5Vi42N83lUBU2d9UbQFWzHxX2vlXkKpR-Ctx0Oh6D".to_owned(),
+                ),
                 source_event_digest: Some(
                     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                         .to_owned(),
@@ -2502,7 +2507,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:impostor.example",
-            "target_ref": "ak:message:01904100-0000-8000-8000-000000000901",
+            "target_ref": "ak:message:AXvyk2cSPhfYUHVSaDoVqdjSO3t5IXRAqpG-6hQjjUAx",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
         }),
@@ -2531,7 +2536,7 @@ async fn moderation_decision_allows_authorized_issuer() {
         json!({
             "sender": "did:web:moderator.example",
             "issuer": "did:web:moderator.example",
-            "target_ref": "ak:message:01904100-0000-8000-8000-000000000902",
+            "target_ref": "ak:message:AR9_0Dn3PqKpHpxvh0C4oIGwx_MZWw6y7PjVc300c93v",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         }),
@@ -2556,7 +2561,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
         arkret_wire::EventKind::MODERATION_DECISION,
         json!({
             "sender": "did:web:moderator.example",
-            "target_ref": "ak:message:01904100-0000-8000-8000-000000000903",
+            "target_ref": "ak:message:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         }),
@@ -2589,14 +2594,14 @@ async fn call_recording_start_defaults_to_record_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-8000-8000-000000000904",
+            "call_id": "ak:call:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
             "recording_id": "recording-904",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "recording",
             "mode": "audio_video",
             "visible_notice": true,
             "result": {
-                "recording_start_event_id": "ak:event:01904100-0000-8000-8000-000000000904",
+                "recording_start_event_id": "ak:event:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
                 "retention": {"consent_confirmed": true}
             }
         }),
@@ -2626,14 +2631,14 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-8000-8000-000000000905",
+            "call_id": "ak:call:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
             "recording_id": "transcript-905",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
             "result": {
-                "transcript_start_event_id": "ak:event:01904100-0000-8000-8000-000000000905",
+                "transcript_start_event_id": "ak:event:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
                 "retention": {"consent_confirmed": true}
             }
         }),
@@ -2673,14 +2678,14 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         arkret_wire::EventKind::CALL_RECORDING_START,
         json!({
             "sender": "did:web:recorder.example",
-            "call_id": "ak:call:01904100-0000-8000-8000-000000000906",
+            "call_id": "ak:call:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
             "recording_id": "transcript-906",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
             "result": {
-                "transcript_start_event_id": "ak:event:01904100-0000-8000-8000-000000000906",
+                "transcript_start_event_id": "ak:event:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
                 "retention": {"consent_confirmed": true}
             }
         }),
@@ -2706,13 +2711,13 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
     );
     let payload = json!({
         "sender": "did:web:recorder.example",
-        "call_id": "ak:call:01904100-0000-8000-8000-000000000907",
+        "call_id": "ak:call:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",
         "recording_id": "recording-907",
         "recording_agent": "did:web:recorder.example",
         "capture_kind": "recording",
         "visible_notice": true,
         "result": {
-            "recording_start_event_id": "ak:event:01904100-0000-8000-8000-000000000907",
+            "recording_start_event_id": "ak:event:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",
             "retention": {"consent_confirmed": true}
         }
     });
@@ -2993,7 +2998,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
             "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
             "recovery_recipient_id": "rrk-1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
-            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-00000000d1a1",
+            "source_authorization_ref": "ak:event:ASvPdNAOWXf8kk2Jd-FbnlIFnNiMFE5H2L2hHGSmQP4_",
             "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -3094,7 +3099,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 delivery_status: Some("routable".to_owned()),
                 recipient_service_id: Some("did:web:local.host".to_owned()),
                 membership_event_ref: Some(
-                    "ak:event:01904100-0000-8000-8000-00000000d3aa".to_owned(),
+                    "ak:event:Aen872J0_GJsInIbyMOsXR2xbw27ZfJY2H6f96pYsgUC".to_owned(),
                 ),
                 delivery_binding_frontier: None,
                 invited_at: Some(now),
@@ -3114,7 +3119,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             "recipient_principal_id": bob,
             "recipient_device_id": bob_device,
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
-            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-00000000d3a1",
+            "source_authorization_ref": "ak:event:AefFLnGCxWP_cx9pZCZR5OTqQnHHI1ubt8-iDlcMP-ZP",
             "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
@@ -3124,7 +3129,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             },
             "ciphertext": "sealed-history-secret",
             "created_at": "2026-07-05T00:00:00.000Z",
-            "event_id": "ak:event:01904100-0000-8000-8000-00000000d300",
+            "event_id": "ak:event:AbmoMmPKDs6imtvD716Jo6SMuqoQBREkaSd3-lTFdVED",
             "sender": "did:web:alice.example",
             "hlc": "2026-07-05T00:00:00.000Z/node/1"
         }),
@@ -3173,7 +3178,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
             "recipient_principal_id": "did:web:stranger.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
-            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-00000000d2a1",
+            "source_authorization_ref": "ak:event:ARj82v99exuqCarIqXhrBbP7-PnlaJkPBbkwanCUgGwc",
             "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},

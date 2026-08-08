@@ -81,7 +81,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "welcome_id": welcome_id,
         "group_id": "ak:mls_group:abc",
         "epoch": 1,
-        "commit_ref": "ak:event:0196419b-0000-8000-8000-000000000010",
+        "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
         "recipient_actor_id": "did:web:bob.example",
         "recipient_device_id": "ak:device:bob-phone",
         "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
@@ -560,7 +560,7 @@ fn welcome_enqueue_rejects_inactive_agent_key_authorization() {
     let mut state = ProjectionState::default();
     let payload = agent_bound_welcome_payload(
         "ak:mls_welcome:w-agent-stale",
-        "ak:event:0196419b-0000-8000-8000-0000000000a1",
+        "ak:event:Af7kHhjQt9bXM9MVmV6uu7VNZY1P_sjoIUGS2rxLV8Qt",
     );
     let effect = apply_welcome_enqueue(&mut state, &op_at(300, "ak.mls.welcome", payload));
     assert!(matches!(
@@ -573,7 +573,7 @@ fn welcome_enqueue_rejects_inactive_agent_key_authorization() {
 #[test]
 fn welcome_enqueue_accepts_current_agent_key_authorization() {
     let mut state = ProjectionState::default();
-    let authorize_event_id = "ak:event:0196419b-0000-8000-8000-0000000000a2";
+    let authorize_event_id = "ak:event:Ad0zM3xkilGkLE8K9IPZrZvbQzit2do46Wb6ECOCaX6k";
     let authorize = op_at(
         200,
         arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
@@ -609,7 +609,7 @@ fn welcome_enqueue_accepts_requester_device_envelope_without_sender_device_id() 
     claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
-        json!("ak:event:01904100-0000-8000-8000-00000000d001"),
+        json!("ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"),
     );
     let claim_envelope = payload
         .get_mut("claim_envelope")
@@ -643,7 +643,7 @@ fn welcome_enqueue_rejects_mismatched_sender_device_id_when_present() {
     claim_ref.remove("ssk_generation");
     claim_ref.insert(
         "device_authorize_event_id".to_owned(),
-        json!("ak:event:01904100-0000-8000-8000-00000000d001"),
+        json!("ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"),
     );
     let claim_envelope = payload
         .get_mut("claim_envelope")
@@ -801,8 +801,8 @@ fn commit_epoch_in_order_succeeds() {
 fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let revoke_event = "ak:event:0196419b-0000-8000-8000-00000000d102";
-    let proposal_ref = "ak:event:0196419b-0000-8000-8000-00000000d103";
+    let revoke_event = "ak:event:AafCYpmebjO4g4U44BB6290CiEHtsdaspFppDQcaFrjv";
+    let proposal_ref = "ak:event:AQ_AVnBjhDRbcSwwa5FDgoABRUHUthd1DA4Y2aDKTfvV";
     state.pending_mls_removals.push(MlsRemoveObligation {
         realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
         circle_id: None,
@@ -864,15 +864,15 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
 fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    let frontier = "ak:event:0196419b-0000-8000-8000-00000000d202";
+    let frontier = "ak:event:Aenxxuj1jGJoLHv5bnuHV1awQ_gKwK2elnGlpIES2Nu4";
     let targets = [
         (
             "did:web:bob.example",
-            "ak:event:0196419b-0000-8000-8000-00000000d203",
+            "ak:event:AQnbGFYH6ZHKM4sQnK_8kg0bmuqX4U5wGRs8Vbxp3u9h",
         ),
         (
             "did:web:charlie.example",
-            "ak:event:0196419b-0000-8000-8000-00000000d204",
+            "ak:event:ARbbiTuRZqECoqMK9qlbv1t2-8v9s_6fOm2bY2rAJt6n",
         ),
     ];
     for (target, proposal_ref) in targets {
@@ -957,7 +957,7 @@ fn commit_epoch_requires_effective_genesis() {
 fn same_group_id_is_independent_across_effective_scopes() {
     let mut state = ProjectionState::default();
     let realm_scope = realm_scope();
-    let circle_scope = circle_scope("ak:circle:0196419b-0000-8000-8000-000000000123");
+    let circle_scope = circle_scope("ak:circle:AYeXMA_Q84Rr4i1LlwOPbkhybNKeukU9ehFA-XsuidnF");
     let realm_genesis = op_at(
         500,
         "ak.mls.genesis",

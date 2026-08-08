@@ -1641,7 +1641,7 @@ mod tests {
             applet_id: package.applet_id.clone(),
             registration_event_ref: Some(
                 arkret_identifiers::EventId::new(
-                    "ak:event:01974100-0000-8000-8000-000000000010".to_owned(),
+                    "ak:event:AWS4dRwcRmYFt2N8TnMoyv5iSK8KYchSW9mPumP7yBe3".to_owned(),
                 )
                 .unwrap(),
             ),
@@ -1649,11 +1649,11 @@ mod tests {
             bot_actor_id: package.bot_actor_id.clone(),
             capability_grant_refs: vec![
                 arkret_identifiers::GrantId::new(
-                    "ak:grant:01974100-0000-8000-8000-000000000020".to_owned(),
+                    "ak:grant:AdVQGBDDzQcOQ0Ixa5_MTVwfKs8bWMgdTnlqRiv6ZMTk".to_owned(),
                 )
                 .unwrap(),
                 arkret_identifiers::GrantId::new(
-                    "ak:grant:01974100-0000-8000-8000-000000000021".to_owned(),
+                    "ak:grant:AV46wCk8jjhi6WSzU44ice0Vqf63WfoL-eRnkJ6w68Ni".to_owned(),
                 )
                 .unwrap(),
             ],

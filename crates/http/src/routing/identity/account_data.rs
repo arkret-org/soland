@@ -812,7 +812,7 @@ mod tests {
     fn private_account_data_key_patterns_are_validated() {
         assert!(
             validate_registered_account_data_key(
-                "ak.scheduled_send.v1:ak:message:01904100-0000-8000-8000-000000000001"
+                "ak.scheduled_send.v1:ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
             )
             .is_ok()
         );
@@ -823,7 +823,7 @@ mod tests {
             .is_ok()
         );
         let err = validate_registered_account_data_key(
-            "ak.draft.v1:message:ak:message:01904100-0000-8000-8000-000000000001:main",
+            "ak.draft.v1:message:ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19:main",
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));

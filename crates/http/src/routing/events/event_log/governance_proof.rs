@@ -1777,7 +1777,7 @@ mod tests {
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
             serde_json::json!({
-                "invite_id": "ak:invite:01999999-0000-8000-8000-00000000fade"
+                "invite_id": "ak:invite:AXqb6Ch5W-jqD8aHcLfUSGkwP47dnrsU4phA2YK03WoF"
             }),
         )
         .unwrap();

@@ -840,7 +840,7 @@ mod tests {
                     "kind": "service_delegation",
                     "subject_actor_id": "did:web:alice.example",
                     "executed_by": "did:web:service.example",
-                    "authorization_ref": "ak:grant:01904100-0000-8000-8000-000000000abc"
+                    "authorization_ref": "ak:grant:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt"
                 }
             }),
         );
@@ -860,7 +860,7 @@ mod tests {
                     "kind": "service_delegation",
                     "subject_actor_id": "did:web:alice.example",
                     "executed_by": "did:web:service.example",
-                    "authorization_ref": "ak:grant:01904100-0000-8000-8000-000000000abc"
+                    "authorization_ref": "ak:grant:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt"
                 }
             }),
         );

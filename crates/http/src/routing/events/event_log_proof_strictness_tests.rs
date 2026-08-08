@@ -341,7 +341,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
 
     let encrypted_envelope = |visibility: &str| {
         json!({
-            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls_rfc9420",
@@ -412,7 +412,7 @@ async fn circle_scoped_write_requires_circle_membership() {
     // bot / Ghost Actor) could inject content into a Circle it never joined.
     let state = make_state(true);
     let realm_id = "ak:realm:AU3fkxq_f4TuVlpZppN3pSPHhVOTTikXW_-Hw0vr9XCp";
-    let circle_id = "ak:circle:01904100-0000-8000-8000-c1c1e0000002";
+    let circle_id = "ak:circle:AZT0NDzMS5h5Oz8ih_r5JqLxOrZZy4HxcAEY5s1MbM9K";
     let member = "did:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
     let non_member = "did:web:slack-bridge.example:bot";
@@ -450,7 +450,7 @@ async fn circle_scoped_write_requires_circle_membership() {
 
     let strand_create = |sender: &str, scope: Option<&str>| {
         let mut object = json!({
-            "id": "ak:strand:01904100-0000-8000-8000-000000000abc",
+            "id": "ak:strand:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
             "metadata": {"title": "t"}
         });
         if let Some(scope) = scope {
@@ -499,9 +499,9 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     // scope, so reacting to a Circle message requires Circle membership too.
     let state = make_state(true);
     let realm_id = "ak:realm:Af5kTRq88MZ71EExjwb7Pm9AHmO7tPZB470XwPwDiYge";
-    let circle_id = "ak:circle:01904100-0000-8000-8000-c2c2e0000002";
-    let strand_id = "ak:strand:01904100-0000-8000-8000-c2c2e0000003";
-    let event_id = "ak:event:01904100-0000-8000-8000-c2c2e0000004";
+    let circle_id = "ak:circle:AS5EmLqkRoAqtHJcDm0xGwZ8A-MgC4120y4IpSAbqFCJ";
+    let strand_id = "ak:strand:AekvaCkXy9kgtwfnxzaKIOIIHF_-HZpSbCakATPdwWMH";
+    let event_id = "ak:event:ATISmX7h_m-9AlDVmW5cqCG9eM06QsDQFjEjG675Jf3A";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -609,9 +609,9 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     // under a Circle scope.
     let state = make_state(true);
     let realm_id = "ak:realm:ASTX9r6c7ZMAY74JFAIh5TyBTiwEqs5oy5TCX7ubmLVB";
-    let circle_id = "ak:circle:01904100-0000-8000-8000-c3c3e0000002";
-    let scoped_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000003";
-    let realm_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000004";
+    let circle_id = "ak:circle:AQIjwhwC5jFHrCd985kMq2m5ahV3nG7qBK-aMMYLbgAt";
+    let scoped_morph_id = "ak:morph:AXlXsex0Kgdp6mgmqub7aKP53d1_Zp7PifQwrYfC-8HO";
+    let realm_morph_id = "ak:morph:AXg0u_PNFrZzEeHPh_4tFOFF7XNlDbiHiSewgv_unmDK";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -775,7 +775,7 @@ async fn applet_registration_requires_realm_admin() {
     state
         .authorization()
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
-            grant_id: "ak:grant:01904100-0000-8000-8000-000000000a02".to_owned(),
+            grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
             issuer: owner.to_owned(),
             subject: owner.to_owned(),
@@ -846,7 +846,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
         arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         arkret_wire::EventKind::MESSAGE_CREATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls_rfc9420",
@@ -965,7 +965,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let state = make_state(false);
     let session = session();
     let envelope = json!({
-        "event_id": "ak:event:01904100-0000-8000-8000-00000000eff0",
+        "event_id": "ak:event:AY8qKJ9oY7RJJMqZWvAL7xFsRzdwHuIdn-0jJgKF2tL8",
         "kind": arkret_wire::EventKind::REALM_CREATE,
         "requirements": { "schema": ["ak.schema.event.v1"] },
         "actor_id": session.actor.clone(),
@@ -1037,7 +1037,7 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let state = make_state(true);
     let envelope = json!({
         "payload": {
-            "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001"
+            "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC"
         }
     });
     let object = envelope.as_object().unwrap();
@@ -1062,7 +1062,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "membership": "join",
             "reason": "invite_accept",
-            "invite_ref": "ak:invite:01904100-0000-8000-8000-000000000001",
+            "invite_ref": "ak:invite:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "delivery_status": "unroutable"
         }
     });
@@ -1080,7 +1080,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
 #[test]
 fn event_payload_validator_enforces_strand_update_patch_schema() {
     let state = make_state(true);
-    let strand_id = "ak:strand:01904100-0000-8000-8000-f10dc0000001";
+    let strand_id = "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC";
     let valid = json!({
         "payload": {
             "target_ref": strand_id,
@@ -1180,44 +1180,44 @@ fn event_payload_validator_enforces_patch_family_schema() {
         (
             "ak.strand.update",
             json!({
-                "target_ref": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.morph.update",
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:morph:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:morph:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:morph:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.space.update",
             json!({
-                "space_id": "ak:space:01904100-0000-8000-8000-f10dc0000001",
+                "space_id": "ak:space:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "space_id": "ak:space:01904100-0000-8000-8000-f10dc0000001",
+                "space_id": "ak:space:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.profile.update",
             json!({
-                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
@@ -1243,7 +1243,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ak.profile.realm_override",
             &json!({
-                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "target_realm_id": "ak:realm:AQqDnmYP2y5kt6ZLD--QatyqmmeXf3WAeSGGrAGZoR-6",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
@@ -1256,7 +1256,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ak.strand.tracks.update",
             &json!({
-                "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+                "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 "tracks": {
                     "discussion": {
                         "enabled": true,
@@ -1274,7 +1274,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
                 "ak.strand.tracks.update",
                 &json!({
                     "type": "removed_track_update",
-                    "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
+                    "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
                 }),
             )
             .is_err(),
@@ -1529,7 +1529,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 
 const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
-const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-8000-8000-000000000001";
+const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
 const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
 
@@ -2021,7 +2021,7 @@ fn data_event_capability_ref_must_resolve() {
     let seal_ref = insert_data_event_seal(&state, Vec::new());
     let object = data_event_object_with_refs(
         &seal_ref,
-        vec!["ak:grant:01904100-0000-8000-8000-000000000111".to_owned()],
+        vec!["ak:grant:ATPdRBJ7VjotWM8xezzjJYCICc6wTKShqh-oWNC3EGqO".to_owned()],
     );
 
     let err = validate_data_event_capability_refs(
@@ -2044,7 +2044,7 @@ fn data_event_capability_ref_must_resolve() {
 #[test]
 fn data_event_capability_must_cover_derived_cell() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000112";
+    let grant_id = "ak:grant:AZjl4ii7409qEbi9w_hFgL2BOAn9txOvjwAf79MHg_i6";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -2060,7 +2060,7 @@ fn data_event_capability_must_cover_derived_cell() {
     .expect("matching grant must cover the derived DataEvent cell");
 
     let wrong_state = make_state(true);
-    let wrong_grant_id = "ak:grant:01904100-0000-8000-8000-000000000113";
+    let wrong_grant_id = "ak:grant:ARgPcY94c3tMPJStrGtcGWGqWQXLGc-0YDI6darot7h0";
     let wrong_seal_ref =
         insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false);
     let wrong_action_object =
@@ -2087,7 +2087,7 @@ fn data_event_capability_must_cover_derived_cell() {
 #[test]
 fn data_event_rejects_producer_selected_capability_fields() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011b";
+    let grant_id = "ak:grant:AX37wLeLONzd_JNkw6LJ99yJoWyfGkOl1VRG-QZRvfHs";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
 
     let mut with_capability_refs = data_event_object_with_refs(&seal_ref, vec![]);
@@ -2133,7 +2133,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
 #[test]
 fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011c";
+    let grant_id = "ak:grant:AawcynxQ2o8vL1cUX0ihdXGNoRO0G_nEj-ZtG2fA6Tq-";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     let object = data_event_object_with_refs(&seal_ref, vec![]);
 
@@ -2153,7 +2153,7 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
 fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     const APPLET_SERVICE: &str = "did:web:bridge.example";
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011d";
+    let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref = insert_historical_data_event_grant_for_subject(
         &state,
         grant_id,
@@ -2182,7 +2182,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
 
     object.insert(
         "authorization_ref".to_owned(),
-        json!("ak:grant:01904100-0000-8000-8000-000000000199"),
+        json!("ak:grant:AXt8OgxCpSbRBVYm7b5yaEOTqGwqu3EiAxcRhN7K2raF"),
     );
     let err = validate_data_event_capability_refs(
         &state,
@@ -2201,7 +2201,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
 #[test]
 fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000114";
+    let grant_id = "ak:grant:AcQ0lLs0sdXJIIFx89z5MPiZcW4lJ931DNuCAR0tR-W3";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -2223,8 +2223,8 @@ fn data_event_capability_ref_must_not_be_revoked() {
 #[test]
 fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let state = make_state(true);
-    let authority_grant_id = "ak:grant:01904100-0000-8000-8000-000000000116";
-    let child_grant_id = "ak:grant:01904100-0000-8000-8000-000000000117";
+    let authority_grant_id = "ak:grant:AXtQr1bQ29BYsE_HxdhYVb02wrOy3mDAcmK4juGSwpGE";
+    let child_grant_id = "ak:grant:AUClLzOaZSu1iuMPWhnnXcjeH3Kdt15z74i8jhKEonWr";
     let seal_ref = insert_historical_data_event_child_grant_with_revoked_authority(
         &state,
         authority_grant_id,
@@ -2251,7 +2251,7 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
 #[test]
 fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-000000000115";
+    let grant_id = "ak:grant:AbNxEyHm2i7kxIWT8d3aeJ0c7n5ujCnlTYJy9aAxH1Fn";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     state
         .authorization()
@@ -2273,7 +2273,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
 #[test]
 fn data_event_revocation_successor_within_window_is_stale() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011d";
+    let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 1);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -2296,7 +2296,7 @@ fn data_event_revocation_successor_within_window_is_stale() {
 #[test]
 fn data_event_revocation_successor_outside_window_is_excluded() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011e";
+    let grant_id = "ak:grant:AXpDvFT5Ig3ReD8ssTjbXBgzMXgcnSVx4liP7nvihgRe";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 25);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
@@ -2317,7 +2317,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
 #[test]
 fn high_risk_data_event_revocation_has_no_grace_window() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011f";
+    let grant_id = "ak:grant:AbcriCdScRg5DEU1Lki7mHfAdOK609vnq1PWuZBQR-mS";
     let action = "ak.message.mention.broadcast";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false);
     insert_data_event_revocation_successor(&state, grant_id, action, 1);
@@ -2339,7 +2339,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
 #[test]
 fn relaxed_e2ee_data_event_keeps_independent_capability_gate() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-8000-8000-00000000011a";
+    let grant_id = "ak:grant:AaMjYWHMpy6u6Gi9YMy2ppf8RiR-qtp4TSKfr1ZrbbTz";
     let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 

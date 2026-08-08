@@ -305,7 +305,7 @@ mod tests {
         let parsed = parse_authz_resource(&json!({
             "kind": "strand",
             "realm_id": "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy",
-            "strand_id": "ak:strand:01970000-0000-8000-8000-000000000002"
+            "strand_id": "ak:strand:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M"
         }));
         assert_eq!(
             parsed.realm_id,
@@ -313,15 +313,15 @@ mod tests {
         );
         assert_eq!(
             parsed.resource,
-            "ak:strand:01970000-0000-8000-8000-000000000002"
+            "ak:strand:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M"
         );
     }
 
     #[test]
     fn persisted_resource_is_reencoded_with_closed_selector_fields() {
         const REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
-        const CIRCLE: &str = "ak:circle:01970000-0000-8000-8000-000000000002";
-        const STRAND: &str = "ak:strand:01970000-0000-8000-8000-000000000003";
+        const CIRCLE: &str = "ak:circle:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M";
+        const STRAND: &str = "ak:strand:AZ6GqZWWvnQ2KFwbBD-MenomzWNz-31MUAuKzBXIP0zv";
 
         let realm =
             serde_json::to_value(capability_resource_selector(REALM, REALM).unwrap()).unwrap();

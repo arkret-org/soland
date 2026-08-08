@@ -1,10 +1,10 @@
 use super::*;
 
 const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-const SPACE: &str = "ak:space:01904100-0000-8000-8000-cfc039892037";
-const STRAND: &str = "ak:strand:01904100-0000-8000-8000-cfc039892038";
-const RELATION: &str = "ak:relation:01904100-0000-8000-8000-cfc039892039";
-const EVENT: &str = "ak:event:01904100-0000-8000-8000-cfc039892040";
+const SPACE: &str = "ak:space:ATu1E_hCvaxzpXDswPMlN3ypwETWAa7O994Etg387rA6";
+const STRAND: &str = "ak:strand:ATw_yJRaz2EEXAz-44u3FE2jGCVrpM3MQQZhKmxheDqW";
+const RELATION: &str = "ak:relation:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL";
+const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 
 fn space_create() -> Operation {
     make_operation(

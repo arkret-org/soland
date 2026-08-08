@@ -170,10 +170,14 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
             ))
             .unwrap(),
             membership_frontier: vec![
-                arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001")
-                    .unwrap(),
-                arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001")
-                    .unwrap(),
+                arkret_identifiers::EventId::new(
+                    "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+                )
+                .unwrap(),
+                arkret_identifiers::EventId::new(
+                    "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+                )
+                .unwrap(),
             ],
             delivery_binding_frontier: Vec::new(),
             destination_service_kind: "principal_server".to_owned(),
@@ -193,7 +197,8 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
 #[test]
 fn federation_binding_does_not_carry_a_reducer_profile() {
     let event_id =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap();
+        arkret_identifiers::EventId::new("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
+            .unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
@@ -220,24 +225,26 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
 #[test]
 fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
     let event_id =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap();
-    let current = vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()];
+        arkret_identifiers::EventId::new("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
+            .unwrap();
+    let current = vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()];
 
     federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
         .unwrap();
 
     let stale =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000002").unwrap();
+        arkret_identifiers::EventId::new("ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1")
+            .unwrap();
     let err = federation_delivery_binding_frontier_is_current(
         &[stale],
-        vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()],
+        vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "delivery_binding_stale");
 
     let err = federation_delivery_binding_frontier_is_current(
         &[],
-        vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()],
+        vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "schema_violation");

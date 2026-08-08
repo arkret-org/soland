@@ -689,7 +689,7 @@ fn new_unsigned_sidecar_event(
     created_at: chrono::DateTime<chrono::Utc>,
     payload: Value,
 ) -> Result<arkret_wire::Event, AppError> {
-    let placeholder = EventId::new("ak:event:00000000-0000-8000-8000-000000000000")
+    let placeholder = EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
         .expect("static content-bound Event placeholder is valid");
     let mut event = arkret_wire::Event {
         event_id: placeholder,
@@ -1406,10 +1406,11 @@ mod tests {
     #[test]
     fn context_attach_contains_only_the_native_source_mapping() {
         let payload = serde_json::to_value(SidecarContextAttachPayload {
-            sidecar_id: SidecarId::new("ak:sidecar:01964137-0000-8000-8000-000000000031").unwrap(),
+            sidecar_id: SidecarId::new("ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo")
+                .unwrap(),
             source_context_ref: SidecarContextRef::Strand {
                 strand_id: arkret_identifiers::StrandId::new(
-                    "ak:strand:01964137-0000-8000-8000-000000000032",
+                    "ak:strand:ATxk9k3t-DqTNiiB9n8GoSjjar3vZJvO3Dtpd1SzdHZF",
                 )
                 .unwrap(),
             },
@@ -1463,7 +1464,7 @@ mod tests {
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
             reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
             membership_frontier: Some(vec![
-                EventId::new("ak:event:01964137-0000-8000-8000-000000000001").unwrap(),
+                EventId::new("ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5").unwrap(),
             ]),
         };
 
@@ -1479,11 +1480,11 @@ mod tests {
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
             "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
-            "sidecar_id": "ak:sidecar:01964137-0000-8000-8000-000000000031",
+            "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
             "effective_scope": {
                 "kind": "sidecar",
                 "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
-                "sidecar_id": "ak:sidecar:01964137-0000-8000-8000-000000000031"
+                "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo"
             },
             "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",
             "previous_epoch": 0,
@@ -1492,15 +1493,15 @@ mod tests {
             "binding_profile": "ak.profile.mls_governance_binding.full.v1",
             "reducer_profile": "ak.reducer.core.v1",
             "sidecar_binding": {
-                "sidecar_id": "ak:sidecar:01964137-0000-8000-8000-000000000031",
+                "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
                 "participant_authority_digest": format!("sha256:{}", "4".repeat(64)),
-                "control_frontier": ["ak:event:01964137-0000-8000-8000-000000000041"]
+                "control_frontier": ["ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV"]
             }
         });
         let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(value).unwrap();
         assert_eq!(
             binding.sidecar_id().map(|id| id.as_str()),
-            Some("ak:sidecar:01964137-0000-8000-8000-000000000031")
+            Some("ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo")
         );
         assert!(matches!(
             binding.effective_scope(),

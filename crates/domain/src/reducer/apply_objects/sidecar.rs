@@ -259,16 +259,16 @@ mod tests {
         assert!(
             state
                 .sidecars
-                .contains_key("ak:sidecar:01964137-0000-8000-8000-000000000042")
+                .contains_key("ak:sidecar:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw")
         );
         assert!(state.circles.is_empty());
         assert!(state.circle_memberships.is_empty());
         assert_eq!(
             state
                 .sidecar_create_refs
-                .get("ak:sidecar:01964137-0000-8000-8000-000000000042")
+                .get("ak:sidecar:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw")
                 .map(String::as_str),
-            Some("ak:event:01964137-0000-8000-8000-000000000042")
+            Some("ak:event:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw")
         );
 
         let second = create("01964137-0000-8000-8000-000000000043");

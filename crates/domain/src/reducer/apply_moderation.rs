@@ -17,9 +17,9 @@
 //!   what survived (§2.6 last paragraph), so an add is never pre-tombstoned.
 //! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
 //!   (fsm, one cell per appeal id). Submit derives that id by retyping its Event id; later events
-//!   carry `payload.appeal_id`. Deterministic state machine (none) → submitted →
-//!   under_review → decided → closed, with `close` also reachable from submitted / under_review
-//!   (appellant withdrawal or an authorized close service). content-moderation.md §5.5.
+//!   carry `payload.appeal_id`. Deterministic state machine (none) → submitted → under_review →
+//!   decided → closed, with `close` also reachable from submitted / under_review (appellant
+//!   withdrawal or an authorized close service). content-moderation.md §5.5.
 //!
 //! Reducer-enforced §5.5.2 constraints (surfaced at ingest by the
 //! `preflight_moderation_projection_reject` snapshot run, mirroring the MLS

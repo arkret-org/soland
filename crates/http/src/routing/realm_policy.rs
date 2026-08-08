@@ -439,7 +439,7 @@ mod caller_signed_policy_server_tests {
 
     fn policy_server_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
         serde_json::from_value(json!({
-            "event_id": "ak:event:01964137-0000-8000-8000-000000000042",
+            "event_id": "ak:event:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw",
             "kind": arkret_wire::EventKind::REALM_POLICY_SERVER,
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },

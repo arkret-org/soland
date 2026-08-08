@@ -2377,7 +2377,8 @@ mod managed_agent_pcr_batch_tests {
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
         event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
-            arkret_wire::EventId::new("ak:event:01999999-0000-8000-8000-00000000caff").unwrap(),
+            arkret_wire::EventId::new("ak:event:AW3zvyLFyfJyAW_Los_ITK2y0zh5E3jCU6bCFkbpPvNc")
+                .unwrap(),
         )];
         // v1 carries no producer `effects[]`: the router recognises a managed
         // Agent PCR create by whether the registered contract materializes its

@@ -1532,7 +1532,7 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
-        let provision_event_id = "ak:event:01980b44-0000-8000-8000-000000000001";
+        let provision_event_id = "ak:event:AUNxs4zPekZ_WmXuTxubpYmxFGvbJi6nyfG3cV_WmScL";
         event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
             arkret_wire::EventId::new(provision_event_id).unwrap(),
         )];
@@ -1607,7 +1607,7 @@ mod tests {
         for role in ["did_inception", "did_recovery_anchor", "bootstrap_binding"] {
             let envelope = serde_json::json!({
                 "refs": [{
-                    "event_id": "ak:event:01904100-0000-8000-8000-000000000001",
+                    "event_id": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                     "role": role,
                     "critical": true
                 }]
