@@ -307,10 +307,6 @@ pub(crate) const MODERATION_DECISION_LIFT_REQUIREMENTS: &[PayloadRequirement] = 
     ),
 ];
 pub(crate) const MODERATION_APPEAL_SUBMIT_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required(
-        "appeal_id",
-        "ak.moderation.appeal.submit requires appeal_id",
-    ),
     PayloadRequirement::Required("realm_id", "ak.moderation.appeal.submit requires realm_id"),
     PayloadRequirement::Required(
         "decision_ref",

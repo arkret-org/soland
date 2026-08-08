@@ -16,7 +16,8 @@
 //!   replacement decision issued in the same batch is a new dot on the same cell and coexists with
 //!   what survived (§2.6 last paragraph), so an add is never pre-tombstoned.
 //! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
-//!   (fsm, one cell per `payload.appeal_id`). Deterministic state machine (none) → submitted →
+//!   (fsm, one cell per appeal id). Submit derives that id by retyping its Event id; later events
+//!   carry `payload.appeal_id`. Deterministic state machine (none) → submitted →
 //!   under_review → decided → closed, with `close` also reachable from submitted / under_review
 //!   (appellant withdrawal or an authorized close service). content-moderation.md §5.5.
 //!
@@ -500,10 +501,33 @@ impl ProjectionState {
         operation: &Operation,
         target_state: &str,
     ) -> ProjectionEffect {
-        let Some(appeal_id) = payload_str(operation, "appeal_id") else {
-            return ProjectionEffect::Rejected {
-                reason: "moderation_appeal_id_missing".to_owned(),
+        let appeal_id = if target_state == "submitted" {
+            if operation.payload.get("appeal_id").is_some() {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_appeal_submit_id_must_be_event_derived".to_owned(),
+                };
+            }
+            let Some(appeal_id) = operation
+                .payload
+                .get("event_id")
+                .and_then(Value::as_str)
+                .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
+                .map(|event_id| {
+                    arkret_identifiers::TypedAppealId::from_event_id(&event_id).to_string()
+                })
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_appeal_submit_event_id_required".to_owned(),
+                };
             };
+            appeal_id
+        } else {
+            let Some(appeal_id) = payload_str(operation, "appeal_id") else {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_appeal_id_missing".to_owned(),
+                };
+            };
+            appeal_id
         };
         let realm_id = operation.realm_id.to_string();
         let Some(cell_ref) = Self::moderation_appeal_cell_ref(&appeal_id) else {
@@ -549,7 +573,9 @@ impl ProjectionState {
         }
 
         // Per-kind §5.5.2 constraints.
-        if let Err(reason) = self.check_moderation_appeal_constraints(operation, target_state) {
+        if let Err(reason) =
+            self.check_moderation_appeal_constraints(&appeal_id, operation, target_state)
+        {
             return ProjectionEffect::Rejected {
                 reason: reason.to_owned(),
             };
@@ -597,31 +623,31 @@ impl ProjectionState {
     /// canonical reason_code on violation.
     fn check_moderation_appeal_constraints(
         &self,
+        appeal_id: &str,
         operation: &Operation,
         target_state: &str,
     ) -> Result<(), &'static str> {
-        let appeal_id = payload_str(operation, "appeal_id").unwrap_or_default();
         match target_state {
             "submitted" => {
-                self.enforce_no_active_duplicate_appeal(&appeal_id, operation)?;
+                self.enforce_no_active_duplicate_appeal(appeal_id, operation)?;
                 Ok(())
             }
             // review: reviewer ≠ original decision issuer (separation of duties).
             "under_review" => {
-                self.enforce_appeal_separation_of_duties(&appeal_id, operation)?;
+                self.enforce_appeal_separation_of_duties(appeal_id, operation)?;
                 Ok(())
             }
             // decision: SoD + verdict-specific atomicity (overturn↔lift,
             // modify↔new decision).
             "decided" => {
-                self.enforce_appeal_separation_of_duties(&appeal_id, operation)?;
+                self.enforce_appeal_separation_of_duties(appeal_id, operation)?;
                 let verdict =
                     payload_str(operation, "verdict").ok_or("moderation_appeal_verdict_missing")?;
                 if !APPEAL_VERDICTS.contains(&verdict.as_str()) {
                     return Err("schema_violation");
                 }
                 // Resolve the appealed decision_ref from the submit-time cell.
-                let decision_ref = self.moderation_appeal_decision_ref(&appeal_id);
+                let decision_ref = self.moderation_appeal_decision_ref(appeal_id);
                 match verdict.as_str() {
                     "overturn" => {
                         let Some(decision_ref) = decision_ref else {

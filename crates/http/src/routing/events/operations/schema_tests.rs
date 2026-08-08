@@ -779,7 +779,6 @@ mod realm_plaintext_visible_services_schema_tests {
             (
                 arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
                 json!({
-                    "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
                     "decision_ref": "ak:event:01904100-0000-8000-8000-000000000903",
                     "target_ref": "ak:message:01904100-0000-8000-8000-000000000903",

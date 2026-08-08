@@ -30,8 +30,8 @@ pub trait ModerationStore: Send + Sync {
         Ok(None)
     }
 
-    /// Append an appeal event. `payload` MUST carry `appeal_id`,
-    /// `realm_id`, and the variant-specific fields (see
+    /// Append a projected appeal event. The projection record MUST carry the
+    /// event-derived `appeal_id`, `realm_id`, and the variant-specific fields (see
     /// the SDK `ModerationAppealPayload`). The store
     /// keeps an event log per appeal; the current FSM state is derived
     /// by replaying events.

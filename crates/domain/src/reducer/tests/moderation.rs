@@ -8,7 +8,8 @@ use super::*;
 
 const MOD_REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
 const MOD_DECISION_ID: &str = "ak:event:01904100-0000-8000-8000-0d0d0d0d0d01";
-const MOD_APPEAL_ID: &str = "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a01";
+const MOD_APPEAL_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+const MOD_APPEAL_ID: &str = "ak:appeal:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 const MOD_TARGET_REF: &str = "ak:message:01904100-0000-8000-8000-000000000777";
 const MOD_REQUEST_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -55,7 +56,7 @@ fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) 
         arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
         MOD_REALM,
         serde_json::json!({
-            "appeal_id": MOD_APPEAL_ID,
+            "event_id": MOD_APPEAL_EVENT_ID,
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
@@ -350,7 +351,7 @@ fn moderation_appeal_duplicate_active_rejected() {
         arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
         MOD_REALM,
         serde_json::json!({
-            "appeal_id": "ak:appeal:01904100-0000-7000-8000-0a0a0a0a0a02",
+            "event_id": "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1",
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
@@ -363,5 +364,30 @@ fn moderation_appeal_duplicate_active_rejected() {
         state.apply(&duplicate, &hlc),
         ProjectionEffect::Rejected { ref reason }
             if reason == "moderation_appeal_duplicate_active"
+    ));
+}
+
+#[test]
+fn moderation_appeal_submit_rejects_carried_appeal_id() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("did:web:test.soland");
+    let legacy = make_operation(
+        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+        MOD_REALM,
+        serde_json::json!({
+            "event_id": MOD_APPEAL_EVENT_ID,
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "decision_ref": MOD_DECISION_ID,
+            "target_ref": MOD_TARGET_REF,
+            "appellant": "did:web:appellant.example",
+            "reason_text_ref": "legacy appeal text",
+        }),
+    );
+
+    assert!(matches!(
+        state.apply(&legacy, &hlc),
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "moderation_appeal_submit_id_must_be_event_derived"
     ));
 }
