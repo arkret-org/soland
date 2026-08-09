@@ -1,9 +1,19 @@
 use async_trait::async_trait;
 
 use crate::{
-    CanonicalEventRecord, FederationOutboxRecord, IdempotencyRecord, PersistenceResult,
-    ProjectionEventRecord,
+    CanonicalEventRecord, ContactRecord, DevicePairingAuthorizationCommit, FederationOutboxRecord,
+    IdempotencyRecord, PersistenceResult, ProjectionEventRecord,
 };
+
+/// One Contact projection mutation committed with its canonical Event and
+/// federation intent. `expected_updated_at=None` is an insert-only slot;
+/// `Some` is a whole-row CAS against the revision read by admission.
+#[derive(Clone, Debug)]
+pub struct ContactProjectionCommit {
+    pub record: ContactRecord,
+    pub expected_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub conflict_code: String,
+}
 
 /// All durable writes produced by accepting one canonical event.
 ///
@@ -13,6 +23,10 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
+    /// Optional staged device-pairing CAS consumed in the same durable
+    /// boundary as the canonical Event and its reducer projection.
+    pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
+    pub contact_projection: Option<ContactProjectionCommit>,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
     /// The Event proof itself is the proposal authority because this is an
     /// authority-authored Control Move in a self-principal PCR. Such a Move
@@ -42,7 +56,6 @@ pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event
             .seal_basis
             .as_ref()
             .is_none_or(|basis| basis.leaves.is_empty())
-        || event.realm_id != arkret_identifiers::principal_control_realm_id(event.actor_id.as_str())
         || event.proofs.len() != 1
     {
         return false;

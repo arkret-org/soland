@@ -3,6 +3,11 @@ use std::sync::Arc;
 
 use arkret_identifiers::{BlobRef, Did, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::contact_operations::{
+    ContactBasisEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
+    RequestAcceptanceReceipt,
+};
+use arkret_models_collaboration::governance::agent_artifacts::PublicKey;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
@@ -68,6 +73,10 @@ pub struct ContactRecord {
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<String>,
+    pub request_receipts: Vec<RequestAcceptanceReceipt>,
+    pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
+    pub basis_evidence: Option<ContactBasisEvidenceBundle>,
+    pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
@@ -207,13 +216,6 @@ impl DirectConversationBindings {
 
 use crate::ServiceResult;
 
-/// Resolve the private control Realm used by identity-scoped application
-/// workflows without exposing the domain crate to transport or composition
-/// layers.
-pub fn principal_control_realm_for_did(principal_did: &str) -> String {
-    soland_domain::identity::principal_control_realm_for_did(principal_did)
-}
-
 fn lifecycle_status_from_wire(value: &str) -> AccountStatus {
     match value {
         "erased" => AccountStatus::ErasurePending,
@@ -346,6 +348,11 @@ pub trait ContactPort: Send + Sync {
     ) -> ServiceResult<Option<ContactRecord>>;
     async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>>;
     async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()>;
+    async fn save_contact_if_updated_at(
+        &self,
+        expected_updated_at: DateTime<Utc>,
+        contact: ContactRecord,
+    ) -> ServiceResult<bool>;
 }
 
 #[async_trait]
@@ -415,6 +422,16 @@ impl ContactService {
 
     pub async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()> {
         self.contacts.save_contact(contact).await
+    }
+
+    pub async fn save_contact_if_updated_at(
+        &self,
+        expected_updated_at: DateTime<Utc>,
+        contact: ContactRecord,
+    ) -> ServiceResult<bool> {
+        self.contacts
+            .save_contact_if_updated_at(expected_updated_at, contact)
+            .await
     }
 
     pub async fn save_invite_policy(
@@ -1282,8 +1299,9 @@ pub trait DevicePairingPort: Send + Sync {
         &self,
         device_pairing_request_id: &str,
         pairing_code: &str,
-        new_device_pubkey: Value,
-        device: SaveDeviceCommand,
+        new_device_pubkey: PublicKey,
+        device_id: &str,
+        authorized_by_actor_id: &str,
         authorized_event_ref: &str,
         changed_at: DateTime<Utc>,
     ) -> ServiceResult<bool>;
@@ -1319,8 +1337,9 @@ impl DevicePairingService {
         &self,
         device_pairing_request_id: &str,
         pairing_code: &str,
-        new_device_pubkey: Value,
-        device: SaveDeviceCommand,
+        new_device_pubkey: PublicKey,
+        device_id: &str,
+        authorized_by_actor_id: &str,
         authorized_event_ref: &str,
         changed_at: DateTime<Utc>,
     ) -> ServiceResult<bool> {
@@ -1329,7 +1348,8 @@ impl DevicePairingService {
                 device_pairing_request_id,
                 pairing_code,
                 new_device_pubkey,
-                device,
+                device_id,
+                authorized_by_actor_id,
                 authorized_event_ref,
                 changed_at,
             )

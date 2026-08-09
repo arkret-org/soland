@@ -55,7 +55,7 @@ pub struct SolandMemoryPersistenceStore {
     account_lifecycle: MemoryAccountLifecycleStore,
     sessions: MemorySessionStore,
     account_data: MemoryAccountDataStore,
-    contacts: MemoryContactStore,
+    pub(crate) contacts: MemoryContactStore,
     invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
     consent_cells: MemoryConsentCellStore,
@@ -64,7 +64,7 @@ pub struct SolandMemoryPersistenceStore {
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
-    device_pairings: MemoryDevicePairingStore,
+    pub(crate) device_pairings: MemoryDevicePairingStore,
     pub(crate) federation_outbox: MemoryFederationOutboxStore,
     federation_frontier_exchange: MemoryFederationFrontierExchangeStore,
     handle_releases: MemoryHandleReleaseStore,
@@ -357,6 +357,12 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
         &self,
         commit: DevicePairingAuthorizationCommit,
     ) -> soland_storage::PersistenceResult<bool> {
+        let commit_new_device_pubkey =
+            serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "cannot encode device pairing authorization public key: {error}"
+                ))
+            })?;
         let mut pairings = self.device_pairings.data.lock();
         let Some(pairing) = pairings.get_mut(&commit.device_pairing_request_id) else {
             return Ok(false);
@@ -364,20 +370,13 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
         if pairing.state != "pending_authorization"
             || pairing.expires_at <= commit.changed_at
             || pairing.pairing_code != commit.pairing_code
-            || pairing.new_device_pubkey != commit.new_device_pubkey
-            || commit.device.actor != commit.authorized_by_actor_id
+            || pairing.new_device_pubkey != commit_new_device_pubkey
         {
             return Ok(false);
         }
 
-        let devices = self.devices.shared_data();
-        let mut devices = devices.lock();
-        devices.insert(
-            (commit.device.actor.clone(), commit.device.device_id.clone()),
-            commit.device.clone(),
-        );
         pairing.state = "authorized".to_owned();
-        pairing.device_id = Some(commit.device.device_id);
+        pairing.device_id = Some(commit.device_id);
         pairing.authorized_by_actor_id = Some(commit.authorized_by_actor_id);
         pairing.authorized_event_ref = Some(commit.authorized_event_ref);
         Ok(true)
@@ -599,7 +598,7 @@ impl PersistenceStore for SolandMemoryPersistenceStore {}
 
 #[cfg(test)]
 mod device_pairing_commit_tests {
-    use soland_storage::{DeviceInventoryRecord, DevicePairingRecord};
+    use soland_storage::DevicePairingRecord;
 
     use super::*;
 
@@ -608,18 +607,22 @@ mod device_pairing_commit_tests {
         let store = SolandMemoryPersistenceStore::new();
         let now = chrono::Utc::now();
         let request_id = "device_pairing_request:01964137-0000-7000-8000-0000000000c1".to_owned();
-        let public_key = serde_json::json!({
+        let public_key_value = serde_json::json!({
             "algorithm": "Ed25519",
             "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
             "kid": "ak:device:01964137-0000-7000-8000-0000000000b2",
             "kty": "OKP"
         });
+        let public_key = serde_json::from_value::<
+            arkret_models_collaboration::governance::agent_artifacts::PublicKey,
+        >(public_key_value.clone())
+        .unwrap();
         store
             .device_pairings
             .put(DevicePairingRecord::new(
                 request_id.clone(),
                 "7H2K9M4Q".to_owned(),
-                public_key.clone(),
+                public_key_value,
                 "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
                 "https://account.example".to_owned(),
                 "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
@@ -632,22 +635,14 @@ mod device_pairing_commit_tests {
             .await
             .unwrap();
 
-        let device = DeviceInventoryRecord {
-            actor: "did:web:example.com:alice".to_owned(),
-            device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
-            display_name: None,
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({"authorized": true}),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        };
+        let actor = "did:web:example.com:alice";
+        let device_id = "ak:device:01964137-0000-7000-8000-0000000000b2";
         let commit = |pairing_code: &str| DevicePairingAuthorizationCommit {
             device_pairing_request_id: request_id.clone(),
             pairing_code: pairing_code.to_owned(),
             new_device_pubkey: public_key.clone(),
-            device: device.clone(),
-            authorized_by_actor_id: device.actor.clone(),
+            device_id: device_id.to_owned(),
+            authorized_by_actor_id: actor.to_owned(),
             authorized_event_ref: "ak:event:AQUeFABQK9MQb8JmkZyP7wD2QfYOSDaCH1LDepfyMD-G"
                 .to_owned(),
             changed_at: now,
@@ -659,28 +654,14 @@ mod device_pairing_commit_tests {
                 .await
                 .unwrap()
         );
-        assert!(
-            store
-                .devices
-                .get(&device.actor, &device.device_id)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(store.devices.get(actor, device_id).await.unwrap().is_none());
         assert!(
             store
                 .commit_device_pairing_authorization(commit("7H2K9M4Q"))
                 .await
                 .unwrap()
         );
-        assert!(
-            store
-                .devices
-                .get(&device.actor, &device.device_id)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(store.devices.get(actor, device_id).await.unwrap().is_none());
         let pairing = store
             .device_pairings
             .get_by_request_id(&request_id)
@@ -688,9 +669,6 @@ mod device_pairing_commit_tests {
             .unwrap()
             .unwrap();
         assert_eq!(pairing.state, "authorized");
-        assert_eq!(
-            pairing.device_id.as_deref(),
-            Some(device.device_id.as_str())
-        );
+        assert_eq!(pairing.device_id.as_deref(), Some(device_id));
     }
 }

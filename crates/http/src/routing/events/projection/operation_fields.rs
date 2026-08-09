@@ -81,20 +81,48 @@ pub(super) fn operation_realm_history_visibility(operation: &Operation) -> Optio
         .or_else(|| patch_string_field(operation, "history_visibility"))
 }
 
-/// Effective history sharing policy declared by an accepted
-/// `ak.realm.history_sharing_policy` Event.
+/// Effective history sharing policy declared by an accepted facet Event or
+/// fixed by a constrained Realm profile at create time.
 ///
 /// The policy is a mutable facet cell, never a create-locked property of the
 /// closed `realm.schema.json`; the old `payload.object.history_sharing_policy`
-/// branch read a field no schema branch accepts. A Principal Control Realm
-/// publishes no such Event at all — its effective baseline is fixed by
-/// `ak.profile.principal_control_realm.v1` (`models/realm-and-space.md` §2.8.1,
-/// `governance/history-visibility.md` §3).
+/// branch read a field no schema branch accepts. Principal Control and Direct
+/// Conversation Realms publish no such Event at all; their profile baseline is
+/// therefore projected as the effective value of the create-locked role.
 pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
-    (kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_wire::EventKind::RealmHistorySharingPolicy))
-    .then(|| operation.payload.get("value").cloned())
-    .flatten()
+    match kinds::canonical_kind_for_operation(operation) {
+        Some(arkret_wire::EventKind::RealmHistorySharingPolicy) => {
+            operation.payload.get("value").cloned()
+        }
+        Some(arkret_wire::EventKind::RealmCreate) => {
+            let object = operation.payload.get("object")?;
+            if arkret_models_collaboration::objects::realm::realm_object_is_principal_control(
+                object,
+            ) {
+                arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
+                    .ok()
+                    .and_then(|policy| serde_json::to_value(policy).ok())
+            } else if object.get("purpose").and_then(Value::as_str) == Some("direct_conversation")
+                && object
+                    .get("schema_refs")
+                    .and_then(Value::as_array)
+                    .is_some_and(|refs| {
+                        refs.iter().any(|profile| {
+                            profile.as_str()
+                                == Some(arkret_wire::ProfileId::DIRECT_CONVERSATION_REALM_V1)
+                        })
+                    })
+            {
+                arkret_policy::history_visibility::direct_conversation_realm_history_sharing_policy(
+                )
+                .ok()
+                .and_then(|policy| serde_json::to_value(policy).ok())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {

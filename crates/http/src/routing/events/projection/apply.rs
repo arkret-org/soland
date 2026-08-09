@@ -1106,7 +1106,10 @@ mod tests {
             soland_storage_postgres::Db { pool: None },
         );
         let actor = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
-        let realm_id = arkret_wire::principal_control_realm_id(actor.as_str());
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x32; 32],
+        ));
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-09T02:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);

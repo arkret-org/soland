@@ -58,7 +58,9 @@ pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id = soland_services::identity::principal_control_realm_for_did(&session.actor);
+    let realm_id =
+        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?
+            .into_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,

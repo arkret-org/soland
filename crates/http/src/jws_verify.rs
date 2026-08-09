@@ -1005,7 +1005,8 @@ pub async fn federated_device_signing_key_evidence(
     }
 
     let control_realm =
-        soland_services::identity::principal_control_realm_for_did(actor_id.as_str());
+        crate::routing::identity::principal_control_realm_for_actor(state, actor_id.as_str())
+            .map_err(|error| error.to_string())?;
     let mut realm_records = state
         .event_queries()
         .canonical_events()
@@ -1014,7 +1015,7 @@ pub async fn federated_device_signing_key_evidence(
     realm_records.retain(|record| record.realm_id.as_deref() == Some(control_realm.as_str()));
     let mut records = state
         .event_queries()
-        .canonical_events_for_realm_actor(&control_realm, actor_id.as_str())
+        .canonical_events_for_realm_actor(control_realm.as_str(), actor_id.as_str())
         .await
         .map_err(|error| format!("PCR history lookup failed: {error}"))?;
     records.sort_by(|a, b| {
@@ -1076,12 +1077,11 @@ pub async fn federated_device_signing_key_evidence(
         .into_iter()
         .find(|receipt| {
             receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                scope.principal_id == *actor_id && scope.realm_id.as_str() == control_realm
+                scope.principal_id == *actor_id && scope.realm_id == control_realm
             })
         })
         .ok_or_else(|| "PCR genesis receipt is unavailable".to_owned())?;
-    let realm_id = arkret_identifiers::RealmId::new(control_realm)
-        .map_err(|error| format!("PCR Realm id is invalid: {error}"))?;
+    let realm_id = control_realm;
     let chain_digests = authorization_chain
         .iter()
         .map(|event| event.event_digest().map_err(|error| error.to_string()))

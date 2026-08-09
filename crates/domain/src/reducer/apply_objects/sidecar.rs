@@ -7,10 +7,7 @@ use super::*;
 
 fn event_derived_sidecar_id(event_ref: &str) -> Option<String> {
     let event_id = arkret_identifiers::EventId::new(event_ref.to_owned()).ok()?;
-    let uuid = event_id.as_str().strip_prefix("ak:event:")?;
-    arkret_identifiers::SidecarId::new(format!("ak:sidecar:{uuid}"))
-        .ok()
-        .map(|id| id.to_string())
+    Some(arkret_identifiers::SidecarId::from_event_id(&event_id).into_string())
 }
 
 fn context_key(context_ref: &SidecarContextRef) -> String {

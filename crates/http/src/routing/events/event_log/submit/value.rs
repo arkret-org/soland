@@ -239,6 +239,11 @@ pub(in crate::routing) async fn submit_event_value(
         None,
         None,
         None,
+        None,
+        false,
+        None,
+        &[],
+        None,
     )
     .await
 }
@@ -279,6 +284,70 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        state,
+        session,
+        submission,
+        None,
+        false,
+        None,
+        Vec::new(),
+        None,
+    )
+    .await
+}
+
+pub(in crate::routing) async fn submit_initial_event_submission_with_device_pairing(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    device_pairing_authorization: Option<soland_services::events::CommitDevicePairingAuthorization>,
+    device_pairing_gate_verified: bool,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        state,
+        session,
+        submission,
+        device_pairing_authorization,
+        device_pairing_gate_verified,
+        None,
+        Vec::new(),
+        None,
+    )
+    .await
+}
+
+pub(in crate::routing) async fn submit_initial_event_submission_with_contact_projection(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    contact_projection: soland_services::events::CommitContactProjection,
+    deliveries: Vec<soland_services::events::FederationDelivery>,
+    idempotency: soland_services::events::IdempotentResponse,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submit_initial_event_submission_with_commit_extensions(
+        state,
+        session,
+        submission,
+        None,
+        false,
+        Some(contact_projection),
+        deliveries,
+        Some(idempotency),
+    )
+    .await
+}
+
+async fn submit_initial_event_submission_with_commit_extensions(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    device_pairing_authorization: Option<soland_services::events::CommitDevicePairingAuthorization>,
+    device_pairing_gate_verified: bool,
+    contact_projection: Option<soland_services::events::CommitContactProjection>,
+    additional_deliveries: Vec<soland_services::events::FederationDelivery>,
+    additional_idempotency: Option<soland_services::events::IdempotentResponse>,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let submit_context = if submission.event.kind == arkret_wire::EventKind::RealmCreate {
         arkret_wire::EventSubmitContext::AnchorUnit
     } else {
@@ -301,6 +370,17 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
+        if device_pairing_authorization.is_some()
+            || contact_projection.is_some()
+            || !additional_deliveries.is_empty()
+            || additional_idempotency.is_some()
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "Event commit extensions cannot accompany Realm genesis",
+            ));
+        }
         return submit_ordinary_realm_genesis(
             state,
             session,
@@ -327,6 +407,11 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         authorization_lease.as_ref(),
         control_proposal_ack.as_ref(),
         membership_compensation_evidence.as_ref(),
+        device_pairing_authorization.as_ref(),
+        device_pairing_gate_verified,
+        contact_projection.as_ref(),
+        &additional_deliveries,
+        additional_idempotency.as_ref(),
     )
     .await
 }
@@ -349,6 +434,11 @@ pub(in crate::routing) async fn submit_mimi_event_value(
         Some(&admission),
         None,
         None,
+        None,
+        None,
+        false,
+        None,
+        &[],
         None,
     )
     .await
@@ -385,6 +475,11 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         None,
         None,
         None,
+        None,
+        false,
+        None,
+        &[],
+        None,
     )
     .await
 }
@@ -412,6 +507,11 @@ pub(in crate::routing) async fn submit_moderation_report_event_value(
         Some(&admission),
         None,
         None,
+        None,
+        None,
+        false,
+        None,
+        &[],
         None,
     )
     .await
@@ -445,6 +545,11 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         None,
         None,
         None,
+        None,
+        None,
+        false,
+        None,
+        &[],
         None,
     )
     .await
@@ -606,9 +711,6 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
     {
         return Some("event has no non-empty Seal basis");
     }
-    if event.realm_id != arkret_identifiers::principal_control_realm_id(event.actor_id.as_str()) {
-        return Some("event Realm is not the actor's deterministic PCR");
-    }
     if event.proofs.len() != 1 {
         return Some("event does not carry exactly one proof");
     }
@@ -634,10 +736,14 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
         return Ok(Some(reason));
     }
+    let snapshot = state.projections().snapshot();
+    if snapshot.principal_control_realm_for_actor(event.actor_id.as_str())
+        != Some(event.realm_id.as_str())
+    {
+        return Ok(Some("event Realm is not the actor's accepted PCR"));
+    }
     debug_assert!(soland_storage::has_self_principal_pcr_device_authorized_shape(event));
-    let principal_control_profile_declared = state
-        .projections()
-        .snapshot()
+    let principal_control_profile_declared = snapshot
         .realm_schema_refs(event.realm_id.as_str())
         .iter()
         .any(|profile| profile == arkret_wire::ProfileId::PRINCIPAL_CONTROL_REALM_V1);
@@ -760,7 +866,38 @@ pub(super) async fn submit_event_value_with_context(
     membership_compensation_evidence: Option<
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
+    device_pairing_authorization: Option<
+        &soland_services::events::CommitDevicePairingAuthorization,
+    >,
+    device_pairing_gate_verified: bool,
+    contact_projection: Option<&soland_services::events::CommitContactProjection>,
+    additional_deliveries: &[soland_services::events::FederationDelivery],
+    additional_idempotency: Option<&soland_services::events::IdempotentResponse>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    if event_string_field_from_value(&envelope, "kind").as_deref()
+        == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
+    {
+        let binding_kind = envelope
+            .get("payload")
+            .and_then(|payload| payload.get("authorization_binding_kind"))
+            .and_then(Value::as_str);
+        if binding_kind == Some("accepted_device") && !device_pairing_gate_verified {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "accepted-device authorization requires the atomic pair_device admission gate",
+            ));
+        }
+        if (device_pairing_authorization.is_some() || device_pairing_gate_verified)
+            && binding_kind != Some("accepted_device")
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "device pairing admission requires accepted_device authorization binding",
+            ));
+        }
+    }
     let managed_agent_pcr_genesis =
         batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope));
     if managed_agent_pcr_genesis && submitted_control_proposal_ack.is_none() {
@@ -1859,7 +1996,7 @@ pub(super) async fn submit_event_value_with_context(
     // Built before the commit and committed with it. Failing to construct the
     // delivery intent rejects the admission rather than accepting an Event this
     // service can never route (`sync/federation.md` §4.1).
-    let outbox = if session.token_hash.starts_with("federation:") {
+    let mut outbox = if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
         peer_event_fanout_records(
@@ -1881,6 +2018,7 @@ pub(super) async fn submit_event_value_with_context(
             )
         })?
     };
+    outbox.extend_from_slice(additional_deliveries);
     let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -1953,7 +2091,16 @@ pub(super) async fn submit_event_value_with_context(
             .control_proposal_acks
             .push(ack.clone());
     }
+    if commit_idempotency.is_some() && additional_idempotency.is_some() {
+        return Err(SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Event commit cannot carry two idempotency outcomes",
+        ));
+    }
     let command = soland_services::events::CommitAcceptedEventCommand {
+        device_pairing_authorization: device_pairing_authorization.cloned(),
+        contact_projection: contact_projection.cloned(),
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
             actor_id: parsed.actor_id.clone(),
@@ -1982,19 +2129,21 @@ pub(super) async fn submit_event_value_with_context(
                 received_at: event.received_at,
             })
             .collect(),
-        idempotency: commit_idempotency.map(|record| {
-            let created_at = now();
-            soland_services::events::IdempotentResponse {
-                principal_id: record.principal_id,
-                key: record.key,
-                service_id: record.service_id,
-                request_hash: record.request_hash,
-                status: StatusCode::OK.as_u16() as i32,
-                body: serde_json::to_value(&accepted_response.outcome)
-                    .unwrap_or_else(|_| json!({"status": "accepted"})),
-                created_at,
-                expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
-            }
+        idempotency: additional_idempotency.cloned().or_else(|| {
+            commit_idempotency.map(|record| {
+                let created_at = now();
+                soland_services::events::IdempotentResponse {
+                    principal_id: record.principal_id,
+                    key: record.key,
+                    service_id: record.service_id,
+                    request_hash: record.request_hash,
+                    status: StatusCode::OK.as_u16() as i32,
+                    body: serde_json::to_value(&accepted_response.outcome)
+                        .unwrap_or_else(|_| json!({"status": "accepted"})),
+                    created_at,
+                    expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
+                }
+            })
         }),
         deliveries: outbox,
     };
@@ -2056,6 +2205,27 @@ pub(super) async fn submit_event_value_with_context(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
                     message,
+                ));
+            }
+            if message.contains("device_pairing_not_found") {
+                return Err(SubmitOneError::new(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "device pairing request not found",
+                ));
+            }
+            if message.contains("contact_basis_conflict") {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "contact_basis_conflict",
+                    "Contact basis changed concurrently",
+                ));
+            }
+            if message.contains("contact_lineage_conflict") {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "contact_lineage_conflict",
+                    "Contact lineage changed concurrently",
                 ));
             }
             if message.contains("duplicate") {

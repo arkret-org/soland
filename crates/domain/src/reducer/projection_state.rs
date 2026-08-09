@@ -1526,4 +1526,22 @@ impl ProjectionState {
                 .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
         })
     }
+
+    /// Resolve the accepted principal-control Realm owned by `principal_id`.
+    ///
+    /// PCR addresses are Event-derived, so callers must discover the address
+    /// from accepted Realm state instead of recomputing it from the DID. More
+    /// than one match is an invariant violation and deliberately resolves to
+    /// `None` so authorization paths fail closed.
+    pub fn principal_control_realm_for_actor(&self, principal_id: &str) -> Option<&str> {
+        let mut matches = self.realm_states.values().filter(|realm| {
+            realm.owner.as_deref() == Some(principal_id)
+                && realm
+                    .active_profiles
+                    .iter()
+                    .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
+        });
+        let realm_id = matches.next()?.realm_id.as_str();
+        matches.next().is_none().then_some(realm_id)
+    }
 }

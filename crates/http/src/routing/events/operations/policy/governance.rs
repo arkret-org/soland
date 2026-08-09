@@ -35,6 +35,14 @@ pub(super) fn validate_direct_conversation_realm_policy(
     if operation_is_space_container(operation) {
         return Err("direct_conversation_space_forbidden");
     }
+    if kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_wire::EventKind::RealmHistorySharingPolicy)
+    {
+        // The effective value is fixed by the Direct Conversation profile;
+        // neither the founding unit nor participant/repair authority may
+        // publish a mutable policy cell for this Realm role.
+        return Err("capability_denied");
+    }
     Ok(())
 }
 
@@ -57,6 +65,9 @@ pub(super) async fn validate_member_state_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::MemberState) {
+        return Ok(());
+    }
+    if validate_direct_conversation_rejoin_authority(state, operation).await? {
         return Ok(());
     }
     if let Some(reason) = direct_conversation_member_state_guard(state, operation) {
@@ -162,6 +173,94 @@ pub(super) async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+/// A stable Direct Conversation repairs a departed participant in place.  The
+/// immutable binding remains authoritative while the ordinary "active"
+/// binding projection is suspended, so this path must not fall back to Realm
+/// owner/admin or treat the repair as another bootstrap join.
+async fn validate_direct_conversation_rejoin_authority(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<bool, &'static str> {
+    let repair_presented = operation.context.authorization_ref.as_deref()
+        == Some("ak.authority.direct_conversation_repair.v1");
+    let is_direct = is_direct_conversation_realm(state, operation.realm_id.as_str());
+    let is_join = operation.payload.get("membership").and_then(Value::as_str) == Some("join");
+    if repair_presented && (!is_direct || !is_join) {
+        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED);
+    }
+    if !is_direct || !is_join {
+        return Ok(false);
+    }
+    let Some(binding) = state
+        .contacts()
+        .settled_direct_binding_for_realm(operation.realm_id.as_str())
+    else {
+        // The exact three-Event founding unit has no durable binding yet and is
+        // governed by its bootstrap admission branch, not repair authority.
+        return if repair_presented {
+            Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED)
+        } else {
+            Ok(false)
+        };
+    };
+    let denied = arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED;
+    let target = membership_target(operation).ok_or(denied)?;
+    if binding.participants_unordered.len() != 2
+        || !binding
+            .participants_unordered
+            .iter()
+            .any(|participant| participant == target)
+        || realm_member_is_joined(state, operation.realm_id.as_str(), target).await
+        || operation.context.authorization_ref.as_deref()
+            != Some("ak.authority.direct_conversation_repair.v1")
+    {
+        return Err(denied);
+    }
+    let binding_refs = operation
+        .refs
+        .iter()
+        .filter(|event_ref| event_ref.role == "direct_conversation_binding")
+        .collect::<Vec<_>>();
+    if binding_refs.len() != 1
+        || !binding_refs[0].critical
+        || binding_refs[0].id != binding.binding_event_ref
+    {
+        return Err(denied);
+    }
+
+    let actor = operation.context.sender.as_str();
+    if let Some(agent) = state.agent_pairings().agent(target).await.ok().flatten() {
+        // Agent repair is controller-authored.  Agent self-authorship and a
+        // human self branch cannot both satisfy the closed XOR.
+        if actor == target
+            || agent.controller_id != actor
+            || agent.state != AgentLifecycleState::Active
+        {
+            return Err(denied);
+        }
+    } else if actor != target {
+        return Err(denied);
+    }
+
+    let peer = binding
+        .participants_unordered
+        .iter()
+        .find(|participant| participant.as_str() != target)
+        .ok_or(denied)?;
+    let contact = crate::routing::identity::account::accepted_contact_for_pair(
+        state,
+        target,
+        peer,
+        "direct_message",
+    )
+    .await
+    .map_err(|_| denied)?;
+    if contact.is_none() {
+        return Err(denied);
+    }
+    Ok(true)
 }
 
 async fn native_agent_controlled_by_record(
@@ -676,8 +775,9 @@ pub(super) fn direct_conversation_member_state_guard(
     // any `ak.direct_conversation.bound` exists, and §6.2 already pins the
     // membership shape for that unit. The bootstrap join is admitted on that
     // reason alone; anything else that adds a member without a binding is not.
-    let Some(binding) =
-        active_direct_conversation_binding_for_realm(state, operation.realm_id.as_str())
+    let Some(binding) = state
+        .contacts()
+        .settled_direct_binding_for_realm(operation.realm_id.as_str())
     else {
         if membership == "join"
             && operation.payload.get("reason").and_then(Value::as_str)
@@ -706,7 +806,10 @@ pub(super) fn direct_conversation_member_state_guard(
     }
 }
 
-pub(super) fn is_direct_conversation_realm(state: &AppState, realm_id: &str) -> bool {
+pub(in crate::routing::events::operations) fn is_direct_conversation_realm(
+    state: &AppState,
+    realm_id: &str,
+) -> bool {
     state
         .projections()
         .snapshot()

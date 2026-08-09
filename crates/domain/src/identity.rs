@@ -1,5 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_models_collaboration::contact_operations::{
+    ContactBasisEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
+    RequestAcceptanceReceipt,
+};
 use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,35 +43,14 @@ pub struct ContactRecord {
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<String>,
+    pub request_receipts: Vec<RequestAcceptanceReceipt>,
+    pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
+    pub basis_evidence: Option<ContactBasisEvidenceBundle>,
+    pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
     pub peer_service_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// Returns the deterministic principal-control Realm identifier for a DID.
-pub fn principal_control_realm_for_did(principal_did: &str) -> String {
-    arkret_identifiers::principal_control_realm_id(principal_did).to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn principal_control_realm_is_stable_and_did_scoped() {
-        let alice = principal_control_realm_for_did("did:web:alice.example");
-        assert_eq!(
-            alice,
-            principal_control_realm_for_did("did:web:alice.example")
-        );
-        assert_ne!(
-            alice,
-            principal_control_realm_for_did("did:web:bob.example")
-        );
-        assert!(alice.starts_with("ak:realm:"));
-        assert_eq!(alice.len(), "ak:realm:".len() + 44);
-    }
 }

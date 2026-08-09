@@ -129,6 +129,71 @@ fn stage_projection_event(
     Ok(true)
 }
 
+fn stage_device_pairing_authorization(
+    staged: &mut std::collections::BTreeMap<String, soland_storage::DevicePairingRecord>,
+    event_id: &str,
+    commit: Option<&soland_storage::DevicePairingAuthorizationCommit>,
+) -> PersistenceResult<()> {
+    let Some(commit) = commit else {
+        return Ok(());
+    };
+    if commit.authorized_event_ref != event_id {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: device pairing authorization does not bind committed Event"
+                .to_owned(),
+        ));
+    }
+    let commit_new_device_pubkey =
+        serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "cannot encode device pairing authorization public key: {error}"
+            ))
+        })?;
+    let pairing = staged
+        .get_mut(&commit.device_pairing_request_id)
+        .ok_or_else(|| PersistenceError::Conflict("device_pairing_not_found".to_owned()))?;
+    if pairing.state != "pending_authorization"
+        || pairing.expires_at <= commit.changed_at
+        || pairing.pairing_code != commit.pairing_code
+        || pairing.new_device_pubkey != commit_new_device_pubkey
+    {
+        return Err(PersistenceError::Conflict(
+            "device_pairing_not_found".to_owned(),
+        ));
+    }
+    pairing.state = "authorized".to_owned();
+    pairing.device_id = Some(commit.device_id.clone());
+    pairing.authorized_by_actor_id = Some(commit.authorized_by_actor_id.clone());
+    pairing.authorized_event_ref = Some(commit.authorized_event_ref.clone());
+    Ok(())
+}
+
+fn stage_contact_projection(
+    staged: &mut std::collections::BTreeMap<
+        soland_storage::ContactKey,
+        soland_storage::ContactRecord,
+    >,
+    commit: Option<&soland_storage::ContactProjectionCommit>,
+) -> PersistenceResult<()> {
+    let Some(commit) = commit else {
+        return Ok(());
+    };
+    let key = (
+        commit.record.requester.clone(),
+        commit.record.target.clone(),
+    );
+    match (staged.get(&key), commit.expected_updated_at) {
+        (None, None) => {}
+        (Some(current), Some(expected))
+            if current.updated_at == expected && commit.record.updated_at > expected => {}
+        _ => {
+            return Err(PersistenceError::Conflict(commit.conflict_code.clone()));
+        }
+    }
+    staged.insert(key, commit.record.clone());
+    Ok(())
+}
+
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
     async fn commit_event(
@@ -146,12 +211,23 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut idempotency = self.idempotency_keys.data.lock();
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
+        let mut pairings = self.device_pairings.data.lock();
+        let mut contacts = self.contacts.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
+        let mut staged_pairings = pairings.clone();
+        let mut staged_contacts = contacts.clone();
+
+        stage_device_pairing_authorization(
+            &mut staged_pairings,
+            &request.event.event_id,
+            request.device_pairing_authorization.as_ref(),
+        )?;
+        stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
 
         ids::validated_event_identity_parts(
             &request.event.event_id,
@@ -199,6 +275,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     "event_hash_collision".to_owned(),
                 ));
             }
+            *pairings = staged_pairings;
             return Ok(EventCommitOutcome {
                 event_inserted: false,
                 projections_inserted: 0,
@@ -272,6 +349,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;
+        *pairings = staged_pairings;
+        *contacts = staged_contacts;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -305,6 +384,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
+        let mut pairings = self.device_pairings.data.lock();
+        let mut contacts = self.contacts.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -313,11 +394,18 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_outbox = outbox.clone();
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_applets = applets.clone();
+        let mut staged_pairings = pairings.clone();
+        let mut staged_contacts = contacts.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
 
         for event_request in request.events {
+            stage_device_pairing_authorization(
+                &mut staged_pairings,
+                &event_request.event.event_id,
+                event_request.device_pairing_authorization.as_ref(),
+            )?;
             ids::validated_event_identity_parts(
                 &event_request.event.event_id,
                 &event_request.event.canonical_digest,
@@ -386,6 +474,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             )?;
             stage_control_proposal_ack(&mut staged_control_proposal_acks, &event_request)?;
             let event_id = event_request.event.event_id.clone();
+            stage_contact_projection(
+                &mut staged_contacts,
+                event_request.contact_projection.as_ref(),
+            )?;
             stage_canonical_event(&mut staged_events, event_request.event)?;
             event_inserted = true;
 
@@ -473,6 +565,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *outbox = staged_outbox;
         *event_outbox_ids = staged_event_outbox_ids;
         *applets = staged_applets;
+        *pairings = staged_pairings;
+        *contacts = staged_contacts;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
@@ -535,6 +629,8 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            device_pairing_authorization: None,
+            contact_projection: None,
             event: CanonicalEventRecord {
                 event_id: event_id.clone(),
                 actor_id: actor_id.to_owned(),
@@ -557,7 +653,11 @@ mod tests {
 
     fn self_principal_pcr_control_request() -> EventCommitRequest {
         let actor_id = "did:web:alice.example";
-        let realm_id = arkret_wire::principal_control_realm_id(actor_id).to_string();
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x31; 32],
+        ))
+        .into_string();
         let created_at = Utc::now();
         let mut event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::ContactRequested.as_str(),
@@ -595,6 +695,8 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            device_pairing_authorization: None,
+            contact_projection: None,
             event: CanonicalEventRecord {
                 event_id,
                 actor_id: actor_id.to_owned(),

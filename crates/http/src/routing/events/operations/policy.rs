@@ -13,6 +13,7 @@ pub(crate) use agent_participation::{
     agent_participation_ceiling_record, validate_agent_participation_ceiling,
     validate_agent_reply_participation,
 };
+pub(super) use governance::is_direct_conversation_realm;
 use governance::*;
 #[cfg(test)]
 pub(crate) async fn validate_member_state_policy_for_test(
@@ -60,7 +61,12 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
 }
 
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
-    if message == "agent_pcr_recovery_not_ready" {
+    if message == arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED {
+        (
+            salvo::http::StatusCode::CONFLICT,
+            arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED,
+        )
+    } else if message == "agent_pcr_recovery_not_ready" {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
@@ -207,7 +213,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
         }
-        validate_principal_control_realm_binding(operation)?;
+        validate_principal_control_realm_binding(state, operation)?;
         message_rules::validate_managed_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;
         crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
@@ -223,6 +229,10 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;
+        crate::routing::identity::account::validate_direct_mls_generation_operation(
+            state, operation,
+        )
+        .await?;
         crate::routing::identity::account::validate_direct_binding_operation(state, operation)
             .await?;
         validate_circle_create_policy(state, operation).await?;

@@ -73,6 +73,7 @@ pub trait EventStore: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
+        account_slot: Option<IdentityAnchorAccountSlot>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
@@ -133,6 +134,16 @@ pub struct RealmEventStats {
 pub struct IdentityAnchorFrontierCas {
     pub realm_id: String,
     pub raw_leaves: Vec<String>,
+}
+
+/// Durable account-scoped create-once slot for a principal-control Realm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdentityAnchorAccountSlot {
+    pub account_authority_id: String,
+    pub account_subject: String,
+    pub principal_id: String,
+    pub realm_id: String,
+    pub create_event_id: String,
 }
 
 #[derive(Clone, Debug)]

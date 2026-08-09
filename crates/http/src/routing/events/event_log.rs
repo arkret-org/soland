@@ -108,9 +108,10 @@ pub(in crate::routing) use submit::{
     service_event_authoring_lock, submit_account_data_event_value,
     submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
     submit_initial_event_batch_outcome, submit_initial_event_submission,
-    submit_initial_identity_anchor_batch, submit_mimi_event_value,
-    submit_moderation_report_event_value, submit_one_error_to_app_error, submit_peer_pcr_genesis,
-    submit_sidecar_ensure_batch,
+    submit_initial_event_submission_with_contact_projection,
+    submit_initial_event_submission_with_device_pairing, submit_initial_identity_anchor_batch,
+    submit_mimi_event_value, submit_moderation_report_event_value, submit_one_error_to_app_error,
+    submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
 };
 use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,

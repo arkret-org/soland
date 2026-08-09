@@ -728,7 +728,9 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
         return false;
     };
-    if realm_id == soland_services::identity::principal_control_realm_for_did(actor) {
+    if crate::routing::identity::principal_control_realm_for_actor(state, actor)
+        .is_ok_and(|pcr| pcr.as_str() == realm_id)
+    {
         return true;
     }
     let realms = state.realm_directory().snapshot();

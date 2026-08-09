@@ -14,7 +14,6 @@ pub struct EventIdentityParts {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RealmIdentityParts {
     pub id: [u8; REALM_ID_BYTES],
-    pub derivation_class: u8,
     pub digest_suite: u8,
     pub digest: [u8; EVENT_DIGEST_BYTES],
 }
@@ -29,8 +28,7 @@ pub fn realm_identity_parts(realm_id: &str) -> Result<RealmIdentityParts, crate:
     digest.copy_from_slice(&id[1..]);
     Ok(RealmIdentityParts {
         id,
-        derivation_class: header >> 4,
-        digest_suite: header & 0x0f,
+        digest_suite: header,
         digest,
     })
 }
@@ -264,26 +262,18 @@ mod tests {
     }
 
     #[test]
-    fn realm_identity_preserves_derivation_class_suite_and_full_digest() {
+    fn realm_identity_preserves_reserved_header_suite_and_full_digest() {
         let event_id = arkret_identifiers::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x44; EVENT_DIGEST_BYTES],
         );
         let event_realm = arkret_identifiers::RealmId::from_event_id(&event_id);
         let event_parts = realm_identity_parts(event_realm.as_str()).unwrap();
-        assert_eq!(event_parts.derivation_class, 0);
         assert_eq!(event_parts.digest_suite, 1);
         assert_eq!(event_parts.digest, [0x44; EVENT_DIGEST_BYTES]);
 
-        let principal_realm =
-            arkret_identifiers::principal_control_realm_id("did:web:alice.example");
-        let principal_parts = realm_identity_parts(principal_realm.as_str()).unwrap();
-        assert_eq!(principal_parts.derivation_class, 1);
-        assert_eq!(principal_parts.digest_suite, 1);
-        assert_eq!(principal_parts.id[0], 0x11);
-
         let mut unknown_class = event_parts.id;
-        unknown_class[0] = 0x21;
+        unknown_class[0] = 0x11;
         assert!(realm_identity_parts(&format_event_token("realm", &unknown_class)).is_err());
     }
 

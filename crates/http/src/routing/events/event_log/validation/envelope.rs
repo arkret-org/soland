@@ -128,9 +128,8 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
 ///
 /// Two branches, both pure functions of the signed Event, so the id stays
 /// self-certifying either way (spec `zh/models/realm-and-space.md` section
-/// 2.5.0): a Principal Control Realm is subject-derived from the principal DID
-/// so its address stays computable from the DID alone, and a collaboration
-/// Realm is `retype(event_id)`.
+/// 2.5.0): every Realm, including a Principal Control Realm, is
+/// `retype(event_id)`.
 ///
 /// This is also the **first-contact check**: because the id is a function of
 /// the Event, a receiver that is served a fabricated "Realm S" computes a
@@ -152,24 +151,7 @@ fn derive_realm_id_from_event_id(
             "event_id must use the ak:event: typed prefix",
         )
     })?;
-    let actor_id = event_string_field(object, &["actor_id"]).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "missing_param",
-            "actor_id is required to derive the Realm id",
-        )
-    })?;
-    let actor_id = arkret_wire::Did::new(actor_id.clone()).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "actor_id must be a DID",
-        )
-    })?;
-    let payload_object = object
-        .get("payload")
-        .and_then(|payload| payload.get("object"));
-    Ok(arkret_wire::derive_genesis_realm_id(&event_id, &actor_id, payload_object).into_string())
+    Ok(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
 }
 
 mod applet;

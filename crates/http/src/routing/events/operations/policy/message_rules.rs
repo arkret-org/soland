@@ -238,10 +238,10 @@ pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
 ];
 
 /// Phase 2 — principal control realm isolation (key-management.md §4.1). A
-/// control-stream event MUST land on its principal's deterministic control realm
-/// (`principal_control_realm_for_did(payload.principal_id)`); it cannot be
+/// control-stream event MUST land on its principal's accepted control Realm; it cannot be
 /// written into a collaboration realm or another principal's control realm.
 pub(in crate::routing::events::operations) fn validate_principal_control_realm_binding(
+    state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind(operation);
@@ -253,8 +253,11 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         .get("principal_id")
         .and_then(Value::as_str)
         .ok_or("principal_control_event_missing_principal_id")?;
-    let expected = soland_services::identity::principal_control_realm_for_did(principal);
-    if realm_ids_match(operation.realm_id.as_str(), &expected) {
+    let snapshot = state.projections().snapshot();
+    let expected = snapshot
+        .principal_control_realm_for_actor(principal)
+        .ok_or("principal_control_realm_unavailable")?;
+    if realm_ids_match(operation.realm_id.as_str(), expected) {
         Ok(())
     } else {
         Err("principal_control_realm_mismatch")

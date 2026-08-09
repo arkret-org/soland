@@ -32,41 +32,6 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
     Ok(())
 }
 
-pub(super) async fn ensure_key_backup_writer_device_authorized(
-    state: &AppState,
-    actor_id: &str,
-    session_device_id: &str,
-    backup: &KeyBackup,
-) -> Result<(), AppError> {
-    let unauthorized = || {
-        AppError::capability_denied(
-            "key backup write requires the authenticated session device to be verified",
-        )
-        .with_wire_code("device_not_authorized")
-    };
-    let auth_device_id = backup
-        .auth_data
-        .as_ref()
-        .map(|auth_data| auth_data.device_id.as_str())
-        .ok_or_else(unauthorized)?;
-    if auth_device_id != session_device_id {
-        return Err(unauthorized());
-    }
-    let device = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: actor_id.to_owned(),
-            device_id: session_device_id.to_owned(),
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
-        .ok_or_else(unauthorized)?;
-    if device.revoked_at.is_some() || device.verification_state != "verified" {
-        return Err(unauthorized());
-    }
-    Ok(())
-}
-
 pub(super) async fn enforce_key_backup_series_chain_typed(
     state: &AppState,
     actor_id: &str,
@@ -300,22 +265,6 @@ pub(super) async fn put_key_backup(
         None => {}
     }
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
-    if backup.is_first_did_recovery_backup() && !backup.satisfies_first_did_recovery_backup_gate() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "first did_recovery backup gate requires recovery policy, signed verified-device auth_data and non-empty backup contents",
-        )
-        .with_wire_code("first_backup_gate_unsatisfied"));
-    }
-    if backup.backup_kind == BackupKind::DidRecovery {
-        ensure_key_backup_writer_device_authorized(
-            state,
-            &session.actor,
-            &session.device_id,
-            &backup,
-        )
-        .await?;
-    }
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
     crate::routing::identity::managed_agent_pcr::validate_managed_agent_key_backup(
         state,
@@ -368,22 +317,6 @@ pub(super) async fn put_key_backup(
                 AppError::internal(error.to_string())
             }
         })?;
-    if backup.satisfies_first_did_recovery_backup_gate() {
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            "key_backup.first_did_recovery_gate",
-            json!({
-                "backup_id": backup.backup_id.as_str(),
-                "series_id": backup.series_id.as_str(),
-                "series_seq": backup.series_seq,
-                "device_id": backup.device_id.as_ref().map(|device| device.as_str().to_owned()),
-                "duplicate": duplicate,
-            }),
-            "accepted",
-        )
-        .await;
-    }
     let outcome = KeysBackupsReplaceOutcome {
         status: KeyBackupPutStatus::Accepted,
         backup_id: typed_backup_id,

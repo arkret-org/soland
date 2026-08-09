@@ -199,73 +199,6 @@ pub(crate) fn fixture_recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
     )
 }
 
-/// Build a schema-conforming root-anchored DID recovery backup fixture.
-pub(crate) fn did_recovery_backup_body(
-    principal_id: &str,
-    backup_id: &str,
-    policy_id: &str,
-) -> Value {
-    serde_json::json!({
-        "backup_id": backup_id,
-        "actor_id": principal_id,
-        "device_id": RECOVERY_TEST_DEVICE,
-        "backup_kind": "did_recovery",
-        "mixed_secret_storage": false,
-        "backup_version": "kb_1",
-        "created_at": "2026-05-30T00:00:00.000Z",
-        "series_id": "ak:backup_series:01964137-0000-7000-8000-0000000000c5",
-        "series_seq": 0,
-        "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
-        "encryption": {
-            "recipient_method": "recovery_public_key",
-            "recipient_key_ref": "did:key:z6MkrecoveryKey#z6MkrecoveryKey",
-            "aead": {
-                "name": "chacha20_poly1305",
-                "aead_profile": "ak.aead.chacha20_poly1305.v1",
-                "enc": "ZW5jYXBzdWxhdGVka2V5"
-            }
-        },
-        "domain_separation": {
-            "hkdf_info": "arkret-key-backup/did_recovery/recovery_policy/v1",
-            "subdomain": "recovery_policy",
-            "aead_aad": {
-                "schema": "ak.schema.key_backup.v1",
-                "actor_id": principal_id,
-                "device_id": RECOVERY_TEST_DEVICE,
-                "backup_kind": "did_recovery",
-                "backup_version": "kb_1",
-                "created_at": "2026-05-30T00:00:00.000Z",
-                "item_kinds": ["recovery_secret"]
-            }
-        },
-        "contents": [{ "item_kind": "recovery_secret" }],
-        "ciphertext": "AAAA",
-        "ciphertext_digest":
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "auth_data": {
-            "device_id": RECOVERY_TEST_DEVICE,
-            "verification_method": format!("{principal_id}#device"),
-            "signature_algorithm": "Ed25519",
-            "signature": "c2lnbmF0dXJl",
-            "device_authorize_event_id":
-                "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
-            "signed_fields": [
-                "backup_id",
-                "actor_id",
-                "backup_kind",
-                "backup_version",
-                "series_id",
-                "series_seq",
-                "encryption",
-                "domain_separation",
-                "contents",
-                "ciphertext_digest",
-                "recovery_policy_ref"
-            ]
-        }
-    })
-}
-
 pub(crate) async fn put_key_backup(
     state: AppState,
     token: &str,
@@ -800,7 +733,7 @@ pub(crate) async fn post_recovery_policy(
     )
     .await;
 
-    let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
+    let realm_id = soland_test_support::fixture_principal_control_realm(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
     let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
     soland_test_support::cba_basis::seed_realm_basis(

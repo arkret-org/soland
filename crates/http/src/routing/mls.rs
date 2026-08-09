@@ -3150,6 +3150,43 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         })
 }
 
+/// Re-resolve every leaf credential represented by the durable claims for an
+/// MLS group against the current device/Agent authorization state. Activation
+/// gates use this instead of trusting the historical claim row alone: a leaf
+/// whose authorization has since expired or been revoked is not a current
+/// authorized leaf.
+pub(crate) async fn current_authorized_claimed_group_actors(
+    state: &AppState,
+    mls_group_id: &str,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+    let rows = state
+        .mls_key_packages()
+        .key_packages_claimed_by_group(mls_group_id)
+        .await
+        .map_err(|error| format!("claimed KeyPackage lookup failed: {error}"))?;
+    if rows.is_empty() {
+        return Err("selected MLS group has no durable claimed leaves".to_owned());
+    }
+    let now_secs = now().timestamp();
+    let mut actors = BTreeSet::new();
+    let mut locally_consumed_welcome_actors = BTreeSet::new();
+    for row in &rows {
+        let principal = arkret_identifiers::Did::new(row.actor_id.clone())
+            .map_err(|error| format!("claimed KeyPackage actor invalid: {error}"))?;
+        let selector = current_keypackage_claim_trust_selector(state, &principal, &BTreeSet::new())
+            .await
+            .map_err(|error| format!("claimed KeyPackage trust unavailable: {error}"))?;
+        if !selector.matches_keypackage(row) || row.lifetime_not_after <= now_secs {
+            return Err("selected MLS group contains a non-current authorized leaf".to_owned());
+        }
+        actors.insert(row.actor_id.clone());
+        if row.consumed_at.is_some() {
+            locally_consumed_welcome_actors.insert(row.actor_id.clone());
+        }
+    }
+    Ok((actors, locally_consumed_welcome_actors))
+}
+
 fn ordinary_keypackage_is_available(keypackage: &MlsKeyPackageRow) -> bool {
     keypackage.lifecycle().is_ok_and(|lifecycle| {
         matches!(
@@ -3428,39 +3465,45 @@ async fn direct_active_generation_group_id(
     state: &AppState,
     realm_id: &str,
 ) -> Result<String, AppError> {
-    let mut best: Option<(u64, String)> = None;
-    for event in state
+    let active_value = state
+        .projections()
+        .snapshot()
+        .realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::DIRECT_CONVERSATION_ACTIVE_MLS_GENERATION_V1,
+        )
+        .cloned()
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "direct conversation active MLS generation is unset or conflicted",
+            )
+        })?;
+    let matching_count = state
         .event_queries()
         .projected_events_for_realm(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        if event.event_kind != arkret_wire::EventKind::DirectConversationMlsGenerationActivate {
-            continue;
-        }
-        let generation = event
-            .payload
-            .get("mls_generation")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_default();
-        let Some(group_id) = event
-            .payload
-            .get("mls_group_id")
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        if best
-            .as_ref()
-            .is_none_or(|(current, _)| generation > *current)
-        {
-            best = Some((generation, group_id.to_owned()));
-        }
-    }
-    best.map(|(_, group_id)| group_id).ok_or_else(|| {
-        AppError::new(
+        .into_iter()
+        .filter(|event| {
+            event.event_kind == arkret_wire::EventKind::DirectConversationMlsGenerationActivate
+                && event.payload == active_value
+        })
+        .count();
+    if matching_count != 1 {
+        return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "direct conversation has no active MLS generation",
-        )
-    })
+            "direct conversation active MLS generation has no unique accepted Event",
+        ));
+    }
+    active_value
+        .get("mls_group_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "direct conversation active MLS generation is malformed",
+            )
+        })
 }

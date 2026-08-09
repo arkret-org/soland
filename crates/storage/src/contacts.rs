@@ -6,6 +6,15 @@ use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 pub trait ContactStore: Send + Sync {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
+    /// Replace one existing Contact row only when its durable revision still
+    /// matches the revision the caller read. Callers must advance
+    /// `record.updated_at`; `false` is a lost-race signal, never permission to
+    /// overwrite newer receipt/evidence state.
+    async fn put_if_updated_at(
+        &self,
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+        record: &ContactRecord,
+    ) -> PersistenceResult<bool>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
 }

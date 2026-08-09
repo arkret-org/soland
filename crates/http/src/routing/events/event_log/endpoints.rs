@@ -124,8 +124,9 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
-    let expected_realm = soland_services::identity::principal_control_realm_for_did(&session.actor);
-    let managed_agent = if seal.realm_id.as_str() == expected_realm {
+    let expected_realm =
+        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
+    let managed_agent = if seal.realm_id == expected_realm {
         None
     } else {
         crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
@@ -135,7 +136,7 @@ async fn submit_event_seal(
         )
         .await?
     };
-    if seal.realm_id.as_str() != expected_realm && managed_agent.is_none() {
+    if seal.realm_id != expected_realm && managed_agent.is_none() {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
@@ -832,7 +833,8 @@ async fn events_frontier(
     {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-        let own_pcr = soland_services::identity::principal_control_realm_for_did(&session.actor);
+        let own_pcr =
+            crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
         let managed_agent_pcr =
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
@@ -840,7 +842,7 @@ async fn events_frontier(
                 realm_value,
             )
             .await?;
-        let accessible = realm_value == &own_pcr
+        let accessible = realm_value == own_pcr.as_str()
             || managed_agent_pcr
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
@@ -971,7 +973,9 @@ async fn events_frontier(
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
         let own_actor_pcr = actor == session.actor
-            && realm_value == soland_services::identity::principal_control_realm_for_did(&actor);
+            && realm_value
+                == crate::routing::identity::principal_control_realm_for_actor(state, &actor)?
+                    .as_str();
         let managed_actor_pcr = state
             .agent_pairings()
             .agent(&actor)

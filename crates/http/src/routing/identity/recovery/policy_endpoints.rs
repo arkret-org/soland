@@ -235,8 +235,10 @@ pub(super) async fn recovery_policy_put(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    let realm_id = RealmId::new(principal_control_realm_for_did(&validated.principal_id))
-        .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
+    let realm_id = crate::routing::identity::principal_control_realm_for_actor(
+        state,
+        &validated.principal_id,
+    )?;
     if request.event.realm_id != realm_id
         || request.event.scope_ref
             != (arkret_wire::ScopeRef::Realm {

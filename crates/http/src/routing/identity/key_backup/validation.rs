@@ -28,7 +28,6 @@ pub(super) fn is_sha_digest(value: &str) -> bool {
 
 pub(super) fn backup_class_wire(backup_kind: BackupKind) -> &'static str {
     match backup_kind {
-        BackupKind::DidRecovery => "did_recovery",
         BackupKind::SecretStorage => "secret_storage",
         BackupKind::MlsHistory => "mls_history",
     }
@@ -79,11 +78,6 @@ pub(super) fn validate_key_backup_body_typed(
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
     match backup.encryption.recipient_method {
         KeyBackupRecipientMethod::PassphraseKdf => {
-            if backup.backup_kind == BackupKind::DidRecovery {
-                return Err(schema_error(
-                    "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, or satisfy threshold/hardware factors in the recovery policy proof layer",
-                ));
-            }
             if backup.backup_kind == BackupKind::MlsHistory {
                 return Err(schema_error(
                     "mls_history key backups must use secret_storage_key or recovery_public_key",
@@ -398,11 +392,6 @@ pub(super) fn typed_recovery_policy_ref(backup: &KeyBackup) -> Option<(&str, u64
 pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
     let present = backup.recovery_policy_ref.is_some();
 
-    if backup.backup_kind == BackupKind::DidRecovery && !present {
-        return Err(schema_error(
-            "did_recovery key backups MUST carry recovery_policy_ref{policy_id, policy_version}",
-        ));
-    }
     if !present {
         return Ok(());
     }

@@ -35,26 +35,23 @@ CREATE TABLE public.soland_schema_contract (
 INSERT INTO public.soland_schema_contract (singleton, contract_version)
 VALUES (true, 'event-realm-full-digest-v1');
 
--- Realm wire identities are content/subject-derived protocol values, not
+-- Realm wire identities are event-derived protocol values, not
 -- database primary keys.  Intern them once and use the monotonic `pk` for
 -- physical joins, exactly as canonical Events use `canonical_events.pk`.
 CREATE TABLE public.canonical_realms (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id bytea NOT NULL,
-    derivation_class smallint NOT NULL,
     digest_suite smallint NOT NULL,
     digest bytea NOT NULL,
     wire_id text NOT NULL,
     CONSTRAINT canonical_realms_id_key UNIQUE (id),
-    CONSTRAINT canonical_realms_identity_key UNIQUE (derivation_class, digest_suite, digest),
+    CONSTRAINT canonical_realms_identity_key UNIQUE (digest_suite, digest),
     CONSTRAINT canonical_realms_wire_id_key UNIQUE (wire_id),
     CONSTRAINT canonical_realms_id_length_check CHECK (octet_length(id) = 33),
     CONSTRAINT canonical_realms_digest_length_check CHECK (octet_length(digest) = 32),
-    CONSTRAINT canonical_realms_derivation_class_check CHECK (derivation_class IN (0, 1)),
-    CONSTRAINT canonical_realms_digest_suite_check CHECK (digest_suite = 1),
-    CONSTRAINT canonical_realms_principal_suite_check CHECK (derivation_class <> 1 OR digest_suite = 1),
+    CONSTRAINT canonical_realms_digest_suite_check CHECK (digest_suite IN (1, 2)),
     CONSTRAINT canonical_realms_id_parts_check CHECK (
-        get_byte(id, 0) = ((derivation_class << 4) | digest_suite)
+        get_byte(id, 0) = digest_suite
         AND substring(id FROM 2) = digest
     ),
     CONSTRAINT canonical_realms_wire_id_check CHECK (wire_id ~ '^ak:realm:[A-Za-z0-9_-]{44}$')
@@ -359,7 +356,7 @@ CREATE TABLE public.backup_series (
     retired_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT backup_series_backup_class_check CHECK ((backup_kind = ANY (ARRAY['did_recovery'::text, 'secret_storage'::text, 'mls_history'::text, 'external'::text]))),
+    CONSTRAINT backup_series_backup_class_check CHECK ((backup_kind = ANY (ARRAY['secret_storage'::text, 'mls_history'::text, 'external'::text]))),
     CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
 );
 
@@ -678,6 +675,10 @@ CREATE TABLE public.contacts (
     -- log at all and a foreign key would reject the legitimate federated case.
     -- Stored in the same 33-octet form `canonical_events.id` uses.
     request_event_ref bytea CHECK (octet_length(request_event_ref) = 33),
+    request_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
+    request_mirror_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
+    basis_evidence jsonb,
+    control_outcomes jsonb DEFAULT '[]'::jsonb NOT NULL,
     response_event_ref bytea CHECK (octet_length(response_event_ref) = 33),
     tombstone_event_ref bytea CHECK (octet_length(tombstone_event_ref) = 33),
     message text,
@@ -2112,6 +2113,19 @@ CREATE TABLE public.event_federation_outbox (
 -- and needs its own index or every outbox delete scans this table.
 CREATE INDEX event_federation_outbox_outbox_id_idx
     ON public.event_federation_outbox USING btree (outbox_id);
+
+-- Account-level create-once authority for Principal Control Realms. The
+-- protocol Realm id remains the full event-derived 264-bit token as text;
+-- this table is a uniqueness ledger, not a second Realm projection.
+CREATE TABLE public.identity_anchor_account_slots (
+    account_authority_id text NOT NULL,
+    account_subject text NOT NULL,
+    principal_id text NOT NULL,
+    realm_id text NOT NULL,
+    create_event_id text NOT NULL,
+    PRIMARY KEY (account_authority_id, account_subject)
+);
+
 CREATE TABLE public.direct_conversation_founding_slots (
     founder_id text NOT NULL,
     trust_domain_id text NOT NULL,

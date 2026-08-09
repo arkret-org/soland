@@ -708,11 +708,11 @@ pub(crate) async fn backup_series_erase_command(
         )
         .with_wire_code("security_transaction_failed_precondition"));
     }
-    let expected_control_realm = soland_services::identity::principal_control_realm_for_did(
+    let expected_control_realm = crate::routing::identity::principal_control_realm_for_actor(
+        state,
         transaction.resource.principal_id.as_str(),
-    );
-    if request.authorization_lease.scope_ref.realm_id().as_str() != expected_control_realm.as_str()
-    {
+    )?;
+    if request.authorization_lease.scope_ref.realm_id() != &expected_control_realm {
         return Err(AppError::conflict(
             "backup-series erase lease is scoped outside principal control",
         )

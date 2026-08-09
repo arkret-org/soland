@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct PcrGenesisPins {
+    pub account_subject: Hash,
     pub did_version_id: String,
     pub log_head_digest: Hash,
     pub control_key_digest: Hash,
@@ -447,6 +448,22 @@ pub(super) async fn submit_identity_anchor_batch(
     } else {
         None
     };
+    let account_slot = if is_bootstrap {
+        let pins = pcr_genesis_pins
+            .as_ref()
+            .expect("PCR genesis pins checked above");
+        Some(soland_storage::IdentityAnchorAccountSlot {
+            account_authority_id: receipt_audience
+                .expect("PCR genesis audience checked above")
+                .to_string(),
+            account_subject: pins.account_subject.to_string(),
+            principal_id: first.actor_id.clone(),
+            realm_id: first.realm_id.clone(),
+            create_event_id: first.event_id.clone(),
+        })
+    } else {
+        None
+    };
     let frontier_cas = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
@@ -509,6 +526,7 @@ pub(super) async fn submit_identity_anchor_batch(
             control_proposal_acks.clone(),
             receipt,
             device_projection,
+            account_slot,
             frontier_cas,
             reanchor_slot,
             publication_evidence,
@@ -528,6 +546,12 @@ pub(super) async fn submit_identity_anchor_batch(
                     StatusCode::CONFLICT,
                     "duplicate_conflict",
                     "identity anchor unit raced a different stored unit",
+                )
+            } else if error.is_conflict("account_principal_control_realm_already_exists") {
+                SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "failed_precondition",
+                    "the account already owns a different principal-control Realm",
                 )
             } else {
                 SubmitOneError::new(
@@ -1035,13 +1059,19 @@ async fn validate_unit_relationships(
             "identity anchor unit Events must share actor_id and principal-control realm_id",
         ));
     }
-    let expected_realm =
-        soland_services::identity::principal_control_realm_for_did(&first.actor_id);
-    if first.realm_id != expected_realm {
+    let create_event_id = arkret_wire::EventId::new(first.event_id.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            format!("identity anchor create event_id is invalid: {error}"),
+        )
+    })?;
+    let expected_realm = arkret_wire::RealmId::from_event_id(&create_event_id);
+    if first.realm_id != expected_realm.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "failed_precondition",
-            "identity anchor unit must target the principal's deterministic control Realm",
+            "identity anchor unit Realm id must be retyped from its create Event id",
         ));
     }
     if second.actor_seq != first.actor_seq.saturating_add(1)
@@ -2152,15 +2182,14 @@ mod tests {
         let principal =
             arkret_identifiers::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned())
                 .unwrap();
-        let realm_id = arkret_identifiers::RealmId::new(
-            soland_services::identity::principal_control_realm_for_did(principal.as_str()),
-        )
-        .unwrap();
         let created_at = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let mut create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
-                realm_id: realm_id.clone(),
+                genesis_salt: arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap(),
                 trust_domain: arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:example.net".to_owned(),
                 )
@@ -2184,6 +2213,7 @@ mod tests {
             &mut create,
             "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
         );
+        let realm_id = arkret_identifiers::RealmId::from_event_id(&create.event_id);
 
         let payload = fixture_founding_authorize_payload(&create.actor_id, create.created_at);
         let authorize_verification_method = format!("{}#{}", create.actor_id, payload.device_id);

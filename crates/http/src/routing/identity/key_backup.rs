@@ -58,7 +58,7 @@ pub(crate) fn admin_router() -> Router {
     Router::with_path("key-backups").get(list_key_backups_admin)
 }
 
-const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
+const KEY_BACKUP_CLASSES: &[&str] = &["secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",
     "recovery_secret",
@@ -258,117 +258,6 @@ mod tests {
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("recovery_public_key without aead.enc must be rejected");
         assert!(err.message.contains("enc"));
-    }
-
-    #[test]
-    fn did_recovery_rejects_passphrase_kdf() {
-        // Spec §5.0.1 first-backup gate: passphrase_kdf-only did_recovery forbidden.
-        let body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            passphrase_encryption(),
-        );
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("passphrase_kdf did_recovery must be rejected");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("did_recovery"));
-    }
-
-    #[test]
-    fn did_recovery_rejects_secret_storage_key() {
-        // secret_storage_key is valid only for mls_history / secret_storage.
-        let body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            secret_storage_key_encryption(),
-        );
-
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("secret_storage_key is not valid for did_recovery");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("secret_storage_key"));
-    }
-
-    // ── C-P5: recovery_policy_ref binding (structural) ──────────────────────
-
-    const POLICY_REF: &str = "ak:policy:01964137-0000-7000-8000-0000000000aa";
-
-    fn did_recovery_signed_fields() -> Value {
-        json!([
-            "backup_id",
-            "actor_id",
-            "backup_kind",
-            "backup_version",
-            "series_id",
-            "series_seq",
-            "supersedes",
-            "encryption",
-            "domain_separation",
-            "contents",
-            "ciphertext_digest",
-            "recovery_policy_ref"
-        ])
-    }
-
-    fn did_recovery_auth_data() -> Value {
-        json!({
-            "device_id": DEVICE_ID,
-            "verification_method": "did:web:alice.example#device",
-            "signature_algorithm": "Ed25519",
-            "signature": "c2lnbmF0dXJl",
-            "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
-            "signed_fields": did_recovery_signed_fields()
-        })
-    }
-
-    #[test]
-    fn did_recovery_requires_recovery_policy_ref() {
-        // Valid HPKE encryption, but no recovery_policy_ref → rejected.
-        let body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            recovery_public_key_encryption(),
-        );
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("did_recovery without recovery_policy_ref must be rejected");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("recovery_policy_ref"));
-    }
-
-    #[test]
-    fn recovery_policy_ref_must_be_covered_by_signed_fields() {
-        let mut body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            recovery_public_key_encryption(),
-        );
-        body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
-        // signed_fields present but does NOT cover recovery_policy_ref.
-        body["auth_data"] = json!({
-            "device_id": DEVICE_ID,
-            "verification_method": "did:web:alice.example#device",
-            "signature_algorithm": "Ed25519",
-            "signature": "c2lnbmF0dXJl",
-            "device_authorize_event_id": "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
-            "signed_fields": ["backup_id", "encryption"]
-        });
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("recovery_policy_ref not covered by signed_fields must be rejected");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(err.message.contains("signed_fields"));
-    }
-
-    #[test]
-    fn did_recovery_with_recovery_policy_ref_validates() {
-        let mut body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            recovery_public_key_encryption(),
-        );
-        body["recovery_policy_ref"] = json!({ "policy_id": POLICY_REF, "policy_version": 1 });
-        body["auth_data"] = did_recovery_auth_data();
-        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect("did_recovery with well-formed signed recovery_policy_ref should validate");
     }
 
     #[test]
@@ -607,48 +496,6 @@ mod tests {
         assert_ne!(
             baseline,
             tampered_window.delete_intent_digest(None).unwrap()
-        );
-    }
-
-    fn did_recovery_delete_candidate(policy_id: &str, policy_version: u64) -> Value {
-        let mut body = key_backup_body(
-            "did_recovery",
-            "recovery_key_share",
-            recovery_public_key_encryption(),
-        );
-        body["recovery_policy_ref"] =
-            json!({ "policy_id": policy_id, "policy_version": policy_version });
-        body["auth_data"] = did_recovery_auth_data();
-        body
-    }
-
-    #[test]
-    fn delete_allows_tail_even_when_policy_bound() {
-        let body = did_recovery_delete_candidate(POLICY_REF, 1);
-        let owned = vec![body.clone()];
-
-        ensure_key_backup_delete_is_series_tail(ACTOR, &body, &owned)
-            .expect("tail envelope may be deleted after high-risk proof verification");
-    }
-
-    #[test]
-    fn delete_rejects_non_tail_even_when_policy_stale() {
-        let older = did_recovery_delete_candidate(POLICY_REF, 1);
-        let mut newer = older.clone();
-        newer["backup_id"] = json!("ak:backup:01964137-0000-7000-8000-000000000099");
-        newer["series_seq"] = json!(1);
-        newer["supersedes"] = older["backup_id"].clone();
-        newer["supersedes_digest"] =
-            json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-        let owned = vec![older.clone(), newer];
-        let err = ensure_key_backup_delete_is_series_tail(ACTOR, &older, &owned)
-            .expect_err("non-tail chain link must not be individually deleted");
-
-        assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(
-            err.wire_code_override.as_deref(),
-            Some("failed_precondition")
         );
     }
 

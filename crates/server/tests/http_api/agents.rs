@@ -179,17 +179,18 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         .await
         .unwrap();
 
-    let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
-    let realm = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: actor.clone(),
-            realm_id: realm.clone(),
+            genesis_salt: arkret_wire::GenesisSalt::new(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             trust_domain: arkret_identifiers::TypedTrustDomainId::new(
                 "ak:trust_domain:soland.local".to_owned(),
             )
@@ -207,6 +208,8 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         &genesis_projector,
     )
     .unwrap();
+    let realm = arkret_identifiers::RealmId::from_event_id(&bootstrap.event_id);
+    let realm_id = realm.to_string();
     let verification_method =
         arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
             .expect("fixture verification method is a DID URL");
@@ -359,7 +362,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .await
         .unwrap();
 
-    let realm_id = soland_test_support::principal_control_realm_for_did(controller);
+    let realm_id = soland_test_support::fixture_principal_control_realm(controller);
     let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let mut entry = soland_http::state::RealmDirectoryEntry::new(
         typed_realm_id,
@@ -828,7 +831,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
 
     let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let controller_realm_id = arkret_identifiers::RealmId::new(
-        soland_domain::identity::principal_control_realm_for_did(controller),
+        soland_test_support::fixture_principal_control_realm(controller),
     )
     .unwrap();
     let now = chrono::Utc::now();

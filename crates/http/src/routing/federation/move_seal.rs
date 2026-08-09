@@ -195,10 +195,11 @@ async fn device_generation_event_seal_context(
     }
     let bootstrap = bootstrap[0];
     let principal_id = bootstrap.actor_id.clone();
-    let expected_realm = soland_services::identity::principal_control_realm_for_did(&principal_id);
-    if expected_realm != realm_id.as_str() {
+    let expected_realm =
+        crate::routing::identity::principal_control_realm_for_actor(state, &principal_id)?;
+    if expected_realm != *realm_id {
         return Err(seal_admission_error(
-            "principal-control bootstrap is stored under a non-deterministic Realm",
+            "principal-control bootstrap is stored outside the accepted actor PCR",
         ));
     }
     let generation = crate::routing::identity::device_generation::current_device_generation(

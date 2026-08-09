@@ -1047,8 +1047,8 @@ async fn range_completeness_for_query(
     };
     let realm_id = RealmId::new(realms[0].clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    if soland_services::identity::principal_control_realm_for_did(&session.actor)
-        != realm_id.as_str()
+    if crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?
+        != realm_id
     {
         return Ok(None);
     }

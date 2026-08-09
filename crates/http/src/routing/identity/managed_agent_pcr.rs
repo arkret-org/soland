@@ -26,17 +26,15 @@ use crate::state::AppState;
 
 const CONTROLLER_DELEGATION_FRAGMENT: &str = "managed-controller";
 
-/// Derive the managed Agent's Principal Control Realm id from its DID.
-///
-/// Spec `zh/models/realm-and-space.md` section 2.5.0: a PCR id is
-/// subject-derived — `H(PCR_DOMAIN || principal_did)` — not minted. Deriving it
-/// keeps the address computable from the DID alone by anyone, and keeps the
-/// identity anchored to `did_inception` rather than to whatever random value
-/// this process happened to pick. Minting one here also produced a *different*
-/// id on every retry of the same provisioning request.
-pub(crate) fn principal_control_realm_id_for(agent_id: &Did) -> Result<RealmId, AppError> {
-    RealmId::new(arkret_models_identity::principal_control_realm_id(agent_id))
-        .map_err(|error| AppError::internal(format!("derived Agent PCR id invalid: {error}")))
+/// The current prepare contract asks for a PCR id before it carries the exact
+/// signed create Event whose EventId is now the only legal source of that id.
+/// Fail closed until the wire contract supplies that event-derived address;
+/// neither a DID hash nor a random Realm id can satisfy it.
+pub(crate) fn unavailable_precreate_managed_agent_pcr_id() -> Result<RealmId, AppError> {
+    Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "managed Agent provisioning cannot allocate an event-derived PCR before the create Event",
+    ))
 }
 
 pub(crate) fn controller_authorization_ref(agent_id: &str) -> Result<DidUrl, AppError> {
@@ -338,10 +336,8 @@ pub(crate) async fn active_series_pointer_is_current(
     controller_id: &str,
     pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    let controller_realm = RealmId::new(
-        soland_services::identity::principal_control_realm_for_did(controller_id),
-    )
-    .map_err(|error| AppError::internal(format!("controller PCR id invalid: {error}")))?;
+    let controller_realm =
+        crate::routing::identity::principal_control_realm_for_actor(state, controller_id)?;
     let leaves = state
         .projections()
         .realm_seal_leaves(&controller_realm)
@@ -446,8 +442,11 @@ pub(crate) async fn validate_active_series_operation_authority(
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
     >(operation.payload.clone())
     .map_err(|_| "key_backup_active_series_schema_violation")?;
-    if arkret_models_identity::did_document::principal_control_realm_id(&record.actor_id)
-        != operation.realm_id.as_str()
+    if state
+        .projections()
+        .snapshot()
+        .principal_control_realm_for_actor(record.actor_id.as_str())
+        != Some(operation.realm_id.as_str())
     {
         return Err("key_backup_active_series_wrong_control_realm");
     }

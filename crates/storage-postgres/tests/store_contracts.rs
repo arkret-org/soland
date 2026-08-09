@@ -11,9 +11,10 @@ use soland_storage::{
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgControlProposalAuthorityAckStore, PgEventCommitUnitOfWork,
-    PgEventStore, PgFederationOutboxStore, PgIdempotencyStore, PgMimiConsentCorrelationStore,
-    PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    Db, PgAccountDataStore, PgContactStore, PgControlProposalAuthorityAckStore,
+    PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
+    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
+    PgProjectionEventStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -83,7 +84,9 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
     let events = PgEventStore { pool: pool.clone() };
     let projections = PgProjectionEventStore { pool: pool.clone() };
     let idempotency = PgIdempotencyStore { pool: pool.clone() };
-    let outbox = PgFederationOutboxStore { pool };
+    let outbox = PgFederationOutboxStore { pool: pool.clone() };
+    let device_pairings = soland_storage_postgres::PgDevicePairingStore { pool: pool.clone() };
+    let contacts = PgContactStore { pool };
     let namespace = format!("postgres-event-commit-{}", uuid::Uuid::now_v7());
     assert_event_commit_unit_of_work_contract(
         EventCommitContractStores {
@@ -92,6 +95,8 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
             projections: &projections,
             idempotency: &idempotency,
             outbox: &outbox,
+            device_pairings: &device_pairings,
+            contacts: &contacts,
         },
         &namespace,
     )
@@ -121,7 +126,11 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         uuid::Uuid::now_v7()
     ))
     .unwrap();
-    let realm_id = arkret_identifiers::principal_control_realm_id(actor_id.as_str());
+    let realm_id =
+        arkret_identifiers::RealmId::from_event_id(&arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x33; 32],
+        ));
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
@@ -155,6 +164,8 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
+            device_pairing_authorization: None,
+            contact_projection: None,
             event: CanonicalEventRecord {
                 event_id: event_id.to_string(),
                 actor_id: event.actor_id.to_string(),
@@ -246,11 +257,10 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let realm_identity = ids::realm_identity_parts(&realm_id).unwrap();
     let realm_pk = sql_query(
         "INSERT INTO canonical_realms \
-         (id, derivation_class, digest_suite, digest, wire_id) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING pk",
+         (id, digest_suite, digest, wire_id) \
+         VALUES ($1, $2, $3, $4) RETURNING pk",
     )
     .bind::<Binary, _>(realm_identity.id.to_vec())
-    .bind::<SmallInt, _>(i16::from(realm_identity.derivation_class))
     .bind::<SmallInt, _>(i16::from(realm_identity.digest_suite))
     .bind::<Binary, _>(realm_identity.digest.to_vec())
     .bind::<Text, _>(&realm_id)
@@ -369,6 +379,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .commit_event_batch(EventBatchCommitRequest {
             events: vec![
                 EventCommitRequest {
+                    device_pairing_authorization: None,
+                    contact_projection: None,
                     event: prefix,
                     control_proposal_ack: None,
                     self_principal_pcr_device_authorized: false,
@@ -377,6 +389,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
                 EventCommitRequest {
+                    device_pairing_authorization: None,
+                    contact_projection: None,
                     event: incoming,
                     control_proposal_ack: None,
                     self_principal_pcr_device_authorized: false,

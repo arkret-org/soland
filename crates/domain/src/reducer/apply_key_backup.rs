@@ -131,7 +131,6 @@ fn rejected(reason: &str) -> ProjectionEffect {
 
 fn backup_class_wire(backup_kind: arkret_models_crypto::BackupKind) -> &'static str {
     match backup_kind {
-        arkret_models_crypto::BackupKind::DidRecovery => "did_recovery",
         arkret_models_crypto::BackupKind::SecretStorage => "secret_storage",
         arkret_models_crypto::BackupKind::MlsHistory => "mls_history",
     }

@@ -2,12 +2,12 @@ use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
     EventBatchReceipt, EventStore, FederationOutboxRecord, FederationOutboxState,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    MessageRecord, MessageStore, Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult,
-    ProjectionEventRecord, PublicationEvidenceRecord, RealmEventStats, async_trait,
-    event_position_cmp, identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor,
-    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
-    stage_identity_anchor_events,
+    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
+    PersistenceError, PersistenceResult, ProjectionEventRecord, PublicationEvidenceRecord,
+    RealmEventStats, async_trait, event_position_cmp, identity_anchor_slot_conflicts, ids,
+    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
+    record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -88,6 +88,7 @@ pub(crate) struct MemoryEventStore {
     pub(crate) event_outbox_ids: Mutex<BTreeMap<String, BTreeSet<String>>>,
     direct_conversation_founding_slots:
         Mutex<BTreeMap<(String, String, String), DirectConversationFoundingSlotRecord>>,
+    identity_anchor_account_slots: Mutex<BTreeMap<(String, String), IdentityAnchorAccountSlot>>,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
@@ -109,6 +110,7 @@ impl MemoryEventStore {
             projections,
             event_outbox_ids: Mutex::new(BTreeMap::new()),
             direct_conversation_founding_slots: Mutex::new(BTreeMap::new()),
+            identity_anchor_account_slots: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -539,6 +541,7 @@ impl EventStore for MemoryEventStore {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
+        account_slot: Option<IdentityAnchorAccountSlot>,
         _frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
@@ -550,6 +553,7 @@ impl EventStore for MemoryEventStore {
         let mut stored_control_proposal_acks = self.control_proposal_acks.lock();
         let mut devices = self.devices.lock();
         let mut receipts = self.receipts.lock();
+        let mut account_slots = self.identity_anchor_account_slots.lock();
         let mut evidence = self.publication_evidence.lock();
         let mut projections = self.projections.lock();
         let mut event_outbox_ids = self.event_outbox_ids.lock();
@@ -575,6 +579,7 @@ impl EventStore for MemoryEventStore {
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_devices = devices.clone();
         let mut staged_receipts = receipts.clone();
+        let mut staged_account_slots = account_slots.clone();
         let mut staged_evidence = evidence.clone();
         let mut staged_outbox = federation_outbox.clone();
         let reanchor_conflict = reanchor_slot.as_ref().is_some_and(|slot| {
@@ -596,6 +601,21 @@ impl EventStore for MemoryEventStore {
             )?;
         }
         stage_identity_anchor_events(&mut staged_events, records)?;
+        if !reanchor_conflict && let Some(slot) = account_slot {
+            let key = (
+                slot.account_authority_id.clone(),
+                slot.account_subject.clone(),
+            );
+            if staged_account_slots
+                .get(&key)
+                .is_some_and(|existing| existing != &slot)
+            {
+                return Err(PersistenceError::Conflict(
+                    "account_principal_control_realm_already_exists".to_owned(),
+                ));
+            }
+            staged_account_slots.insert(key, slot);
+        }
         if !reanchor_conflict && let Some(device) = device {
             staged_devices.insert((device.actor.clone(), device.device_id.clone()), device);
         }
@@ -616,6 +636,7 @@ impl EventStore for MemoryEventStore {
         *stored_control_proposal_acks = staged_control_proposal_acks;
         *devices = staged_devices;
         *receipts = staged_receipts;
+        *account_slots = staged_account_slots;
         *evidence = staged_evidence;
         *federation_outbox = staged_outbox;
         if !reanchor_conflict {

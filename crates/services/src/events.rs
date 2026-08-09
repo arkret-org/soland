@@ -771,11 +771,31 @@ pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
+    pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
+    pub contact_projection: Option<CommitContactProjection>,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
     pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommitContactProjection {
+    pub record: crate::identity::ContactRecord,
+    pub expected_updated_at: Option<DateTime<Utc>>,
+    pub conflict_code: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommitDevicePairingAuthorization {
+    pub device_pairing_request_id: String,
+    pub pairing_code: String,
+    pub new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
+    pub device_id: String,
+    pub authorized_by_actor_id: String,
+    pub authorized_event_ref: String,
+    pub changed_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -867,6 +887,7 @@ pub trait EventReadPort: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
+        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
@@ -1212,6 +1233,7 @@ impl EventQueryService {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
+        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
@@ -1223,6 +1245,7 @@ impl EventQueryService {
                 control_proposal_acks,
                 receipt,
                 device,
+                account_slot,
                 frontier_cas,
                 reanchor_slot,
                 publication_evidence,
@@ -2304,6 +2327,8 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                device_pairing_authorization: None,
+                contact_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),
                     actor_id: "did:web:alice.example".to_owned(),

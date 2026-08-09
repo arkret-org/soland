@@ -149,6 +149,8 @@ async fn validate_and_prepare(
         Some(&parsed.actor_id),
     );
     let command = soland_services::events::CommitAcceptedEventCommand {
+        device_pairing_authorization: None,
+        contact_projection: None,
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id,
             actor_id: parsed.actor_id.clone(),

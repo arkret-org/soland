@@ -183,11 +183,11 @@ pub(crate) async fn validate_direct_binding_operation(
         "direct_conversation_binding_invalid"
     })?;
 
-    // The canonical precursor Events are the admission authority. Projection
-    // application is asynchronous, so consulting the derived Realm view here
-    // creates a race when a binding immediately follows its accepted
-    // Realm/member/Strand/MLS Events. Active-binding reads still require the
-    // projection to agree; admission validates every exact precursor below.
+    // The canonical precursor Events are the admission authority. The MLS
+    // activation is also a security-barrier singleton, so its accepted cell
+    // projection must be visible before a binding can endorse it. A binding
+    // that races projection catches up by exact retry; it must not treat a
+    // merely stored activation proposal as final.
     if let Err(stage) = validate_direct_binding_event_refs(state, &payload).await {
         tracing::warn!(
             target: "soland_http::error",
@@ -266,6 +266,239 @@ pub(crate) async fn validate_direct_binding_operation(
         return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_PAIR_MATERIALIZATION_CONFLICT);
     }
     Ok(())
+}
+
+/// Enforce the Direct Conversation active-generation sequence against the one
+/// accepted CAS-register value. Pending proposals never become authority, but
+/// they do count toward the bounded fan-out for the same predecessor.
+pub(crate) async fn validate_direct_mls_generation_operation(
+    state: &AppState,
+    operation: &arkret_event_draft::ProjectedEventOperation,
+) -> Result<(), &'static str> {
+    if soland_services::operation_semantics::canonical_kind_for_operation(operation)
+        != Some(arkret_wire::EventKind::DirectConversationMlsGenerationActivate)
+    {
+        return Ok(());
+    }
+    let proposed = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationActivatePayload,
+    >(operation.payload.clone())
+    .map_err(|_| "direct_conversation_mls_generation_invalid")?;
+    let snapshot = state.projections().snapshot();
+    if !snapshot.realm_is_direct_conversation(operation.realm_id.as_str()) {
+        return Err("direct_conversation_mls_generation_invalid");
+    }
+    let current_value = snapshot
+        .realm_null_subject_cell_value(
+            operation.realm_id.as_str(),
+            arkret_wire::CellFamilyId::DIRECT_CONVERSATION_ACTIVE_MLS_GENERATION_V1,
+        )
+        .cloned();
+    let realm_events = state
+        .event_queries()
+        .projected_events_for_realm(operation.realm_id.as_str())
+        .await
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?;
+    let mut founders = realm_events
+        .iter()
+        .filter(|event| event.event_kind == arkret_wire::EventKind::RealmCreate)
+        .filter_map(|event| event.sender.clone())
+        .collect::<Vec<_>>();
+    founders.sort_unstable();
+    founders.dedup();
+    let [founder] = founders.as_slice() else {
+        return Err("direct_conversation_activation_authority_unavailable");
+    };
+    let binding = state.contacts().direct_binding(proposed.pair_key.as_str());
+    let selected_state = state
+        .event_queries()
+        .accepted_event(proposed.selected_group_state_ref.as_str())
+        .await
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?
+        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    if selected_state.realm_id.as_deref() != Some(operation.realm_id.as_str())
+        || !matches!(
+            arkret_wire::EventKind::from_wire(&selected_state.kind),
+            arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+        )
+    {
+        return Err("direct_conversation_activation_authority_unavailable");
+    }
+    let selected_payload = selected_state
+        .envelope
+        .get("payload")
+        .cloned()
+        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    if selected_payload
+        .get("group_id")
+        .or_else(|| selected_payload.get("mls_group_id"))
+        .and_then(Value::as_str)
+        != Some(proposed.mls_group_id.as_str())
+    {
+        return Err("direct_conversation_activation_authority_unavailable");
+    }
+    let genesis = state
+        .event_queries()
+        .accepted_event(proposed.genesis_event_ref.as_str())
+        .await
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?
+        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    if genesis.kind != arkret_wire::EventKind::MlsGenesis.as_str()
+        || genesis.realm_id.as_deref() != Some(operation.realm_id.as_str())
+        || genesis
+            .envelope
+            .get("payload")
+            .and_then(|payload| {
+                payload
+                    .get("group_id")
+                    .or_else(|| payload.get("mls_group_id"))
+            })
+            .and_then(Value::as_str)
+            != Some(proposed.mls_group_id.as_str())
+    {
+        return Err("direct_conversation_activation_authority_unavailable");
+    }
+    let effective_scope = selected_payload
+        .get("effective_scope")
+        .cloned()
+        .or_else(|| {
+            selected_payload
+                .get("governance_binding")
+                .or_else(|| selected_payload.get("mls_governance_binding"))
+                .and_then(|binding| binding.get("effective_scope"))
+                .cloned()
+        })
+        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    let selected_frontier = state
+        .mls_commits()
+        .commit(&effective_scope, proposed.mls_group_id.as_str())
+        .await
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?
+        .ok_or("direct_conversation_activation_authority_unavailable")?;
+    let selected_ref_is_current =
+        if selected_state.kind == arkret_wire::EventKind::MlsGenesis.as_str() {
+            selected_frontier.accepted_commit_ref.is_none()
+                && selected_frontier.genesis_event_ref == proposed.selected_group_state_ref.as_str()
+        } else {
+            selected_frontier.accepted_commit_ref.as_deref()
+                == Some(proposed.selected_group_state_ref.as_str())
+        };
+    if selected_frontier.frontier_contested
+        || selected_frontier.genesis_event_ref != proposed.genesis_event_ref.as_str()
+        || !selected_ref_is_current
+    {
+        return Err("direct_conversation_activation_authority_unavailable");
+    }
+    let (selected_actors, locally_consumed_welcome_actors) =
+        crate::routing::mls::current_authorized_claimed_group_actors(
+            state,
+            proposed.mls_group_id.as_str(),
+        )
+        .await
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?;
+    let expected_actors = if proposed.mls_generation == 0 {
+        BTreeSet::from([founder.clone()])
+    } else if let Some(binding) = binding.as_ref() {
+        binding.participants_unordered.iter().cloned().collect()
+    } else {
+        snapshot
+            .members_of_realm(operation.realm_id.as_str())
+            .into_iter()
+            .filter(|member| member.state == "join")
+            .map(|member| member.member.clone())
+            .collect()
+    };
+    if expected_actors.len() != if proposed.mls_generation == 0 { 1 } else { 2 }
+        || selected_actors != expected_actors
+    {
+        return Err("direct_conversation_activation_authority_unavailable");
+    }
+    validate_direct_generation_predecessor(&proposed, current_value.as_ref())?;
+    match proposed.mls_generation {
+        0 => {
+            if operation.context.sender.as_str() != founder.as_str() || binding.is_some() {
+                return Err("direct_conversation_activation_authority_unavailable");
+            }
+        }
+        1 => {
+            if operation.context.sender.as_str() == founder.as_str()
+                || binding.is_some()
+                || !locally_consumed_welcome_actors.contains(operation.context.sender.as_str())
+            {
+                return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_ACTIVATION_AUTHOR_INVALID);
+            }
+        }
+        _ => {
+            let binding = binding.ok_or("direct_conversation_activation_authority_unavailable")?;
+            if binding.realm_id != operation.realm_id.as_str()
+                || binding.main_strand_id != proposed.main_strand_id.as_str()
+                || !binding
+                    .participants_unordered
+                    .iter()
+                    .any(|participant| participant.as_str() == operation.context.sender.as_str())
+            {
+                return Err("direct_conversation_activation_authority_unavailable");
+            }
+        }
+    }
+    let pending = state
+        .projections()
+        .pending_control_events_for_notary(&operation.realm_id, None, 4096)
+        .map_err(|_| "direct_conversation_activation_authority_unavailable")?;
+    let same_predecessor_candidates = pending
+        .iter()
+        .filter(|event| {
+            event.kind == arkret_wire::EventKind::DirectConversationMlsGenerationActivate
+                && event.event_id != operation.context.event_id
+                && event.payload.get("pair_key") == operation.payload.get("pair_key")
+                && event.payload.get("main_strand_id") == operation.payload.get("main_strand_id")
+                && event.payload.get("predecessor_active_value_digest")
+                    == operation.payload.get("predecessor_active_value_digest")
+        })
+        .count();
+    validate_direct_generation_candidate_cap(same_predecessor_candidates)?;
+    Ok(())
+}
+
+fn validate_direct_generation_predecessor(
+    proposed: &arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationActivatePayload,
+    current_value: Option<&Value>,
+) -> Result<(), &'static str> {
+    match (proposed.mls_generation, current_value) {
+        (0, None) => Ok(()),
+        (0, Some(_)) | (_, None) => Err("direct_conversation_mls_generation_predecessor_invalid"),
+        (generation, Some(current_value)) => {
+            let current = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationActivatePayload,
+            >(current_value.clone())
+            .map_err(|_| "direct_conversation_mls_generation_predecessor_invalid")?;
+            if current.mls_generation.checked_add(1) != Some(generation)
+                || current.pair_key != proposed.pair_key
+                || current.main_strand_id != proposed.main_strand_id
+            {
+                return Err("direct_conversation_mls_generation_predecessor_invalid");
+            }
+            let current_digest = arkret_wire::Hash::new(
+                arkret_canonical::canonical_sha256(current_value)
+                    .map_err(|_| "direct_conversation_mls_generation_predecessor_invalid")?,
+            )
+            .map_err(|_| "direct_conversation_mls_generation_predecessor_invalid")?;
+            if proposed.predecessor_active_value_digest.as_ref() != Some(&current_digest) {
+                return Err("direct_conversation_mls_generation_predecessor_invalid");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_direct_generation_candidate_cap(
+    existing_same_predecessor_candidates: usize,
+) -> Result<(), &'static str> {
+    if existing_same_predecessor_candidates >= 16 {
+        Err(arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED)
+    } else {
+        Ok(())
+    }
 }
 
 async fn accepted_direct_event(
@@ -369,6 +602,21 @@ async fn validate_direct_binding_event_refs(
             != Some(payload.pair_key.as_str())
     {
         return Err("initial_exact_pair_generation");
+    }
+    let active_generation = state
+        .projections()
+        .snapshot()
+        .realm_null_subject_cell_value(
+            payload.realm_id.as_str(),
+            arkret_wire::CellFamilyId::DIRECT_CONVERSATION_ACTIVE_MLS_GENERATION_V1,
+        )
+        .cloned()
+        .ok_or("initial_exact_pair_generation_not_final")?;
+    if serde_json::to_value(&activation.payload)
+        .map_err(|_| "initial_exact_pair_generation_not_final")?
+        != active_generation
+    {
+        return Err("initial_exact_pair_generation_not_final");
     }
 
     match payload.authorization_basis.kind {
@@ -605,6 +853,40 @@ fn direct_binding_endorsement_digest(
 mod binding_digest_tests {
     use super::*;
 
+    fn generation_payload(
+        generation: u64,
+        predecessor: Option<arkret_wire::Hash>,
+    ) -> arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationActivatePayload
+    {
+        arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationActivatePayload {
+            pair_key: arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            mls_generation: generation,
+            phase: if generation == 0 {
+                arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationPhase::ProvisionalHistorySend
+            } else {
+                arkret_models_collaboration::events_payloads::DirectConversationMlsGenerationPhase::ExactPair
+            },
+            mls_group_id: arkret_wire::MlsGroupId::new("direct-generation-test-group").unwrap(),
+            genesis_event_ref: arkret_wire::EventId::new(
+                "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
+            )
+            .unwrap(),
+            selected_group_state_ref: arkret_wire::NonEmptyString::new(format!(
+                "selected-generation-{generation}"
+            ))
+            .unwrap(),
+            main_strand_id: arkret_wire::StrandId::new(
+                "ak:strand:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
+            )
+            .unwrap(),
+            predecessor_active_value_digest: predecessor,
+        }
+    }
+
+    fn value_digest(value: &Value) -> arkret_wire::Hash {
+        arkret_wire::Hash::new(arkret_canonical::canonical_sha256(value).unwrap()).unwrap()
+    }
+
     #[test]
     fn registered_binding_digest_kat_is_used_for_projection_identity() {
         let payload = serde_json::json!({
@@ -632,6 +914,57 @@ mod binding_digest_tests {
             "sha256:bb50b66aa3a8e808ea61743efb278f1d55d0849f534ce2ee6ab01e893ce15a58"
         );
     }
+
+    #[test]
+    fn generation_candidate_cap_accepts_sixteenth_and_rejects_seventeenth() {
+        assert!(validate_direct_generation_candidate_cap(15).is_ok());
+        assert_eq!(
+            validate_direct_generation_candidate_cap(16),
+            Err(arkret_wire::ErrorCode::MLS_GENERATION_PROPOSAL_FANOUT_EXCEEDED)
+        );
+    }
+
+    #[test]
+    fn generation_cas_has_one_winner_and_rejects_same_predecessor_loser() {
+        let generation_zero = generation_payload(0, None);
+        let generation_zero_value = serde_json::to_value(&generation_zero).unwrap();
+        let generation_one = generation_payload(1, Some(value_digest(&generation_zero_value)));
+        assert!(
+            validate_direct_generation_predecessor(&generation_one, Some(&generation_zero_value))
+                .is_ok()
+        );
+
+        let accepted_winner = serde_json::to_value(&generation_one).unwrap();
+        assert_eq!(
+            validate_direct_generation_predecessor(&generation_one, Some(&accepted_winner)),
+            Err("direct_conversation_mls_generation_predecessor_invalid"),
+            "a same-generation loser cannot replace the accepted singleton"
+        );
+        let generation_two = generation_payload(2, Some(value_digest(&accepted_winner)));
+        assert!(
+            validate_direct_generation_predecessor(&generation_two, Some(&accepted_winner)).is_ok()
+        );
+    }
+
+    #[test]
+    fn generation_predecessor_binds_the_whole_accepted_value() {
+        let generation_zero = generation_payload(0, None);
+        let original = serde_json::to_value(&generation_zero).unwrap();
+        let proposed = generation_payload(1, Some(value_digest(&original)));
+
+        let mut changed = original;
+        changed["selected_group_state_ref"] = serde_json::json!("different-selected-state");
+        assert_eq!(
+            validate_direct_generation_predecessor(&proposed, Some(&changed)),
+            Err("direct_conversation_mls_generation_predecessor_invalid")
+        );
+
+        let skipped = generation_payload(3, Some(value_digest(&changed)));
+        assert_eq!(
+            validate_direct_generation_predecessor(&skipped, Some(&changed)),
+            Err("direct_conversation_mls_generation_predecessor_invalid")
+        );
+    }
 }
 
 /// Derive the founder basis from an accepted Contact record.
@@ -648,12 +981,52 @@ pub(crate) fn direct_founder_basis_from_contact(
     arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis,
     &'static str,
 > {
-    // NOTE: glare bases (both sides requested concurrently) derive the founder from the
-    // canonically-ordered pair of request refs. The stored ContactRecord keeps a single
-    // requester/target orientation and does not persist both request refs, so a glare pair cannot
-    // be derived here yet. We deliberately do NOT guess: guessing would let the two sides
-    // disagree about who may create, which is exactly the race founder derivation exists to
-    // remove.
+    if let Some(bundle) = record.basis_evidence.as_ref() {
+        if record.basis_id.as_deref() != Some(bundle.basis_id.as_str()) {
+            return Err("direct_conversation_founder_basis_unavailable");
+        }
+        if let arkret_models_collaboration::contact_operations::ContactBasis::Glare {
+            requests,
+            ..
+        } = &bundle.basis
+        {
+            let attestations = bundle
+                .glare_concurrency_attestations
+                .as_ref()
+                .ok_or("direct_conversation_founder_basis_unavailable")?;
+            if bundle.request_receipts.len() != 2
+                || attestations.iter().any(|attestation| {
+                    attestation.complete_through == 0
+                        || requests.iter().any(|request| {
+                            !attestation
+                                .observed_frontier
+                                .contains(&request.request_event_ref)
+                        })
+                })
+            {
+                return Err("direct_conversation_founder_basis_unavailable");
+            }
+            let first = &requests[0];
+            let receipt = bundle
+                .request_receipts
+                .iter()
+                .find(|receipt| receipt.core.request_event_ref == first.request_event_ref)
+                .ok_or("direct_conversation_founder_basis_unavailable")?;
+            let digest = arkret_identifiers::Hash::new(
+                arkret_canonical::canonical_sha256(receipt)
+                    .map_err(|_| "direct_conversation_founder_basis_unavailable")?,
+            )
+            .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+            if digest != first.request_acceptance_receipt_digest {
+                return Err("direct_conversation_founder_basis_unavailable");
+            }
+            return Ok(
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Glare {
+                    first_request_issuer: receipt.core.holder.subject_id().clone(),
+                },
+            );
+        }
+    }
     let request_issuer = arkret_identifiers::Did::new(record.requester.clone())
         .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
     Ok(
@@ -718,36 +1091,43 @@ pub(crate) async fn direct_founder_for_pair(
 /// Current active exact-pair MLS generation activation for a bound conversation.
 pub(crate) async fn direct_active_generation_ref(
     state: &AppState,
+    pair_key: &str,
     binding: &DirectConversationBindingRecord,
-) -> Result<EventId, AppError> {
-    let mut best: Option<(u64, String)> = None;
-    for event in state
+) -> Result<Option<EventId>, AppError> {
+    let active_value = state
+        .projections()
+        .snapshot()
+        .realm_null_subject_cell_value(
+            &binding.realm_id,
+            arkret_wire::CellFamilyId::DIRECT_CONVERSATION_ACTIVE_MLS_GENERATION_V1,
+        )
+        .cloned();
+    let Some(active_value) = active_value else {
+        // Missing and Bottom both require reconciliation. Neither may be
+        // replaced by selecting the numerically greatest observed Event.
+        return Ok(None);
+    };
+    let mut matching_refs = state
         .event_queries()
         .projected_events_for_realm(&binding.realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        if event.event_kind != arkret_wire::EventKind::DirectConversationMlsGenerationActivate {
-            continue;
-        }
-        let generation = event
-            .payload
-            .get("mls_generation")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        if best
-            .as_ref()
-            .is_none_or(|(current, _)| generation > *current)
-        {
-            best = Some((generation, event.event_id));
-        }
+        .into_iter()
+        .filter(|event| {
+            event.event_kind == arkret_wire::EventKind::DirectConversationMlsGenerationActivate
+                && event.payload == active_value
+                && event.payload.get("pair_key").and_then(Value::as_str) == Some(pair_key)
+                && event.payload.get("main_strand_id").and_then(Value::as_str)
+                    == Some(binding.main_strand_id.as_str())
+        })
+        .map(|event| event.event_id)
+        .collect::<Vec<_>>();
+    matching_refs.sort_unstable();
+    matching_refs.dedup();
+    if matching_refs.len() != 1 {
+        return Ok(None);
     }
-    let (_, event_id) = best.ok_or_else(|| {
-        direct_resolve_precondition(
-            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-            "direct conversation has no active MLS generation",
-        )
-    })?;
-    EventId::new(event_id)
+    EventId::new(matching_refs.pop().expect("cardinality checked"))
+        .map(Some)
         .map_err(|error| AppError::internal(format!("stored activation ref invalid: {error}")))
 }

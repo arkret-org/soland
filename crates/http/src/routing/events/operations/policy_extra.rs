@@ -533,10 +533,10 @@ pub(crate) async fn validate_realm_key_share_policy(
     else {
         return Err("history_sharing_policy_missing");
     };
-    // A Principal Control Realm has no projected policy cell and never can: the
-    // facet kind is absent from its event-kind allowlist. Its effective policy is
-    // the profile-fixed baseline (realm-and-space.md §2.8.1), so a PCR key share
-    // is evaluated against that instead of being refused for a missing Event.
+    // Principal Control and Direct Conversation Realms have no projected
+    // policy cell and never can: each profile supplies one fixed effective
+    // baseline.  An absent Event is therefore not a missing policy for either
+    // constrained Realm role.
     let policy = if let Some(policy_value) = meta.history_sharing_policy.as_ref() {
         let policy = serde_json::from_value::<
             arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue,
@@ -547,6 +547,9 @@ pub(crate) async fn validate_realm_key_share_policy(
         policy
     } else if realm_is_principal_control(state, operation.realm_id.as_str()).await {
         arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
+            .map_err(|_| "history_sharing_policy_missing")?
+    } else if is_direct_conversation_realm(state, operation.realm_id.as_str()) {
+        arkret_policy::history_visibility::direct_conversation_realm_history_sharing_policy()
             .map_err(|_| "history_sharing_policy_missing")?
     } else {
         return Err("history_sharing_policy_missing");

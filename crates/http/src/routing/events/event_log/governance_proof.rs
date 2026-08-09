@@ -42,7 +42,8 @@ pub(super) async fn mls_governance_proof(
     }
 
     let realm_value = request.realm_id.as_str();
-    let own_pcr = soland_services::identity::principal_control_realm_for_did(&session.actor);
+    let own_pcr =
+        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
     let managed_agent_pcr =
         crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
             state,
@@ -50,7 +51,7 @@ pub(super) async fn mls_governance_proof(
             realm_value,
         )
         .await?;
-    let realm_accessible = realm_value == own_pcr
+    let realm_accessible = realm_value == own_pcr.as_str()
         || managed_agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(state, realm_value, Some(&session))
             .await;

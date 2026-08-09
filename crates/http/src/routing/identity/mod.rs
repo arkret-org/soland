@@ -1,5 +1,7 @@
 use salvo::prelude::*;
 
+use crate::AppState;
+
 pub(super) mod account;
 pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
 pub(crate) mod account_data;
@@ -38,6 +40,28 @@ use super::{
     normalize_localpart, now, parse_and_validate_sync_cursor, query_param, render_error,
     sha256_hex, sync_token_for_client_sync, validate_device_id, validate_did,
 };
+
+/// Resolve a principal's unique accepted PCR from projection truth.
+/// Event-derived Realm ids cannot be reconstructed from a DID.
+pub(crate) fn principal_control_realm_for_actor(
+    state: &AppState,
+    principal_id: &str,
+) -> Result<arkret_identifiers::RealmId, soland_http::error::AppError> {
+    let snapshot = state.projections().snapshot();
+    let realm_id = snapshot
+        .principal_control_realm_for_actor(principal_id)
+        .ok_or_else(|| {
+            soland_http::error::AppError::new(
+                arkret_wire::ErrorCode::FailedPrecondition,
+                "principal has no unique accepted principal-control Realm",
+            )
+        })?;
+    arkret_identifiers::RealmId::new(realm_id.to_owned()).map_err(|error| {
+        soland_http::error::AppError::internal(format!(
+            "projected principal-control Realm id is invalid: {error}"
+        ))
+    })
+}
 
 pub fn router() -> Router {
     protocol_router()

@@ -236,9 +236,14 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
         let mut conn = pg_conn(&self.device_pairings.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let new_device_pubkey =
+            serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "cannot encode device pairing authorization public key: {error}"
+                ))
+            })?;
         sql_query(
-            "WITH claimed AS (\
-                UPDATE device_pairings SET \
+            "UPDATE device_pairings SET \
                     state = 'authorized', \
                     device_id = $4, \
                     authorized_by_actor_id = $5, \
@@ -247,31 +252,15 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
                     AND pairing_code = $2 \
                     AND new_device_pubkey = $3 \
                     AND state = 'pending_authorization' \
-                    AND expires_at > $7 \
-                RETURNING 1\
-            ) \
-            INSERT INTO devices \
-                (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-            SELECT $8, $5, $4, $9, $10, $11, $12, $13 FROM claimed \
-            ON CONFLICT (actor_id, device_id) DO UPDATE SET \
-                payload = EXCLUDED.payload, \
-                verification_state = EXCLUDED.verification_state, \
-                updated_at = EXCLUDED.updated_at, \
-                revoked_at = EXCLUDED.revoked_at",
+                    AND expires_at > $7",
         )
         .bind::<Text, _>(&commit.device_pairing_request_id)
         .bind::<Text, _>(&commit.pairing_code)
-        .bind::<Jsonb, _>(&commit.new_device_pubkey)
-        .bind::<Text, _>(&commit.device.device_id)
+        .bind::<Jsonb, _>(&new_device_pubkey)
+        .bind::<Text, _>(&commit.device_id)
         .bind::<Text, _>(&commit.authorized_by_actor_id)
         .bind::<Text, _>(&commit.authorized_event_ref)
         .bind::<Timestamptz, _>(commit.changed_at)
-        .bind::<SqlUuid, _>(uuid::Uuid::now_v7())
-        .bind::<Jsonb, _>(&commit.device.payload)
-        .bind::<Text, _>(&commit.device.verification_state)
-        .bind::<Timestamptz, _>(commit.device.created_at)
-        .bind::<Timestamptz, _>(commit.device.updated_at)
-        .bind::<Nullable<Timestamptz>, _>(commit.device.revoked_at)
         .execute(&mut *conn)
         .await
         .map(|rows| rows > 0)

@@ -2,12 +2,15 @@ use arkret_models_collaboration::contact_operations::{
     ContactAcceptedOutcome, ContactBasis, ContactCommitRequestBody, ContactCurrentProof,
     ContactFailedOutcome, ContactLineage, ContactOperationRejectReason, ContactPreparedEventDraft,
     ContactPreparedOutcome, ContactResultKind, ContactScope, ContactScopeUpdatePayload,
-    ContactScopeUpdateSchema, NormalResponseAcceptanceReceipt, RejectAcceptanceReceipt,
-    RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
+    ContactScopeUpdateSchema, NormalResponseAcceptanceReceipt, PeerContactSubmitRequestBody,
+    RejectAcceptanceReceipt, RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
     ContactTombstonedPayload,
+};
+use arkret_models_collaboration::governance::peer_contact::{
+    ContactIntroductionEvidence, PeerContactAddress,
 };
 use arkret_wire::{
     Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId, ProtocolSignature,
@@ -28,6 +31,7 @@ enum ContactReservationBranch {
         peer: ContactPeer,
         granted_to_peer_scopes: Vec<ContactScope>,
         previous_terminal_basis_id: Option<Hash>,
+        introduction_evidence: ContactIntroductionEvidence,
     },
     Response {
         request_receipt: RequestAcceptanceReceipt,
@@ -545,10 +549,8 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
-    let realm_id = RealmId::new(soland_services::identity::principal_control_realm_for_did(
-        &session.actor,
-    ))
-    .map_err(|error| AppError::internal(format!("holder PCR id invalid: {error}")))?;
+    let realm_id =
+        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         realm_id.clone(),
@@ -865,7 +867,39 @@ async fn commit(
         }
         _ => {}
     }
-    crate::routing::events::event_log::submit_initial_event_submission(
+    let (outcome, contact_projection) =
+        plan_contact_commit(state, &reservation, &body.signed_event).await?;
+    if matches!(outcome, ContactOperationOutcome::Failed { .. }) {
+        persist_final(
+            state,
+            &session.actor,
+            &contact_phase_idempotency_key("commit", &body.idempotency_key),
+            &request_hash,
+            &outcome,
+        )
+        .await?;
+        return json_ok(outcome);
+    }
+    let delivery = prepare_contact_federation_delivery(
+        state,
+        &reservation,
+        &body.signed_event,
+        &outcome,
+        contact_projection.as_ref().map(|commit| &commit.record),
+    )?;
+    let idempotency_created_at = now();
+    let contact_idempotency = soland_services::events::IdempotentResponse {
+        principal_id: session.actor.clone(),
+        key: contact_phase_idempotency_key("commit", &body.idempotency_key),
+        service_id: state.service_id().clone(),
+        request_hash: request_hash.clone(),
+        status: StatusCode::OK.as_u16() as i32,
+        body: serde_json::to_value(&outcome)
+            .map_err(|error| AppError::internal(format!("Contact outcome encode: {error}")))?,
+        created_at: idempotency_created_at,
+        expires_at: idempotency_created_at + chrono::Duration::hours(CONTACT_OUTCOME_TTL_HOURS),
+    };
+    crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
         state,
         session,
         arkret_wire::EventInitialSubmission {
@@ -875,6 +909,11 @@ async fn commit(
             control_proposal_ack: body.control_proposal_ack.clone(),
             membership_compensation_evidence: None,
         },
+        contact_projection.ok_or_else(|| {
+            AppError::internal("accepted Contact commit is missing its projection mutation")
+        })?,
+        delivery.into_iter().collect(),
+        contact_idempotency,
     )
     .await
     .map_err(|error| {
@@ -882,31 +921,38 @@ async fn commit(
             .with_status(error.status)
             .with_wire_code(Box::leak(error.code.into_boxed_str()))
     })?;
-    let outcome = project_contact_commit(state, &reservation, &body.signed_event).await?;
-    persist_final(
-        state,
-        &session.actor,
-        &contact_phase_idempotency_key("commit", &body.idempotency_key),
-        &request_hash,
-        &outcome,
-    )
-    .await?;
     json_ok(outcome)
 }
 
-async fn project_contact_commit(
+async fn plan_contact_commit(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
-) -> Result<ContactOperationOutcome, AppError> {
+) -> Result<
+    (
+        ContactOperationOutcome,
+        Option<soland_services::events::CommitContactProjection>,
+    ),
+    AppError,
+> {
     let holder = reservation.holder.subject_id().as_str().to_owned();
     let peer = reservation.branch.peer().subject_id().as_str().to_owned();
     let contacts = state.contacts();
+    let mut projection = None;
     let outcome = match &reservation.branch {
         ContactReservationBranch::Request {
             granted_to_peer_scopes,
+            introduction_evidence,
             ..
         } => {
+            let request_receipt = sign_request_receipt(state, reservation, event)?;
+            let peer_service_id = contact_request_delivery_address(
+                state,
+                reservation.holder.subject_id(),
+                reservation.branch.peer().subject_id(),
+                introduction_evidence,
+            )?
+            .map(|address| address.recipient_service_id.to_string());
             if contacts
                 .contact_any(&holder, &peer)
                 .await
@@ -918,16 +964,19 @@ async fn project_contact_commit(
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .is_some()
             {
-                return Ok(ContactOperationOutcome::Failed {
-                    outcome: ContactFailedOutcome {
-                        result_kind: ContactResultKind::Request,
-                        operation_id: reservation.operation_id.clone(),
-                        reason: ContactOperationRejectReason::ContactBasisConflict,
+                return Ok((
+                    ContactOperationOutcome::Failed {
+                        outcome: ContactFailedOutcome {
+                            result_kind: ContactResultKind::Request,
+                            operation_id: reservation.operation_id.clone(),
+                            reason: ContactOperationRejectReason::ContactBasisConflict,
+                        },
                     },
-                });
+                    None,
+                ));
             }
-            contacts
-                .save_contact(ContactRecord {
+            projection = Some(soland_services::events::CommitContactProjection {
+                record: ContactRecord {
                     requester: holder.clone(),
                     target: peer.clone(),
                     basis_id: None,
@@ -936,6 +985,10 @@ async fn project_contact_commit(
                     granted_to_requester_scopes: Vec::new(),
                     status: "pending".to_owned(),
                     request_event_ref: Some(event.event_id.to_string()),
+                    request_receipts: vec![request_receipt.clone()],
+                    request_mirror_receipts: Vec::new(),
+                    basis_evidence: None,
+                    control_outcomes: Vec::new(),
                     response_event_ref: None,
                     tombstone_event_ref: None,
                     message: event
@@ -943,16 +996,17 @@ async fn project_contact_commit(
                         .get("message")
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
-                    peer_service_id: None,
+                    peer_service_id,
                     created_at: event.created_at,
                     updated_at: event.created_at,
-                })
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+                },
+                expected_updated_at: None,
+                conflict_code: "contact_basis_conflict".to_owned(),
+            });
             ContactOperationOutcome::Accepted {
                 outcome: ContactAcceptedOutcome::Request {
                     operation_id: reservation.operation_id.clone(),
-                    request_acceptance_receipt: sign_request_receipt(state, reservation, event)?,
+                    request_acceptance_receipt: request_receipt,
                 },
             }
         }
@@ -984,16 +1038,18 @@ async fn project_contact_commit(
                     "Contact request slot is already consumed",
                 ));
             }
+            let expected_updated_at = record.updated_at;
             record.status = "accepted".to_owned();
             record.basis_id = Some(basis_id.to_string());
             record.version = Some(1);
             record.granted_to_requester_scopes = contact_scope_strings(granted_to_peer_scopes);
             record.response_event_ref = Some(event.event_id.to_string());
             record.updated_at = event.created_at;
-            contacts
-                .save_contact(record)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            projection = Some(soland_services::events::CommitContactProjection {
+                record,
+                expected_updated_at: Some(expected_updated_at),
+                conflict_code: "contact_lineage_conflict".to_owned(),
+            });
             let response_digest = Hash::new(event.event_digest().map_err(|error| {
                 AppError::internal(format!("Contact response digest: {error}"))
             })?)
@@ -1066,13 +1122,15 @@ async fn project_contact_commit(
                     "Contact request slot is already consumed",
                 ));
             }
+            let expected_updated_at = record.updated_at;
             record.status = "rejected".to_owned();
             record.response_event_ref = Some(event.event_id.to_string());
             record.updated_at = event.created_at;
-            contacts
-                .save_contact(record)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            projection = Some(soland_services::events::CommitContactProjection {
+                record,
+                expected_updated_at: Some(expected_updated_at),
+                conflict_code: "contact_lineage_conflict".to_owned(),
+            });
             let reject_digest =
                 Hash::new(event.event_digest().map_err(|error| {
                     AppError::internal(format!("Contact reject digest: {error}"))
@@ -1113,6 +1171,7 @@ async fn project_contact_commit(
                 return Err(AppError::not_found("accepted Contact basis not found"));
             };
             validate_lineage_head(&record, &holder, basis_id, *version, predecessor_event_ref)?;
+            let expected_updated_at = record.updated_at;
             set_holder_scopes(
                 &mut record,
                 &holder,
@@ -1125,10 +1184,11 @@ async fn project_contact_commit(
             // heads, so an empty intersection grants nothing.
             record.status = "accepted".to_owned();
             set_holder_head(&mut record, &holder, event.event_id.to_string());
-            contacts
-                .save_contact(record)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            projection = Some(soland_services::events::CommitContactProjection {
+                record,
+                expected_updated_at: Some(expected_updated_at),
+                conflict_code: "contact_lineage_conflict".to_owned(),
+            });
             let lineage = signed_lineage(
                 state,
                 reservation.holder.clone(),
@@ -1158,14 +1218,16 @@ async fn project_contact_commit(
                 return Err(AppError::not_found("accepted Contact basis not found"));
             };
             validate_lineage_head(&record, &holder, basis_id, *version, predecessor_event_ref)?;
+            let expected_updated_at = record.updated_at;
             record.version = Some(*version);
             record.status = "tombstoned".to_owned();
             record.tombstone_event_ref = Some(event.event_id.to_string());
             record.updated_at = event.created_at;
-            contacts
-                .save_contact(record)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            projection = Some(soland_services::events::CommitContactProjection {
+                record,
+                expected_updated_at: Some(expected_updated_at),
+                conflict_code: "contact_lineage_conflict".to_owned(),
+            });
             let lineage = signed_lineage(
                 state,
                 reservation.holder.clone(),
@@ -1186,7 +1248,241 @@ async fn project_contact_commit(
             }
         }
     };
-    Ok(outcome)
+    Ok((outcome, projection))
+}
+
+fn prepare_contact_federation_delivery(
+    state: &AppState,
+    reservation: &ContactReservation,
+    event: &Event,
+    outcome: &ContactOperationOutcome,
+    planned_record: Option<&ContactRecord>,
+) -> Result<Option<soland_services::events::FederationDelivery>, AppError> {
+    let ContactOperationOutcome::Accepted { outcome } = outcome else {
+        return Ok(None);
+    };
+    let holder = reservation.holder.subject_id();
+    let peer = reservation.branch.peer().subject_id();
+    let address = match &reservation.branch {
+        ContactReservationBranch::Request {
+            introduction_evidence,
+            ..
+        } => contact_request_delivery_address(state, holder, peer, introduction_evidence)?,
+        _ => {
+            let Some(recipient_service_id) =
+                planned_record.and_then(|record| record.peer_service_id.as_deref())
+            else {
+                // Later facts may only reuse a delivery coordinate retained
+                // from the verified request carrier. Never infer a Principal
+                // Server from the peer subject DID.
+                return Ok(None);
+            };
+            Some(PeerContactAddress {
+                subject_id: peer.clone(),
+                recipient_service_id: Did::new(recipient_service_id.to_owned()).map_err(
+                    |error| {
+                        AppError::internal(format!("Contact recipient service invalid: {error}"))
+                    },
+                )?,
+                recipient_service_kind: Some("principal_server".to_owned()),
+            })
+        }
+    };
+    let Some(contact_address) = address else {
+        // Some introduction profiles intentionally carry no routable service
+        // coordinate. The accepted local request remains pending_outgoing and
+        // cannot be upgraded to accepted authority until a verified delivery
+        // binding becomes available.
+        return Ok(None);
+    };
+    let key = IdempotencyKey::new(format!("peer-contact:{}", event.event_id))
+        .map_err(|error| AppError::internal(format!("Contact peer key invalid: {error}")))?;
+    let delivery = match outcome {
+        ContactAcceptedOutcome::Request {
+            request_acceptance_receipt,
+            ..
+        } => {
+            let ContactReservationBranch::Request {
+                introduction_evidence,
+                ..
+            } = &reservation.branch
+            else {
+                return Err(AppError::internal(
+                    "Contact request outcome/branch mismatch",
+                ));
+            };
+            PeerContactSubmitRequestBody::Request {
+                idempotency_key: key,
+                signed_event: event.clone(),
+                request_receipt: request_acceptance_receipt.clone(),
+                contact_address,
+                introduction_evidence: introduction_evidence.clone(),
+                current_proof: None,
+            }
+        }
+        ContactAcceptedOutcome::Response {
+            normal_response_acceptance_receipt,
+            current_proof,
+            ..
+        } => PeerContactSubmitRequestBody::Response {
+            idempotency_key: key,
+            signed_event: event.clone(),
+            response_receipt: normal_response_acceptance_receipt.clone(),
+            contact_address,
+            current_proof: Some(current_proof.clone()),
+        },
+        ContactAcceptedOutcome::Reject {
+            reject_acceptance_receipt,
+            ..
+        } => PeerContactSubmitRequestBody::Reject {
+            idempotency_key: key,
+            signed_event: event.clone(),
+            reject_receipt: reject_acceptance_receipt.clone(),
+            contact_address,
+        },
+        ContactAcceptedOutcome::ScopeUpdate {
+            lineage,
+            current_proof,
+            ..
+        } => PeerContactSubmitRequestBody::ScopeUpdate {
+            idempotency_key: key,
+            signed_event: event.clone(),
+            lineage: lineage.clone(),
+            current_proof: current_proof.clone(),
+            contact_address,
+        },
+        ContactAcceptedOutcome::Tombstone {
+            lineage,
+            current_proof,
+            ..
+        } => PeerContactSubmitRequestBody::Tombstone {
+            idempotency_key: key,
+            signed_event: event.clone(),
+            lineage: lineage.clone(),
+            current_proof: current_proof.clone(),
+            contact_address,
+        },
+    };
+    let recipient_service_id = match &delivery {
+        PeerContactSubmitRequestBody::Request {
+            contact_address, ..
+        }
+        | PeerContactSubmitRequestBody::Response {
+            contact_address, ..
+        }
+        | PeerContactSubmitRequestBody::Reject {
+            contact_address, ..
+        }
+        | PeerContactSubmitRequestBody::ScopeUpdate {
+            contact_address, ..
+        }
+        | PeerContactSubmitRequestBody::Tombstone {
+            contact_address, ..
+        } => contact_address.recipient_service_id.as_str(),
+        PeerContactSubmitRequestBody::ProofRefresh { .. }
+        | PeerContactSubmitRequestBody::GlareFinalize { .. } => {
+            unreachable!("Contact commit only emits Event carriers")
+        }
+    };
+    crate::routing::identity::contact_federation::prepare_peer_contact_carrier(
+        state,
+        recipient_service_id,
+        &delivery,
+    )
+}
+
+fn contact_request_delivery_address(
+    state: &AppState,
+    holder: &Did,
+    peer: &Did,
+    evidence: &ContactIntroductionEvidence,
+) -> Result<Option<PeerContactAddress>, AppError> {
+    let (recipient_service_id, recipient_service_kind) = match evidence {
+        ContactIntroductionEvidence::LocatorRef { principal_locator } => {
+            principal_locator.validate_minimal().map_err(|error| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    format!("Contact principal locator invalid: {error}"),
+                )
+            })?;
+            if &principal_locator.subject_id != peer || principal_locator.expires_at <= now() {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact principal locator does not bind the current peer",
+                ));
+            }
+            (
+                principal_locator.recipient_service_id.clone(),
+                principal_locator.recipient_service_kind.clone(),
+            )
+        }
+        ContactIntroductionEvidence::SharedRealm {
+            realm_id,
+            requester_member_ref,
+            target_member_ref,
+        } => {
+            let snapshot = state.projections().snapshot();
+            let requester = snapshot.member(realm_id.as_str(), holder.as_str());
+            let target = snapshot.member(realm_id.as_str(), peer.as_str());
+            let (Some(requester), Some(target)) = (requester, target) else {
+                return Ok(None);
+            };
+            if requester.state != "join"
+                || requester.membership_event_ref.as_deref() != Some(requester_member_ref.as_str())
+                || target.state != "join"
+                || target.delivery_status.as_deref() != Some("routable")
+                || target.membership_event_ref.as_deref() != Some(target_member_ref.as_str())
+            {
+                return Ok(None);
+            }
+            let Some(service_id) = target.recipient_service_id.as_deref() else {
+                return Ok(None);
+            };
+            (
+                Did::new(service_id.to_owned()).map_err(|error| {
+                    AppError::internal(format!("Contact member delivery service invalid: {error}"))
+                })?,
+                Some("principal_server".to_owned()),
+            )
+        }
+        ContactIntroductionEvidence::HandleClaim {
+            handle,
+            handle_claim,
+            ..
+        } => {
+            let Some(binding) = handle_claim.member_delivery_binding.as_ref() else {
+                return Ok(None);
+            };
+            if handle_claim.handle.as_ref() != Some(handle)
+                || handle_claim.subject.as_ref() != Some(peer)
+                || handle_claim
+                    .validate_remote_resolution(
+                        Some(state.service_id()),
+                        Some(&binding.recipient_service_id),
+                        now(),
+                    )
+                    .is_err()
+            {
+                return Ok(None);
+            }
+            (
+                binding.recipient_service_id.clone(),
+                Some("principal_server".to_owned()),
+            )
+        }
+        ContactIntroductionEvidence::SamePrincipalServer => (
+            Did::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("local Contact service DID invalid: {error}"))
+            })?,
+            Some("principal_server".to_owned()),
+        ),
+        ContactIntroductionEvidence::ExplicitAddress => return Ok(None),
+    };
+    Ok(Some(PeerContactAddress {
+        subject_id: peer.clone(),
+        recipient_service_id,
+        recipient_service_kind,
+    }))
 }
 
 async fn contact_record_for_lineage(
@@ -1284,6 +1580,7 @@ pub(super) async fn request(
                     peer: body.peer,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                     previous_terminal_basis_id: body.previous_terminal_basis_id,
+                    introduction_evidence: body.introduction_evidence,
                 },
                 payload,
             )

@@ -204,6 +204,12 @@ pub(super) async fn provision_agent(
             requested_scope,
             pairing_ttl_ms,
         } => {
+            // The current wire shape requires the server to return a PCR id
+            // before it carries the signed create Event that alone determines
+            // that id.  Reject even a historical idempotency hit: replaying a
+            // formerly minted/subject-derived id would preserve the invalid
+            // allocation contract.
+            let _ = crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             if let Some(record) = lookup_provision_allocation(state, &controller_id, &key).await? {
                 if record.expires_at <= now_utc {
@@ -281,9 +287,7 @@ pub(super) async fn provision_agent(
                     AppError::internal(format!("generated Agent DID invalid: {error}"))
                 })?;
             let principal_control_realm_id =
-                crate::routing::identity::managed_agent_pcr::principal_control_realm_id_for(
-                    &agent_id,
-                )?;
+                crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let controller_did = Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
@@ -369,6 +373,9 @@ pub(super) async fn provision_agent(
             provision_event,
             pairing_ttl_ms,
         } => {
+            // Do not let a persisted legacy prepare allocation bypass the
+            // event-derived PCR requirement during commit.
+            let _ = crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let prepare_key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             let allocation = lookup_provision_allocation(state, &controller_id, &prepare_key)
                 .await?

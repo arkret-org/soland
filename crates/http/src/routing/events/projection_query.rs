@@ -110,14 +110,26 @@ async fn realm_history_sharing_policy(
     state: &AppState,
     realm_id: &str,
 ) -> Option<HistorySharingPolicyPayloadValue> {
-    let policy_value = state
+    let meta = state
         .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
-        .flatten()?
-        .history_sharing_policy?;
-    let policy = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?;
+        .flatten()?;
+    let policy = if let Some(policy_value) = meta.history_sharing_policy {
+        serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?
+    } else {
+        let projection = state.projections().snapshot();
+        if projection.realm_is_principal_control(realm_id) {
+            arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
+                .ok()?
+        } else if projection.realm_is_direct_conversation(realm_id) {
+            arkret_policy::history_visibility::direct_conversation_realm_history_sharing_policy()
+                .ok()?
+        } else {
+            return None;
+        }
+    };
     arkret_policy::history_visibility::validate_history_sharing_policy(&policy).ok()?;
     Some(policy)
 }

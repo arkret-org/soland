@@ -381,10 +381,8 @@ async fn admit_caller_signed_account_data_set(
             "account data revision high-water mark is exhausted",
         )
     })?;
-    let realm_id = RealmId::new(soland_services::identity::principal_control_realm_for_did(
-        &session.actor,
-    ))
-    .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
+    let realm_id =
+        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
     if event.realm_id.as_str() != realm_id.as_str() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,

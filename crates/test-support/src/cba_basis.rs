@@ -227,6 +227,42 @@ fn fixture_pcr_founding_device_descriptor(
     }
 }
 
+/// Deterministic, fully content-bound PCR create Event shared by fixtures that
+/// need to name the PCR before seeding its accepted projection.
+pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire::Event {
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .expect("fixture PCR genesis timestamp")
+        .with_timezone(&chrono::Utc);
+    let principal = Did::new(principal_id.to_owned()).expect("fixture PCR principal DID");
+    arkret_bootstrap::build_self_principal_pcr_create(
+        arkret_bootstrap::SelfPrincipalPcrCreateInput {
+            principal_id: principal.clone(),
+            genesis_salt: arkret_wire::GenesisSalt::new(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .expect("fixture PCR genesis salt"),
+            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+                "ak:trust_domain:soland.test".to_owned(),
+            )
+            .expect("fixture PCR trust domain"),
+            did_inception_ref: arkret_wire::EventRef::new(
+                format!("sha256:{}", "1".repeat(64)),
+                arkret_bootstrap::DID_INCEPTION_REF_ROLE,
+            ),
+            founding_device_descriptor: fixture_pcr_founding_device_descriptor(
+                &principal, created_at,
+            ),
+            capability_action_registry_digest:
+                arkret_policy::current_capability_action_registry_digest()
+                    .expect("fixture capability action registry digest"),
+            created_at,
+            hlc: Hlc::new(FIXTURE_BASIS_HLC).expect("fixture PCR genesis HLC"),
+        },
+        &fixture_registered_projection,
+    )
+    .expect("fixture closed PCR genesis Event")
+}
+
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
@@ -327,13 +363,9 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     // receiver that re-derives `realm_id` from the Event lands on a different
     // Realm than the fixture stood up — which is exactly what admission checks.
     //
-    // Two derivation classes, matching `arkret_wire::derive_genesis_realm_id`.
-    // Event-derived class 0 can be retyped byte-for-byte to EventId. Principal
-    // subject-derived class 1 cannot; that branch ignores the Event id, so any
-    // well-formed content-bound Event id will do for fixture construction.
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .expect("fixture Realm id is canonical");
-    let is_principal_control_realm = realm.event_id().is_none();
+    let is_principal_control_realm = realm_id == crate::fixture_principal_control_realm(subject);
     let existing_records = state
         .test_persistence()
         .events()
@@ -379,42 +411,12 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         return;
     }
     if is_principal_control_realm {
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .expect("fixture PCR genesis timestamp")
-            .with_timezone(&chrono::Utc);
-        let principal = Did::new(subject.to_owned()).expect("fixture PCR principal DID");
-        let event = arkret_bootstrap::build_self_principal_pcr_create(
-            arkret_bootstrap::SelfPrincipalPcrCreateInput {
-                principal_id: principal.clone(),
-                realm_id: realm.clone(),
-                trust_domain: arkret_identifiers::TypedTrustDomainId::new(
-                    "ak:trust_domain:soland.test".to_owned(),
-                )
-                .expect("fixture PCR trust domain"),
-                did_inception_ref: arkret_wire::EventRef::new(
-                    format!("sha256:{}", "1".repeat(64)),
-                    arkret_bootstrap::DID_INCEPTION_REF_ROLE,
-                ),
-                founding_device_descriptor: fixture_pcr_founding_device_descriptor(
-                    &principal, created_at,
-                ),
-                capability_action_registry_digest:
-                    arkret_policy::current_capability_action_registry_digest()
-                        .expect("fixture capability action registry digest"),
-                created_at,
-                hlc: Hlc::new(FIXTURE_BASIS_HLC).expect("fixture PCR genesis HLC"),
-            },
-            &fixture_registered_projection,
-        )
-        .expect("fixture closed PCR genesis Event");
+        let event = fixture_principal_control_realm_create(subject);
         let payload = serde_json::to_value(&event.payload).expect("fixture PCR genesis payload");
         project_fixture_genesis_event(state, &realm, event, payload).await;
         return;
     }
-    let genesis_event_id = realm
-        .event_id()
-        .map(|event_id| event_id.to_string())
-        .unwrap_or_else(|| crate::fixture_content_bound_id("ak:event:"));
+    let genesis_event_id = realm.event_id().to_string();
     // A Realm has exactly one canonical create and the store enforces that, so
     // do not write another when this Realm already has one — whether from a
     // previous call here or from a fixture that authored its own genesis

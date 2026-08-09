@@ -10,6 +10,7 @@ pub(crate) mod direct;
 pub(crate) use direct::{
     active_direct_binding, direct_binding_conflict, direct_binding_matches_projection,
     direct_pair_key, project_canonical_direct_binding, validate_direct_binding_operation,
+    validate_direct_mls_generation_operation,
 };
 
 mod contact_write;
@@ -203,6 +204,7 @@ async fn contact_list_rows(
     records: Vec<ContactRecord>,
 ) -> Result<Vec<ContactListRow>, AppError> {
     let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
+    let mut selected = BTreeMap::<String, (ContactState, chrono::DateTime<chrono::Utc>)>::new();
     let mut records = records;
     records.sort_by(|left, right| {
         left.created_at
@@ -235,63 +237,95 @@ async fn contact_list_rows(
                 principal_id: Did::new(peer.clone()).expect("contact peer DID is validated"),
             }
         };
-        let entry = rows.entry(peer.clone()).or_insert_with(|| ContactListRow {
+        let request_receipt = if row_state == ContactState::PendingIncoming {
+            let request_event_ref = record.request_event_ref.as_deref().ok_or_else(|| {
+                AppError::internal("pending incoming Contact has no request Event reference")
+            })?;
+            Some(
+                record
+                    .request_receipts
+                    .iter()
+                    .find(|receipt| receipt.core.request_event_ref.as_str() == request_event_ref)
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::internal(
+                            "pending incoming Contact has no matching signed request receipt",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        let next_prepare_input = if row_state == ContactState::Accepted {
+            let basis_id = record
+                .basis_id
+                .as_deref()
+                .ok_or_else(|| AppError::internal("accepted Contact has no basis_id"))?;
+            let current_version = record
+                .version
+                .ok_or_else(|| AppError::internal("accepted Contact has no lineage version"))?;
+            let predecessor = if record.requester == actor {
+                record.request_event_ref.as_deref()
+            } else {
+                record.response_event_ref.as_deref()
+            }
+            .ok_or_else(|| {
+                AppError::internal("accepted Contact has no holder-local lineage head")
+            })?;
+            Some(ContactNextPrepareInput {
+                basis_id: Hash::new(basis_id.to_owned()).map_err(|error| {
+                    AppError::internal(format!("stored Contact basis_id invalid: {error}"))
+                })?,
+                version: current_version.checked_add(1).ok_or_else(|| {
+                    AppError::internal("accepted Contact lineage version overflow")
+                })?,
+                predecessor_event_ref: EventId::new(predecessor.to_owned()).map_err(|error| {
+                    AppError::internal(format!("stored Contact lineage head invalid: {error}"))
+                })?,
+            })
+        } else {
+            None
+        };
+        let candidate = ContactListRow {
             peer: peer_model,
             state: row_state,
-            request_event_ref: None,
-            response_event_ref: None,
-            tombstone_event_ref: None,
-            granted_to_peer_scopes: Vec::new(),
-            granted_by_peer_scopes: Vec::new(),
+            request_event_ref: optional_contact_event_ref(&record.request_event_ref),
+            request_receipt,
+            response_event_ref: optional_contact_event_ref(&record.response_event_ref),
+            tombstone_event_ref: optional_contact_event_ref(&record.tombstone_event_ref),
+            next_prepare_input,
+            granted_to_peer_scopes: if record.requester == actor {
+                &record.granted_to_target_scopes
+            } else {
+                &record.granted_to_requester_scopes
+            }
+            .iter()
+            .filter_map(|scope| contact_scope_model(scope))
+            .collect(),
+            granted_by_peer_scopes: if record.requester == actor {
+                &record.granted_to_requester_scopes
+            } else {
+                &record.granted_to_target_scopes
+            }
+            .iter()
+            .filter_map(|scope| contact_scope_model(scope))
+            .collect(),
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
-            peer_service_id: None,
-            direct_conversation: None,
-            agents: Vec::new(),
-        });
-        if contact_state_rank(&row_state) > contact_state_rank(&entry.state) {
-            entry.state = row_state;
-        }
-        if entry.request_event_ref.is_none() {
-            entry.request_event_ref = optional_contact_event_ref(&record.request_event_ref);
-        }
-        if entry.response_event_ref.is_none() {
-            entry.response_event_ref = optional_contact_event_ref(&record.response_event_ref);
-        }
-        if entry.tombstone_event_ref.is_none() {
-            entry.tombstone_event_ref = optional_contact_event_ref(&record.tombstone_event_ref);
-        }
-        if record.requester == actor {
-            entry.granted_to_peer_scopes = record
-                .granted_to_target_scopes
-                .iter()
-                .filter_map(|scope| contact_scope_model(scope))
-                .collect();
-            entry.granted_by_peer_scopes = record
-                .granted_to_requester_scopes
-                .iter()
-                .filter_map(|scope| contact_scope_model(scope))
-                .collect();
-        } else {
-            entry.granted_to_peer_scopes = record
-                .granted_to_requester_scopes
-                .iter()
-                .filter_map(|scope| contact_scope_model(scope))
-                .collect();
-            entry.granted_by_peer_scopes = record
-                .granted_to_target_scopes
-                .iter()
-                .filter_map(|scope| contact_scope_model(scope))
-                .collect();
-        }
-        // Surface the peer's home Principal Server when learned from a cross-PS
-        // delivery (None for same-PS contacts). Multiple scoped records can
-        // collapse into one peer row; keep the first known service DID.
-        if entry.peer_service_id.is_none() {
-            entry.peer_service_id = record
+            peer_service_id: record
                 .peer_service_id
                 .as_deref()
-                .and_then(|did| Did::new(did.to_owned()).ok());
+                .and_then(|did| Did::new(did.to_owned()).ok()),
+            direct_conversation: None,
+            agents: Vec::new(),
+        };
+        let candidate_order = (row_state, record.updated_at);
+        if selected
+            .get(&peer)
+            .is_none_or(|current| contact_candidate_replaces(*current, candidate_order))
+        {
+            selected.insert(peer.clone(), candidate_order);
+            rows.insert(peer, candidate);
         }
     }
     let mut out = rows
@@ -429,11 +463,29 @@ fn directional_contact_state(actor: &str, record: &ContactRecord) -> Option<Cont
 fn contact_state_rank(state: &ContactState) -> u8 {
     match state {
         ContactState::Accepted => 5,
-        ContactState::PendingIncoming => 4,
-        ContactState::PendingOutgoing => 3,
+        // During incomplete glare the holder's own outstanding proposal is
+        // still the only authorable slot.  Never replace it with the mirrored
+        // incoming request merely because both directional rows are present.
+        ContactState::PendingOutgoing => 4,
+        ContactState::PendingIncoming => 3,
         ContactState::Rejected => 2,
         ContactState::Expired => 2,
         ContactState::Tombstoned => 1,
+    }
+}
+
+fn contact_candidate_replaces(
+    current: (ContactState, chrono::DateTime<chrono::Utc>),
+    candidate: (ContactState, chrono::DateTime<chrono::Utc>),
+) -> bool {
+    match (current.0, candidate.0) {
+        (ContactState::PendingOutgoing, ContactState::PendingIncoming) => false,
+        (ContactState::PendingIncoming, ContactState::PendingOutgoing) => true,
+        _ => {
+            candidate.1 > current.1
+                || (candidate.1 == current.1
+                    && contact_state_rank(&candidate.0) > contact_state_rank(&current.0))
+        }
     }
 }
 
@@ -464,20 +516,29 @@ pub(crate) async fn accepted_contact_for_pair(
     peer: &str,
     scope: &str,
 ) -> Result<Option<ContactRecord>, AppError> {
+    let mut records = Vec::new();
     for (requester, target) in [(actor, peer), (peer, actor)] {
         if let Some(contact) = state
             .contacts()
             .contact_any(requester, target)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-            && contact.status == "accepted"
-            && contact_has_scope_for_both(&contact, scope)
-            && accepted_contact_has_fact_refs(&contact)
         {
-            return Ok(Some(contact));
+            records.push(contact);
         }
     }
-    Ok(None)
+    let current = records.into_iter().max_by(|left, right| {
+        left.updated_at
+            .cmp(&right.updated_at)
+            // Equal-time terminal/non-accepted evidence must fail closed over
+            // an accepted mirror; a later recontact has a later accepted_at.
+            .then_with(|| (left.status != "accepted").cmp(&(right.status != "accepted")))
+    });
+    Ok(current.filter(|contact| {
+        contact.status == "accepted"
+            && contact_has_scope_for_both(contact, scope)
+            && accepted_contact_has_fact_refs(contact)
+    }))
 }
 
 fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
@@ -493,6 +554,17 @@ fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
 }
 
 fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
+    if let Some(bundle) = contact.basis_evidence.as_ref()
+        && matches!(
+            &bundle.basis,
+            arkret_models_collaboration::contact_operations::ContactBasis::Glare { .. }
+        )
+    {
+        return bundle.request_receipts.len() == 2
+            && bundle.glare_concurrency_attestations.is_some()
+            && bundle.current_proofs.len() == 2
+            && contact.tombstone_event_ref.is_none();
+    }
     contact
         .request_event_ref
         .as_deref()
@@ -505,6 +577,16 @@ fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
 }
 
 fn contact_fact_refs(contact: &ContactRecord) -> Vec<String> {
+    if let Some(bundle) = contact.basis_evidence.as_ref()
+        && let arkret_models_collaboration::contact_operations::ContactBasis::Glare {
+            requests, ..
+        } = &bundle.basis
+    {
+        return requests
+            .iter()
+            .map(|request| request.request_event_ref.to_string())
+            .collect();
+    }
     [
         contact.request_event_ref.as_ref(),
         contact.response_event_ref.as_ref(),
@@ -537,9 +619,8 @@ fn direct_summary(
         realm_id: RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
         main_strand_id: StrandId::new(binding.main_strand_id)
             .expect("direct conversation strand id is valid"),
-        binding_event_ref: Some(
-            EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
-        ),
+        binding_event_ref: EventId::new(binding.binding_event_ref)
+            .expect("direct conversation event id is valid"),
         state,
     }
 }

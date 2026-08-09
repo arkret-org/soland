@@ -119,7 +119,7 @@ async fn signed_account_data_submission(
     content: Option<Value>,
     tombstone: bool,
 ) -> arkret_wire::EventInitialSubmission {
-    let realm_id = soland_test_support::principal_control_realm_for_did(actor);
+    let realm_id = soland_test_support::fixture_principal_control_realm(actor);
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
@@ -443,7 +443,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     // genesis builder rather than through an ordinary Realm bootstrap.
     soland_test_support::cba_basis::seed_realm_genesis_event(
         &state,
-        &soland_test_support::principal_control_realm_for_did(&actor),
+        &soland_test_support::fixture_principal_control_realm(&actor),
         &actor,
     )
     .await;

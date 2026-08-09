@@ -48,6 +48,8 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
             projections: store.projection_events(),
             idempotency: store.idempotency_keys(),
             outbox: store.federation_outbox(),
+            device_pairings: store.device_pairings(),
+            contacts: store.contacts(),
         },
         "memory-event-commit",
     )

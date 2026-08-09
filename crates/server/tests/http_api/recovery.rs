@@ -1,4 +1,4 @@
-//! Integration tests — recovery policy, session, and DID-recovery backup verification.
+//! Integration tests — recovery policy and session verification.
 //!
 //! This module is a structural root: shared helpers and constants live in
 //! [`helpers`], and each test cluster sits in its own submodule. Test
@@ -7,6 +7,5 @@
 
 mod helpers;
 
-mod did_recovery_backup;
 mod policy;
 mod session;

@@ -4,7 +4,7 @@ use super::{
     MimiConsentCorrelationStore, Mutex, PersistenceResult, async_trait,
 };
 pub(crate) struct MemoryContactStore {
-    data: Arc<Mutex<BTreeMap<ContactKey, ContactRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<ContactKey, ContactRecord>>>,
 }
 impl MemoryContactStore {
     pub(crate) fn new() -> Self {
@@ -30,6 +30,23 @@ impl ContactStore for MemoryContactStore {
             record.clone(),
         );
         Ok(())
+    }
+
+    async fn put_if_updated_at(
+        &self,
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+        record: &ContactRecord,
+    ) -> PersistenceResult<bool> {
+        let mut data = self.data.lock();
+        let key = (record.requester.clone(), record.target.clone());
+        let Some(current) = data.get(&key) else {
+            return Ok(false);
+        };
+        if current.updated_at != expected_updated_at || record.updated_at <= expected_updated_at {
+            return Ok(false);
+        }
+        data.insert(key, record.clone());
+        Ok(true)
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {

@@ -239,10 +239,10 @@ pub async fn hydrate_sidecar_projections(
     });
     for event in events {
         if event.event_kind == arkret_wire::EventKind::SidecarCreate.as_str() {
-            let Some(uuid) = event.event_id.strip_prefix("ak:event:") else {
+            let Ok(event_id) = arkret_wire::EventId::new(event.event_id.clone()) else {
                 continue;
             };
-            let sidecar_id = format!("ak:sidecar:{uuid}");
+            let sidecar_id = arkret_wire::SidecarId::from_event_id(&event_id).into_string();
             if proj.sidecars.contains_key(&sidecar_id) {
                 proj.sidecar_create_refs.insert(sidecar_id, event.event_id);
             }

@@ -51,6 +51,14 @@ struct ContactRow {
     status: String,
     #[diesel(sql_type = Nullable<Binary>)]
     request_event_ref: Option<Vec<u8>>,
+    #[diesel(sql_type = Jsonb)]
+    request_receipts: Value,
+    #[diesel(sql_type = Jsonb)]
+    request_mirror_receipts: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    basis_evidence: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    control_outcomes: Value,
     #[diesel(sql_type = Nullable<Binary>)]
     response_event_ref: Option<Vec<u8>>,
     #[diesel(sql_type = Nullable<Binary>)]
@@ -64,36 +72,64 @@ struct ContactRow {
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
-impl From<ContactRow> for ContactRecord {
-    fn from(row: ContactRow) -> Self {
-        Self {
-            requester: row.requester,
-            target: row.target,
-            basis_id: row.basis_id,
-            version: row.version.and_then(|value| u64::try_from(value).ok()),
-            granted_to_target_scopes: row.granted_to_target_scopes,
-            granted_to_requester_scopes: row.granted_to_requester_scopes,
-            status: row.status,
-            request_event_ref: row
-                .request_event_ref
-                .as_deref()
-                .map(format_contact_event_ref),
-            response_event_ref: row
-                .response_event_ref
-                .as_deref()
-                .map(format_contact_event_ref),
-            tombstone_event_ref: row
-                .tombstone_event_ref
-                .as_deref()
-                .map(format_contact_event_ref),
-            message: row.message,
-            peer_service_id: row.peer_service_id,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }
-    }
+fn decode_contact_json<T: serde::de::DeserializeOwned>(
+    value: Value,
+    field: &str,
+) -> PersistenceResult<T> {
+    serde_json::from_value(value).map_err(|error| {
+        PersistenceError::Internal(format!("invalid contacts.{field} JSONB: {error}"))
+    })
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
+
+fn encode_contact_json<T: serde::Serialize + ?Sized>(
+    value: &T,
+    field: &str,
+) -> PersistenceResult<Value> {
+    serde_json::to_value(value).map_err(|error| {
+        PersistenceError::Internal(format!("cannot encode contacts.{field} JSONB: {error}"))
+    })
+}
+
+fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> {
+    Ok(ContactRecord {
+        requester: row.requester,
+        target: row.target,
+        basis_id: row.basis_id,
+        version: row.version.map(u64::try_from).transpose().map_err(|_| {
+            PersistenceError::Internal("contacts.version contains a negative value".to_owned())
+        })?,
+        granted_to_target_scopes: row.granted_to_target_scopes,
+        granted_to_requester_scopes: row.granted_to_requester_scopes,
+        status: row.status,
+        request_event_ref: row
+            .request_event_ref
+            .as_deref()
+            .map(format_contact_event_ref),
+        request_receipts: decode_contact_json(row.request_receipts, "request_receipts")?,
+        request_mirror_receipts: decode_contact_json(
+            row.request_mirror_receipts,
+            "request_mirror_receipts",
+        )?,
+        basis_evidence: row
+            .basis_evidence
+            .map(|value| decode_contact_json(value, "basis_evidence"))
+            .transpose()?,
+        control_outcomes: decode_contact_json(row.control_outcomes, "control_outcomes")?,
+        response_event_ref: row
+            .response_event_ref
+            .as_deref()
+            .map(format_contact_event_ref),
+        tombstone_event_ref: row
+            .tombstone_event_ref
+            .as_deref()
+            .map(format_contact_event_ref),
+        message: row.message,
+        peer_service_id: row.peer_service_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
@@ -111,17 +147,26 @@ impl ContactStore for PgContactStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        Ok(row.map(ContactRecord::from))
+        row.map(contact_record_from_row).transpose()
     }
 
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
+        let request_mirror_receipts =
+            encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
+        let basis_evidence = record
+            .basis_evidence
+            .as_ref()
+            .map(|value| encode_contact_json(value, "basis_evidence"))
+            .transpose()?;
+        let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
              ON CONFLICT (requester_id, target_id) DO UPDATE SET \
                 basis_id = EXCLUDED.basis_id, \
                 version = EXCLUDED.version, \
@@ -129,6 +174,10 @@ impl ContactStore for PgContactStore {
                 granted_to_requester_scopes = EXCLUDED.granted_to_requester_scopes, \
                 status = EXCLUDED.status, \
                 request_event_ref = EXCLUDED.request_event_ref, \
+                request_receipts = EXCLUDED.request_receipts, \
+                request_mirror_receipts = EXCLUDED.request_mirror_receipts, \
+                basis_evidence = EXCLUDED.basis_evidence, \
+                control_outcomes = EXCLUDED.control_outcomes, \
                 response_event_ref = EXCLUDED.response_event_ref, \
                 tombstone_event_ref = EXCLUDED.tombstone_event_ref, \
                 message = EXCLUDED.message, \
@@ -144,6 +193,10 @@ impl ContactStore for PgContactStore {
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_deref())?)
+        .bind::<Jsonb, _>(&request_receipts)
+        .bind::<Jsonb, _>(&request_mirror_receipts)
+        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
+        .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_deref())?)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
             record.tombstone_event_ref.as_deref(),
@@ -156,6 +209,67 @@ impl ContactStore for PgContactStore {
         .await
         .map(|_| ())
         .map_err(PersistenceError::database)
+    }
+
+    async fn put_if_updated_at(
+        &self,
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+        record: &ContactRecord,
+    ) -> PersistenceResult<bool> {
+        if record.updated_at <= expected_updated_at {
+            return Ok(false);
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
+        let request_mirror_receipts =
+            encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
+        let basis_evidence = record
+            .basis_evidence
+            .as_ref()
+            .map(|value| encode_contact_json(value, "basis_evidence"))
+            .transpose()?;
+        let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
+        let affected = sql_query(
+            "UPDATE contacts SET \
+                basis_id = $3, version = $4, granted_to_target_scopes = $5, \
+                granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
+                request_receipts = $9, request_mirror_receipts = $10, basis_evidence = $11, \
+                control_outcomes = $12, response_event_ref = $13, tombstone_event_ref = $14, \
+                message = $15, peer_service_id = $16, updated_at = $17 \
+             WHERE requester_id = $1 AND target_id = $2 AND updated_at = $18",
+        )
+        .bind::<Text, _>(&record.requester)
+        .bind::<Text, _>(&record.target)
+        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(
+            |_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()),
+        )?)
+        .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
+        .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
+            record.request_event_ref.as_deref(),
+        )?)
+        .bind::<Jsonb, _>(&request_receipts)
+        .bind::<Jsonb, _>(&request_mirror_receipts)
+        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
+        .bind::<Jsonb, _>(&control_outcomes)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
+            record.response_event_ref.as_deref(),
+        )?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
+            record.tombstone_event_ref.as_deref(),
+        )?)
+        .bind::<Nullable<Text>, _>(record.message.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Timestamptz, _>(expected_updated_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(affected == 1)
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
@@ -171,7 +285,7 @@ impl ContactStore for PgContactStore {
         .get_results::<ContactRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(ContactRecord::from).collect())
+        rows.into_iter().map(contact_record_from_row).collect()
     }
 
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {

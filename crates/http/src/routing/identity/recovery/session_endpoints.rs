@@ -455,8 +455,7 @@ pub(super) async fn recovery_session_create(
         crate::routing::identity::device_generation::current_device_generation(state, &principal)
             .await
             .map_err(recovery_store_error)?;
-    let realm_id = RealmId::new(principal_control_realm_for_did(&principal))
-        .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
+    let realm_id = crate::routing::identity::principal_control_realm_for_actor(state, &principal)?;
     let (
         identity_model,
         current_device_generation_ref,

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use diesel::sql_types::{
-    BigInt, Binary, Integer, Jsonb, Nullable, SmallInt, Text, Timestamptz, Uuid,
+    Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, SmallInt, Text, Timestamptz, Uuid,
 };
 use diesel::{OptionalExtension, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -22,6 +22,12 @@ struct EventPreflightRow {
     state: String,
 }
 
+#[derive(diesel::QueryableByName)]
+struct DevicePairingCasRow {
+    #[diesel(sql_type = Bool)]
+    accepted: bool,
+}
+
 #[derive(Clone)]
 pub struct PgEventCommitUnitOfWork {
     pool: PgPool,
@@ -36,6 +42,115 @@ impl PgEventCommitUnitOfWork {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+}
+
+fn contact_event_ref(value: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> {
+    value
+        .map(|value| {
+            ids::event_token_part_or_schema_violation(value, "event").map(|token| token.to_vec())
+        })
+        .transpose()
+}
+
+async fn commit_contact_projection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    commit: soland_storage::ContactProjectionCommit,
+) -> PersistenceResult<()> {
+    let conflict_code = commit.conflict_code;
+    let record = commit.record;
+    let request_receipts = serde_json::to_value(&record.request_receipts).map_err(|error| {
+        PersistenceError::Internal(format!("cannot encode Contact request receipts: {error}"))
+    })?;
+    let request_mirror_receipts =
+        serde_json::to_value(&record.request_mirror_receipts).map_err(|error| {
+            PersistenceError::Internal(format!("cannot encode Contact mirror receipts: {error}"))
+        })?;
+    let basis_evidence = record
+        .basis_evidence
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            PersistenceError::Internal(format!("cannot encode Contact basis evidence: {error}"))
+        })?;
+    let control_outcomes = serde_json::to_value(&record.control_outcomes).map_err(|error| {
+        PersistenceError::Internal(format!("cannot encode Contact control outcomes: {error}"))
+    })?;
+    let version = record.version.map(i64::try_from).transpose().map_err(|_| {
+        PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned())
+    })?;
+    let request_event_ref = contact_event_ref(record.request_event_ref.as_deref())?;
+    let response_event_ref = contact_event_ref(record.response_event_ref.as_deref())?;
+    let tombstone_event_ref = contact_event_ref(record.tombstone_event_ref.as_deref())?;
+
+    let affected = if let Some(expected_updated_at) = commit.expected_updated_at {
+        if record.updated_at <= expected_updated_at {
+            return Err(PersistenceError::Conflict(conflict_code));
+        }
+        sql_query(
+            "UPDATE contacts SET \
+                basis_id = $3, version = $4, granted_to_target_scopes = $5, \
+                granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
+                request_receipts = $9, request_mirror_receipts = $10, basis_evidence = $11, \
+                control_outcomes = $12, response_event_ref = $13, tombstone_event_ref = $14, \
+                message = $15, peer_service_id = $16, updated_at = $17 \
+             WHERE requester_id = $1 AND target_id = $2 AND updated_at = $18",
+        )
+        .bind::<Text, _>(&record.requester)
+        .bind::<Text, _>(&record.target)
+        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<BigInt>, _>(version)
+        .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
+        .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Binary>, _>(request_event_ref)
+        .bind::<Jsonb, _>(&request_receipts)
+        .bind::<Jsonb, _>(&request_mirror_receipts)
+        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
+        .bind::<Jsonb, _>(&control_outcomes)
+        .bind::<Nullable<Binary>, _>(response_event_ref)
+        .bind::<Nullable<Binary>, _>(tombstone_event_ref)
+        .bind::<Nullable<Text>, _>(record.message.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Timestamptz, _>(record.updated_at)
+        .bind::<Timestamptz, _>(expected_updated_at)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?
+    } else {
+        sql_query(
+            "INSERT INTO contacts \
+             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+             ON CONFLICT (requester_id, target_id) DO NOTHING",
+        )
+        .bind::<Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Text, _>(&record.requester)
+        .bind::<Text, _>(&record.target)
+        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<BigInt>, _>(version)
+        .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
+        .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Binary>, _>(request_event_ref)
+        .bind::<Jsonb, _>(&request_receipts)
+        .bind::<Jsonb, _>(&request_mirror_receipts)
+        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
+        .bind::<Jsonb, _>(&control_outcomes)
+        .bind::<Nullable<Binary>, _>(response_event_ref)
+        .bind::<Nullable<Binary>, _>(tombstone_event_ref)
+        .bind::<Nullable<Text>, _>(record.message.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?
+    };
+    if affected != 1 {
+        return Err(PersistenceError::Conflict(conflict_code));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -124,6 +239,61 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let mut projections_inserted = 0;
             let mut outbox_inserted = 0;
             for request in request.events {
+            if let Some(commit) = request.device_pairing_authorization.as_ref() {
+                if commit.authorized_event_ref != request.event.event_id {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: device pairing authorization does not bind committed Event"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                let new_device_pubkey =
+                    serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "cannot encode device pairing authorization public key: {error}"
+                        ))
+                    })?;
+                // Lock, compare, and consume the short-link inside this Event
+                // transaction. Every CAS miss, including an exact response-
+                // loss replay of an already-authorized row, aborts all Event/
+                // projection/receipt/outbox writes; the caller reconciles via
+                // the registered pairing-status query.
+                let cas = sql_query(
+                    "WITH candidate AS ( \
+                         SELECT state, pairing_code, new_device_pubkey, device_id, \
+                                authorized_by_actor_id, authorized_event_ref, expires_at \
+                         FROM device_pairings WHERE device_pairing_request_id = $1 FOR UPDATE \
+                     ), updated AS ( \
+                         UPDATE device_pairings AS pairing SET \
+                             state = 'authorized', device_id = $4, \
+                             authorized_by_actor_id = $5, authorized_event_ref = $6 \
+                         FROM candidate \
+                         WHERE pairing.device_pairing_request_id = $1 \
+                           AND candidate.pairing_code = $2 \
+                           AND candidate.new_device_pubkey = $3 \
+                           AND candidate.state = 'pending_authorization' \
+                           AND candidate.expires_at > $7 \
+                         RETURNING 1 \
+                     ) \
+                     SELECT EXISTS(SELECT 1 FROM updated) AS accepted",
+                )
+                .bind::<Text, _>(&commit.device_pairing_request_id)
+                .bind::<Text, _>(&commit.pairing_code)
+                .bind::<Jsonb, _>(&new_device_pubkey)
+                .bind::<Text, _>(&commit.device_id)
+                .bind::<Text, _>(&commit.authorized_by_actor_id)
+                .bind::<Text, _>(&commit.authorized_event_ref)
+                .bind::<Timestamptz, _>(commit.changed_at)
+                .get_result::<DevicePairingCasRow>(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if !cas.accepted {
+                    return Err(PersistenceError::Conflict(
+                        "device_pairing_not_found".to_owned(),
+                    )
+                    .into());
+                }
+            }
             let identity = ids::validated_event_identity_parts(
                 &request.event.event_id,
                 &request.event.canonical_digest,
@@ -216,6 +386,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     "schema_violation: accepted Event envelope is not canonical wire: {error}"
                 ))
             })?;
+            if let Some(contact_projection) = request.contact_projection {
+                commit_contact_projection(conn, contact_projection).await?;
+            }
             // Control/Data routing is defined by the typed Event plane. A
             // closed genesis anchor is a basis-free Control Move; a DataEvent
             // instead carries `seal_ref` plus `auth_context`.

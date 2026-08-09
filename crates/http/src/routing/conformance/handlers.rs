@@ -396,13 +396,9 @@ pub async fn realm_basis(
         ));
     }
 
-    let principal_control_realm =
-        arkret_models_identity::did_document::principal_control_realm_id(&subject);
-    let requested_notary_authority = if body.realm_id == principal_control_realm {
-        body.subject.as_str()
-    } else {
-        state.service_id()
-    };
+    // A synthetic Realm has no accepted create Event and therefore cannot be
+    // classified as a PCR from its subject. Keep its notary service-owned.
+    let requested_notary_authority = state.service_id();
     let notary_cell =
         arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
             .map_err(|error| AppError::internal(format!("construct notary cell ref: {error}")))?;

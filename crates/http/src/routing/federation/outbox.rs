@@ -893,15 +893,30 @@ impl FederationDispatcher {
                 let status = resp.status().as_u16() as i32;
                 let response_headers = resp.headers().clone();
                 let body_text = resp.text().await.unwrap_or_default();
-                self.classify_response(
-                    &row,
-                    &lease_token,
-                    attempts,
-                    status,
-                    &response_headers,
-                    &body_text,
-                    now,
-                )
+                if (200..300).contains(&status)
+                    && let Err(error) = self.capture_contact_outcome(&row, &body_text).await
+                {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        Some(status),
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("contact_receipt_persistence: {error}")),
+                        None,
+                        now,
+                    )
+                } else {
+                    self.classify_response(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        status,
+                        &response_headers,
+                        &body_text,
+                        now,
+                    )
+                }
             }
             Err(error) => {
                 // No response at all — transport retry: same body, same key.
@@ -918,6 +933,98 @@ impl FederationDispatcher {
             }
         };
         self.commit(command).await;
+    }
+
+    async fn capture_contact_outcome(
+        &self,
+        row: &PendingFederationDelivery,
+        response_body: &str,
+    ) -> Result<(), String> {
+        if row.delivery.endpoint != "/_arkret/peer/contacts" {
+            return Ok(());
+        }
+        let request: arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody =
+            serde_json::from_str(&row.delivery.payload_json)
+                .map_err(|error| format!("outbound Contact carrier decode failed: {error}"))?;
+        let outcome: arkret_models_collaboration::contact_operations::PeerContactSubmitOutcome =
+            serde_json::from_str(response_body)
+                .map_err(|error| format!("Contact carrier outcome decode failed: {error}"))?;
+        outcome
+            .validate()
+            .map_err(|error| format!("invalid Contact carrier outcome: {error}"))?;
+        match (&request, &outcome) {
+            (
+                arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::Request {
+                    request_receipt,
+                    ..
+                },
+                arkret_models_collaboration::contact_operations::PeerContactSubmitOutcome::Event(
+                    event_outcome,
+                ),
+            ) => {
+                if !matches!(
+                    event_outcome.status,
+                    arkret_models_collaboration::contact_operations::PeerContactDisposition::Accepted
+                        | arkret_models_collaboration::contact_operations::PeerContactDisposition::Duplicate
+                ) || event_outcome.mirror_receipt.signed_event_ref
+                    != request_receipt.core.request_event_ref
+                    || event_outcome.mirror_receipt.signed_event_digest
+                        != request_receipt.core.request_digest
+                {
+                    return Err("Contact mirror receipt does not bind the outbound request".to_owned());
+                }
+                crate::routing::identity::contact_federation::validate_mirror_receipt_cryptography(
+                    &self.state,
+                    &event_outcome.mirror_receipt,
+                    &row.delivery.peer_did,
+                    "outbound_request_mirror_receipt",
+                )
+                .map_err(|error| error.to_string())?;
+                let holder = request_receipt.core.holder.subject_id().as_str();
+                let peer = request_receipt.core.peer.subject_id().as_str();
+                crate::routing::identity::contact_federation::persist_request_mirror_receipt(
+                    &self.state,
+                    holder,
+                    peer,
+                    &event_outcome.mirror_receipt,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                crate::routing::identity::contact_federation::enqueue_glare_finalize_if_ready(
+                    &self.state,
+                    holder,
+                    peer,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            }
+            (
+                arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::GlareFinalize { .. }
+                    | arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ProofRefresh { .. },
+                arkret_models_collaboration::contact_operations::PeerContactSubmitOutcome::ControlDeferred(deferred),
+            ) => crate::routing::identity::contact_federation::reenqueue_deferred_contact_control(
+                &self.state,
+                &request,
+                deferred,
+                &row.delivery.peer_did,
+            )
+            .await
+            .map_err(|error| error.to_string()),
+            (
+                arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::GlareFinalize { .. }
+                    | arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ProofRefresh { .. },
+                _,
+            ) => crate::routing::identity::contact_federation::accept_outbound_contact_control_outcome(
+                &self.state,
+                &request,
+                &outcome,
+                &row.delivery.peer_did,
+            )
+            .await
+            .map_err(|error| error.to_string()),
+            _ => Ok(()),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

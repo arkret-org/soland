@@ -7,10 +7,12 @@ use arkret_wire::{Did, Hash, PayloadProof, ProofContextId};
 use chrono::{Duration, Utc};
 
 use super::{
-    CanonicalEventRecord, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
-    EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
-    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
-    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
+    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
+    DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore, EventCommitRequest,
+    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, IdempotencyRecord, IdempotencyStore, MimiConsentCorrelationRecord,
     MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
     MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
@@ -732,6 +734,8 @@ pub struct EventCommitContractStores<'a> {
     pub projections: &'a dyn ProjectionEventStore,
     pub idempotency: &'a dyn IdempotencyStore,
     pub outbox: &'a dyn FederationOutboxStore,
+    pub device_pairings: &'a dyn DevicePairingStore,
+    pub contacts: &'a dyn ContactStore,
 }
 
 fn contract_realm_id(seed: &str) -> String {
@@ -832,6 +836,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_id = event.event_id.clone();
     let control_proposal_ack = contract_control_proposal_ack(&event, &realm_id, now);
     let request = EventCommitRequest {
+        device_pairing_authorization: None,
+        contact_projection: None,
         event,
         control_proposal_ack: Some(control_proposal_ack),
         self_principal_pcr_device_authorized: false,
@@ -915,6 +921,264 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .is_some()
     );
 
+    // Accepted-device pairing is consumed in the exact Event unit of work.
+    // A response-loss replay reaches the already-consumed staged row and must
+    // fail without inserting a second Event/projection or reviving the row.
+    let pairing_request_id = format!("device-pairing:{namespace}:{event_uuid}");
+    let pairing_key_value = serde_json::json!({
+        "algorithm": "Ed25519",
+        "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+        "kid": "ak:device:01964137-0000-7000-8000-0000000000b2",
+        "kty": "OKP"
+    });
+    let pairing_key =
+        serde_json::from_value(pairing_key_value.clone()).expect("contract pairing public key");
+    stores
+        .device_pairings
+        .put(DevicePairingRecord::new(
+            pairing_request_id.clone(),
+            "7H2K9M4Q".to_owned(),
+            pairing_key_value,
+            "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            "https://account.example".to_owned(),
+            "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
+            None,
+            None,
+            "pending_authorization".to_owned(),
+            now,
+            now + Duration::minutes(10),
+        ))
+        .await
+        .expect("stage contract pairing");
+    let pairing_event = canonical_wire_event_record("", &principal_id, &realm_id, 1, now);
+    let pairing_event_id = pairing_event.event_id.clone();
+    let pairing_ack = contract_control_proposal_ack(&pairing_event, &realm_id, now);
+    let pairing_commit = EventCommitRequest {
+        device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
+            device_pairing_request_id: pairing_request_id.clone(),
+            pairing_code: "7H2K9M4Q".to_owned(),
+            new_device_pubkey: pairing_key,
+            device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
+            authorized_by_actor_id: principal_id.clone(),
+            authorized_event_ref: pairing_event_id.clone(),
+            changed_at: now,
+        }),
+        contact_projection: None,
+        event: pairing_event,
+        control_proposal_ack: Some(pairing_ack),
+        self_principal_pcr_device_authorized: false,
+        projections: vec![ProjectionEventRecord {
+            event_id: pairing_event_id.clone(),
+            realm_id: realm_id.clone(),
+            event_kind: "ak.device.authorize".to_owned(),
+            operation_kind: "authorize".to_owned(),
+            operation_id: None,
+            sender: Some(principal_id.clone()),
+            payload: serde_json::json!({"device_id": "ak:device:01964137-0000-7000-8000-0000000000b2"}),
+            created_at: now,
+            received_at: now,
+        }],
+        idempotency: None,
+        outbox: Vec::new(),
+    };
+    stores
+        .unit_of_work
+        .commit_event(pairing_commit.clone())
+        .await
+        .expect("pairing Event and staged CAS commit together");
+    assert!(
+        stores
+            .unit_of_work
+            .commit_event(pairing_commit)
+            .await
+            .is_err(),
+        "response-loss replay must not accept an already-consumed pairing"
+    );
+    assert!(
+        stores
+            .events
+            .contains(&pairing_event_id)
+            .await
+            .expect("read paired Event")
+    );
+    assert_eq!(
+        stores
+            .projections
+            .snapshot_all()
+            .await
+            .expect("read paired projections")
+            .iter()
+            .filter(|projection| projection.event_id == pairing_event_id)
+            .count(),
+        1,
+        "response-loss replay must not duplicate the pairing projection"
+    );
+    let pairing = stores
+        .device_pairings
+        .get_by_request_id(&pairing_request_id)
+        .await
+        .expect("read consumed pairing")
+        .expect("pairing row retained for status/audit");
+    assert_eq!(pairing.state, "authorized");
+    assert_eq!(
+        pairing.authorized_event_ref.as_deref(),
+        Some(pairing_event_id.as_str())
+    );
+
+    // Contact acceptance must expose its canonical Event, holder projection,
+    // and peer carrier together. Reading all three back only through durable
+    // stores models a process restart with no in-memory planning state.
+    let contact_event = canonical_wire_event_record("", &principal_id, &realm_id, 2, now);
+    let contact_event_id = contact_event.event_id.clone();
+    let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
+    let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
+    let contact_record = ContactRecord {
+        requester: principal_id.clone(),
+        target: format!("did:web:contact-peer-{namespace}.example"),
+        basis_id: None,
+        version: None,
+        granted_to_target_scopes: vec!["direct_conversation".to_owned()],
+        granted_to_requester_scopes: Vec::new(),
+        status: "pending".to_owned(),
+        request_event_ref: Some(contact_event_id.clone()),
+        request_receipts: Vec::new(),
+        request_mirror_receipts: Vec::new(),
+        basis_evidence: None,
+        control_outcomes: Vec::new(),
+        response_event_ref: None,
+        tombstone_event_ref: None,
+        message: None,
+        peer_service_id: Some(format!("did:web:contact-service-{namespace}.example")),
+        created_at: now,
+        updated_at: now,
+    };
+    let contact_commit = EventCommitRequest {
+        device_pairing_authorization: None,
+        contact_projection: Some(ContactProjectionCommit {
+            record: contact_record.clone(),
+            expected_updated_at: None,
+            conflict_code: "contact_basis_conflict".to_owned(),
+        }),
+        control_proposal_ack: Some(contract_control_proposal_ack(
+            &contact_event,
+            &realm_id,
+            now,
+        )),
+        event: contact_event,
+        self_principal_pcr_device_authorized: false,
+        projections: Vec::new(),
+        idempotency: Some(IdempotencyRecord {
+            principal_id: principal_id.clone(),
+            idempotency_key: contact_idempotency_key.clone(),
+            service_id: "did:web:soland.example".to_owned(),
+            request_hash: format!("sha256:contact-{event_uuid}"),
+            response_status: 200,
+            response_body: serde_json::json!({"status": "accepted"}),
+            created_at: now,
+            expires_at: now + Duration::hours(1),
+        }),
+        outbox: vec![FederationOutboxRecord::pending(
+            contact_outbox_id.clone(),
+            contact_record.peer_service_id.clone().unwrap(),
+            "https://contact-peer.example".to_owned(),
+            "/_arkret/peer/contacts".to_owned(),
+            format!("peer-contact:{contact_event_id}"),
+            "{}".to_owned(),
+            now.timestamp(),
+        )],
+    };
+    stores
+        .unit_of_work
+        .commit_event(contact_commit.clone())
+        .await
+        .expect("Contact Event/projection/outbox commit atomically");
+    stores
+        .unit_of_work
+        .commit_event(contact_commit)
+        .await
+        .expect("Contact response-loss replay observes the committed unit");
+    assert!(stores.events.contains(&contact_event_id).await.unwrap());
+    assert_eq!(
+        stores
+            .contacts
+            .get(&contact_record.requester, &contact_record.target)
+            .await
+            .unwrap()
+            .expect("Contact projection survives restart-equivalent read")
+            .request_event_ref
+            .as_deref(),
+        Some(contact_event_id.as_str())
+    );
+    assert!(
+        stores
+            .outbox
+            .get(&contact_outbox_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        stores
+            .idempotency
+            .get(&principal_id, &contact_idempotency_key)
+            .await
+            .unwrap()
+            .is_some(),
+        "Contact response-loss replay retains the first operation outcome"
+    );
+
+    let failed_contact_event = canonical_wire_event_record("", &principal_id, &realm_id, 3, now);
+    let failed_contact_event_id = failed_contact_event.event_id.clone();
+    let failed_contact_outbox_id = format!("contact-outbox-failed:{namespace}:{event_uuid}");
+    let mut conflicting_contact = contact_record.clone();
+    conflicting_contact.updated_at = now + Duration::seconds(2);
+    let failed_contact_commit = stores
+        .unit_of_work
+        .commit_event(EventCommitRequest {
+            device_pairing_authorization: None,
+            contact_projection: Some(ContactProjectionCommit {
+                record: conflicting_contact,
+                expected_updated_at: Some(now + Duration::seconds(1)),
+                conflict_code: "contact_lineage_conflict".to_owned(),
+            }),
+            control_proposal_ack: Some(contract_control_proposal_ack(
+                &failed_contact_event,
+                &realm_id,
+                now,
+            )),
+            event: failed_contact_event,
+            self_principal_pcr_device_authorized: false,
+            projections: Vec::new(),
+            idempotency: None,
+            outbox: vec![FederationOutboxRecord::pending(
+                failed_contact_outbox_id.clone(),
+                contact_record.peer_service_id.clone().unwrap(),
+                "https://contact-peer.example".to_owned(),
+                "/_arkret/peer/contacts".to_owned(),
+                format!("peer-contact:{failed_contact_event_id}"),
+                "{}".to_owned(),
+                now.timestamp(),
+            )],
+        })
+        .await;
+    assert!(failed_contact_commit.is_err());
+    assert!(
+        !stores
+            .events
+            .contains(&failed_contact_event_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        stores
+            .outbox
+            .get(&failed_contact_outbox_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "Contact CAS failure must roll back its peer carrier"
+    );
+
     let rollback_uuid = uuid::Uuid::now_v7();
     let rollback_idempotency_key = format!("event-rollback:{namespace}:{rollback_uuid}");
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
@@ -922,6 +1186,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event_id = rollback_event.event_id.clone();
     let rollback_ack = contract_control_proposal_ack(&rollback_event, &realm_id, now);
     let failed = EventCommitRequest {
+        device_pairing_authorization: None,
+        contact_projection: None,
         event: rollback_event,
         control_proposal_ack: Some(rollback_ack),
         self_principal_pcr_device_authorized: false,
@@ -1489,6 +1755,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
             .put_identity_anchor_batch_atomic(
                 vec![anchor_record.clone()],
                 vec![control_proposal_ack(&anchor_record)],
+                None,
                 None,
                 None,
                 None,

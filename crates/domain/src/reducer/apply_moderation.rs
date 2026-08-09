@@ -126,8 +126,8 @@ fn moderation_add_tag(operation: &Operation) -> Option<String> {
 ///
 /// `content-moderation.md` §2.6: the payload MUST carry `observed_dots[]`, the
 /// removal set is byte-equal to it, and every dot's `event_id` segment MUST
-/// equal the `decision_ref` uuid. `decision_ref` is `ak:event:<uuid>` and a dot
-/// is `ak:event:<uuid>:<write_index>`; §2.4.2 provides no `event_ref -> dot`
+/// equal the full `decision_ref` Event token. A dot appends `:<write_index>`
+/// to that token; §2.4.2 provides no `event_ref -> dot`
 /// derivation, so the two are checked against each other rather than one being
 /// computed from the other. Returns `None` — fail closed — when the field is
 /// absent, empty, malformed, or names a dot belonging to another decision.

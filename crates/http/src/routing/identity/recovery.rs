@@ -43,7 +43,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
     RecoveryPolicyState, SecurityTransactionState as SecurityTransactionRecord,
-    SessionIdentityState as SessionRecord, principal_control_realm_for_did,
+    SessionIdentityState as SessionRecord,
 };
 
 use super::{AuthArgs, append_audit_log};

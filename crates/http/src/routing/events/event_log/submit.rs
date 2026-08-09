@@ -1436,6 +1436,11 @@ async fn submit_event_batch_outcome_with_leases(
             membership_compensation_evidence
                 .and_then(|evidence| evidence.get(index))
                 .and_then(Option::as_ref),
+            None,
+            false,
+            None,
+            &[],
+            None,
         )
         .await
         {
@@ -1622,6 +1627,10 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         None,
         Some(&request.account_authority_id),
         Some(PcrGenesisPins {
+            account_subject: request
+                .identity_creation_control_proof
+                .account_subject
+                .clone(),
             did_version_id: request.did_version_id.clone(),
             log_head_digest: request.log_head_digest.clone(),
             control_key_digest: request.control_key_digest.clone(),
@@ -1719,63 +1728,131 @@ async fn validate_identity_creation_control_proof(
             )
         })?;
     history.sort_by_key(|entry| entry.seq);
-    let inception = history.first().ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "PCR genesis requires the accepted DID inception entry",
-        )
-    })?;
-    if inception.did != request.principal_id.as_str() {
+    let pinned = history
+        .iter()
+        .find(|entry| {
+            entry.operation.get("versionId").and_then(Value::as_str)
+                == Some(request.did_version_id.as_str())
+        })
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "PCR genesis requires the accepted pinned DID version",
+            )
+        })?;
+    if pinned.did != request.principal_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
             "PCR genesis DID history belongs to a different principal",
         ));
     }
-    if inception.seq != 1
-        || !inception
-            .operation
-            .get("versionId")
-            .and_then(Value::as_str)
-            .is_some_and(|version_id| version_id.starts_with("1-"))
-    {
+    let pinned_digest = arkret_wire::Hash::new(pinned.event_digest.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored DID entry digest is invalid: {error}"),
+        )
+    })?;
+    if pinned_digest != request.log_head_digest {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "PCR genesis DID history does not begin with a WebVH inception entry",
+            "PCR genesis DID version and log head digest do not name the same accepted entry",
         ));
     }
-    let operation = inception
+    let pinned_version_time = pinned
         .operation
-        .as_object()
-        .cloned()
+        .get("versionTime")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
         .ok_or_else(|| {
             SubmitOneError::new(
                 StatusCode::FORBIDDEN,
                 "invalid_proof",
-                "accepted DID inception operation is not an object",
-            )
-        })?
-        .into_iter()
-        .collect();
-    let did_operation = arkret_models_identity::identity::DidOperationSubmitRequestBody {
-        did: request.principal_id.clone(),
-        did_method: "webvh".to_owned(),
-        seq: Some(inception.seq),
-        prev_event_digest: None,
-        operation,
-    };
-    arkret_signatures::webvh::verify_identity_creation_control_proof(&did_operation, proof)
-        .map_err(|error| {
-            SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-                format!(
-                    "identity creation control proof does not match the accepted DID inception: {error}"
-                ),
+                "pinned DID version has no canonical versionTime",
             )
         })?;
+    let native_history = history
+        .iter()
+        .map(|entry| entry.operation.clone())
+        .collect::<Vec<_>>();
+    let history_point = arkret_signatures::webvh::validate_webvh_history_at(
+        &request.principal_id,
+        &native_history,
+        pinned_version_time,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("pinned DID history is invalid: {error}"),
+        )
+    })?;
+    if history_point.version_id != request.did_version_id {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "pinned DID version does not resolve to the requested history point",
+        ));
+    }
+    let active_update_key = history_point.active_update_key_multibase;
+    if proof.verification_key_multibase != active_update_key {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation proof is not signed by the pinned version's active update key",
+        ));
+    }
+    let key_material = arkret_signatures::proof::PublicKeyMaterial::Ed25519Multibase {
+        value: active_update_key,
+    };
+    let key_bytes = key_material.ed25519_bytes().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("pinned DID update key is invalid: {error}"),
+        )
+    })?;
+    let control_key_digest = arkret_wire::Hash::new(format!(
+        "sha256:{}",
+        arkret_canonical::sha256_hex(&key_bytes)
+    ))
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("pinned DID update key digest is invalid: {error}"),
+        )
+    })?;
+    if control_key_digest != request.control_key_digest
+        || control_key_digest != proof.control_key_digest
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation proof control key digest does not match the pinned update key",
+        ));
+    }
+    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("identity creation proof transcript is invalid: {error}"),
+        )
+    })?;
+    if !arkret_signatures::proof::verify_detached_ed25519_signature(
+        &key_material,
+        &signing_bytes,
+        &proof.signature,
+    ) {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "identity creation control signature is invalid",
+        ));
+    }
     Ok(())
 }
 
@@ -2816,6 +2893,11 @@ pub(crate) async fn submit_federation_events(
                 .iter()
                 .find(|submission| submission.event.event_id.as_str() == id)
                 .and_then(|submission| submission.membership_compensation_evidence.as_ref()),
+            None,
+            false,
+            None,
+            &[],
+            None,
         )
         .await
         {
@@ -3273,17 +3355,7 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
     }
     let event_id =
         arkret_wire::EventId::new(event_string_field_from_value(value, "event_id")?).ok()?;
-    let actor_id = arkret_wire::Did::new(event_string_field_from_value(value, "actor_id")?).ok()?;
-    Some(
-        arkret_wire::derive_genesis_realm_id(
-            &event_id,
-            &actor_id,
-            value
-                .get("payload")
-                .and_then(|payload| payload.get("object")),
-        )
-        .into_string(),
-    )
+    Some(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
 }
 
 mod delivery_binding;
@@ -3306,7 +3378,9 @@ pub(in crate::routing::events::event_log) use value::{
 };
 pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
-    submit_mimi_event_value, submit_moderation_report_event_value,
+    submit_initial_event_submission_with_contact_projection,
+    submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
+    submit_moderation_report_event_value,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.
@@ -3371,6 +3445,10 @@ mod managed_agent_pcr_batch_tests {
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
+                arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                )
+                .unwrap(),
                 arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:managed-agent-pcr".to_owned(),
                 )

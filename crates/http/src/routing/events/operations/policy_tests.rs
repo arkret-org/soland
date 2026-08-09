@@ -35,9 +35,6 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let now = chrono::Utc::now();
     let alice = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
     let bob = arkret_identifiers::Did::new("did:web:bob.example".to_owned()).unwrap();
-    let strand_id =
-        arkret_identifiers::StrandId::new("ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D")
-            .unwrap();
     let mut realm_create = op(
         realm_id.clone(),
         "000000000691",
@@ -82,7 +79,6 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         "000000000693",
         arkret_wire::EventKind::StrandCreate,
         serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_main_strand_create_payload(
-            strand_id,
             realm_id.clone(),
             alice,
             now,

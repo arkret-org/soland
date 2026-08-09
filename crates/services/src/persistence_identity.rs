@@ -470,6 +470,18 @@ impl crate::identity::ContactPort for PersistenceContacts {
         self.0.contacts().put(&storage_contact(contact)).await?;
         Ok(())
     }
+
+    async fn save_contact_if_updated_at(
+        &self,
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+        contact: crate::identity::ContactRecord,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .contacts()
+            .put_if_updated_at(expected_updated_at, &storage_contact(contact))
+            .await?)
+    }
 }
 
 #[async_trait::async_trait]
@@ -570,6 +582,10 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
         granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
+        request_receipts: record.request_receipts,
+        request_mirror_receipts: record.request_mirror_receipts,
+        basis_evidence: record.basis_evidence,
+        control_outcomes: record.control_outcomes,
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
@@ -589,6 +605,10 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
+        request_receipts: record.request_receipts,
+        request_mirror_receipts: record.request_mirror_receipts,
+        basis_evidence: record.basis_evidence,
+        control_outcomes: record.control_outcomes,
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
@@ -932,8 +952,9 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
         &self,
         device_pairing_request_id: &str,
         pairing_code: &str,
-        new_device_pubkey: serde_json::Value,
-        device: crate::identity::SaveDeviceCommand,
+        new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
+        device_id: &str,
+        authorized_by_actor_id: &str,
         authorized_event_ref: &str,
         changed_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<bool> {
@@ -943,17 +964,8 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
                 device_pairing_request_id: device_pairing_request_id.to_owned(),
                 pairing_code: pairing_code.to_owned(),
                 new_device_pubkey,
-                device: soland_storage::DeviceInventoryRecord {
-                    actor: device.actor_id.clone(),
-                    device_id: device.device_id,
-                    display_name: device.display_name,
-                    verification_state: device.device.verification_state,
-                    payload: device.device.payload,
-                    created_at: device.device.created_at,
-                    updated_at: device.device.updated_at,
-                    revoked_at: device.device.revoked_at,
-                },
-                authorized_by_actor_id: device.actor_id,
+                device_id: device_id.to_owned(),
+                authorized_by_actor_id: authorized_by_actor_id.to_owned(),
                 authorized_event_ref: authorized_event_ref.to_owned(),
                 changed_at,
             })

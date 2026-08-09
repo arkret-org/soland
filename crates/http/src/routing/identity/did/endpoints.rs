@@ -923,47 +923,39 @@ pub(crate) async fn identity_log(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let records = state.dids().log_events(&did).await.unwrap_or_default();
-    let mut previous_digest = None;
-    let mut events = Vec::with_capacity(records.len());
-    for record in records {
-        let operation_name = record
-            .operation
-            .get("operation")
-            .or_else(|| record.operation.get("type"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let operation = if record.seq == 0 {
-            arkret_models_identity::DidKeyLogOperation::Inception
-        } else if operation_name.contains("deactivate") {
-            arkret_models_identity::DidKeyLogOperation::Deactivate
-        } else if operation_name.contains("recover") {
-            arkret_models_identity::DidKeyLogOperation::Recover
-        } else if operation_name.contains("rotate") {
-            arkret_models_identity::DidKeyLogOperation::Rotate
-        } else {
-            arkret_models_identity::DidKeyLogOperation::ServiceUpdate
-        };
-        let Some(operation_body) = record.operation.as_object().cloned() else {
-            continue;
-        };
-        let Ok(mut entry) = arkret_models_identity::DidKeyLogEntry::build(
-            Did::new(record.did).map_err(|error| AppError::internal(error.to_string()))?,
-            record.seq,
-            operation,
-            previous_digest.clone(),
-            operation_body,
-            record.created_at,
-        ) else {
-            continue;
-        };
-        entry.head_event_digest = Hash::new(record.event_digest)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        previous_digest = Some(entry.head_event_digest.clone());
-        events.push(entry);
-    }
+    let method = did
+        .strip_prefix("did:")
+        .and_then(|value| value.split(':').next())
+        .ok_or_else(|| AppError::invalid_param("invalid did method"))?
+        .to_owned();
+    let (native_history, entries) = match method.as_str() {
+        // The persisted operation is the accepted method-native did.jsonl
+        // object. Returning it directly avoids creating a second Arkret log
+        // envelope, sequence, digest chain, or proof transcript.
+        "webvh" => (
+            Some(true),
+            state
+                .dids()
+                .log_events(&did)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|record| record.operation)
+                .collect(),
+        ),
+        // did:web has no method-native append-only history.
+        "web" => (Some(false), Vec::new()),
+        _ => {
+            return Err(AppError::invalid_param(
+                "DID method does not expose a supported native history",
+            ));
+        }
+    };
     json_ok(IdentityLogListOutcome {
-        events,
+        did: Did::new(did).map_err(|error| AppError::internal(error.to_string()))?,
+        method,
+        native_history,
+        entries,
         next_cursor: None,
         has_more: false,
     })

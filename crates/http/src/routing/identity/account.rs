@@ -21,8 +21,9 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
 use arkret_models_collaboration::contact_operations::{
-    ContactAcceptRequestBody, ContactOperationOutcome, ContactOperationRequestBody, ContactPeer,
-    ContactRejectRequestBody, ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
+    ContactAcceptRequestBody, ContactNextPrepareInput, ContactOperationOutcome,
+    ContactOperationRequestBody, ContactPeer, ContactRejectRequestBody,
+    ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
 use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationCoordinates, DirectConversationResolveOutcome,
@@ -140,8 +141,9 @@ use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
     direct_binding_matches_projection, project_canonical_direct_binding,
-    validate_direct_binding_operation, validate_request_receipt_cryptography,
-    verify_contact_service_signature, verify_contact_service_signature_bytes,
+    validate_direct_binding_operation, validate_direct_mls_generation_operation,
+    validate_request_receipt_cryptography, verify_contact_service_signature,
+    verify_contact_service_signature_bytes,
 };
 mod lifecycle;
 // Re-export the lifecycle surface used by sibling routing modules.
@@ -1361,16 +1363,18 @@ async fn direct_conversation_resolve(
         }
     }
 
-    // The peer MAY be either an active controller-owned local Agent or an accepted Contact.
-    // Direction grants are read only from the canonical Contact record.
+    // The peer MAY be either an active controller-owned local Agent or a
+    // canonical Contact. Keep a tombstoned Contact visible here: once durable
+    // coordinates exist, a scope/lifecycle change suspends sending but must
+    // not make those coordinates disappear.
     let scope = "direct_message";
     let managed_agent_basis =
         managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?;
     let contact = if managed_agent_basis.is_some() {
         None
     } else {
-        let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, scope).await?
-        else {
+        let contact = direct_contact_for_pair(state, &session.actor, &peer).await?;
+        if contact.is_none() {
             return Err(direct_resolve_precondition(
                 arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation is unavailable",
@@ -1379,8 +1383,13 @@ async fn direct_conversation_resolve(
                 "no owned active managed-Agent authorization or accepted contact projection: requester={}, peer={peer}",
                 session.actor
             )));
-        };
-        Some(contact)
+        }
+        contact
+    };
+    let accepted_contact = if managed_agent_basis.is_some() {
+        None
+    } else {
+        accepted_contact_for_pair(state, &session.actor, &peer, scope).await?
     };
 
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;
@@ -1389,15 +1398,7 @@ async fn direct_conversation_resolve(
 
     // Existing coordinates are never hidden by presence, session, KeyPackage inventory or MLS
     // reconcile state.
-    if let Some(binding) = active_direct_binding(state, &pair_key) {
-        return json_ok(DirectConversationResolveOutcome::Found {
-            coordinates: direct_coordinates(pair_key_hash, &binding)?,
-            active_mls_generation_ref: direct_active_generation_ref(state, &binding).await?,
-            send_blockers: Vec::new(),
-        });
-    }
-    // §5.7 — two distinct endorsement digests for one pair freeze it. No side
-    // is canonical, so the resolver names the conflict and stops.
+    let raw_binding = state.contacts().direct_binding(&pair_key);
     if direct_binding_conflict(state, &pair_key)
         && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
         && let Some(record) = bindings.any_endorsed()
@@ -1405,6 +1406,116 @@ async fn direct_conversation_resolve(
         return json_ok(DirectConversationResolveOutcome::Suspended {
             coordinates: direct_coordinates(pair_key_hash, &record)?,
             blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
+        });
+    }
+    if let Some(binding) = raw_binding {
+        let coordinates = direct_coordinates(pair_key_hash, &binding)?;
+        let projection = state.projections().snapshot();
+        if projection.realm_is_destroyed(&binding.realm_id)
+            || projection.realm_is_tombstoned(&binding.realm_id)
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::RealmTerminalFault],
+            });
+        }
+        if contact
+            .as_ref()
+            .is_some_and(|contact| contact.status != "accepted")
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+            });
+        }
+        if !direct_binding_matches_projection(state, &binding) {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
+            });
+        }
+        if projection
+            .member(&binding.realm_id, &session.actor)
+            .is_none_or(|member| member.state != "join")
+            || projection
+                .member(&binding.realm_id, &peer)
+                .is_none_or(|member| member.state != "join")
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
+            });
+        }
+        if state.account_lifecycle_state(&session.actor) != "active"
+            || (managed_agent_basis.is_none() && state.account_lifecycle_state(&peer) != "active")
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::PolicyStale],
+            });
+        }
+        let Some(active_mls_generation_ref) =
+            direct_active_generation_ref(state, &pair_key, &binding).await?
+        else {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
+            });
+        };
+        let mut send_blockers = Vec::new();
+        if projection.realm_is_frozen_at(&binding.realm_id, now()) {
+            send_blockers.push(DirectConversationSendBlocker::PolicyStale);
+        }
+        if let Some(contact) = contact.as_ref() {
+            let current_contact_evidence = contact.basis_evidence.as_ref().is_some_and(|bundle| {
+                bundle.current_proofs.len() == 2
+                    && bundle.current_proofs.iter().all(|proof| {
+                        proof.basis_id.as_str() == contact.basis_id.as_deref().unwrap_or_default()
+                            && !proof.terminal
+                            && proof.complete_through > 0
+                            && proof.fresh_until > now()
+                    })
+            });
+            if !current_contact_evidence {
+                send_blockers.push(DirectConversationSendBlocker::ContactScopeStale);
+            }
+        }
+        if managed_agent_basis.is_some() {
+            let agent_active = state
+                .agent_pairings()
+                .agent(&peer)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("managed Agent lookup failed: {error}"))
+                })?
+                .is_some_and(|agent| agent.state == AgentLifecycleState::Active);
+            if !agent_active {
+                send_blockers.push(DirectConversationSendBlocker::AgentRuntimeUnavailable);
+            }
+        }
+        let realm_id = RealmId::new(binding.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("direct Realm id invalid: {error}")))?;
+        let notary_available = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+            .current_notary_profile_for_events(state, &realm_id, &[])
+            .ok()
+            .flatten()
+            .is_some();
+        if !notary_available {
+            send_blockers.push(DirectConversationSendBlocker::NotaryUnavailable);
+        }
+        if projection
+            .realm_reducer_profile(&binding.realm_id)
+            .as_deref()
+            != Some(arkret_wire::CORE_REDUCER_PROFILE)
+        {
+            send_blockers.push(DirectConversationSendBlocker::ProfileUnsupported);
+        }
+        send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
+        send_blockers.dedup();
+        return json_ok(DirectConversationResolveOutcome::Found {
+            coordinates,
+            active_mls_generation_ref,
+            send_blockers,
         });
     }
 
@@ -1418,6 +1529,41 @@ async fn direct_conversation_resolve(
         managed_agent_basis.is_some(),
     )
     .await?;
+    if let Some(founder_id) = founder.as_deref() {
+        let trust_domain =
+            arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
+                .map_err(|error| {
+                    AppError::internal(format!("configured trust_domain invalid: {error}"))
+                })?;
+        if let Some(slot) = state
+            .event_queries()
+            .direct_conversation_founding_slot(founder_id, trust_domain.as_str(), &pair_key)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("direct founding slot lookup failed: {error}"))
+            })?
+        {
+            let coordinates = direct_slot_coordinates(pair_key_hash, &slot)?;
+            if contact
+                .as_ref()
+                .is_some_and(|contact| contact.status != "accepted")
+            {
+                return json_ok(DirectConversationResolveOutcome::Suspended {
+                    coordinates,
+                    blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+                });
+            }
+            return json_ok(DirectConversationResolveOutcome::Provisional {
+                coordinates,
+                active_mls_generation_ref: None,
+            });
+        }
+    }
+    if managed_agent_basis.is_none() && accepted_contact.is_none() {
+        return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+            retry_after_ms: None,
+        });
+    }
     match founder {
         Some(founder) if founder == session.actor => {
             json_ok(DirectConversationResolveOutcome::CreationRequired)
@@ -1430,6 +1576,29 @@ async fn direct_conversation_resolve(
             retry_after_ms: None,
         }),
     }
+}
+
+async fn direct_contact_for_pair(
+    state: &AppState,
+    actor: &str,
+    peer: &str,
+) -> Result<Option<ContactRecord>, AppError> {
+    let mut records = Vec::new();
+    for (requester, target) in [(actor, peer), (peer, actor)] {
+        if let Some(contact) = state
+            .contacts()
+            .contact_any(requester, target)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            records.push(contact);
+        }
+    }
+    Ok(records.into_iter().max_by(|left, right| {
+        left.updated_at
+            .cmp(&right.updated_at)
+            .then_with(|| (left.status != "accepted").cmp(&(right.status != "accepted")))
+    }))
 }
 
 fn direct_coordinates(
@@ -1447,6 +1616,20 @@ fn direct_coordinates(
                 AppError::internal(format!("stored direct binding ref: {error}"))
             })?,
         ),
+    })
+}
+
+fn direct_slot_coordinates(
+    pair_key: Hash,
+    slot: &soland_storage::DirectConversationFoundingSlotRecord,
+) -> Result<DirectConversationCoordinates, AppError> {
+    Ok(DirectConversationCoordinates {
+        pair_key,
+        realm_id: RealmId::new(slot.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored direct Realm id: {error}")))?,
+        main_strand_id: StrandId::new(slot.main_strand_id.clone())
+            .map_err(|error| AppError::internal(format!("stored direct Strand id: {error}")))?,
+        binding_event_ref: None,
     })
 }
 
@@ -1622,31 +1805,5 @@ mod tests {
             did_host_candidate("did:web:local.host").as_deref(),
             Some("local.host")
         );
-    }
-
-    #[test]
-    fn principal_realm_for_did_is_deterministic() {
-        let a = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        let b = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn principal_realm_for_did_diverges_per_did() {
-        let a = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        let c = soland_services::identity::principal_control_realm_for_did("did:web:bob.example");
-        assert_ne!(a, c);
-    }
-
-    #[test]
-    fn principal_realm_for_did_is_subject_derived_full_digest_token() {
-        let s = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        let realm_id = arkret_identifiers::RealmId::new(s).unwrap();
-        assert_eq!(realm_id.token_bytes()[0], 0x11);
-        assert_eq!(
-            realm_id.derivation_class(),
-            arkret_identifiers::RealmDerivationClass::PrincipalSubjectDerived
-        );
-        assert!(realm_id.event_id().is_none());
     }
 }

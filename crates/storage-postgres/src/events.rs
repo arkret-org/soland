@@ -6,11 +6,12 @@ use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
     DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
     DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, ExistsRow,
-    FederationOutboxRecord, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable, OptionalExtension, PeerEventsPageQuery,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord,
-    QueryableByName, RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value,
-    async_trait, identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
+    FederationOutboxRecord, IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable,
+    OptionalExtension, PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl,
+    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
+    pg_conn, sql_query,
 };
 use crate::federation::insert_federation_outbox_row;
 pub struct PgEventStore {
@@ -992,6 +993,7 @@ impl EventStore for PgEventStore {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
+        account_slot: Option<IdentityAnchorAccountSlot>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
@@ -1077,6 +1079,32 @@ impl EventStore for PgEventStore {
                 }
                 if let Some(frontier_cas) = frontier_cas {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
+                }
+                if let Some(slot) = account_slot {
+                    let affected = sql_query(
+                        "INSERT INTO identity_anchor_account_slots \
+                            (account_authority_id, account_subject, principal_id, realm_id, create_event_id) \
+                         VALUES ($1, $2, $3, $4, $5) \
+                         ON CONFLICT (account_authority_id, account_subject) DO UPDATE SET \
+                            principal_id = EXCLUDED.principal_id \
+                         WHERE identity_anchor_account_slots.principal_id = EXCLUDED.principal_id \
+                           AND identity_anchor_account_slots.realm_id = EXCLUDED.realm_id \
+                           AND identity_anchor_account_slots.create_event_id = EXCLUDED.create_event_id",
+                    )
+                    .bind::<Text, _>(&slot.account_authority_id)
+                    .bind::<Text, _>(&slot.account_subject)
+                    .bind::<Text, _>(&slot.principal_id)
+                    .bind::<Text, _>(&slot.realm_id)
+                    .bind::<Text, _>(&slot.create_event_id)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                    if affected == 0 {
+                        return Err(PersistenceError::Conflict(
+                            "account_principal_control_realm_already_exists".to_owned(),
+                        )
+                        .into());
+                    }
                 }
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {

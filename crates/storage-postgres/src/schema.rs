@@ -298,7 +298,6 @@ diesel::table! {
     canonical_realms (pk) {
         pk -> Int8,
         id -> Bytea,
-        derivation_class -> Int2,
         digest_suite -> Int2,
         digest -> Bytea,
         wire_id -> Text,
@@ -379,6 +378,10 @@ diesel::table! {
         granted_to_requester_scopes -> Array<Text>,
         status -> Text,
         request_event_ref -> Nullable<Bytea>,
+        request_receipts -> Jsonb,
+        request_mirror_receipts -> Jsonb,
+        basis_evidence -> Nullable<Jsonb>,
+        control_outcomes -> Jsonb,
         response_event_ref -> Nullable<Bytea>,
         tombstone_event_ref -> Nullable<Bytea>,
         message -> Nullable<Text>,

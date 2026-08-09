@@ -222,7 +222,7 @@ async fn issue_intent_leases(
         .with_status(StatusCode::FORBIDDEN)
     })?;
     let expected_realm =
-        soland_services::identity::principal_control_realm_for_did(actor_id.as_str());
+        crate::routing::identity::principal_control_realm_for_actor(state, actor_id.as_str())?;
     let mut leases = Vec::with_capacity(intents.len());
     for intent in intents {
         let descriptor = arkret_schema::capability_action(&intent.action).ok_or_else(|| {
@@ -240,7 +240,7 @@ async fn issue_intent_leases(
         if !descriptor.target_event_kinds.is_empty()
             || intent.risk_tier != expected_risk
             || intent.authorization_rule_id != "realm_admission"
-            || intent.scope_ref.realm_id().as_str() != expected_realm
+            || intent.scope_ref.realm_id() != &expected_realm
         {
             return Err(AppError::new(
                 ErrorCode::CapabilityDenied,

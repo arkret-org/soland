@@ -555,4 +555,11 @@ fn effective_state_with_new_ops(
 }
 
 pub use soland_http::project_accepted_operations;
-pub use soland_services::identity::principal_control_realm_for_did;
+
+/// Stable event-derived PCR address for fixtures that do not exercise the
+/// full signed genesis builder. Production code must resolve accepted PCRs.
+pub fn fixture_principal_control_realm(principal_id: &str) -> String {
+    cba_basis::fixture_principal_control_realm_create(principal_id)
+        .realm_id
+        .into_string()
+}

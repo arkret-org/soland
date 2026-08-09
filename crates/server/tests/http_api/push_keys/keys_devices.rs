@@ -839,7 +839,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let multibase = test_ed25519_multibase_public(&device_key);
 
     // Exercise accepted device authorization projection directly.
-    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
+    let control_realm = soland_test_support::fixture_principal_control_realm(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id.clone()).unwrap(),
@@ -914,7 +914,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
-        RealmId::new(soland_test_support::principal_control_realm_for_did(alice)).unwrap(),
+        RealmId::new(soland_test_support::fixture_principal_control_realm(alice)).unwrap(),
         "ak.device.authorize",
         serde_json::json!({
             "principal_id": alice,
@@ -952,7 +952,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
-    let control_realm = soland_test_support::principal_control_realm_for_did(alice);
+    let control_realm = soland_test_support::fixture_principal_control_realm(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id).unwrap(),

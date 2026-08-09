@@ -20,8 +20,7 @@ use arkret_wire::{CapabilityActionId, Event, ScopeRef};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::AppError;
-use soland_services::events::MessageState;
+use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
@@ -34,7 +33,6 @@ use super::types::{
     GhostActorRecord,
 };
 use crate::ids;
-use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::AppState;
 
 struct ValidatedInstallEvents {
@@ -709,37 +707,11 @@ pub(super) async fn append_portal_message(
             "applet install does not grant ak.message.create",
         ));
     }
-    let operation_id = ids::generate_operation_id();
-    let event_id = ids::generate_event_id();
-    let thread_id = strand_id_from_realm_id(realm_id)
-        .ok_or_else(|| AppError::invalid_param("portal realm_id is not canonical"))?;
-    let created_at = chrono::Utc::now();
-    let content_with_portal = enrich_content_with_portal_metadata(content, applet, ghost);
-    let message_record = MessageState {
-        event_id: event_id.clone(),
-        message_id: crate::routing::events::strand::message_id_from_event_id(&event_id),
-        realm_id: realm_id.to_owned(),
-        sender: ghost.ghost_actor_id.clone(),
-        thread_id: thread_id.clone(),
-        content: content_with_portal.clone(),
-        encrypted: false,
-        created_at,
-    };
-    if let Err(error) = state
-        .event_queries()
-        .store_message(message_record.clone())
-        .await
-    {
-        tracing::error!(%error, "applet bridge: failed to persist portal MessageRecord");
-        return Err(AppError::internal("failed to persist portal message"));
-    }
-    Ok(AppletPortalMessageOutcome {
-        message_id: message_record.message_id.clone(),
-        event_id,
-        operation_id,
-        realm_id: realm_id.to_owned(),
-        portal_realm_id: applet.portal_realm_id.clone(),
-    })
+    let _ = (state, ghost, realm_id, content);
+    Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "portal messages require a content-bound signed Event admission path",
+    ))
 }
 
 pub(super) fn parse_manifest(

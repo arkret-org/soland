@@ -101,6 +101,43 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
+        device_pairing_authorization: command.device_pairing_authorization.map(|commit| {
+            soland_storage::DevicePairingAuthorizationCommit {
+                device_pairing_request_id: commit.device_pairing_request_id,
+                pairing_code: commit.pairing_code,
+                new_device_pubkey: commit.new_device_pubkey,
+                device_id: commit.device_id,
+                authorized_by_actor_id: commit.authorized_by_actor_id,
+                authorized_event_ref: commit.authorized_event_ref,
+                changed_at: commit.changed_at,
+            }
+        }),
+        contact_projection: command.contact_projection.map(|commit| {
+            soland_storage::ContactProjectionCommit {
+                record: soland_storage::ContactRecord {
+                    requester: commit.record.requester,
+                    target: commit.record.target,
+                    basis_id: commit.record.basis_id,
+                    version: commit.record.version,
+                    granted_to_target_scopes: commit.record.granted_to_target_scopes,
+                    granted_to_requester_scopes: commit.record.granted_to_requester_scopes,
+                    status: commit.record.status,
+                    request_event_ref: commit.record.request_event_ref,
+                    request_receipts: commit.record.request_receipts,
+                    request_mirror_receipts: commit.record.request_mirror_receipts,
+                    basis_evidence: commit.record.basis_evidence,
+                    control_outcomes: commit.record.control_outcomes,
+                    response_event_ref: commit.record.response_event_ref,
+                    tombstone_event_ref: commit.record.tombstone_event_ref,
+                    message: commit.record.message,
+                    peer_service_id: commit.record.peer_service_id,
+                    created_at: commit.record.created_at,
+                    updated_at: commit.record.updated_at,
+                },
+                expected_updated_at: commit.expected_updated_at,
+                conflict_code: commit.conflict_code,
+            }
+        }),
         control_proposal_ack: command.control_proposal_ack,
         self_principal_pcr_device_authorized: command.self_principal_pcr_device_authorized,
         projections: command
@@ -198,6 +235,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
+        account_slot: Option<soland_storage::IdentityAnchorAccountSlot>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
@@ -223,6 +261,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     updated_at: state.updated_at,
                     revoked_at: state.revoked_at,
                 }),
+                account_slot,
                 frontier_cas.map(|state| soland_storage::IdentityAnchorFrontierCas {
                     realm_id: state.realm_id,
                     raw_leaves: state.raw_leaves,

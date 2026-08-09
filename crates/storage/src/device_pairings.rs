@@ -62,14 +62,16 @@ impl DevicePairingRecord {
     }
 }
 
-/// Atomic unit of work for consuming a staged short-link request and making the
-/// corresponding device authorization durable.
+/// Atomic compare-and-set for consuming a staged short-link request after the
+/// canonical `ak.device.authorize` Event has been accepted through ordinary
+/// Event admission. Device state is deliberately absent: the Event reducer is
+/// the sole writer of the device projection.
 #[derive(Clone, Debug)]
 pub struct DevicePairingAuthorizationCommit {
     pub device_pairing_request_id: String,
     pub pairing_code: String,
-    pub new_device_pubkey: Value,
-    pub device: super::DeviceInventoryRecord,
+    pub new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
+    pub device_id: String,
     pub authorized_by_actor_id: String,
     pub authorized_event_ref: String,
     pub changed_at: DateTime<Utc>,
@@ -92,10 +94,10 @@ pub trait DevicePairingStore: Send + Sync {
 
 #[async_trait]
 pub trait DevicePairingCommitUnitOfWork: Send + Sync {
-    /// Atomically verifies and consumes a pending, unexpired staged pairing and
-    /// persists the authorized device. Returns `false` without side effects when
-    /// the request id, code, public key, signature, state, or expiry does not
-    /// match.
+    /// Atomically verifies and consumes a pending, unexpired staged pairing.
+    /// Returns `false` without side effects when the request id, code, public
+    /// key, state, or expiry does not match. The authorized device projection
+    /// must already exist as the result of ordinary Event admission.
     async fn commit_device_pairing_authorization(
         &self,
         commit: DevicePairingAuthorizationCommit,

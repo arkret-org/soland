@@ -103,8 +103,23 @@ pub fn validate_device_authorize_binding(
     let payload_shape: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         serde_json::from_value(device_authorize_wire_payload(payload))
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
-    arkret_signatures::verify_device_authorize_possession(&payload_shape)
-        .map_err(|_| "device_authorize_device_signature_invalid")
+    match payload_shape.authorization_binding_kind {
+        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::RootAnchored => {
+            arkret_signatures::verify_device_authorize_possession(&payload_shape)
+                .map_err(|_| "device_authorize_device_signature_invalid")
+        }
+        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice => {
+            // The accepted-device target proof is challenge-bound and is
+            // verified by the pair_device gate before this Event reaches
+            // ordinary admission.  Reinterpreting its signature as the
+            // root-anchored full-payload transcript would reject the formal
+            // pre-assembly protocol and, more importantly, would omit the
+            // pairing challenge from the possession proof.
+            payload_shape
+                .validate_wire_constraints()
+                .map_err(|_| "device_authorize_device_signature_invalid")
+        }
+    }
 }
 
 pub(crate) fn device_authorize_wire_payload(payload: &Value) -> Value {

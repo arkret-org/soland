@@ -31,31 +31,6 @@ pub fn generate(kind: &str) -> String {
     arkret_identifiers::new_prefixed_uuid7(&format!("ak:{kind}:"))
 }
 
-/// Generators for kinds whose ids the server must NOT mint.
-///
-/// These five kinds are `id_source: event_derived`: their ids come from the
-/// create Event, so a UUIDv7 minted here is rejected by the typed-id
-/// constructor and, if it got through, would name an object no receiver can
-/// agree with.
-///
-/// They are still here because their callers author a whole object graph and
-/// wire the ids between its members before any envelope exists — converting
-/// them means reordering each into build-then-derive, which is real work per
-/// site rather than a rename. Every remaining caller is a known defect; the
-/// current call-site inventory lives in
-/// `arkret-work/work/active/2026-08-06-event-derived-id-handover.md` section 3,
-/// and the contract change that retires them is
-/// `arkret-work/work/active/2026-08-06-event-log-operations-need-a-signed-request.md`.
-///
-/// Do not add callers.
-pub fn generate_realm_id() -> String {
-    generate("realm")
-}
-
-pub fn generate_event_id() -> String {
-    generate("event")
-}
-
 /// A locally-minted correlation token for a server-side record that stands
 /// behind no Event.
 ///
@@ -92,10 +67,6 @@ pub fn generate_read_cursor_id() -> String {
 /// Notification id helper. Spec uses the full `ak:notification:` kind.
 pub fn generate_notification_id() -> String {
     generate("notification")
-}
-
-pub fn generate_view_id() -> String {
-    generate("view")
 }
 
 pub fn generate_request_id() -> String {
