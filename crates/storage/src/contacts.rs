@@ -1,6 +1,6 @@
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
-use super::{BTreeMap, PersistenceResult, Value, async_trait};
+use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {
@@ -53,6 +53,35 @@ pub trait ConsentCellStore: Send + Sync {
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
     async fn put(&self, record: &ConsentCellRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
+}
+
+/// Service-local correlation retained by the MIMI consent facade.
+///
+/// This is deliberately not a consent cell or a protocol Event. It only binds
+/// the opaque `consent_id` returned by `request_consent` to the authenticated
+/// requester, target, scope, transport source, and optional expiry so a later
+/// caller-authored Event can be checked without disclosing holder-private
+/// state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MimiConsentCorrelationRecord {
+    pub consent_id: String,
+    pub requester_id: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub purpose: String,
+    pub strand_id: Option<String>,
+    pub source_service_id: Option<String>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub expires_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[async_trait]
+pub trait MimiConsentCorrelationStore: Send + Sync {
+    async fn get(
+        &self,
+        consent_id: &str,
+    ) -> PersistenceResult<Option<MimiConsentCorrelationRecord>>;
+    async fn put(&self, record: &MimiConsentCorrelationRecord) -> PersistenceResult<()>;
 }
 #[doc(hidden)]
 pub type ContactKey = (String, String);

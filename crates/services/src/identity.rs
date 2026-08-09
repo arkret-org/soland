@@ -45,6 +45,19 @@ pub struct ConsentCellRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MimiConsentCorrelation {
+    pub consent_id: String,
+    pub requester_id: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub purpose: String,
+    pub strand_id: Option<String>,
+    pub source_service_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ContactRecord {
     pub requester: String,
@@ -311,9 +324,16 @@ pub trait ConsentCellPort: Send + Sync {
     async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
 }
 
+#[async_trait]
+pub trait MimiConsentCorrelationPort: Send + Sync {
+    async fn save_correlation(&self, correlation: MimiConsentCorrelation) -> ServiceResult<()>;
+    async fn correlation(&self, consent_id: &str) -> ServiceResult<Option<MimiConsentCorrelation>>;
+}
+
 #[derive(Clone)]
 pub struct ConsentService {
     consent_cells: Arc<dyn ConsentCellPort>,
+    mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
     runtime_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
 }
 
@@ -511,11 +531,29 @@ impl ContactService {
 }
 
 impl ConsentService {
-    pub fn new(consent_cells: Arc<dyn ConsentCellPort>) -> Self {
+    pub fn new(
+        consent_cells: Arc<dyn ConsentCellPort>,
+        mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
+    ) -> Self {
         Self {
             consent_cells,
+            mimi_correlations,
             runtime_cells: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub async fn save_mimi_correlation(
+        &self,
+        correlation: MimiConsentCorrelation,
+    ) -> ServiceResult<()> {
+        self.mimi_correlations.save_correlation(correlation).await
+    }
+
+    pub async fn mimi_correlation(
+        &self,
+        consent_id: &str,
+    ) -> ServiceResult<Option<MimiConsentCorrelation>> {
+        self.mimi_correlations.correlation(consent_id).await
     }
 
     pub async fn save_cell(&self, cell: ConsentCellRecord) -> ServiceResult<()> {

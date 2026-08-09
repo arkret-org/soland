@@ -17,11 +17,9 @@ fn op(payload: serde_json::Value) -> Operation {
 #[test]
 fn canonical_strand_tracks_update_accepts_patch_payload() {
     let operation = op(json!({
-        "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+        "target_ref": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
         "patch": {
-            "tracks": {
-                "discussion": {"profile": "discussion"}
-            }
+            "tracks.discussion.profile": {"$op": "set", "value": "discussion"}
         }
     }));
     assert_eq!(
@@ -33,7 +31,7 @@ fn canonical_strand_tracks_update_accepts_patch_payload() {
 }
 
 #[test]
-fn canonical_strand_tracks_update_accepts_tracks_payload() {
+fn canonical_strand_tracks_update_rejects_retired_tracks_payload() {
     let operation = op(json!({
         "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
         "tracks": {
@@ -41,29 +39,32 @@ fn canonical_strand_tracks_update_accepts_tracks_payload() {
         }
     }));
     let schema = operation_schema_for_kind(arkret_wire::EventKind::STRAND_TRACKS_UPDATE).unwrap();
-    assert!(validate_operation_schema(&operation, schema).is_ok());
+    assert_eq!(
+        validate_operation_schema(&operation, schema),
+        Err("strand tracks update requires target_ref")
+    );
 }
 
 #[test]
-fn canonical_strand_tracks_update_requires_strand_id_and_patch_or_tracks() {
+fn canonical_strand_tracks_update_requires_target_ref_and_patch() {
     let schema = operation_schema_for_kind(arkret_wire::EventKind::STRAND_TRACKS_UPDATE).unwrap();
 
-    let missing_strand_id = op(json!({
-        "tracks": {
-            "discussion": {"profile": "discussion"}
+    let missing_target_ref = op(json!({
+        "patch": {
+            "tracks.discussion.profile": {"$op": "set", "value": "discussion"}
         }
     }));
     assert_eq!(
-        validate_operation_schema(&missing_strand_id, schema),
-        Err("strand tracks update requires strand_id")
+        validate_operation_schema(&missing_target_ref, schema),
+        Err("strand tracks update requires target_ref")
     );
 
-    let missing_patch_or_tracks = op(json!({
-        "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+    let missing_patch = op(json!({
+        "target_ref": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
     }));
     assert_eq!(
-        validate_operation_schema(&missing_patch_or_tracks, schema),
-        Err("strand tracks update requires patch or tracks")
+        validate_operation_schema(&missing_patch, schema),
+        Err("strand tracks update requires patch")
     );
 }
 

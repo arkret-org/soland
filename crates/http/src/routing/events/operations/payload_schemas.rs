@@ -512,15 +512,11 @@ pub(crate) const STRAND_WATCH_REQUIREMENTS: &[PayloadRequirement] = &[
         "strand watch operation requires level (use null to clear)",
     ),
 ];
-// Strand tracks update event. Required fields per SDK schema:
-//   `ak.strand.tracks.update` -> strand_id + (patch | tracks)
-pub(crate) const STRAND_TRACKS_UPDATE_FIELDS: &[&str] = &["patch", "tracks"];
+// Strand tracks update event. Required fields per canonical event payload schema:
+//   `ak.strand.tracks.update` -> target_ref + patch
 pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("strand_id", "strand tracks update requires strand_id"),
-    PayloadRequirement::AnyOf(
-        STRAND_TRACKS_UPDATE_FIELDS,
-        "strand tracks update requires patch or tracks",
-    ),
+    PayloadRequirement::Required("target_ref", "strand tracks update requires target_ref"),
+    PayloadRequirement::Required("patch", "strand tracks update requires patch"),
 ];
 // Applet protocol family.
 //

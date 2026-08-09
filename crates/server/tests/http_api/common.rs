@@ -2246,11 +2246,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     // alias — it has no place on the wire.
     if matches!(
         kind,
-        "ak.strand.archive"
-            | "ak.strand.restore"
-            | "ak.strand.tombstone"
-            | "ak.strand.update"
-            | "ak.strand.tracks.update"
+        "ak.strand.archive" | "ak.strand.restore" | "ak.strand.tombstone" | "ak.strand.update"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {

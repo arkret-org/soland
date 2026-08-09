@@ -2,9 +2,10 @@ use diesel::sql_types::{BigInt, Binary};
 
 use super::{
     Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
-    ContactStore, InviteReceivePolicyStore, Jsonb, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait,
-    decode_grant_dots, encode_grant_dots, ids, pg_conn, sql_query,
+    ContactStore, InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_grant_dots,
+    encode_grant_dots, ids, pg_conn, sql_query,
 };
 /// Encode a contact's Event reference for storage.
 ///
@@ -184,6 +185,97 @@ impl ContactStore for PgContactStore {
             .await
             .map(|_| ())
             .map_err(PersistenceError::database)
+    }
+}
+
+pub struct PgMimiConsentCorrelationStore {
+    pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct MimiConsentCorrelationRow {
+    #[diesel(sql_type = Text)]
+    consent_id: String,
+    #[diesel(sql_type = Text)]
+    requester_id: String,
+    #[diesel(sql_type = Text)]
+    target_kind: String,
+    #[diesel(sql_type = Text)]
+    target_id: String,
+    #[diesel(sql_type = Text)]
+    purpose: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    strand_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    source_service_id: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<MimiConsentCorrelationRow> for MimiConsentCorrelationRecord {
+    fn from(row: MimiConsentCorrelationRow) -> Self {
+        Self {
+            consent_id: row.consent_id,
+            requester_id: row.requester_id,
+            target_kind: row.target_kind,
+            target_id: row.target_id,
+            purpose: row.purpose,
+            strand_id: row.strand_id,
+            source_service_id: row.source_service_id,
+            created_at: row.created_at,
+            expires_at: row.expires_at,
+        }
+    }
+}
+
+#[async_trait]
+impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
+    async fn get(
+        &self,
+        consent_id: &str,
+    ) -> PersistenceResult<Option<MimiConsentCorrelationRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
+             source_service_id, created_at, expires_at \
+             FROM mimi_consent_correlations WHERE consent_id = $1",
+        )
+        .bind::<Text, _>(consent_id)
+        .get_result::<MimiConsentCorrelationRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MimiConsentCorrelationRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn put(&self, record: &MimiConsentCorrelationRecord) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO mimi_consent_correlations \
+             (consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
+              source_service_id, created_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (consent_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&record.consent_id)
+        .bind::<Text, _>(&record.requester_id)
+        .bind::<Text, _>(&record.target_kind)
+        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(&record.purpose)
+        .bind::<Nullable<Text>, _>(record.strand_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.source_service_id.as_deref())
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Nullable<Timestamptz>, _>(record.expires_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
     }
 }
 // ── Pg-backed invite-receive policy store ────────────────────────────────

@@ -17,28 +17,30 @@ use super::{
     MemoryDevicePairingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
     MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryHandleReleaseStore,
     MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
-    MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
-    MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
-    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
-    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
-    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryProjectionEventStore,
-    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
-    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
-    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemorySessionStore,
-    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
-    MemoryStrandProjectionStore, MemoryStrandWatchProjectionStore, MemorySyncCursorStore,
-    MemoryWebsocketAuthStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
-    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore, Mutex,
-    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationRegistrationStore,
-    OrganizationStore, PersistenceStore, PolicyDocumentStore, ProjectionEventStore,
-    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmInviteStore,
-    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RecoveryPolicyStore, RecoverySessionStore, RetentionPolicyStore,
-    RetentionTombstoneStore, SecurityTransactionStore, ServiceIdentityStore, SessionStore,
-    SidecarStore, SignalRelayStore, SpaceContainerProjectionStore, StrandProjectionStore,
-    StrandWatchProjectionStore, SyncCursorStore, WebsocketAuthStore, WebvhStore,
+    MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore,
+    MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
+    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
+    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
+    MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
+    MemoryPolicyDocumentStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
+    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
+    MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
+    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
+    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
+    MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
+    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
+    OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
+    ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
+    RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
+    RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
+    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
+    SpaceContainerProjectionStore, StrandProjectionStore, StrandWatchProjectionStore,
+    SyncCursorStore, WebsocketAuthStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -57,6 +59,7 @@ pub struct SolandMemoryPersistenceStore {
     invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
     consent_cells: MemoryConsentCellStore,
+    mimi_consent_correlations: MemoryMimiConsentCorrelationStore,
     realm_meta: MemoryRealmMetaStore,
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
@@ -148,6 +151,7 @@ impl SolandMemoryPersistenceStore {
             invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
             invite_locators: MemoryInviteLocatorStore::new(),
             consent_cells: MemoryConsentCellStore::new(),
+            mimi_consent_correlations: MemoryMimiConsentCorrelationStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
@@ -320,6 +324,10 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {
         &self.consent_cells
+    }
+
+    fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore {
+        &self.mimi_consent_correlations
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {
