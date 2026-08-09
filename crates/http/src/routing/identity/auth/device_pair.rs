@@ -24,6 +24,9 @@ async fn authorize_account_device_pair(
     session: &SessionRecord,
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
+    body.validate_authorize_event_binding().map_err(|error| {
+        AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+    })?;
     let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
     let active_generation = crate::routing::identity::device_generation::current_device_generation(
         state,
@@ -146,61 +149,60 @@ async fn authorize_account_device_pair(
             .with_wire_code("schema_violation"));
         }
     }
-    // KNOWN DEFECT: this names an Event that was never authored. It stays a
-    // minted `ak:event:` value only because the field is validated as one; the
-    // fix is to author the authorization Event and use its derived id.
-    let authorized_event_ref = ids::generate_event_id();
-    let display_name = body
-        .display_name
-        .as_deref()
-        .or_else(|| {
-            body.device_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.display_name.as_ref())
-                .map(arkret_wire::NonEmptyString::as_str)
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let mut device_payload = json!({
-        "device_id": device_id.clone(),
-        "device_public_key": pair_pubkey.device_public_key.clone(),
-        "device_authorize_projected": true,
-        "device_authorize_event_id": authorized_event_ref.clone(),
-        "authorization": {
-            "event_kind": "ak.device.authorize",
-            "authorized_event_ref": authorized_event_ref.clone(),
-            "authorized_by_device_id": session.device_id.clone(),
-            "authorized_at": authorized_at,
-            "pairing_code": pairing_code,
-            "challenge_proof": body.challenge_proof,
-            "new_device_pubkey": body.new_device_pubkey,
-            "device_public_key": pair_pubkey.device_public_key,
-            "device_metadata": body.device_metadata,
-        }
-    });
-    if let Some(generation_ref) = authorized_generation_ref
-        && let Some(payload) = device_payload.as_object_mut()
+    let authorize_payload = body
+        .authorize_event
+        .event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| {
+            AppError::invalid_param(format!("authorize_event payload invalid: {error}"))
+        })?;
+    if authorize_payload.principal_id.as_str() != session.actor
+        || authorize_payload.device_id.as_str() != device_id
+        || authorize_payload.device_public_key.as_str() != pair_pubkey.device_public_key
+        || !matches!(
+            authorize_payload.authorized_by,
+            arkret_models_collaboration::events_payloads::DeviceOrPrincipalRef::DeviceId(ref id)
+                if id.as_str() == session.device_id
+        )
     {
-        payload.insert(
-            "authorized_generation_ref".to_owned(),
-            Value::String(generation_ref),
-        );
+        return Err(AppError::invalid_param(
+            "authorize_event does not bind the authenticated authorizer and candidate device",
+        )
+        .with_wire_code("schema_violation"));
+    }
+    let submitted = crate::routing::events::event_log::submit_initial_event_submission(
+        state,
+        session,
+        body.authorize_event.clone(),
+    )
+    .await
+    .map_err(crate::routing::events::event_log::submit_one_error_to_app_error)?;
+    let authorized_event_ref = submitted.event_id;
+    let projected = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: session.actor.clone(),
+            device_id: device_id.clone(),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("accepted authorize Event has no device projection"))?;
+    if projected.verification_state != "verified"
+        || authorized_generation_ref.as_deref()
+            != projected
+                .payload
+                .get("authorized_generation_ref")
+                .and_then(Value::as_str)
+    {
+        return Err(AppError::internal(
+            "accepted authorize Event produced an inconsistent device projection",
+        ));
     }
     let device = soland_services::identity::SaveDeviceCommand {
         actor_id: session.actor.clone(),
         device_id: device_id.clone(),
-        display_name: display_name.clone(),
-        device: soland_services::identity::DeviceIdentity {
-            actor_id: session.actor.clone(),
-            device_id: device_id.clone(),
-            display_name: display_name.clone(),
-            verification_state: "verified".to_owned(),
-            payload: device_payload,
-            created_at: authorized_at,
-            updated_at: authorized_at,
-            revoked_at: None,
-        },
+        display_name: projected.display_name.clone(),
+        device: projected,
     };
     if let Some(device_pairing_request_id) = body
         .device_pairing_request_id
@@ -222,12 +224,6 @@ async fn authorize_account_device_pair(
         if !committed {
             return Err(AppError::not_found("device pairing request not found"));
         }
-    } else {
-        state
-            .identities()
-            .save_device(device)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
     }
     append_audit_log(
         state,

@@ -178,7 +178,7 @@ pub fn stage_identity_anchor_events(
         if record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record.realm_id.is_some()
             && staged.values().any(|existing| {
-                existing.kind == arkret_wire::EventKind::RealmCreate
+                existing.kind == arkret_wire::EventKind::RealmCreate.as_str()
                     && existing.realm_id == record.realm_id
             })
         {
@@ -205,7 +205,7 @@ pub fn paired_replacement_authorize<'a>(
     records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
 ) -> Option<&'a CanonicalEventRecord> {
     records.into_iter().find(|candidate| {
-        candidate.kind == arkret_wire::EventKind::DeviceAuthorize
+        candidate.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
             && candidate.actor_id == reanchor.actor_id
             && candidate
                 .envelope

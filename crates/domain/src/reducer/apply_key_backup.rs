@@ -67,7 +67,8 @@ impl ProjectionState {
         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
-            self.cells.insert(cell_id, CellState::Value(wire_payload));
+            self.cells
+                .insert(cell_id, CellState::Value(operation.payload.clone()));
         }
         self.key_backup_active_series
             .insert(pointer_key, projection);

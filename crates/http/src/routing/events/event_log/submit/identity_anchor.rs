@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct PcrGenesisPins {
+    pub did_version_id: String,
+    pub log_head_digest: Hash,
+    pub control_key_digest: Hash,
+}
+
 pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
     envelopes.iter().any(|envelope| {
         envelope
@@ -51,6 +58,7 @@ pub(super) async fn submit_identity_anchor_batch(
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
     submitted_control_proposal_acks: Option<&[Option<arkret_wire::ControlProposalAck>]>,
     receipt_audience: Option<&Did>,
+    pcr_genesis_pins: Option<PcrGenesisPins>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
@@ -394,6 +402,14 @@ pub(super) async fn submit_identity_anchor_batch(
                 .new_device_generation
                 .to_string(),
         )
+    } else if is_bootstrap {
+        Some(
+            pcr_genesis_pins
+                .as_ref()
+                .ok_or_else(|| unit_error("PCR bootstrap is missing validated DID log pins"))?
+                .did_version_id
+                .clone(),
+        )
     } else {
         bootstrap_generation_ref(&envelopes[0])?
     };
@@ -418,6 +434,9 @@ pub(super) async fn submit_identity_anchor_batch(
             &second,
             &envelopes[0],
             receipt_audience.expect("PCR genesis audience checked above"),
+            pcr_genesis_pins
+                .as_ref()
+                .expect("PCR genesis pins checked above"),
             received_at,
         )?)
     } else if is_reanchor && !reanchor_conflict {
@@ -1639,6 +1658,7 @@ fn build_pcr_genesis_batch_receipt(
     authorize: &ValidatedEventEnvelope,
     create_envelope: &Value,
     audience: &Did,
+    pins: &PcrGenesisPins,
     created_at: DateTime<Utc>,
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
     let create_payload: arkret_models_collaboration::events_payloads::realm::RealmCreatePayload =
@@ -1708,6 +1728,9 @@ fn build_pcr_genesis_batch_receipt(
                         format!("PCR genesis Realm id is invalid: {error}"),
                     )
                 })?,
+                did_version_id: pins.did_version_id.clone(),
+                log_head_digest: pins.log_head_digest.clone(),
+                control_key_digest: pins.control_key_digest.clone(),
                 create_digest: create_digest.clone(),
                 founding_authorize_digest: authorize_digest.clone(),
                 accepted_device_id: descriptor.device_id,

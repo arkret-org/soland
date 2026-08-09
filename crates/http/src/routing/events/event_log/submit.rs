@@ -31,7 +31,9 @@ static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = Once
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
-use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
+use identity_anchor::{
+    PcrGenesisPins, batch_contains_identity_anchor, submit_identity_anchor_batch,
+};
 mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod sidecar_ensure;
@@ -1365,6 +1367,7 @@ async fn submit_event_batch_outcome_with_leases(
             authorization_leases,
             control_proposal_acks,
             None,
+            None,
         )
         .await;
     }
@@ -1539,6 +1542,7 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         Some(&leases),
         Some(&control_proposal_acks),
         None,
+        None,
     )
     .await
 }
@@ -1617,6 +1621,11 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         None,
         None,
         Some(&request.account_authority_id),
+        Some(PcrGenesisPins {
+            did_version_id: request.did_version_id.clone(),
+            log_head_digest: request.log_head_digest.clone(),
+            control_key_digest: request.control_key_digest.clone(),
+        }),
     )
     .await?;
     existing_pcr_genesis_outcome(state, request, accepted_device_id)
@@ -1657,6 +1666,9 @@ async fn existing_pcr_genesis_outcome(
                     scope.principal_id == request.principal_id
                         && scope.realm_id == request.pcr_realm_id
                         && scope.audience == request.account_authority_id
+                        && scope.did_version_id == request.did_version_id
+                        && scope.log_head_digest == request.log_head_digest
+                        && scope.control_key_digest == request.control_key_digest
                 })
         });
     let Some(receipt) = receipt else {

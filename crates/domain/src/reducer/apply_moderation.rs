@@ -54,7 +54,7 @@ fn payload_str(operation: &Operation, field: &str) -> Option<String> {
 
 fn appeal_verdict(operation: &Operation) -> Result<AppealVerdict, &'static str> {
     operation
-        .typed_payload::<arkret_wire::event_spec::ModerationAppealDecide>()
+        .typed_payload::<arkret_wire::event_spec::ModerationAppealDecision>()
         .map(|payload| payload.verdict)
         .map_err(|_| "schema_violation")
 }

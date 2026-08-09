@@ -395,7 +395,7 @@ pub fn paired_replacement_authorize<'a>(
     records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
 ) -> Option<&'a CanonicalEventRecord> {
     records.into_iter().find(|candidate| {
-        candidate.kind == arkret_wire::EventKind::DeviceAuthorize
+        arkret_wire::EventKind::DeviceAuthorize == candidate.kind
             && candidate.actor_id == reanchor.actor_id
             && candidate
                 .envelope
@@ -1013,7 +1013,7 @@ fn active_agent_accountability(
         .envelope
         .get("payload")
         .unwrap_or(&original_event.envelope);
-    if original_event.kind == arkret_wire::EventKind::AgentProvision {
+    if arkret_wire::EventKind::AgentProvision == original_event.kind {
         let Ok(provision) =
             serde_json::from_value::<AgentProvisionPayload>(original_payload.clone())
         else {

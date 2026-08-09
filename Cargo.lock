@@ -144,6 +144,7 @@ name = "arkret-bootstrap"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
+ "arkret-event-draft",
  "arkret-lattice-registry",
  "arkret-models-collaboration",
  "arkret-models-identity",
@@ -444,6 +445,7 @@ name = "arkret-policy"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
+ "arkret-event-draft",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-schema",
@@ -509,6 +511,7 @@ name = "arkret-signatures"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
+ "arkret-event-draft",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-discovery",
@@ -534,6 +537,7 @@ name = "arkret-state"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
+ "arkret-event-draft",
  "arkret-identifiers",
  "arkret-models-collaboration",
  "arkret-models-crypto",

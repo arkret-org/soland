@@ -1345,7 +1345,7 @@ impl ProjectionState {
 
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
-        match kind {
+        match kind.clone() {
             k if k == arkret_wire::EventKind::RealmCreate => {
                 self.realm_create_cells.insert(
                     realm_id.clone(),
@@ -1520,7 +1520,11 @@ impl ProjectionState {
 
         ProjectionEffect::RealmLifecycle {
             realm_id,
-            action: kind.strip_prefix("ak.realm.").unwrap_or(kind).to_owned(),
+            action: kind
+                .as_str()
+                .strip_prefix("ak.realm.")
+                .unwrap_or(kind.as_str())
+                .to_owned(),
         }
     }
 

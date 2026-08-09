@@ -245,7 +245,7 @@ impl ProjectionState {
             .insert(realm_cell_key, CellState::Value(value));
         ProjectionEffect::RealmBootstrapFacetProjected {
             realm_id: operation.realm_id.to_string(),
-            kind: kind.to_owned(),
+            kind: kind.as_str().to_owned(),
         }
     }
 

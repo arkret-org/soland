@@ -251,17 +251,17 @@ pub fn operation_is_message_create(operation: &Operation) -> bool {
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_redaction_kind(kind.as_str()))
+        .is_some_and(|kind| arkret_wire::events::kinds::is_redaction_kind(&kind))
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_membership_kind(kind.as_str()))
+        .is_some_and(|kind| arkret_wire::events::kinds::is_membership_kind(&kind))
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_invite_kind(kind.as_str()))
+        .is_some_and(|kind| arkret_wire::events::kinds::is_invite_kind(&kind))
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
@@ -278,7 +278,7 @@ pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_realm_lifecycle_kind(kind.as_str()))
+        .is_some_and(|kind| arkret_wire::events::kinds::is_realm_lifecycle_kind(&kind))
 }
 
 // ────────────────────────────────────────────────────────────────────────

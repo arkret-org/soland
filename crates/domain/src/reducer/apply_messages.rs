@@ -619,7 +619,7 @@ impl ProjectionState {
 
     pub fn check_pin_scope_safety(&self, operation: &Operation) -> Result<(), &'static str> {
         if !crate::kinds::canonical_kind_for_operation(operation)
-            .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(kind.as_str()))
+            .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(&kind))
         {
             return Ok(());
         }

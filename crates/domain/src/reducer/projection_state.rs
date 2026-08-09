@@ -532,7 +532,7 @@ impl ProjectionState {
             }
         };
         let derived_subject = match private_registry.derive_subject(
-            arkret_wire::EventKind::DevicePushRoute,
+            arkret_wire::EventKind::DevicePushRoute.as_str(),
             principal_id,
             &operation.payload,
         ) {

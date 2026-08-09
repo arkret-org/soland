@@ -305,7 +305,7 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
-        if !arkret_wire::events::kinds::is_strand_tracks_kind(kind) {
+        if !arkret_wire::events::kinds::is_strand_tracks_kind(&kind) {
             return Ok(());
         }
         let Some(strand_id) = operation.payload.get("target_ref").and_then(|v| v.as_str()) else {

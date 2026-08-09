@@ -205,10 +205,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 outbox_inserted: 0,
             });
         }
-        if request.event.kind == arkret_wire::EventKind::RealmCreate
+        if arkret_wire::EventKind::RealmCreate == request.event.kind
             && request.event.realm_id.is_some()
             && staged_events.values().any(|existing| {
-                existing.kind == arkret_wire::EventKind::RealmCreate
+                arkret_wire::EventKind::RealmCreate == existing.kind
                     && existing.realm_id == request.event.realm_id
             })
         {
@@ -369,10 +369,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 }
                 continue;
             }
-            if event_request.event.kind == arkret_wire::EventKind::RealmCreate
+            if arkret_wire::EventKind::RealmCreate == event_request.event.kind
                 && event_request.event.realm_id.is_some()
                 && staged_events.values().any(|existing| {
-                    existing.kind == arkret_wire::EventKind::RealmCreate
+                    arkret_wire::EventKind::RealmCreate == existing.kind
                         && existing.realm_id == event_request.event.realm_id
                 })
             {

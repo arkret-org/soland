@@ -1600,10 +1600,9 @@ impl ProjectionState {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
         let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer;
-        let actor_is_target_realm_controller = actor.as_ref().is_some_and(|actor| {
-            self.realm_authority_root(&target.realm_id)
-                .is_some_and(|root| root.controller_id == *actor)
-        });
+        let actor_is_target_realm_controller = self
+            .realm_authority_root(&target.realm_id)
+            .is_some_and(|root| root.controller_id.as_str() == operation.context.sender.as_str());
         if !actor_is_target_issuer && !actor_is_target_realm_controller {
             return ProjectionEffect::Rejected {
                 reason: "grant_revoke_not_authorized".to_owned(),

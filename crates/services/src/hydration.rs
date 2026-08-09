@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_identifiers::{CircleId, Did, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
@@ -340,7 +341,9 @@ async fn hydrate_canonical_realm_bootstraps(
             {
                 break;
             }
-            if !arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind) {
+            if !arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(
+                &arkret_wire::EventKind::from(&candidate.kind),
+            ) {
                 break;
             }
             unit.push(candidate);
