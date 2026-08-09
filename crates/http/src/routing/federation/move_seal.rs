@@ -180,7 +180,9 @@ async fn device_generation_event_seal_context(
                     .envelope
                     .pointer("/payload/object/purpose")
                     .and_then(serde_json::Value::as_str)
-                    == Some("principal_control")
+                    .is_some_and(|purpose| {
+                        matches!(purpose, "principal_control" | "managed_agent_control")
+                    })
         })
         .collect::<Vec<_>>();
     if bootstrap.is_empty() {

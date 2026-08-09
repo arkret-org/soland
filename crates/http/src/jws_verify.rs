@@ -1030,7 +1030,9 @@ pub async fn federated_device_signing_key_evidence(
                     .envelope
                     .pointer("/payload/object/purpose")
                     .and_then(Value::as_str)
-                    == Some("principal_control")
+                    .is_some_and(|purpose| {
+                        matches!(purpose, "principal_control" | "managed_agent_control")
+                    })
         })
         .ok_or_else(|| "PCR genesis Event is unavailable".to_owned())?;
     let create_event_id = create.event_id.clone();

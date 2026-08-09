@@ -524,7 +524,7 @@ async fn materialize_realm_control_with_transported_seals(
                 .envelope
                 .pointer("/payload/object/purpose")
                 .and_then(serde_json::Value::as_str)
-                == Some("principal_control")
+                == Some("managed_agent_control")
             && record
                 .envelope
                 .get("executed_by")

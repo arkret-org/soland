@@ -906,7 +906,7 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             .and_then(Value::as_object)
             .and_then(|fields| fields.get("purpose"))
             .and_then(Value::as_str)
-            != Some("principal_control")
+            != Some("managed_agent_control")
         || !schema_refs.contains("ak.profile.principal_control_realm.v1")
         || object.get("history_visibility").and_then(Value::as_str) != Some("restricted")
         || object.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
@@ -1219,7 +1219,7 @@ mod tests {
         );
         realm.fields.insert(
             "purpose".to_owned(),
-            Value::String("principal_control".to_owned()),
+            Value::String("managed_agent_control".to_owned()),
         );
         realm.schema_refs = vec![
             "ak.schema.realm.v1".to_owned(),

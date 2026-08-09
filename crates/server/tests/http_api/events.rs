@@ -1582,7 +1582,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "digest_algorithm": "sha256",
                 "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 "created_at": arkret_canonical::format_timestamp_canonical(created_at),
-                "fields": {"purpose": "principal_control"},
+                "fields": {"purpose": "managed_agent_control"},
                 "content_encryption_floor": "e2ee_required",
                 "metadata_encryption_floor": "e2ee_required",
                 // `realm.schema.json` is closed (`unevaluatedProperties: false`)

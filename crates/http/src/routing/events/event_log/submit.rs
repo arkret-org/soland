@@ -3370,8 +3370,7 @@ mod managed_agent_pcr_batch_tests {
                 .unwrap();
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let genesis =
-            arkret_models_collaboration::events_payloads::RealmGenesis::principal_control(
-                None,
+            arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
                 arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:managed-agent-pcr".to_owned(),
                 )
