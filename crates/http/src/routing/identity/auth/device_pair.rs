@@ -1,3 +1,4 @@
+use arkret_event_draft::EventPayloadExt as _;
 use serde_json::Value;
 
 use super::*;
@@ -176,7 +177,14 @@ async fn authorize_account_device_pair(
         body.authorize_event.clone(),
     )
     .await
-    .map_err(crate::routing::events::event_log::submit_one_error_to_app_error)?;
+    .map_err(|error| {
+        crate::routing::events::event_log::submit_one_error_to_app_error(
+            "ak.gate.account.command.pair_device authorize Event submit failed",
+            error.status,
+            error.code,
+            &error.message,
+        )
+    })?;
     let authorized_event_ref = submitted.event_id;
     let projected = state
         .identities()
