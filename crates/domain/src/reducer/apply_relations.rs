@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use arkret_models_collaboration::objects::relation::{
     RelationCardinality, RelationConflictPolicy, RelationProfile, RelationScope,
 };
-use serde::de::DeserializeOwned;
 
 use super::*;
 
@@ -133,11 +132,7 @@ impl ProjectionState {
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
         let scope_circle_id = relation_scope_circle_id_from_payload(&operation.payload);
-        let source_event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        let source_event_id = Some(operation.context.event_id.to_string());
         let source_event_digest = Some(relation_event_digest(operation));
 
         let state = SolandRelationState {
@@ -552,7 +547,7 @@ impl ProjectionState {
     /// capability path with projection-time `ReferenceProjectionState`).
     pub fn check_relation_cross_realm(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::RELATION_CREATE)
+            != Some(arkret_wire::EventKind::RelationCreate)
         {
             return Ok(());
         }
@@ -591,15 +586,15 @@ impl ProjectionState {
             return Ok(());
         };
         if !matches!(
-            kind,
-            arkret_wire::EventKind::RELATION_CREATE
-                | arkret_wire::EventKind::RELATION_UPDATE
-                | arkret_wire::EventKind::RELATION_TOMBSTONE
+            &kind,
+            arkret_wire::EventKind::RelationCreate
+                | arkret_wire::EventKind::RelationUpdate
+                | arkret_wire::EventKind::RelationTombstone
         ) {
             return Ok(());
         }
 
-        if kind == arkret_wire::EventKind::RELATION_CREATE {
+        if kind == arkret_wire::EventKind::RelationCreate {
             let relation_kind = operation
                 .payload
                 .get("relation_kind")
@@ -614,7 +609,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == arkret_wire::EventKind::RELATION_UPDATE {
+        if kind == arkret_wire::EventKind::RelationUpdate {
             let relation_id = operation
                 .payload
                 .get("relation_id")
@@ -677,7 +672,7 @@ impl ProjectionState {
             return Ok(());
         }
 
-        if kind == arkret_wire::EventKind::RELATION_TOMBSTONE {
+        if kind == arkret_wire::EventKind::RelationTombstone {
             if operation
                 .payload
                 .get("relation_kind")
@@ -845,27 +840,15 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_move_item(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::ContainerMoveItemPayload =
-            match typed_container_payload::<
-                arkret_models_collaboration::events_payloads::ContainerMoveItemPayload,
-            >(
-                &operation.payload,
-                &[
-                    "item_ref",
-                    "from_container_ref",
-                    "container_ref",
-                    "relation_kind",
-                    "rank",
-                    "expected_position_digest",
-                ],
-            ) {
-                Ok(payload) if payload.validate().is_ok() => payload,
-                _ => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
+        let payload = match operation.typed_payload::<arkret_wire::event_spec::ContainerMoveItem>()
+        {
+            Ok(payload) if payload.validate().is_ok() => payload,
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
         let cell_id = match container_position_cell_id(&payload.container_ref, &payload.item_ref) {
             Some(cell_id) => cell_id,
             None => {
@@ -912,25 +895,15 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_rebalance(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::ContainerRebalancePayload =
-            match typed_container_payload::<
-                arkret_models_collaboration::events_payloads::ContainerRebalancePayload,
-            >(
-                &operation.payload,
-                &[
-                    "container_ref",
-                    "relation_kind",
-                    "positions",
-                    "expected_order_digest",
-                ],
-            ) {
-                Ok(payload) if payload.validate().is_ok() => payload,
-                _ => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
+        let payload = match operation.typed_payload::<arkret_wire::event_spec::ContainerRebalance>()
+        {
+            Ok(payload) if payload.validate().is_ok() => payload,
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
         let order_cell_id = match container_order_cell_id(&payload.container_ref) {
             Some(cell_id) => cell_id,
             None => {
@@ -967,23 +940,6 @@ impl ProjectionState {
             position_count,
         }
     }
-}
-
-fn typed_container_payload<T: DeserializeOwned>(
-    payload: &Value,
-    fields: &[&str],
-) -> std::result::Result<T, serde_json::Error> {
-    let object = payload.as_object().cloned().unwrap_or_default();
-    let wire_payload = fields
-        .iter()
-        .filter_map(|field| {
-            object
-                .get(*field)
-                .cloned()
-                .map(|value| ((*field).to_owned(), value))
-        })
-        .collect();
-    serde_json::from_value(Value::Object(wire_payload))
 }
 
 fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {
@@ -1042,18 +998,7 @@ fn relation_endpoint_needs_projection(endpoint: &str) -> bool {
 }
 
 fn relation_event_digest(operation: &Operation) -> String {
-    operation
-        .canonical_event_digest
-        .clone()
-        .or_else(|| {
-            operation
-                .payload
-                .get("canonical_event_digest")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| operation.operation_digest().ok())
-        .unwrap_or_else(|| format!("operation-id:{}", operation.operation_id))
+    operation.context.canonical_event_digest.to_string()
 }
 
 #[cfg(test)]
@@ -1096,13 +1041,13 @@ mod cross_realm_relation_tests {
     }
 
     fn relation_op(relation_kind: &str, from: &str, to: &str) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RelationCreate.as_str(),
             json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
         )
     }
@@ -1115,13 +1060,13 @@ mod cross_realm_relation_tests {
         to: &str,
         digest: &str,
     ) -> Operation {
-        let mut operation = Operation::create(
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
                 "relation_id": relation_id,
                 "relation_kind": relation_kind,
@@ -1130,7 +1075,8 @@ mod cross_realm_relation_tests {
                 "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}")
             }),
         );
-        operation.canonical_event_digest = Some(digest.to_owned());
+        operation.context.canonical_event_digest =
+            arkret_identifiers::Hash::new(digest.to_owned()).unwrap();
         operation
     }
 
@@ -1329,13 +1275,13 @@ mod cross_realm_relation_tests {
                 updated_at: now,
             },
         );
-        let update = Operation::create(
+        let update = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000ab",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_UPDATE,
+            arkret_wire::EventKind::RelationUpdate.as_str(),
             json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
         );
         assert!(matches!(
@@ -1343,13 +1289,13 @@ mod cross_realm_relation_tests {
             ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED
         ));
 
-        let delete = Operation::create(
+        let delete = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000ac",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_TOMBSTONE,
+            arkret_wire::EventKind::RelationTombstone.as_str(),
             json!({"relation_id": "ak:relation:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml"}),
         );
         assert!(matches!(
@@ -1447,13 +1393,13 @@ mod cross_realm_relation_tests {
             Err("relation_scope_wider_than_endpoint")
         );
 
-        let scoped = Operation::create(
+        let scoped = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000001001",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
                 "relation_kind": "contains",
                 "from_ref": STRAND_A,

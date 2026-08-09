@@ -9,7 +9,7 @@ pub(super) fn validate_capability_grant_body(
     actor_id: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::EventKind::CAPABILITY_GRANT {
+    if kind != arkret_wire::event_kind_str::CAPABILITY_GRANT {
         return Ok(());
     }
     let payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
@@ -70,7 +70,7 @@ mod tests {
         let actor = "did:key:z6Mktest";
         let event = event(actor);
         validate_capability_grant_body(
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             actor,
             event.as_object().unwrap(),
         )
@@ -84,7 +84,7 @@ mod tests {
         legacy["payload"]["grant"]["proofs"] = json!([]);
         assert!(
             validate_capability_grant_body(
-                arkret_wire::EventKind::CAPABILITY_GRANT,
+                arkret_wire::EventKind::CapabilityGrant.as_str(),
                 actor,
                 legacy.as_object().unwrap(),
             )
@@ -94,7 +94,7 @@ mod tests {
         let event = event(actor);
         assert!(
             validate_capability_grant_body(
-                arkret_wire::EventKind::CAPABILITY_GRANT,
+                arkret_wire::EventKind::CapabilityGrant.as_str(),
                 "did:key:z6Mkother",
                 event.as_object().unwrap(),
             )

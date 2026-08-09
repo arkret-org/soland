@@ -738,7 +738,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .unwrap_or_default();
     if let Some(policy_bundle) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
     {
         let source_ref = EventId::new(policy_bundle.event_id.clone()).ok();
         if let Some(endpoints) = policy_bundle

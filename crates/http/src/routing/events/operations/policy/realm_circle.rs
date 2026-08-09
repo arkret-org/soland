@@ -4,10 +4,10 @@ pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
     arkret_wire::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            arkret_wire::EventKind::REALM_ARCHIVE
-                | arkret_wire::EventKind::REALM_FREEZE
-                | arkret_wire::EventKind::REALM_TOMBSTONE
-                | arkret_wire::EventKind::REALM_DESTROY
+            arkret_wire::event_kind_str::REALM_ARCHIVE
+                | arkret_wire::event_kind_str::REALM_FREEZE
+                | arkret_wire::event_kind_str::REALM_TOMBSTONE
+                | arkret_wire::event_kind_str::REALM_DESTROY
         )
 }
 
@@ -15,7 +15,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let kind = kinds::canonical_kind_string(operation);
+    let kind = kinds::canonical_kind(operation);
     let realm_id = operation.realm_id.as_str();
     let projection = state.projections().snapshot();
     if projection.realm_is_in_terminal_state(realm_id)
@@ -56,7 +56,7 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            action: arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
+            action: arkret_wire::EventKind::MorphSchemaMigrate,
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),
@@ -74,7 +74,7 @@ pub(super) async fn validate_circle_create_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::CIRCLE_CREATE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::CircleCreate)
     {
         return Ok(());
     }
@@ -162,13 +162,13 @@ pub(super) async fn validate_circle_management_policy(
         return Ok(());
     };
     let (action, reason) = match kind {
-        arkret_wire::EventKind::CIRCLE_UPDATE
-        | arkret_wire::EventKind::CIRCLE_ARCHIVE
-        | arkret_wire::EventKind::CIRCLE_RESTORE
-        | arkret_wire::EventKind::CIRCLE_TOMBSTONE => {
+        arkret_wire::EventKind::CircleUpdate
+        | arkret_wire::EventKind::CircleArchive
+        | arkret_wire::EventKind::CircleRestore
+        | arkret_wire::EventKind::CircleTombstone => {
             ("ak.circle.manage", "circle_manage_capability_required")
         }
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE
+        arkret_wire::EventKind::CircleMemberState
             if circle_member_manage_required(state, operation) =>
         {
             (
@@ -228,27 +228,10 @@ pub(super) async fn validate_circle_management_policy(
 
 /// Policy-layer acting-principal accessor.
 ///
-/// Unlike [`Operation::actor`], which probes `actor_id` before `sender`, the
-/// policy layer must resolve the *executing* principal. For membership events
-/// (e.g. arkret_wire::EventKind::CIRCLE_MEMBER_STATE) the `actor_id` field names the
-/// *target* member, not the executor, so preferring it would let a forged verdict pass its own
-/// authorization gate. This accessor therefore resolves the executor as
-/// `sender` → `actor_id` → `created_by`, matching the historical soland
-/// contract.
+/// The executing principal is an accepted envelope fact. Payload `actor_id`
+/// fields name targets and must never participate in authorization.
 pub(super) fn policy_operation_sender(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("sender")
-        .or_else(|| operation.payload.get("actor_id"))
-        .or_else(|| operation.payload.get("created_by"))
-        // Full-object create payloads keep the executor on the object.
-        .or_else(|| {
-            operation
-                .payload
-                .get("object")
-                .and_then(|object| object.get("created_by"))
-        })
-        .and_then(Value::as_str)
+    Some(operation.context.sender.as_str())
 }
 
 pub(super) fn operation_circle_id(operation: &Operation) -> Option<&str> {

@@ -1,6 +1,6 @@
 //! `security_class=high_assurance` federation-policy enforcement.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_state::lattice::CellState;
 use serde_json::json;
 use soland_domain::hlc::ServerHlc;
@@ -9,11 +9,11 @@ use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 const REALM: &str = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
 
 fn policy_operation(policy_revision: u64, federation_policy: &str) -> Operation {
-    Operation::create(
+    arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(REALM).unwrap(),
-        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        arkret_wire::EventKind::RealmPolicyBundle.as_str(),
         json!({
             "policy_revision": policy_revision,
             "federation_policy": federation_policy,
@@ -40,11 +40,11 @@ fn high_assurance_rejects_open_or_omitted_federation_policy() {
             if reason == "high_assurance_federation_policy_invalid"
     ));
 
-    let omitted = Operation::create(
+    let omitted = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(REALM).unwrap(),
-        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        arkret_wire::EventKind::RealmPolicyBundle.as_str(),
         json!({"policy_revision": 1, "content_scheme": "mls_rfc9420"}),
     );
     let effect = state.apply(&omitted, &ServerHlc::new("test"));

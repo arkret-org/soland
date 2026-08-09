@@ -327,11 +327,13 @@ async fn submit_rotation_event_unit(
     unit: &arkret_wire::PreparedEventUnit,
     expected_event_ids: &[&arkret_wire::EventId],
 ) -> Result<Value, AppError> {
-    let request: arkret_wire::EventsSubmitBatchRequestBody =
-        serde_json::from_value(unit.request.clone()).map_err(|error| {
-            AppError::invalid_param(format!("prepared rotation Event unit is invalid: {error}"))
-                .with_wire_code("schema_violation")
-        })?;
+    let request: arkret_wire::EventsSubmitBatchRequestBody = serde_json::from_value(Value::Object(
+        unit.request.clone().into_iter().collect(),
+    ))
+    .map_err(|error| {
+        AppError::invalid_param(format!("prepared rotation Event unit is invalid: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
     let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
         state,
         session,
@@ -402,12 +404,18 @@ async fn continue_rotation_revoke(
     .await
 }
 
-fn public_backup_values(material: &arkret_wire::CanonicalPublicMaterial) -> Vec<Value> {
+fn public_backup_values(
+    material: &arkret_wire::CanonicalPublicMaterial,
+) -> Result<&[Value], AppError> {
     material
         .value
-        .as_array()
-        .cloned()
-        .unwrap_or_else(|| vec![material.value.clone()])
+        .get("backups")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| {
+            AppError::conflict("prepared backup material does not contain a backups array")
+                .with_wire_code("security_transaction_failed_precondition")
+        })
 }
 
 async fn continue_rotation_upload(
@@ -426,7 +434,7 @@ async fn continue_rotation_upload(
     )
     .await?;
     for (rotation, prepared) in binding.backup_rotations.iter().zip(&plan.backup_rotations) {
-        let values = public_backup_values(&prepared.encrypted_backup_material);
+        let values = public_backup_values(&prepared.encrypted_backup_material)?;
         if values.len() != rotation.new_backups.len() {
             return Err(
                 AppError::conflict("prepared backup material has unreserved entries")
@@ -816,8 +824,7 @@ pub(crate) async fn backup_series_erase_command(
             .accepted_event(rotation.active_series_event_id.as_str())
             .await
             .map_err(recovery_service_error)?;
-        if active.is_none_or(|event| event.kind != arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
-        {
+        if active.is_none_or(|event| event.kind != arkret_wire::EventKind::KeyBackupActiveSeries) {
             return Err(
                 AppError::conflict("replacement active-series Event is not accepted")
                     .with_wire_code("security_transaction_failed_precondition"),
@@ -1277,7 +1284,7 @@ async fn continue_issue_terminal_receipt(
         .accepted_event(authorize_event_id.as_str())
         .await
         .map_err(recovery_service_error)?
-        .filter(|event| event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE)
+        .filter(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize)
         .ok_or_else(|| {
             AppError::conflict("durable device authorization Event is unavailable")
                 .with_wire_code("security_transaction_failed_precondition")
@@ -1358,7 +1365,7 @@ async fn continue_issue_terminal_receipt(
                 .accepted_event(reanchor_event_id.as_str())
                 .await
                 .map_err(recovery_service_error)?
-                .filter(|event| event.kind == arkret_wire::EventKind::DEVICE_REANCHOR)
+                .filter(|event| event.kind == arkret_wire::EventKind::DeviceReanchor)
                 .ok_or_else(|| {
                     AppError::conflict("durable device re-anchor Event is unavailable")
                         .with_wire_code("security_transaction_failed_precondition")
@@ -1479,8 +1486,7 @@ async fn continue_issue_terminal_receipt(
     let authorization_event_digest = Hash::new(authorization_event.canonical_digest)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let completed_at = chrono::Utc::now();
-    let mut completion_attestation = arkret_wire::RecoveryCompletionAttestation {
-        schema: "ak.schema.recovery_completion_attestation.v1".to_owned(),
+    let completion_attestation_body = arkret_wire::UnsignedRecoveryCompletionAttestationBody {
         transaction_id: transaction.resource.transaction_id.clone(),
         transaction_request_digest: transaction.resource.request_digest.clone(),
         prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
@@ -1494,35 +1500,31 @@ async fn continue_issue_terminal_receipt(
         device_authorization_event_digest: authorization_event_digest,
         result_model_generation_ref: result_generation,
         completed_at,
-        auth_data: arkret_wire::RecoveryCompletionAttestationAuthData {
-            verification_method: arkret_wire::DidUrl::new(
-                crate::routing::federation::federation_service_signature_key_id(state.service_id()),
-            )
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "federation signature verification method is invalid: {error}"
-                ))
-            })?,
-            signature_algorithm: "Ed25519".to_owned(),
-            signature: String::new(),
-            signed_fields: arkret_wire::RECOVERY_COMPLETION_ATTESTATION_SIGNED_FIELDS
-                .iter()
-                .map(|field| (*field).to_owned())
-                .collect(),
-        },
     };
-    completion_attestation.auth_data.signature = URL_SAFE_NO_PAD.encode(
-        state
-            .notary_signing_key()
-            .sign(&completion_attestation.signing_bytes().map_err(|error| {
-                AppError::internal(format!(
-                    "completion attestation signing transcript is invalid: {error}"
-                ))
-            })?)
-            .to_bytes(),
-    );
-    completion_attestation
-        .validate_structural()
+    let unsigned_completion = arkret_wire::UnsignedRecoveryCompletionAttestation::new(
+        completion_attestation_body,
+        arkret_wire::DidUrl::new(
+            crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+        )
+        .map_err(|error| {
+            AppError::internal(format!(
+                "federation signature verification method is invalid: {error}"
+            ))
+        })?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let signature = state
+        .notary_signing_key()
+        .sign(&unsigned_completion.signing_bytes().map_err(|error| {
+            AppError::internal(format!(
+                "completion attestation signing transcript is invalid: {error}"
+            ))
+        })?);
+    let completion_attestation = unsigned_completion
+        .attach_signature(
+            arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
@@ -1786,7 +1788,10 @@ async fn continue_submit_reanchor_unit(
         .with_status(StatusCode::FORBIDDEN));
     }
     let batch: arkret_models_collaboration::http_bodies::EventsSubmitBatchRequestBody =
-        serde_json::from_value(plan.reanchor_unit.request.clone()).map_err(|error| {
+        serde_json::from_value(Value::Object(
+            plan.reanchor_unit.request.clone().into_iter().collect(),
+        ))
+        .map_err(|error| {
             AppError::internal(format!("prepared re-anchor unit is invalid: {error}"))
         })?;
     let prepared_material_digest = canonical_digest(&batch)?;

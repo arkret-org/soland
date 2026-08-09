@@ -13,13 +13,14 @@
 //! the `crate::reducer::*` paths and sibling `super::*` access stay
 //! unchanged.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_wire::EventKind;
 use serde_json::Value;
 
 use super::{
-    AgentActionRequestStatus, CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect,
-    ProjectionState, RealmLinkState, SpaceContainerLifecycleTransition, apply_moderation, mls,
+    CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
+    RealmLinkState, SpaceContainerLifecycleTransition, apply_moderation, mls,
 };
 use crate::hlc::ServerHlc;
 
@@ -62,9 +63,10 @@ pub(crate) fn extract_event_ref_id(payload: &Value, field: &str) -> Option<Strin
 // This registry keeps the dispatch table out of the match: every
 // canonical event_kind maps to a single `ApplyFn` adapter that calls
 // the corresponding `apply_*` helper with the per-kind extra args
-// baked in. `apply()` becomes a HashMap lookup + indirect call, with
-// the "unknown kind → ProjectionEffect::Ignored" tolerance preserved
-// in the fallthrough.
+// baked in. `apply()` becomes a typed HashMap lookup + indirect call.
+// Every active reducer-input kind is present: kinds without a local
+// structured projection use the explicit no-op adapter, while unknown kinds
+// remain fail-closed before lookup.
 
 fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
     op.payload
@@ -77,6 +79,14 @@ fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
 
 /// Adapter signature for entries in [`default_apply_registry`].
 pub type ApplyFn = fn(&mut ProjectionState, &Operation, &ServerHlc) -> ProjectionEffect;
+
+fn apply_noop_dispatch(
+    _state: &mut ProjectionState,
+    _operation: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    ProjectionEffect::Ignored
+}
 
 fn apply_message_dispatch(
     s: &mut ProjectionState,
@@ -126,13 +136,6 @@ fn apply_pin_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_pin(op, op.created_at)
-}
-fn apply_read_cursor_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_read_cursor(op, op.created_at)
 }
 fn apply_relation_create_dispatch(
     s: &mut ProjectionState,
@@ -214,14 +217,14 @@ fn apply_realm_create_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_CREATE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmCreate)
 }
 fn apply_realm_profile_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_PROFILE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmProfile)
 }
 fn apply_realm_upgrade_dispatch(
     s: &mut ProjectionState,
@@ -235,49 +238,49 @@ fn apply_realm_archive_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_ARCHIVE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmArchive)
 }
 fn apply_realm_freeze_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_FREEZE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmFreeze)
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_TOMBSTONE)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmTombstone)
 }
 fn apply_realm_destroy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_DESTROY)
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmDestroy)
 }
 fn apply_realm_owner_transfer_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_OWNER_TRANSFER)
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmOwnerTransfer)
 }
 fn apply_realm_authority_reset_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_AUTHORITY_RESET)
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityReset)
 }
 fn apply_realm_authority_basis_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE)
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::RealmAuthorityBasisUpdate)
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -299,13 +302,6 @@ fn apply_realm_digest_suite_transition_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     s.apply_realm_digest_suite_transition(op)
-}
-fn apply_erasure_receipt_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_audit_erasure_receipt(op, op.created_at)
 }
 fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
@@ -574,42 +570,6 @@ fn apply_agent_key_revoke_dispatch(
     s.apply_agent_key_revoke(op)
 }
 
-// REDU-2 — actor_private_event dispatchers. `reducer_input=false`: do
-// NOT advance the seal frontier / actor_seq. Wire-accepted only;
-// projection consumers (sodmin draft inbox, action approval queue) read
-// them through the audit log. TODO(R3.1): persist into per-actor
-// private projections and surface to the controller.
-fn apply_agent_draft_propose_dispatch(
-    _s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    ProjectionEffect::AgentPrivateEventAccepted {
-        kind: arkret_wire::EventKind::AGENT_DRAFT_PROPOSE,
-        event_id: op.operation_id.to_string(),
-    }
-}
-fn apply_agent_action_request_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_agent_action_request(op)
-}
-fn apply_agent_action_approve_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Approved)
-}
-fn apply_agent_action_reject_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Rejected)
-}
 /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) — reducer-side dispatch for
 /// `ak.member.identity.update`. The full ordered-log projection +
 /// per-actor effective-set / `member_display_state_digest` materialization
@@ -864,7 +824,7 @@ fn apply_moderation_appeal_dispatch(
     let Some(kind) = crate::kinds::canonical_kind_for_operation(op) else {
         return ProjectionEffect::Ignored;
     };
-    let Some(target_state) = apply_moderation::appeal_target_state(kind) else {
+    let Some(target_state) = apply_moderation::appeal_target_state(&kind) else {
         return ProjectionEffect::Rejected {
             reason: "moderation_appeal_kind_unknown".to_owned(),
         };
@@ -954,87 +914,75 @@ fn apply_realm_policy_server_dispatch(
     crate::reducer::realm_policy_server::apply_realm_policy_server(s, op)
 }
 
-fn apply_device_push_route_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_device_push_route(op)
-}
-
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
-/// the registry covers every canonical kind they care about.
-pub fn default_apply_registry() -> std::collections::HashMap<&'static str, ApplyFn> {
-    let mut m: std::collections::HashMap<&'static str, ApplyFn> =
-        std::collections::HashMap::with_capacity(40);
+/// exact coverage of the active reducer-input set.
+pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn> {
+    let mut m: std::collections::HashMap<EventKind, ApplyFn> =
+        std::collections::HashMap::with_capacity(EventKind::ALL.len());
     m.insert(
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         apply_message_dispatch as ApplyFn,
     );
     m.insert(
-        arkret_wire::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MessageRevise,
         apply_message_revise_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MESSAGE_REDACT,
+        arkret_wire::EventKind::MessageRedact,
         apply_redaction_dispatch,
     );
-    m.insert(arkret_wire::EventKind::REDACTION, apply_redaction_dispatch);
+    m.insert(arkret_wire::EventKind::Redaction, apply_redaction_dispatch);
     m.insert(
-        arkret_wire::EventKind::REACTION_ADD,
+        arkret_wire::EventKind::ReactionAdd,
         apply_reaction_add_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REACTION_REMOVE,
+        arkret_wire::EventKind::ReactionRemove,
         apply_reaction_remove_dispatch,
     );
-    m.insert(arkret_wire::EventKind::RSVP_SET, apply_rsvp_set_dispatch);
-    m.insert(arkret_wire::EventKind::PIN_ADD, apply_pin_dispatch);
-    m.insert(arkret_wire::EventKind::PIN_REMOVE, apply_pin_dispatch);
-    m.insert(arkret_wire::EventKind::PIN_REORDER, apply_pin_dispatch);
+    m.insert(arkret_wire::EventKind::RsvpSet, apply_rsvp_set_dispatch);
+    m.insert(arkret_wire::EventKind::PinAdd, apply_pin_dispatch);
+    m.insert(arkret_wire::EventKind::PinRemove, apply_pin_dispatch);
+    m.insert(arkret_wire::EventKind::PinReorder, apply_pin_dispatch);
     m.insert(
-        arkret_wire::EventKind::READ_CURSOR_ADVANCE,
-        apply_read_cursor_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RELATION_CREATE,
+        arkret_wire::EventKind::RelationCreate,
         apply_relation_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::RELATION_UPDATE,
+        arkret_wire::EventKind::RelationUpdate,
         apply_relation_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::RELATION_TOMBSTONE,
+        arkret_wire::EventKind::RelationTombstone,
         apply_relation_delete_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
+        arkret_wire::EventKind::ContainerMoveItem,
         apply_container_move_item_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CONTAINER_REBALANCE,
+        arkret_wire::EventKind::ContainerRebalance,
         apply_container_rebalance_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         apply_membership_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::INVITE_THIRD_PARTY,
+        arkret_wire::EventKind::InviteThirdParty,
         apply_invite_third_party_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::INVITE_CLAIM,
+        arkret_wire::EventKind::InviteClaim,
         apply_invite_claim_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::INVITE_CREATE,
+        arkret_wire::EventKind::InviteCreate,
         apply_invite_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+        arkret_wire::EventKind::KeyBackupActiveSeries,
         apply_key_backup_active_series_dispatch,
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
@@ -1047,116 +995,112 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // because it spans cells; the in-process reducer just records that
     // the event was accepted so subscribers observe the lifecycle effect.
     m.insert(
-        arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
+        arkret_wire::EventKind::MemberIdentityUpdate,
         apply_member_identity_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate,
         apply_realm_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_PROFILE,
+        arkret_wire::EventKind::RealmProfile,
         apply_realm_profile_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_UPGRADE,
+        arkret_wire::EventKind::RealmUpgrade,
         apply_realm_upgrade_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_ARCHIVE,
+        arkret_wire::EventKind::RealmArchive,
         apply_realm_archive_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_FREEZE,
+        arkret_wire::EventKind::RealmFreeze,
         apply_realm_freeze_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_TOMBSTONE,
+        arkret_wire::EventKind::RealmTombstone,
         apply_realm_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_DESTROY,
+        arkret_wire::EventKind::RealmDestroy,
         apply_realm_destroy_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+        arkret_wire::EventKind::RealmOwnerTransfer,
         apply_realm_owner_transfer_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_AUTHORITY_RESET,
+        arkret_wire::EventKind::RealmAuthorityReset,
         apply_realm_authority_reset_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+        arkret_wire::EventKind::RealmAuthorityBasisUpdate,
         apply_realm_authority_basis_update_dispatch,
     );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
-        arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND,
+        arkret_wire::EventKind::RealmSetDefaultStrand,
         apply_realm_set_default_strand_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_NOTARY,
+        arkret_wire::EventKind::RealmNotary,
         apply_realm_notary_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+        arkret_wire::EventKind::RealmDigestSuiteTransition,
         apply_realm_digest_suite_transition_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT,
-        apply_erasure_receipt_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SPACE_CREATE,
+        arkret_wire::EventKind::SpaceCreate,
         apply_space_container_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SPACE_UPDATE,
+        arkret_wire::EventKind::SpaceUpdate,
         apply_space_container_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SpaceParent,
         apply_space_container_parent_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SPACE_ARCHIVE,
+        arkret_wire::EventKind::SpaceArchive,
         apply_space_container_archive_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SPACE_RESTORE,
+        arkret_wire::EventKind::SpaceRestore,
         apply_space_container_restore_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SPACE_TOMBSTONE,
+        arkret_wire::EventKind::SpaceTombstone,
         apply_space_container_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::StrandCreate,
         apply_strand_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::StrandUpdate,
         apply_strand_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_ARCHIVE,
+        arkret_wire::EventKind::StrandArchive,
         apply_strand_archive_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_RESTORE,
+        arkret_wire::EventKind::StrandRestore,
         apply_strand_restore_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_MOVE,
+        arkret_wire::EventKind::StrandMove,
         apply_strand_position_touch_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_REORDER,
+        arkret_wire::EventKind::StrandReorder,
         apply_strand_position_touch_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::STRAND_WATCH_SET,
+        arkret_wire::EventKind::StrandWatchSet,
         apply_strand_watch_set_dispatch,
     );
     // Unified tracks patch. Payload-shape validation (presence of `tracks`
@@ -1164,27 +1108,27 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // against soland-side Strand.tracks projection once the server-side
     // projection carries the tracks map.
     m.insert(
-        arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
+        arkret_wire::EventKind::StrandTracksUpdate,
         apply_strand_track_touch_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MORPH_CREATE,
+        arkret_wire::EventKind::MorphCreate,
         apply_morph_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MORPH_UPDATE,
+        arkret_wire::EventKind::MorphUpdate,
         apply_morph_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MORPH_ARCHIVE,
+        arkret_wire::EventKind::MorphArchive,
         apply_morph_archive_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MORPH_RESTORE,
+        arkret_wire::EventKind::MorphRestore,
         apply_morph_restore_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
+        arkret_wire::EventKind::MorphSchemaMigrate,
         apply_morph_schema_migrate_dispatch,
     );
     // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
@@ -1193,185 +1137,156 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
     m.insert(
-        arkret_wire::EventKind::CIRCLE_CREATE,
+        arkret_wire::EventKind::CircleCreate,
         apply_circle_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CIRCLE_UPDATE,
+        arkret_wire::EventKind::CircleUpdate,
         apply_circle_update_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CIRCLE_ARCHIVE,
+        arkret_wire::EventKind::CircleArchive,
         apply_circle_archive_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CIRCLE_RESTORE,
+        arkret_wire::EventKind::CircleRestore,
         apply_circle_restore_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CIRCLE_TOMBSTONE,
+        arkret_wire::EventKind::CircleTombstone,
         apply_circle_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         apply_circle_member_state_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SIDECAR_CREATE,
+        arkret_wire::EventKind::SidecarCreate,
         apply_sidecar_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+        arkret_wire::EventKind::SidecarContextAttach,
         apply_sidecar_context_attach_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+        arkret_wire::EventKind::AgentSidecarExchangeControl,
         apply_sidecar_exchange_control_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::APPLET_REGISTRATION,
+        arkret_wire::EventKind::AppletRegistration,
         apply_applet_registration_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::APPLET_DISCOVERY,
+        arkret_wire::EventKind::AppletDiscovery,
         apply_applet_discovery_dispatch,
     );
     // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
     // deactivate is terminal.
     m.insert(
-        arkret_wire::EventKind::SELF_AGENT_PAUSE,
+        arkret_wire::EventKind::SelfAgentPause,
         apply_agent_pause_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SELF_AGENT_RESUME,
+        arkret_wire::EventKind::SelfAgentResume,
         apply_agent_resume_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::SELF_AGENT_DEACTIVATE,
+        arkret_wire::EventKind::SelfAgentDeactivate,
         apply_agent_deactivate_dispatch,
-    );
-    // REDU-2 — actor_private_event kinds (reducer_input=false). These
-    // accept but do NOT advance the seal frontier / actor_seq;
-    // downstream consumers read them from the audit log.
-    m.insert(
-        arkret_wire::EventKind::AGENT_DRAFT_PROPOSE,
-        apply_agent_draft_propose_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AGENT_ACTION_REQUEST,
-        apply_agent_action_request_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AGENT_ACTION_APPROVE,
-        apply_agent_action_approve_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AGENT_ACTION_REJECT,
-        apply_agent_action_reject_dispatch,
     );
     // delivery_binding_policy is Realm-scoped with cell_family
     // `ak.component.realm.delivery_binding_policy.v1`.
     m.insert(
-        arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
+        arkret_wire::EventKind::RealmDeliveryBindingPolicy,
         apply_delivery_binding_policy_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        arkret_wire::EventKind::RealmPolicyBundle,
         apply_realm_policy_bundle_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_DISAPPEARING_POLICY,
+        arkret_wire::EventKind::RealmDisappearingPolicy,
         apply_realm_disappearing_policy_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_SEARCH_POLICY,
+        arkret_wire::EventKind::RealmSearchPolicy,
         apply_realm_search_policy_dispatch,
     );
     // media_service is Realm-scoped with cell_family
     // `ak.component.realm.media_service.v1`; consumed by the AKP-0010
     // media token exchange in `routing::interop::webrtc`.
     m.insert(
-        arkret_wire::EventKind::REALM_MEDIA_SERVICE,
+        arkret_wire::EventKind::RealmMediaService,
         apply_realm_media_service_dispatch,
     );
     // `ak.call.create` establishes the Event-derived CallId before any
     // signaling or state event may refer to it.
     m.insert(
-        arkret_wire::EventKind::CALL_CREATE,
+        arkret_wire::EventKind::CallCreate,
         apply_call_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::AUDIT_APPLET_BINDING_CREATE,
+        arkret_wire::EventKind::AuditAppletBindingCreate,
         apply_audit_binding_create_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::AUDIT_APPLET_BINDING_STATE,
+        arkret_wire::EventKind::AuditAppletBindingState,
         apply_audit_binding_state_dispatch,
     );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
+    m.insert(arkret_wire::EventKind::CallState, apply_call_state_dispatch);
     m.insert(
-        arkret_wire::EventKind::CALL_STATE,
-        apply_call_state_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CALL_RECORDING_START,
+        arkret_wire::EventKind::CallRecordingStart,
         apply_call_recording_start_dispatch,
     );
     // `ak.call.summary` — durable terminal summary projection. Cell family
     // `ak.component.call.summary.v1`, write-once cas_register (`call-state.md`
     // §7).
     m.insert(
-        arkret_wire::EventKind::CALL_SUMMARY,
+        arkret_wire::EventKind::CallSummary,
         apply_call_summary_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::DEVICE_PUSH_ROUTE,
-        apply_device_push_route_dispatch,
     );
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
-    m.insert(
-        arkret_wire::EventKind::REALM_LINK,
-        apply_realm_link_dispatch,
-    );
+    m.insert(arkret_wire::EventKind::RealmLink, apply_realm_link_dispatch);
     // SOL-ORG-02 — organization-authorized Realm relationship statement.
     m.insert(
-        arkret_wire::EventKind::REALM_ORGANIZATION,
+        arkret_wire::EventKind::RealmOrganization,
         apply_realm_organization_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::RealmInheritancePolicy,
         apply_realm_inheritance_policy_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CAPABILITY_DERIVED,
+        arkret_wire::EventKind::CapabilityDerived,
         apply_capability_derived_dispatch,
     );
     // Capability control-plane projection. Grant adds to the canonical grant
     // cell; revoke and subject-only relinquish perform observed-remove.
     m.insert(
-        arkret_wire::EventKind::CAPABILITY_GRANT,
+        arkret_wire::EventKind::CapabilityGrant,
         apply_capability_grant_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CAPABILITY_REVOKE,
+        arkret_wire::EventKind::CapabilityRevoke,
         apply_capability_revoke_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::CAPABILITY_RELINQUISH,
+        arkret_wire::EventKind::CapabilityRelinquish,
         apply_capability_relinquish_dispatch,
     );
     // Agent runtime key authorization + revocation. Authorize records the
     // key; revoke removes it. Neither operation changes Realm grants.
     m.insert(
-        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::EventKind::AgentKeyAuthorize,
         apply_agent_key_authorize_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::AGENT_KEY_REVOKE,
+        arkret_wire::EventKind::AgentKeyRevoke,
         apply_agent_key_revoke_dispatch,
     );
     // P2 — moderation control-plane projection (decision / lift / appeal.*).
@@ -1380,27 +1295,27 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
     // `apply_moderation.rs`.
     m.insert(
-        arkret_wire::EventKind::MODERATION_DECISION,
+        arkret_wire::EventKind::ModerationDecision,
         apply_moderation_decision_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MODERATION_DECISION_LIFT,
+        arkret_wire::EventKind::ModerationDecisionLift,
         apply_moderation_decision_lift_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+        arkret_wire::EventKind::ModerationAppealSubmit,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
+        arkret_wire::EventKind::ModerationAppealDecision,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
+        arkret_wire::EventKind::ModerationAppealClose,
         apply_moderation_appeal_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
@@ -1413,37 +1328,66 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
     m.insert(
-        arkret_wire::EventKind::MLS_KEYPACKAGE,
+        arkret_wire::EventKind::MlsKeypackage,
         apply_mls_keypackage_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MLS_WELCOME,
+        arkret_wire::EventKind::MlsWelcome,
         apply_mls_welcome_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MLS_GENESIS,
+        arkret_wire::EventKind::MlsGenesis,
         apply_mls_genesis_dispatch,
     );
     m.insert(
-        arkret_wire::EventKind::MLS_PROPOSAL,
+        arkret_wire::EventKind::MlsProposal,
         apply_mls_proposal_dispatch,
     );
+    m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
     m.insert(
-        arkret_wire::EventKind::MLS_COMMIT,
-        apply_mls_commit_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::REALM_KEY_SHARE,
+        arkret_wire::EventKind::RealmKeyShare,
         apply_realm_key_share_dispatch,
     );
     // G3.S2: policy server cell
     m.insert(
-        arkret_wire::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::RealmPolicyServer,
         apply_realm_policy_server_dispatch,
+    );
+    for kind in EventKind::ALL.iter().filter(|kind| kind.is_reducer_input()) {
+        m.entry(kind.clone()).or_insert(apply_noop_dispatch);
+    }
+    debug_assert!(m.keys().all(EventKind::is_reducer_input));
+    debug_assert_eq!(
+        m.len(),
+        EventKind::ALL
+            .iter()
+            .filter(|kind| kind.is_reducer_input())
+            .count()
     );
     m
 }
 
 pub(crate) static APPLY_REGISTRY: std::sync::LazyLock<
-    std::collections::HashMap<&'static str, ApplyFn>,
+    std::collections::HashMap<EventKind, ApplyFn>,
 > = std::sync::LazyLock::new(default_apply_registry);
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use arkret_wire::EventKind;
+
+    use super::default_apply_registry;
+
+    #[test]
+    fn apply_registry_exactly_covers_active_reducer_inputs() {
+        let actual = default_apply_registry().into_keys().collect::<HashSet<_>>();
+        let expected = EventKind::ALL
+            .iter()
+            .filter(|kind| kind.is_reducer_input())
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        assert_eq!(actual, expected);
+    }
+}

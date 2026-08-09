@@ -610,7 +610,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         )
         .bind::<SqlUuid, _>(operation_id_uuid)
         .bind::<Text, _>(operation.realm_id.as_str())
-        .bind::<Text, _>(&operation.object_kind)
+        .bind::<Text, _>(operation.event_kind.as_str())
         .bind::<Nullable<Text>, _>(&object_id)
         .bind::<Text, _>(&operation_kind)
         .bind::<Jsonb, _>(&payload)

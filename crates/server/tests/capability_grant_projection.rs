@@ -13,7 +13,7 @@
 //! events and read back the projected cell + the engine-shaped effective
 //! grant the projection driver folds into `SolandAuthzEngine`.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_wire::CapabilityActionId;
 use serde_json::{Value, json};
@@ -29,7 +29,7 @@ const STRAND_ID: &str = "ak:strand:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd"
 const CIRCLE_A: &str = "ak:circle:AV0qavYDFj4YHrrFZnfkfneXMs0JkzjUEmCj7wbVmzN4";
 const CIRCLE_B: &str = "ak:circle:AbSfcRhN4egzL0N5Mj2zIGUOB-2ng3vazhVmP7lFmJXo";
 
-fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
+fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let operation_uuid = uuid::Uuid::now_v7().to_string();
     let object = payload.as_object_mut().expect("test payload object");
     object
@@ -48,10 +48,10 @@ fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
     object
         .entry("event_id".to_owned())
         .or_insert_with(|| Value::String(event_id));
-    Operation::create(
+    arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{operation_uuid}")).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     )
 }
@@ -68,7 +68,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
     let registry_digest = arkret_policy::current_capability_action_registry_digest()
         .expect("embedded capability action registry");
     op(
-        arkret_wire::EventKind::CAPABILITY_GRANT,
+        arkret_wire::EventKind::CapabilityGrant,
         REALM,
         json!({
             "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
@@ -93,7 +93,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        arkret_wire::EventKind::CAPABILITY_REVOKE,
+        arkret_wire::EventKind::CapabilityRevoke,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -206,7 +206,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant,
             REALM,
             json!({
                 "event_id": GRANT_ID.replacen("ak:grant:", "ak:event:", 1),

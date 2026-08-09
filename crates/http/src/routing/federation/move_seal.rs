@@ -175,7 +175,7 @@ async fn device_generation_event_seal_context(
     let bootstrap = records
         .iter()
         .filter(|record| {
-            record.kind == arkret_wire::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && record
                     .envelope
                     .pointer("/payload/object/purpose")
@@ -223,7 +223,7 @@ async fn device_generation_event_seal_context(
         .iter()
         .filter(|record| {
             record.actor_id == principal_id
-                && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
                 && record
                     .envelope
                     .get("prev_refs")
@@ -1729,8 +1729,8 @@ mod seal_delta_tests {
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();
         let issued_at = chrono::Utc::now();
-        let mut event = Event::new_with_derived_id_at(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+        let mut event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             actor_id.clone(),
             1,

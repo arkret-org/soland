@@ -433,7 +433,7 @@ pub fn check_realm_link_admissible(
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyInheritanceMode;
     use serde_json::{Value, json};
@@ -446,18 +446,18 @@ mod tests {
     const REALM_C: &str = "ak:realm:AVJxba8HLR894aybuEkqgnHX90IxEdwBYIeL1JkXv7Lq";
     const REALM_D: &str = "ak:realm:AeSLLARQPGkIcx04DQS4eAzknCtO1BwgudaJkCo0s4DR";
 
-    fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
-        Operation::create(
+    fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         )
     }
 
     fn link_op(source: &str, target: &str, link_kind: &str, status: &str) -> Operation {
         op(
-            arkret_wire::EventKind::REALM_LINK,
+            arkret_wire::EventKind::RealmLink,
             source,
             json!({
                 "target_realm_id": target,
@@ -469,7 +469,7 @@ mod tests {
 
     fn inherit_op(child: &str, parent: &str, allowed_policies: &[&str]) -> Operation {
         op(
-            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::RealmInheritancePolicy,
             child,
             json!({
                 "source_realm_id": parent,
@@ -481,7 +481,7 @@ mod tests {
 
     fn inherit_op_spec_payload(child: &str, parent: &str, policy_rules: &[&str]) -> Operation {
         op(
-            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::RealmInheritancePolicy,
             child,
             json!({
                 "source_realm_id": parent,

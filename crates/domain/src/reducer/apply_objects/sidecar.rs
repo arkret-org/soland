@@ -1,9 +1,7 @@
 use arkret_models_collaboration::agent_operations::{
-    AgentSidecarEncryptionProfile, AgentSidecarExchangeControlPayload, AgentSidecarState,
+    AgentSidecarEncryptionProfile, AgentSidecarState,
 };
-use arkret_models_collaboration::sidecar_operations::{
-    SidecarContextAttachPayload, SidecarContextRef,
-};
+use arkret_models_collaboration::sidecar_operations::SidecarContextRef;
 
 use super::*;
 
@@ -24,22 +22,14 @@ fn context_key(context_ref: &SidecarContextRef) -> String {
 
 impl ProjectionState {
     pub(crate) fn apply_sidecar_create(&mut self, operation: &Operation) -> ProjectionEffect {
-        let Some(event_ref) = operation.payload.get("event_id").and_then(Value::as_str) else {
-            return ProjectionEffect::Rejected {
-                reason: "sidecar_create_invalid".to_owned(),
-            };
-        };
+        let event_ref = operation.context.event_id.as_str();
         let Some(sidecar_id) = event_derived_sidecar_id(event_ref) else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_create_invalid".to_owned(),
             };
         };
-        let Some(controller_id) = operation.actor() else {
-            return ProjectionEffect::Rejected {
-                reason: "sidecar_create_invalid".to_owned(),
-            };
-        };
-        let wire_payload = projection_context_stripped_payload(&operation.payload);
+        let controller_id = &operation.context.sender;
+        let wire_payload = operation.payload.clone();
         let Some(payload) = wire_payload.as_object() else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_create_invalid".to_owned(),
@@ -96,20 +86,15 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
     ) -> ProjectionEffect {
-        let Some(attach_event_ref) = operation.payload.get("event_id").and_then(Value::as_str)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "sidecar_context_attach_invalid".to_owned(),
-            };
-        };
+        let attach_event_ref = operation.context.event_id.as_str();
         if arkret_identifiers::EventId::new(attach_event_ref.to_owned()).is_err() {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
             };
         }
-        let Ok(payload) = serde_json::from_value::<SidecarContextAttachPayload>(
-            projection_context_stripped_payload(&operation.payload),
-        ) else {
+        let Ok(payload) =
+            operation.typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
+        else {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
             };
@@ -125,8 +110,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.actor().as_ref().map(|id| id.as_str())
-                != Some(sidecar.controller_id.as_str())
+            || operation.context.sender.as_str() != sidecar.controller_id.as_str()
         {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
@@ -196,9 +180,9 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         const REASON: &str = "sidecar_exchange_control_forbidden";
-        let Ok(payload) = serde_json::from_value::<AgentSidecarExchangeControlPayload>(
-            projection_context_stripped_payload(&operation.payload),
-        ) else {
+        let Ok(payload) =
+            operation.typed_payload::<arkret_wire::event_spec::AgentSidecarExchangeControl>()
+        else {
             return ProjectionEffect::Rejected {
                 reason: REASON.to_owned(),
             };
@@ -209,8 +193,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.actor().as_ref().map(|id| id.as_str())
-                != Some(sidecar.controller_id.as_str())
+            || operation.context.sender.as_str() != sidecar.controller_id.as_str()
             || payload.encrypted_payload.validate().is_err()
             || !self.sidecar_contexts.contains_key(&(
                 payload.sidecar_id.to_string(),
@@ -230,7 +213,7 @@ mod tests {
     use super::*;
 
     fn create(event_suffix: &str) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01964137-0000-7000-8000-000000000040",
             )
@@ -239,7 +222,7 @@ mod tests {
                 "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
             )
             .unwrap(),
-            arkret_wire::EventKind::SIDECAR_CREATE,
+            arkret_wire::EventKind::SidecarCreate.as_str(),
             serde_json::json!({
                 "encryption_profile": "mls_rfc9420",
                 "event_id": format!("ak:event:{event_suffix}"),

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{CircleId, Did, OperationId, RealmId};
+use arkret_identifiers::{CircleId, Did, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_wire::{Event, PlaintextDataClassKind};
@@ -24,7 +24,7 @@ pub trait HydrationProjectionAdapter: Send + Sync {
     fn operation_from_canonical_record(
         &self,
         record: &crate::events::CanonicalEventRecord,
-    ) -> Option<arkret_event_draft::Operation>;
+    ) -> Option<arkret_event_draft::ProjectedEventOperation>;
 }
 
 fn application_canonical_event(
@@ -129,46 +129,44 @@ pub fn parse_child_scope_policy(
     Ok(Some(policy))
 }
 
-fn operation_from_projection_event(
+async fn operation_from_projection_event(
+    persistence: &dyn soland_storage::PersistenceStore,
+    projection_adapter: &dyn HydrationProjectionAdapter,
     event: &soland_storage::ProjectionEventRecord,
     projection_name: &str,
-) -> soland_storage::PersistenceResult<arkret_event_draft::Operation> {
-    let operation_id = event.operation_id.as_deref().ok_or_else(|| {
-        soland_storage::PersistenceError::Internal(format!(
-            "{projection_name} projection event {} has no operation_id",
-            event.event_id
-        ))
-    })?;
-    let operation_id = OperationId::new(operation_id.to_owned()).map_err(|_| {
-        soland_storage::PersistenceError::Internal(format!(
-            "{projection_name} projection event {} has an invalid operation_id",
-            event.event_id
-        ))
-    })?;
-    let realm_id = RealmId::new(event.realm_id.clone()).map_err(|_| {
-        soland_storage::PersistenceError::Internal(format!(
-            "{projection_name} projection event {} has an invalid realm_id",
-            event.event_id
-        ))
-    })?;
-    let mut operation = arkret_event_draft::Operation::create(
-        operation_id,
-        realm_id,
-        event.event_kind.clone(),
-        event.payload.clone(),
-    );
-    operation.created_at = event.created_at;
-    Ok(operation)
+) -> soland_storage::PersistenceResult<arkret_event_draft::ProjectedEventOperation> {
+    let record = persistence
+        .events()
+        .get(&event.event_id)
+        .await?
+        .ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(format!(
+                "{projection_name} projection event {} has no canonical Event",
+                event.event_id
+            ))
+        })?;
+    projection_adapter
+        .operation_from_canonical_record(&application_canonical_event(&record))
+        .ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(format!(
+                "{projection_name} canonical Event {} cannot be projected",
+                event.event_id
+            ))
+        })
 }
 
-fn replay_projection_event(
+async fn replay_projection_event(
+    persistence: &dyn soland_storage::PersistenceStore,
+    projection_adapter: &dyn HydrationProjectionAdapter,
     proj: &mut ProjectionState,
     event: soland_storage::ProjectionEventRecord,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<()> {
-    let mut operation = operation_from_projection_event(&event, projection_name)?;
-    if event.event_kind == arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
+    let mut operation =
+        operation_from_projection_event(persistence, projection_adapter, &event, projection_name)
+            .await?;
+    if event.event_kind == arkret_wire::EventKind::CircleMemberState.as_str() {
         let payload = operation.payload.as_object_mut().ok_or_else(|| {
             soland_storage::PersistenceError::Internal(format!(
                 "{projection_name} projection event {} has a non-object payload",
@@ -239,7 +237,7 @@ pub async fn hydrate_sidecar_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::SIDECAR_CREATE {
+        if event.event_kind == arkret_wire::EventKind::SidecarCreate.as_str() {
             let Some(uuid) = event.event_id.strip_prefix("ak:event:") else {
                 continue;
             };
@@ -256,6 +254,7 @@ pub async fn hydrate_sidecar_context_projections(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     let mut events = persistence.projection_events().snapshot_all().await?;
     events.sort_by(|left, right| {
@@ -264,8 +263,16 @@ pub async fn hydrate_sidecar_context_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH {
-            replay_projection_event(proj, event, hydration_hlc, "sidecar-context-attach")?;
+        if event.event_kind == arkret_wire::EventKind::SidecarContextAttach.as_str() {
+            replay_projection_event(
+                persistence,
+                projection_adapter,
+                proj,
+                event,
+                hydration_hlc,
+                "sidecar-context-attach",
+            )
+            .await?;
         }
     }
     Ok(())
@@ -314,7 +321,7 @@ async fn hydrate_canonical_realm_bootstraps(
     for (create_index, create) in records
         .iter()
         .enumerate()
-        .filter(|(_, record)| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .filter(|(_, record)| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
         let mut unit = vec![create];
         let mut previous_event_id = create.event_id.as_str();
@@ -383,10 +390,10 @@ async fn hydrate_canonical_realm_bootstraps(
             })?;
             let effect = if index > 0 {
                 if crate::projection::uses_validated_realm_bootstrap_facet_reducer(
-                    operation.object_kind.as_str(),
+                    operation.event_kind.as_str(),
                 ) {
                     staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
-                } else if operation.object_kind == arkret_wire::EventKind::MEMBER_STATE {
+                } else if operation.event_kind == arkret_wire::EventKind::MemberState {
                     staged.apply_validated_realm_bootstrap_membership(&operation, &cell_writes)
                 } else {
                     staged.apply_projected(&operation, &cell_writes, hydration_hlc)
@@ -435,7 +442,7 @@ pub async fn hydrate_canonical_realm_memberships(
         .snapshot_all()
         .await?
         .into_iter()
-        .filter(|record| record.kind == arkret_wire::EventKind::MEMBER_STATE)
+        .filter(|record| record.kind == arkret_wire::EventKind::MemberState.as_str())
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -509,14 +516,23 @@ pub async fn hydrate_projections_from_persistence(
     // the accepted CAS chain.
     let events = persistence.projection_events().snapshot_all().await?;
     for event in events.iter().cloned() {
-        let projection_name = match event.event_kind.as_str() {
-            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_wire::EventKind::AGENT_KEY_REVOKE => "agent-key",
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
-            arkret_wire::EventKind::REALM_POLICY_SERVER => "realm-policy-server",
+        let projection_name = match arkret_wire::EventKind::from_wire(&event.event_kind) {
+            arkret_wire::EventKind::AgentKeyAuthorize | arkret_wire::EventKind::AgentKeyRevoke => {
+                "agent-key"
+            }
+            arkret_wire::EventKind::KeyBackupActiveSeries => "active-series",
+            arkret_wire::EventKind::RealmPolicyServer => "realm-policy-server",
             _ => continue,
         };
-        replay_projection_event(proj, event, &hydration_hlc, projection_name)?;
+        replay_projection_event(
+            persistence,
+            projection_adapter,
+            proj,
+            event,
+            &hydration_hlc,
+            projection_name,
+        )
+        .await?;
     }
 
     fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
@@ -939,7 +955,7 @@ pub async fn hydrate_projections_from_persistence(
     }
     for event in persistence
         .projection_events()
-        .snapshot_kind(arkret_wire::EventKind::MLS_COMMIT)
+        .snapshot_kind(arkret_wire::EventKind::MlsCommit.as_str())
         .await?
     {
         proj.accepted_mls_commit_refs.insert(event.event_id);
@@ -951,19 +967,28 @@ pub async fn hydrate_projections_from_persistence(
     // source instead of being replaced by an incomplete mirror row.
     for event in events.into_iter().filter(|event| {
         matches!(
-            event.event_kind.as_str(),
-            arkret_wire::EventKind::STRAND_CREATE
-                | arkret_wire::EventKind::STRAND_UPDATE
-                | arkret_wire::EventKind::STRAND_ARCHIVE
-                | arkret_wire::EventKind::STRAND_RESTORE
-                | arkret_wire::EventKind::RSVP_SET
+            arkret_wire::EventKind::from_wire(&event.event_kind),
+            arkret_wire::EventKind::StrandCreate
+                | arkret_wire::EventKind::StrandUpdate
+                | arkret_wire::EventKind::StrandArchive
+                | arkret_wire::EventKind::StrandRestore
+                | arkret_wire::EventKind::RsvpSet
         )
     }) {
-        replay_projection_event(proj, event, &hydration_hlc, "strand-calendar-rsvp")?;
+        replay_projection_event(
+            persistence,
+            projection_adapter,
+            proj,
+            event,
+            &hydration_hlc,
+            "strand-calendar-rsvp",
+        )
+        .await?;
     }
     // Run after object mirrors because a native Sidecar attachment validates
     // that its referenced source Relation or Strand already exists.
-    hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc).await?;
+    hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc, projection_adapter)
+        .await?;
     Ok(())
 }
 
@@ -1226,35 +1251,65 @@ pub async fn hydrate_realm_policy_event(
     let Ok(Some(mut meta)) = persistence.realm_meta().get(&realm_id).await else {
         return;
     };
-    let Some(payload) = record.envelope.get("payload") else {
+    let Ok(event) = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()) else {
         return;
     };
-    match record.kind.as_str() {
-        "ak.realm.history_visibility" => {
-            if let Some(value) = payload.get("value").and_then(Value::as_str) {
-                meta.history_visibility = value.to_owned();
-            }
+    match &event.kind {
+        arkret_wire::EventKind::RealmHistoryVisibility => {
+            let Ok(payload) =
+                event.typed_payload::<arkret_wire::event_spec::RealmHistoryVisibility>()
+            else {
+                return;
+            };
+            let Ok(Value::String(value)) = serde_json::to_value(payload.value) else {
+                return;
+            };
+            meta.history_visibility = value;
         }
-        "ak.realm.history_sharing_policy" => {
-            if let Some(value) = payload.get("value") {
-                meta.history_sharing_policy = Some(value.clone());
-                meta.history_sharing_policy_digest = canonical_value_digest(value);
-            }
+        arkret_wire::EventKind::RealmHistorySharingPolicy => {
+            let Ok(payload) =
+                event.typed_payload::<arkret_wire::event_spec::RealmHistorySharingPolicy>()
+            else {
+                return;
+            };
+            let Ok(value) = serde_json::to_value(payload.value) else {
+                return;
+            };
+            meta.history_sharing_policy_digest = canonical_value_digest(&value);
+            meta.history_sharing_policy = Some(value);
         }
-        "ak.realm.preview_policy" => {
-            if let Some(value) = payload.get("value") {
-                meta.preview_policy = Some(value.clone());
-                meta.preview_policy_digest = canonical_value_digest(value);
-            }
+        arkret_wire::EventKind::RealmPreviewPolicy => {
+            let Ok(payload) = event.typed_payload::<arkret_wire::event_spec::RealmPreviewPolicy>()
+            else {
+                return;
+            };
+            let Ok(value) = serde_json::to_value(payload.value) else {
+                return;
+            };
+            meta.preview_policy_digest = canonical_value_digest(&value);
+            meta.preview_policy = Some(value);
         }
-        "ak.realm.asset_privacy_policy" => {
-            if let Some(value) = payload.get("value") {
+        arkret_wire::EventKind::RealmAssetPrivacyPolicy => {
+            let Ok(payload) =
+                event.typed_payload::<arkret_wire::event_spec::RealmAssetPrivacyPolicy>()
+            else {
+                return;
+            };
+            if let Some(value) = payload.value {
                 meta.asset_privacy_policy = Some(value.clone());
-                meta.asset_privacy_policy_digest = canonical_value_digest(value);
+                meta.asset_privacy_policy_digest = canonical_value_digest(&value);
             }
         }
-        "ak.realm.plaintext_visible_services" => {
-            for (service, classes) in plaintext_service_classes_from_value(payload) {
+        arkret_wire::EventKind::RealmPlaintextVisibleServices => {
+            let Ok(payload) =
+                event.typed_payload::<arkret_wire::event_spec::RealmPlaintextVisibleServices>()
+            else {
+                return;
+            };
+            let Ok(payload) = serde_json::to_value(payload) else {
+                return;
+            };
+            for (service, classes) in plaintext_service_classes_from_value(&payload) {
                 meta.plaintext_visible_services.insert(service.clone());
                 meta.plaintext_visible_service_classes
                     .entry(service)

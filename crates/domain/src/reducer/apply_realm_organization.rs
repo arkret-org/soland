@@ -32,7 +32,7 @@
 //! admission/HTTP layer (see SOL-ORG-06 notes). `organization_did` /
 //! `threshold_quorum` statements (no `delegation_ref`) project directly.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::{
     RealmOrganizationControlScope, RealmOrganizationPayload, SignatureMaterial,
 };
@@ -57,15 +57,15 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         // Strong-typed parse. We never hand-roll the wire struct.
-        let payload: RealmOrganizationPayload =
-            match serde_json::from_value(operation.payload.clone()) {
-                Ok(payload) => payload,
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
+        let payload = match operation.typed_payload::<arkret_wire::event_spec::RealmOrganization>()
+        {
+            Ok(payload) => payload,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
 
         // The statement's `realm_id` MUST equal the enclosing event's
         // `realm_id`. The SDK verifier also checks this, but we resolve the
@@ -334,7 +334,7 @@ fn control_scopes_str(payload: &RealmOrganizationPayload) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use arkret_models_collaboration::RealmOrganizationControlScope as Scope;
     use serde_json::{Value, json};
@@ -353,10 +353,10 @@ mod tests {
     }
 
     fn op(realm_id: &str, payload: Value) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            arkret_wire::EventKind::REALM_ORGANIZATION,
+            arkret_wire::EventKind::RealmOrganization.as_str(),
             payload,
         )
     }

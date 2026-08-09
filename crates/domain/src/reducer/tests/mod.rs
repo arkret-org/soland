@@ -6,7 +6,6 @@ mod cells_realm;
 mod circle_encryption;
 mod circle_history;
 mod container_realm_control;
-mod dispatch_boundaries;
 mod invite_claim;
 mod key_backup_active_series;
 mod moderation;
@@ -46,7 +45,11 @@ pub(super) fn install_realm_authority_root(
     );
 }
 
-pub(super) fn make_operation(object_kind: &str, realm_id: &str, mut payload: Value) -> Operation {
+pub(super) fn make_operation(
+    object_kind: impl AsRef<str>,
+    realm_id: &str,
+    mut payload: Value,
+) -> Operation {
     // The production Event→Operation adapter injects the accepted event_id.
     // Unit tests commonly construct only the create object's typed id, so
     // mirror that adapter by retyping the same UUID when the id-kind registry
@@ -71,11 +74,11 @@ pub(super) fn make_operation(object_kind: &str, realm_id: &str, mut payload: Val
             .expect("operation payload object")
             .insert("event_id".to_owned(), Value::String(event_id));
     }
-    Operation::create(
+    arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
-        object_kind,
+        object_kind.as_ref(),
         payload,
     )
 }
@@ -99,7 +102,7 @@ pub(super) fn make_operation(object_kind: &str, realm_id: &str, mut payload: Val
 /// distinct. Same kind, Realm, payload and seq is the *same* Event and
 /// therefore the same id; a test that needs siblings varies the seq.
 pub(super) fn projected_cell_writes_at_seq(
-    object_kind: &str,
+    object_kind: impl AsRef<str>,
     realm_id: &str,
     actor_seq: u64,
     payload: &Value,
@@ -110,8 +113,8 @@ pub(super) fn projected_cell_writes_at_seq(
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let event = arkret_wire::Event::new_at(
-        object_kind,
+    let event = arkret_wire::test_support::raw_event_at(
+        object_kind.as_ref(),
         arkret_wire::event_envelope::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id).unwrap(),
         },
@@ -132,7 +135,7 @@ pub(super) fn projected_cell_writes_at_seq(
 }
 
 pub(super) fn projected_cell_writes(
-    object_kind: &str,
+    object_kind: impl AsRef<str>,
     realm_id: &str,
     payload: &Value,
 ) -> (

@@ -366,13 +366,13 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
         })
     };
     let message_op = |payload: serde_json::Value| {
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             payload,
         )
     };
@@ -457,13 +457,13 @@ async fn circle_scoped_write_requires_circle_membership() {
         if let Some(scope) = scope {
             object["scope_circle_id"] = json!(scope);
         }
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-57d7d8550abc",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate.as_str(),
             json!({"sender": sender, "object": object}),
         )
     };
@@ -580,13 +580,13 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     }
 
     let reaction = |sender: &str| {
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-c2c2e000000a",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::REACTION_ADD,
+            arkret_wire::EventKind::ReactionAdd.as_str(),
             json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
         )
     };
@@ -673,13 +673,13 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     }
 
     let morph_update = |sender: &str, morph_id: &str| {
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-c3c3e000000a",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MorphUpdate.as_str(),
             json!({
                 "sender": sender,
                 "target_ref": morph_id,
@@ -752,13 +752,13 @@ async fn applet_registration_requires_realm_admin() {
         .unwrap();
 
     let registration = |sender: &str| {
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-57d7d855a99e",
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::APPLET_REGISTRATION,
+            arkret_wire::EventKind::AppletRegistration.as_str(),
             json!({
                 "sender": sender,
                 "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
@@ -841,11 +841,11 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
         .await
         .unwrap();
 
-    let op = arkret_event_draft::Operation::create(
+    let op = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c6")
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate.as_str(),
         json!({
             "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "track_name": "main",
@@ -965,8 +965,8 @@ fn production_requires_requirements_schema() {
 async fn top_level_effective_scope_is_reducer_managed() {
     let state = make_state(true);
     let session = session();
-    let event = arkret_wire::Event::new(
-        arkret_wire::EventKind::REALM_CREATE,
+    let event = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
@@ -994,7 +994,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
 
 #[test]
 fn event_canonical_bytes_use_sdk_canonical_json() {
-    let mut event = arkret_wire::Event::new(
+    let mut event = arkret_wire::test_support::raw_event(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -1023,7 +1023,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
 
 #[test]
 fn event_canonical_bytes_reject_fractional_numbers() {
-    let event = arkret_wire::Event::new(
+    let event = arkret_wire::test_support::raw_event(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -1140,8 +1140,8 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
     const SIBLING_SCHEMA_EVENT_KINDS: &[&str] = &[
-        arkret_wire::EventKind::MODERATION_FRANKING_PROOF,
-        arkret_wire::EventKind::RELATION_TOMBSTONE,
+        arkret_wire::EventKind::ModerationFrankingProof,
+        arkret_wire::EventKind::RelationTombstone,
     ];
     let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let event_kinds = soland_services::protocol_artifacts::active_durable_event_kinds()
@@ -1291,7 +1291,7 @@ fn realm_create_rejects_world_readable_history_without_history_capable_scheme() 
         }
     });
     let err = validate_realm_create_policy_constraints(
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate.as_str(),
         &payload,
         false,
     )

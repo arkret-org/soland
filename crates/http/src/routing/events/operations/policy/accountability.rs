@@ -5,7 +5,7 @@ pub(super) fn validate_pin_scope_safety(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !kinds::canonical_kind_for_operation(operation)
-        .is_some_and(arkret_wire::events::kinds::is_pin_kind)
+        .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(kind.as_str()))
     {
         return Ok(());
     }
@@ -19,7 +19,7 @@ pub(super) async fn validate_accountability_profile_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !matches!(
-        kinds::canonical_kind_string(operation).as_str(),
+        kinds::canonical_kind(operation).as_str(),
         "ak.profile.create" | "ak.profile.update"
     ) {
         return Ok(());
@@ -94,7 +94,7 @@ async fn accountability_grants_at_frozen_basis(
     records.sort_by(|left, right| left.event_id.as_bytes().cmp(right.event_id.as_bytes()));
     let mut grants = std::collections::BTreeMap::new();
     for record in records {
-        if record.kind != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+        if record.kind != arkret_wire::EventKind::IdentityAccountabilityGrant.as_str()
             || record.realm_id.as_deref() != Some(operation.realm_id.as_str())
         {
             continue;
@@ -119,30 +119,11 @@ fn accountability_seal_basis(
     operation: &Operation,
 ) -> Result<Vec<arkret_identifiers::SealId>, &'static str> {
     let mut ids = Vec::new();
-    if let Some(seal_ref) = operation.payload.get("seal_ref").and_then(Value::as_str) {
-        ids.push(
-            arkret_identifiers::SealId::new(seal_ref.to_owned())
-                .map_err(|_| "accountability grant seal_ref is invalid")?,
-        );
+    if let Some(seal_ref) = &operation.context.seal_ref {
+        ids.push(seal_ref.clone());
     }
-    if let Some(seal_basis) = operation.payload.get("seal_basis") {
-        if let Some(seal_ref) = seal_basis.as_str() {
-            ids.push(
-                arkret_identifiers::SealId::new(seal_ref.to_owned())
-                    .map_err(|_| "accountability grant seal_basis is invalid")?,
-            );
-        }
-        if let Some(leaves) = seal_basis.get("leaves").and_then(Value::as_array) {
-            for leaf in leaves {
-                let seal_ref = leaf
-                    .as_str()
-                    .ok_or("accountability grant seal_basis leaf is invalid")?;
-                ids.push(
-                    arkret_identifiers::SealId::new(seal_ref.to_owned())
-                        .map_err(|_| "accountability grant seal_basis leaf is invalid")?,
-                );
-            }
-        }
+    if let Some(seal_basis) = &operation.context.seal_basis {
+        ids.extend(seal_basis.leaves.iter().cloned());
     }
     ids.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
     ids.dedup();
@@ -155,8 +136,7 @@ fn merge_atomic_accountability_grants(
     realm_id: &str,
 ) {
     for operation in operations {
-        if kinds::canonical_kind_string(operation)
-            != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+        if kinds::canonical_kind(operation) != arkret_wire::EventKind::IdentityAccountabilityGrant
             || operation.realm_id.as_str() != realm_id
         {
             continue;
@@ -198,25 +178,7 @@ fn accountability_grant_key(grant: &AccountabilityGrant) -> Option<Accountabilit
 }
 
 fn parse_accountability_grant(value: &Value) -> Option<AccountabilityGrant> {
-    let mut grant_value = value.clone();
-    if let Some(object) = grant_value.as_object_mut() {
-        for field in [
-            "event_id",
-            "sender",
-            "hlc",
-            "executed_by",
-            "authorization_ref",
-            "seal_basis",
-            "seal_ref",
-            "preconditions",
-            "effects",
-            "accepted_event_id",
-            "query_grade",
-        ] {
-            object.remove(field);
-        }
-    }
-    serde_json::from_value(grant_value).ok()
+    serde_json::from_value(value.clone()).ok()
 }
 
 pub(super) fn profile_body_value(operation: &Operation) -> &Value {
@@ -261,11 +223,12 @@ pub(super) fn accountability_grant_operation_signed_by(
     issuer: &str,
 ) -> bool {
     operation
-        .payload
-        .get("executed_by")
-        .or_else(|| operation.payload.get("sender"))
-        .and_then(Value::as_str)
-        == Some(issuer)
+        .context
+        .executed_by
+        .as_ref()
+        .unwrap_or(&operation.context.sender)
+        .as_str()
+        == issuer
 }
 
 pub(super) fn accountability_grant_envelope_signed_by(
@@ -320,9 +283,9 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     let is_message_or_reaction = matches!(
         kind,
         Some(
-            arkret_wire::EventKind::MESSAGE_CREATE
-                | arkret_wire::EventKind::REACTION_ADD
-                | arkret_wire::EventKind::REACTION_REMOVE
+            arkret_wire::EventKind::MessageCreate
+                | arkret_wire::EventKind::ReactionAdd
+                | arkret_wire::EventKind::ReactionRemove
         )
     );
     if !is_message_or_reaction {

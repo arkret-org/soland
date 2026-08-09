@@ -388,7 +388,7 @@ pub async fn realm_basis(
             AppError::internal(format!("read accepted Realm bootstrap events: {error}"))
         })?;
     if accepted.iter().any(|record| {
-        record.kind == arkret_wire::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record.realm_id.as_deref() == Some(body.realm_id.as_str())
     }) {
         return Err(AppError::conflict(
@@ -1450,7 +1450,7 @@ fn projection_event_diagnostic(record: &ProjectionEventRecord) -> ProjectionEven
     ProjectionEventDiagnostic {
         event_id: record.event_id.clone(),
         realm_id: record.realm_id.clone(),
-        event_kind: record.event_kind.clone(),
+        event_kind: record.event_kind.as_str().to_owned(),
         operation_kind: record.operation_kind.clone(),
         operation_id: record.operation_id.clone(),
         sender: record.sender.clone(),

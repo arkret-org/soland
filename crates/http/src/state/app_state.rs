@@ -475,7 +475,7 @@ mod test_construction {
         async fn persist_projected_operation(
             &self,
             _origin: &str,
-            _operation: &arkret_event_draft::Operation,
+            _operation: &arkret_event_draft::ProjectedEventOperation,
             _event_type: &str,
             _is_membership_or_realm_lifecycle: bool,
         ) -> Result<(), String> {
@@ -1185,7 +1185,7 @@ impl AppState {
         // acceptance and the private-store mirror. The operation is
         // idempotent for records already marked consumed.
         for record in self.event_queries.canonical_events().await? {
-            if record.kind != arkret_wire::EventKind::INVITE_CREATE {
+            if record.kind != arkret_wire::EventKind::InviteCreate.as_str() {
                 continue;
             }
             let Some(operation) =
@@ -1222,7 +1222,9 @@ impl AppState {
             .canonical_events()
             .await?
             .into_iter()
-            .filter(|record| record.kind == arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND)
+            .filter(|record| {
+                record.kind == arkret_wire::EventKind::DirectConversationBound.as_str()
+            })
             .collect::<Vec<_>>();
         for record in direct_binding_records {
             let Some(operation) =
@@ -1636,7 +1638,7 @@ impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
     fn operation_from_canonical_record(
         &self,
         record: &soland_services::events::CanonicalEventRecord,
-    ) -> Option<arkret_event_draft::Operation> {
+    ) -> Option<arkret_event_draft::ProjectedEventOperation> {
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     }
 }
@@ -1749,11 +1751,12 @@ mod membership_hydration_tests {
         realm_id: &str,
         actor_id: &str,
         actor_seq: u64,
-        kind: &str,
+        kind: impl AsRef<str>,
         payload: serde_json::Value,
         received_at: chrono::DateTime<chrono::Utc>,
     ) -> CanonicalEventRecord {
-        let event = arkret_wire::Event::new_at(
+        let kind = kind.as_ref();
+        let event = arkret_wire::test_support::raw_event_at(
             kind,
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(realm_id).unwrap(),
@@ -1794,7 +1797,7 @@ mod membership_hydration_tests {
             realm_id,
             member,
             1,
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "membership": membership,
                 "actor_id": member,
@@ -2152,7 +2155,7 @@ mod membership_hydration_tests {
             realm_id,
             actor,
             1,
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             first_payload.clone(),
             now,
         );
@@ -2167,7 +2170,9 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: first_event_id,
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_wire::EventKind::KeyBackupActiveSeries
+                    .as_str()
+                    .to_owned(),
                 operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned()),
                 sender: Some(actor.to_owned()),
@@ -2218,7 +2223,7 @@ mod membership_hydration_tests {
             realm_id,
             actor,
             2,
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             gap_payload.clone(),
             now,
         );
@@ -2233,7 +2238,9 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: gap_event_id,
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
+                event_kind: arkret_wire::EventKind::KeyBackupActiveSeries
+                    .as_str()
+                    .to_owned(),
                 operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned()),
                 sender: Some(actor.to_owned()),
@@ -2271,7 +2278,7 @@ mod membership_hydration_tests {
             realm_id,
             agent_id,
             1,
-            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+            arkret_wire::EventKind::AgentKeyAuthorize,
             serde_json::json!({
                 "agent_id": agent_id,
                 "key_id": key_id
@@ -2289,7 +2296,9 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: event_id.clone(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_wire::EventKind::AgentKeyAuthorize
+                    .as_str()
+                    .to_owned(),
                 operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -2308,7 +2317,7 @@ mod membership_hydration_tests {
             realm_id,
             agent_id,
             2,
-            arkret_wire::EventKind::AGENT_KEY_REVOKE,
+            arkret_wire::EventKind::AgentKeyRevoke,
             serde_json::json!({
                 "agent_id": agent_id,
                 "key_id": key_id
@@ -2326,7 +2335,7 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: revoke_event_id,
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AGENT_KEY_REVOKE.to_owned(),
+                event_kind: arkret_wire::EventKind::AgentKeyRevoke.as_str().to_owned(),
                 operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
                 sender: Some(agent_id.to_owned()),
@@ -2343,7 +2352,7 @@ mod membership_hydration_tests {
             realm_id,
             agent_id,
             3,
-            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+            arkret_wire::EventKind::AgentKeyAuthorize,
             serde_json::json!({
                 "agent_id": agent_id,
                 "key_id": replacement_key_id
@@ -2361,7 +2370,9 @@ mod membership_hydration_tests {
             .append(ProjectionEventRecord {
                 event_id: replacement_event_id.clone(),
                 realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                event_kind: arkret_wire::EventKind::AgentKeyAuthorize
+                    .as_str()
+                    .to_owned(),
                 operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
                 sender: Some(agent_id.to_owned()),

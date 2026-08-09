@@ -4,12 +4,12 @@ const REALM: &str = "ak:realm:AW2XhEBfjbMHqDBzRGwBXCaBZtSGUQTBe5CkC4pjU8O2";
 const OWNER: &str = "did:web:owner.example";
 const SUCCESSOR: &str = "did:web:successor.example";
 
-fn operation(kind: &str, payload: Value) -> Operation {
-    Operation::create(
+fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {
+    arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(REALM).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     )
 }
@@ -48,7 +48,7 @@ fn transfer_changes_only_controller_and_epoch() {
     let before = state.realm_authority_root(REALM).unwrap();
     let effect = state.apply_realm_authority_transition(
         &operation(
-            arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+            arkret_wire::EventKind::RealmOwnerTransfer,
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
@@ -60,7 +60,7 @@ fn transfer_changes_only_controller_and_epoch() {
                 "sender": OWNER
             }),
         ),
-        arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+        arkret_wire::EventKind::RealmOwnerTransfer,
     );
     assert!(matches!(effect, ProjectionEffect::RealmLifecycle { .. }));
     let after = state.realm_authority_root(REALM).unwrap();
@@ -79,7 +79,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
     let expected = root_digest(&state);
     let nonmember = state.apply_realm_authority_transition(
         &operation(
-            arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+            arkret_wire::EventKind::RealmOwnerTransfer,
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": expected,
@@ -91,7 +91,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "sender": OWNER
             }),
         ),
-        arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+        arkret_wire::EventKind::RealmOwnerTransfer,
     );
     assert!(matches!(
         nonmember,
@@ -101,7 +101,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
 
     let stale = state.apply_realm_authority_transition(
         &operation(
-            arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+            arkret_wire::EventKind::RealmOwnerTransfer,
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": format!("sha256:{}", "0".repeat(64)),
@@ -113,7 +113,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "sender": OWNER
             }),
         ),
-        arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+        arkret_wire::EventKind::RealmOwnerTransfer,
     );
     assert!(matches!(
         stale,
@@ -127,7 +127,7 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
     let before = state.realm_authority_root(REALM).unwrap();
     let reset = state.apply_realm_authority_transition(
         &operation(
-            arkret_wire::EventKind::REALM_AUTHORITY_RESET,
+            arkret_wire::EventKind::RealmAuthorityReset,
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
@@ -136,7 +136,7 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
                 "sender": OWNER
             }),
         ),
-        arkret_wire::EventKind::REALM_AUTHORITY_RESET,
+        arkret_wire::EventKind::RealmAuthorityReset,
     );
     assert!(matches!(reset, ProjectionEffect::RealmLifecycle { .. }));
     let after_reset = state.realm_authority_root(REALM).unwrap();
@@ -150,7 +150,7 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
 
     let rejected = state.apply_realm_authority_transition(
         &operation(
-            arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+            arkret_wire::EventKind::RealmAuthorityBasisUpdate,
             serde_json::json!({
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
@@ -160,7 +160,7 @@ fn reset_changes_only_generation_and_basis_update_fails_closed() {
                 "sender": OWNER
             }),
         ),
-        arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+        arkret_wire::EventKind::RealmAuthorityBasisUpdate,
     );
     assert!(matches!(
         rejected,

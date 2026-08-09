@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{Did, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_wire::PlaintextDataClassKind;
@@ -26,18 +26,10 @@ pub(super) async fn project_invite_accept_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != "ak.invite.accept" {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteAccept {
         return;
     }
-    let accepter = operation
-        .payload
-        .get("sender")
-        .or_else(|| operation.payload.get("invitee"))
-        .or_else(|| operation.payload.get("actor_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(origin)
-        .to_owned();
+    let accepter = operation.context.sender.to_string();
     let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
@@ -156,7 +148,7 @@ pub(super) async fn project_invite_cancel_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_CANCEL {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteCancel {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
@@ -173,7 +165,7 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     event: &arkret_wire::Event,
 ) -> Result<arkret_schema::FrozenPreState, &'static str> {
     let mut frozen = arkret_schema::FrozenPreState::new();
-    if event.kind.as_str() != arkret_wire::EventKind::INVITE_CANCEL {
+    if event.kind != arkret_wire::EventKind::InviteCancel {
         return Ok(frozen);
     }
     let invite_id = event
@@ -247,7 +239,7 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     operation: &Operation,
     frozen_pre_state: &arkret_schema::FrozenPreState,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_CANCEL {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteCancel {
         return Ok(());
     }
     let invite_id =
@@ -302,7 +294,7 @@ pub(super) async fn project_invite_revoke_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_REVOKE {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteRevoke {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Revoke).await;
@@ -693,14 +685,7 @@ pub(super) async fn project_invite_create_operation(
         return;
     }
 
-    let inviter = operation
-        .payload
-        .get("sender")
-        .or_else(|| operation.payload.get("inviter"))
-        .or_else(|| operation.payload.get("issuer"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(origin);
+    let inviter = operation.context.sender.as_str();
     let expires_at = operation
         .payload
         .get("expires_at")
@@ -837,11 +822,7 @@ fn project_invite_creation(state: &AppState, operation: &Operation, invitee: &st
 /// producer-allocated `operation_id`, which would fabricate an identity the
 /// creating Event never bound.
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {
-    let event_id = operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())?;
+    let event_id = operation.context.event_id.clone();
     let derived = arkret_identifiers::InviteId::from_event_id(&event_id).to_string();
     if let Some(invite_id) = operation
         .payload
@@ -1138,8 +1119,8 @@ mod tests {
         if let Some(invitee) = invitee {
             payload["invitee"] = json!(invitee);
         }
-        arkret_wire::Event::new(
-            arkret_wire::EventKind::INVITE_CANCEL,
+        arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::InviteCancel.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(CANCEL_REALM).unwrap(),
             },
@@ -1153,13 +1134,13 @@ mod tests {
 
     fn cancel_operation(invitee: Option<&str>) -> Operation {
         let event = cancel_event(invitee);
-        let mut operation = Operation::create(
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000523",
             )
             .unwrap(),
             RealmId::new(CANCEL_REALM).unwrap(),
-            arkret_wire::EventKind::INVITE_CANCEL,
+            arkret_wire::EventKind::InviteCancel.as_str(),
             serde_json::to_value(event.payload).unwrap(),
         );
         operation.created_at = event.created_at;
@@ -1201,13 +1182,13 @@ mod tests {
             json!("pending"),
         );
         if !third_party {
-            let mut create = Operation::create(
+            let mut create = arkret_event_draft::test_support::raw_projected_operation(
                 arkret_identifiers::OperationId::new(
                     "ak:operation:01904100-0000-7000-8000-000000000524",
                 )
                 .unwrap(),
                 RealmId::new(CANCEL_REALM).unwrap(),
-                arkret_wire::EventKind::INVITE_CREATE,
+                arkret_wire::EventKind::InviteCreate.as_str(),
                 json!({"invite_id": CANCEL_INVITE, "invitee": CANCEL_INVITEE}),
             );
             create.created_at = created_at;
@@ -1395,13 +1376,13 @@ mod tests {
                 .invite_member_is_invited(realm_id.as_str(), invitee)
         );
 
-        let mut operation = Operation::create(
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000503",
             )
             .unwrap(),
             realm_id.clone(),
-            arkret_wire::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::InviteCreate.as_str(),
             json!({
                 "invitee": invitee,
                 "invite_delivery_target": delivery_target,
@@ -1461,13 +1442,13 @@ mod tests {
             })
             .await
             .unwrap();
-        let mut operation = Operation::create(
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000513",
             )
             .unwrap(),
             realm_id.clone(),
-            arkret_wire::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::InviteCreate.as_str(),
             json!({
                 "invitee": invitee,
                 "expires_at": "2026-08-05T10:00:00.000Z"

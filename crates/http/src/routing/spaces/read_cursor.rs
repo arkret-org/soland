@@ -7,6 +7,9 @@
 use arkret_models_collaboration::objects::read_receipts::{
     ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadCursorPosition, ReadMarkerOutcome,
 };
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate,
+};
 use arkret_wire::{Event, ReadCursorScope, ReadScopeKind};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -15,9 +18,7 @@ use serde_json::json;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
-use crate::routing::identity::device_messages::{
-    READ_MARKER_UPDATE_TYPE, fanout_actor_private_update,
-};
+use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -69,17 +70,19 @@ pub(super) async fn set_read_cursor(
         fanout_actor_private_update(
             state,
             &session.actor,
-            &session.device_id,
-            READ_MARKER_UPDATE_TYPE,
-            json!({
-                "schema": "ak.schema.read_cursor.v1",
-                "actor_id": marker.actor_id,
-                "device_id": marker.device_id,
-                "realm_id": marker.realm_id,
-                "read_scope": marker.read_scope,
-                "position": marker.position,
-                "updated_at": marker.updated_at,
-            }),
+            ActorPrivateDeviceUpdate::ReadCursor {
+                sender_device_id: session.device_id.clone(),
+                content: ActorPrivateReadCursorUpdate {
+                    schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
+                    actor_id: marker.actor_id,
+                    device_id: marker.device_id,
+                    realm_id: marker.realm_id,
+                    read_scope: marker.read_scope,
+                    position: marker.position,
+                    updated_at: marker.updated_at,
+                },
+                created_at: marker.updated_at,
+            },
         )
         .await;
     }
@@ -91,7 +94,7 @@ fn validate_caller_signed_read_cursor(
     session_device_id: &str,
     event: &Event,
 ) -> Result<ReadCursor, AppError> {
-    if event.kind != arkret_wire::EventKind::READ_CURSOR_ADVANCE {
+    if event.kind != arkret_wire::EventKind::ReadCursorAdvance {
         return Err(AppError::invalid_param(
             "advance_event.event.kind must be ak.read_cursor.advance",
         ));
@@ -273,8 +276,8 @@ mod tests {
 
     fn signed_shape() -> Event {
         let created_at = "2026-08-08T00:00:00.000Z".parse().expect("timestamp");
-        Event::new_at(
-            arkret_wire::EventKind::READ_CURSOR_ADVANCE,
+        arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::ReadCursorAdvance.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("realm"),
             },

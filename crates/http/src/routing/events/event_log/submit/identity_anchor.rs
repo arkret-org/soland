@@ -81,10 +81,11 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let first_kind = event_string_field_from_value(&envelopes[0], "kind");
     let second_kind = event_string_field_from_value(&envelopes[1], "kind");
-    let is_bootstrap = first_kind.as_deref() == Some(arkret_wire::EventKind::REALM_CREATE)
-        && second_kind.as_deref() == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE);
-    let is_reanchor = first_kind.as_deref() == Some("ak.device.reanchor")
-        && second_kind.as_deref() == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE);
+    let is_bootstrap = first_kind.as_deref() == Some(arkret_wire::EventKind::RealmCreate.as_str())
+        && second_kind.as_deref() == Some(arkret_wire::EventKind::DeviceAuthorize.as_str());
+    let is_reanchor = first_kind.as_deref()
+        == Some(arkret_wire::EventKind::DeviceReanchor.as_str())
+        && second_kind.as_deref() == Some(arkret_wire::EventKind::DeviceAuthorize.as_str());
     if !is_bootstrap && !is_reanchor {
         return Err(unit_error(
             "identity anchor unit must be [ak.realm.create, ak.device.authorize] or [ak.device.reanchor, ak.device.authorize]",
@@ -223,7 +224,7 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     if is_bootstrap
         && existing.iter().any(|record| {
-            record.kind == arkret_wire::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && (record.realm_id.as_deref() == Some(first.realm_id.as_str())
                     || (record.actor_id == first.actor_id
                         && record
@@ -1202,7 +1203,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 0
-                && record.kind == arkret_wire::EventKind::REALM_CREATE
+                && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && record
                     .envelope
                     .pointer("/payload/object/purpose")
@@ -1219,7 +1220,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 1
-                && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
                 && event_prev_refs(&record.envelope) == vec![genesis.event_id.as_str()]
         })
         .collect::<Vec<_>>();
@@ -2102,8 +2103,8 @@ mod tests {
 
         let payload = fixture_founding_authorize_payload(&create.actor_id, create.created_at);
         let authorize_verification_method = format!("{}#{}", create.actor_id, payload.device_id);
-        let mut authorize = arkret_wire::Event::new(
-            arkret_wire::EventKind::DEVICE_AUTHORIZE,
+        let mut authorize = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::DeviceAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             principal,
             1,
@@ -2166,7 +2167,7 @@ mod tests {
 
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
         let actor = arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
-        let mut event = arkret_wire::Event::new(
+        let mut event = arkret_wire::test_support::raw_event(
             envelope["kind"].as_str().unwrap(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(

@@ -53,13 +53,13 @@ mod audience_mention_tests {
 }
 
 mod reaction_and_window_policy_tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;
 
     use super::super::*;
 
-    fn reaction_op(kind: &str, payload: serde_json::Value) -> Operation {
-        Operation::create(
+    fn reaction_op(kind: impl AsRef<str>, payload: serde_json::Value) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
             )
@@ -68,7 +68,7 @@ mod reaction_and_window_policy_tests {
                 "ak:realm:AQptIWDEF2d4jlsnzTQVXGqZs6h-vPkYXuYqwewKqIjr",
             )
             .unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         )
     }
@@ -76,23 +76,23 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn reaction_on_message_target_is_accepted() {
         let op = reaction_op(
-            arkret_wire::EventKind::REACTION_ADD,
+            arkret_wire::EventKind::ReactionAdd,
             json!({
                 "target_ref": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "actor": "did:web:alice",
                 "key": "👍",
             }),
         );
-        assert!(validate_reaction_target_kind(arkret_wire::EventKind::REACTION_ADD, &op).is_ok());
+        assert!(validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op).is_ok());
     }
 
     #[test]
     fn reaction_on_event_storage_id_is_accepted() {
         let op = reaction_op(
-            arkret_wire::EventKind::REACTION_ADD,
+            arkret_wire::EventKind::ReactionAdd,
             json!({ "target_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19" }),
         );
-        assert!(validate_reaction_target_kind(arkret_wire::EventKind::REACTION_ADD, &op).is_ok());
+        assert!(validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op).is_ok());
     }
 
     #[test]
@@ -103,11 +103,11 @@ mod reaction_and_window_policy_tests {
             "ak:circle:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
         ] {
             let op = reaction_op(
-                arkret_wire::EventKind::REACTION_ADD,
+                arkret_wire::EventKind::ReactionAdd,
                 json!({ "target_ref": target }),
             );
             assert_eq!(
-                validate_reaction_target_kind(arkret_wire::EventKind::REACTION_ADD, &op),
+                validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op),
                 Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED),
                 "target {target} must be rejected",
             );
@@ -117,10 +117,10 @@ mod reaction_and_window_policy_tests {
     #[test]
     fn non_reaction_kinds_skip_target_check() {
         let op = reaction_op(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             json!({ "target_ref": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19" }),
         );
-        assert!(validate_reaction_target_kind(arkret_wire::EventKind::MESSAGE_CREATE, &op).is_ok());
+        assert!(validate_reaction_target_kind(&arkret_wire::EventKind::MessageCreate, &op).is_ok());
     }
 
     #[test]

@@ -1,5 +1,10 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::events_payloads::RealmKeyShareTarget;
+use arkret_models_collaboration::sync_frames::account_sync::{
+    MlsWelcomeProjectedDeviceMessage, MlsWelcomeProjectionBinding,
+    RealmKeyShareProjectedDeviceMessage,
+};
+use serde::Serialize;
 use serde_json::{Value, json};
 use soland_services::delivery::DeviceMessageState;
 use soland_services::events::MlsWelcomeState;
@@ -18,67 +23,43 @@ pub async fn project_accepted_operations_from_device(
     project_accepted_operations_inner(state, origin, source_device_id, operations).await;
 }
 
-/// The registry-derived cell writes for an accepted Operation.
+/// The registry-derived cell writes for an accepted projected Event.
 ///
 /// `event-and-patch.md` §2.4.2 makes the registered reducer contract the only
-/// source of a cell write; v1 deleted the producer `effects[]` this lane used
-/// to replay. The lane carries Operations rather than signed Events — the
-/// service-authored admin/circle/realm projections never had one — so the
-/// Operation is restated in the shape the single evaluator reads: `kind`,
-/// `event_id`, `actor_id` and the wire payload with the projection-context
-/// fields this crate injected stripped back out. Its temporary evaluator Event
-/// receives a content-derived id; no accepted id is ever forced onto a
-/// different reconstructed preimage. Nothing here decides what an
-/// Event writes; the registry still does.
+/// source of a cell write. Projection consumes the accepted Event facts held by
+/// `ProjectedEventOperation`; it neither reconstructs an unsigned Event nor
+/// rewrites projection context into the signed payload.
 ///
 /// An unprojectable Operation yields no writes, which is fail-closed: the
 /// reducer rejects a kind whose contract declares writes when handed none.
 fn accepted_operation_cell_writes(
     state: &AppState,
-    origin: &str,
+    _origin: &str,
     operation: &Operation,
 ) -> Vec<arkret_wire::cba::ProjectedCellWrite> {
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Vec::new();
     };
-    if !arkret_wire::EventKind::from(kind)
-        .descriptor()
-        .is_some_and(|descriptor| descriptor.reducer_input)
-    {
+    if !kind.is_reducer_input() {
         return Vec::new();
     }
-    let actor_id = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .unwrap_or(origin);
-    // A Realm genesis names no Realm: `realm_id` is `retype(event_id)` of the
-    // genesis itself, so it carries the closed `realm_genesis` scope and the SDK
-    // derives the Realm id from the Event. Giving it the `realm` scope every
-    // other kind uses fails `realm_id_not_event_derived`, and the failure is
-    // silent — the Operation yields no cell writes and the Realm's founding
-    // writes are simply lost.
-    let scope_ref = if kind == arkret_wire::EventKind::REALM_CREATE {
-        arkret_wire::ScopeRef::RealmGenesis
-    } else {
-        arkret_wire::ScopeRef::Realm {
-            realm_id: operation.realm_id.clone(),
-        }
-    };
-    let event = match restate_accepted_event(operation, actor_id, kind, scope_ref) {
-        Ok(event) => event,
+    let input = match operation.projection_input() {
+        Ok(input) => input,
         Err(error) => {
             tracing::error!(
                 operation_id = %operation.operation_id,
                 %kind,
                 %error,
-                "accepted operation cannot be restated as an Event envelope; \
+                "accepted operation cannot expose its projection input; \
                  the reducer will see no derived cell write"
             );
             return Vec::new();
         }
     };
-    match state.projections().project_accepted_cell_writes(&event) {
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(operation.realm_id.as_str());
+    match arkret_schema::project_registered_operation_writes(&input, digest_suite) {
         Ok(writes) => writes,
         Err(error) => {
             tracing::error!(
@@ -90,41 +71,6 @@ fn accepted_operation_cell_writes(
             Vec::new()
         }
     }
-}
-
-/// Restate an accepted Operation as the SDK `Event` the single cell-write
-/// evaluator reads.
-///
-/// Built through the SDK constructor rather than assembled as JSON and parsed
-/// back: `Event` is the spec type, and every hand-written envelope literal is a
-/// second place for its shape to drift from the one the SDK owns.
-fn restate_accepted_event(
-    operation: &Operation,
-    actor_id: &str,
-    kind: &str,
-    scope_ref: arkret_wire::ScopeRef,
-) -> Result<arkret_wire::Event, String> {
-    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned())
-        .map_err(|error| format!("restated actor id: {error}"))?;
-    // The Operation's own HLC, read before the projection context is stripped
-    // back out of the payload below.
-    let hlc = operation
-        .payload
-        .get("hlc")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "operation carries no hlc".to_owned())?;
-    let hlc = arkret_identifiers::Hlc::new(hlc.to_owned())
-        .map_err(|error| format!("restated hlc: {error}"))?;
-    arkret_wire::Event::new_at(
-        kind,
-        scope_ref,
-        actor_id,
-        0,
-        hlc,
-        crate::routing::events::projection_context_stripped_payload(&operation.payload),
-        operation.created_at,
-    )
-    .map_err(|error| format!("restated envelope: {error}"))
 }
 
 fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation {
@@ -232,12 +178,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     group_id: group_id.clone(),
                     leader_actor_id: creator_actor_id.clone(),
                     creator_device_id: creator_device_id.clone(),
-                    genesis_event_ref: operation
-                        .payload
-                        .get("event_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_else(|| operation.operation_id.as_str())
-                        .to_owned(),
+                    genesis_event_ref: operation.context.event_id.to_string(),
                     governance_binding: binding,
                     committed_at: operation.created_at.timestamp(),
                 })
@@ -268,12 +209,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     group_id: group_id.clone(),
                     leader_actor_id: leader_actor_id.clone(),
                     governance_binding: binding,
-                    accepted_commit_ref: operation
-                        .payload
-                        .get("event_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_else(|| operation.operation_id.as_str())
-                        .to_owned(),
+                    accepted_commit_ref: operation.context.event_id.to_string(),
                     committed_at: operation.created_at.timestamp(),
                 })
                 .await
@@ -378,7 +314,7 @@ pub async fn mirror_join_authorisation_consumption(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::INVITE_CREATE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::InviteCreate)
     {
         return;
     }
@@ -463,13 +399,15 @@ async fn project_accepted_operations_inner(
             project_invite_third_party_operation(state, operation).await;
         } else if kinds::operation_is_invite_claim(operation) {
             project_invite_claim_operation(state, operation).await;
-        } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
+        } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteAccept {
             project_invite_accept_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::INVITE_CANCEL {
+        } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteCancel {
             project_invite_cancel_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::INVITE_REVOKE {
+        } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteRevoke {
             project_invite_revoke_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation) == "ak.realm.plaintext_visible_services" {
+        } else if kinds::canonical_kind(operation)
+            == arkret_wire::EventKind::RealmPlaintextVisibleServices
+        {
             project_plaintext_visible_services_operation(state, operation).await;
         } else if kinds::operation_is_membership(operation)
             || kinds::operation_is_realm_lifecycle(operation)
@@ -482,8 +420,7 @@ async fn project_accepted_operations_inner(
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
-        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE
-        {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::MemberIdentityUpdate {
             project_member_identity_update(state, operation);
         }
         // Cache ak.realm.read_receipt_policy state into ProjectionState so the
@@ -496,10 +433,10 @@ async fn project_accepted_operations_inner(
         // (`discovery/read-receipts.md` §2.5). `ak.receipt.read` travels as
         // Signal plaintext inside the ciphertext, so this service cannot read
         // it and MUST NOT route or drop an envelope by receipt content.
-        if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::RealmReadReceiptPolicy {
             project_read_receipt_policy(state, operation);
         }
-        if kinds::canonical_kind_string(operation) == "ak.account_data.set" {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::AccountDataSet {
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
@@ -508,7 +445,7 @@ async fn project_accepted_operations_inner(
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
-        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::DEVICE_AUTHORIZE {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {
             project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
@@ -523,15 +460,8 @@ async fn project_accepted_operations_inner(
             Some(contextual)
         } else {
             match kinds::canonical_kind_for_operation(operation) {
-                Some(arkret_wire::EventKind::CIRCLE_MEMBER_STATE) => {
+                Some(arkret_wire::EventKind::CircleMemberState) => {
                     Some(accepted_circle_member_reducer_operation(operation))
-                }
-                Some(arkret_wire::EventKind::MEMBER_STATE)
-                    if operation.payload.get("sender").is_none() =>
-                {
-                    let mut contextual = operation.clone();
-                    contextual.payload["sender"] = Value::String(origin.to_owned());
-                    Some(contextual)
                 }
                 _ => None,
             }
@@ -552,12 +482,12 @@ async fn project_accepted_operations_inner(
             if let ProjectionEffectView::Rejected { reason } = &effect {
                 tracing::error!(
                     operation_id = %operation.operation_id,
-                    kind = %kinds::canonical_kind_string(operation),
+                    kind = %kinds::canonical_kind(operation),
                     %reason,
                     "invariant violation: durably accepted Event was rejected by the live reducer"
                 );
             }
-            if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::CAPABILITY_GRANT
+            if kinds::canonical_kind(operation) == arkret_wire::EventKind::CapabilityGrant
                 && let ProjectionEffectView::PendingReplayQueued { target_ref, reason } = &effect
             {
                 tracing::warn!(
@@ -567,8 +497,7 @@ async fn project_accepted_operations_inner(
                     "durably accepted capability grant is waiting on an unresolved projection dependency"
                 );
             }
-            if kinds::canonical_kind_string(operation)
-                == arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES
+            if kinds::canonical_kind(operation) == arkret_wire::EventKind::KeyBackupActiveSeries
                 && let ProjectionEffectView::Rejected { reason } = &effect
             {
                 tracing::error!(
@@ -587,7 +516,7 @@ async fn project_accepted_operations_inner(
             // view: replay/hydration may legitimately collapse that view after
             // the cell write, while the idempotent device-message projection
             // must still be rebuilt.
-            if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::REALM_KEY_SHARE {
+            if kinds::canonical_kind(operation) == arkret_wire::EventKind::RealmKeyShare {
                 project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
             }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
@@ -612,11 +541,11 @@ async fn project_accepted_operations_inner(
         // `ProjectionState::{space_containers,strands,morphs}`.
         write_through_projection(state, operation).await;
         crate::routing::identity::account::project_canonical_direct_binding(state, operation).await;
-        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::RELATION_CREATE {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::RelationCreate {
             crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
                 .await;
         }
-        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::STRAND_UPDATE {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::StrandUpdate {
             crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
         }
         // AKP-0016 — mirror agent_participation ceiling changes into the
@@ -638,7 +567,7 @@ async fn project_accepted_operations_inner(
             tracing::warn!(
                 error = %error,
                 operation_id = %operation.operation_id,
-                object_kind = %operation.object_kind,
+                event_kind = %operation.event_kind,
                 "failed to persist accepted operation projection"
             );
         }
@@ -659,28 +588,58 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
         return;
     };
 
-    let mut record = match operation.payload.clone() {
-        Value::Object(map) => map,
-        _ => serde_json::Map::new(),
+    #[derive(Serialize)]
+    struct ProjectedAppealRecord<T> {
+        #[serde(flatten)]
+        payload: T,
+        #[serde(rename = "appeal_id", skip_serializing_if = "Option::is_none")]
+        derived_appeal_id: Option<String>,
+        event_kind: arkret_wire::EventKind,
+        appeal_state: String,
+        #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+        projected_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    fn record<T: Serialize>(
+        payload: T,
+        derived_appeal_id: Option<String>,
+        operation: &Operation,
+        appeal_state: &str,
+    ) -> Value {
+        serde_json::to_value(ProjectedAppealRecord {
+            payload,
+            derived_appeal_id,
+            event_kind: operation.event_kind.clone(),
+            appeal_state: appeal_state.to_owned(),
+            projected_at: operation.created_at.to_owned(),
+        })
+        .expect("typed moderation appeal projection record serializes")
+    }
+
+    let record = match &operation.event_kind {
+        arkret_wire::EventKind::ModerationAppealSubmit => operation
+            .typed_payload::<arkret_wire::event_spec::ModerationAppealSubmit>()
+            .map(|payload| record(payload, Some(appeal_id.clone()), operation, new_state)),
+        arkret_wire::EventKind::ModerationAppealReview => operation
+            .typed_payload::<arkret_wire::event_spec::ModerationAppealReview>()
+            .map(|payload| record(payload, None, operation, new_state)),
+        arkret_wire::EventKind::ModerationAppealDecision => operation
+            .typed_payload::<arkret_wire::event_spec::ModerationAppealDecide>()
+            .map(|payload| record(payload, None, operation, new_state)),
+        arkret_wire::EventKind::ModerationAppealClose => operation
+            .typed_payload::<arkret_wire::event_spec::ModerationAppealClose>()
+            .map(|payload| record(payload, None, operation, new_state)),
+        _ => return,
     };
-    record
-        .entry("appeal_id".to_owned())
-        .or_insert_with(|| Value::String(appeal_id.clone()));
-    record.insert(
-        "event_kind".to_owned(),
-        Value::String(kinds::canonical_kind_string(operation)),
-    );
-    record.insert("appeal_state".to_owned(), Value::String(new_state.clone()));
-    record.entry("projected_at".to_owned()).or_insert_with(|| {
-        Value::String(arkret_canonical::format_timestamp_canonical(
-            operation.created_at,
-        ))
-    });
-    if let Err(error) = state
-        .governance()
-        .append_moderation_appeal(Value::Object(record))
-        .await
-    {
+    let Ok(record) = record else {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            event_kind = %operation.event_kind,
+            "typed moderation appeal payload rejected before persistence"
+        );
+        return;
+    };
+    if let Err(error) = state.governance().append_moderation_appeal(record).await {
         tracing::warn!(
             %error,
             appeal_id = %appeal_id,
@@ -763,14 +722,16 @@ async fn project_mls_welcome_to_device(
     record: &MlsWelcomeState,
     welcome_id: &str,
 ) {
+    let Ok(welcome) = operation.typed_payload::<arkret_wire::event_spec::MlsWelcome>() else {
+        tracing::warn!(%welcome_id, operation_id = %operation.operation_id, "accepted MLS Welcome payload is not the typed wire shape");
+        return;
+    };
     let sender_device_id = if source_device_id.trim().is_empty() {
-        {
-            operation
-                .payload
-                .get("sender_device_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-        }
+        welcome
+            .sender_device_id
+            .as_ref()
+            .map(|device_id| device_id.as_str())
+            .unwrap_or_default()
     } else {
         source_device_id
     }
@@ -784,23 +745,22 @@ async fn project_mls_welcome_to_device(
         return;
     }
 
-    let expires_at = operation
-        .payload
-        .get("expires_at")
-        .cloned()
-        .unwrap_or_else(|| json!(operation.created_at + chrono::Duration::hours(1)));
-    let welcome_content = operation.payload.clone();
-    let content = json!({
-        "kind": "ak.mls.welcome",
-        "sender_device_id": sender_device_id,
-        "expires_at": expires_at,
-        "content": welcome_content,
-        "unsigned": {
-            "source_event_id": operation.operation_id,
-            "mls_welcome_id": welcome_id,
-            "key_package_id": record.key_package_id,
+    let content = match serde_json::to_value(MlsWelcomeProjectedDeviceMessage {
+        sender_device_id: sender_device_id.to_owned(),
+        expires_at: welcome.expires_at.to_owned(),
+        content: welcome,
+        unsigned: MlsWelcomeProjectionBinding {
+            source_event_id: operation.context.event_id.to_string(),
+            mls_welcome_id: welcome_id.to_owned(),
+            key_package_id: record.key_package_id.clone(),
+        },
+    }) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(%error, %welcome_id, "failed to serialize typed MLS Welcome device message");
+            return;
         }
-    });
+    };
     let message = DeviceMessageState {
         idempotency_key: format!("mls_welcome:{welcome_id}"),
         sender: origin.to_owned(),
@@ -826,11 +786,7 @@ async fn project_realm_key_share_to_device(
     source_device_id: &str,
     operation: &Operation,
 ) {
-    let wire_payload =
-        crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
-    let Ok(share) = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::RealmKeySharePayload,
-    >(wire_payload.clone()) else {
+    let Ok(share) = operation.typed_payload::<arkret_wire::event_spec::RealmKeyShare>() else {
         return;
     };
     if share.key_scope.effective_scope.realm_id().as_str() != operation.realm_id.as_str()
@@ -855,11 +811,14 @@ async fn project_realm_key_share_to_device(
     else {
         return;
     };
+    let recipient_device_id = recipient_device_id.to_string();
+    let recipient = share.recipient_principal_id.to_string();
     let sender_device_id = if source_device_id.trim().is_empty() {
         share.sender_device_id.as_str()
     } else {
         source_device_id.trim()
-    };
+    }
+    .to_owned();
     if sender_device_id.is_empty() {
         tracing::warn!(
             operation_id = %operation.operation_id,
@@ -867,17 +826,23 @@ async fn project_realm_key_share_to_device(
         );
         return;
     }
-    let content = realm_key_share_device_message_content(
+    let content = match serde_json::to_value(RealmKeyShareProjectedDeviceMessage {
         sender_device_id,
-        operation.realm_id.as_str(),
-        operation.operation_id.as_str(),
-        &wire_payload,
-    );
+        realm_id: operation.realm_id.clone(),
+        operation_id: operation.operation_id.to_string(),
+        payload: share,
+    }) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(%error, operation_id = %operation.operation_id, "failed to serialize typed Realm Key Share device message");
+            return;
+        }
+    };
     let record = DeviceMessageState {
         idempotency_key: format!("realm_key_share:{}", operation.operation_id),
         sender: origin.to_owned(),
-        recipient: share.recipient_principal_id.to_string(),
-        device_id: recipient_device_id.to_string(),
+        recipient,
+        device_id: recipient_device_id,
         position: state.next_to_device_position(),
         content,
         created_at: operation.created_at,
@@ -891,23 +856,6 @@ async fn project_realm_key_share_to_device(
     }
 }
 
-fn realm_key_share_device_message_content(
-    sender_device_id: &str,
-    realm_id: &str,
-    operation_id: &str,
-    payload: &Value,
-) -> Value {
-    json!({
-        "kind": arkret_wire::EventKind::REALM_KEY_SHARE,
-        "sender_device_id": sender_device_id,
-        "content": {
-            "realm_id": realm_id,
-            "operation_id": operation_id,
-            "payload": payload,
-        },
-    })
-}
-
 /// Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
 /// authoritative `device_public_key` into the devices inventory so the
 /// `keys/query` signing-key directory (`device-lifecycle.md` §8.2) can resolve
@@ -918,13 +866,7 @@ fn realm_key_share_device_message_content(
 /// device possession proof was already verified at ingest.
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
     use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
-    let payload = &operation.payload;
-    // Accepted device.authorize payloads already passed schema validation;
-    // parse the wire shape (projection-injected envelope fields stripped)
-    // into the typed SDK counterpart so field access is checked, not stringly.
-    let wire_payload =
-        crate::routing::identity::device_signing::device_authorize_wire_payload(payload);
-    let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload = match serde_json::from_value(wire_payload) {
+    let typed = match operation.typed_payload::<arkret_wire::event_spec::DeviceAuthorize>() {
         Ok(typed) => typed,
         Err(error) => {
             tracing::warn!(%error, "accepted ak.device.authorize payload is not the typed wire shape; skipping projection");
@@ -1100,7 +1042,7 @@ mod tests {
     use crate::routing::identity::device_messages::device_message_envelopes_after;
 
     #[tokio::test]
-    async fn realm_key_share_device_projection_accepts_projected_payload_context() {
+    async fn realm_key_share_device_projection_uses_signed_payload() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -1135,15 +1077,12 @@ mod tests {
                 "to_epoch": 0
             },
             "ciphertext": "sealed",
-            "created_at": "2026-07-05T00:00:00.000Z",
-            "event_id": "ak:event:AfqXI4jyBJWA5HRhSr3SdFP5Qb_2V210Q00mFqUjA7_z",
-            "sender": sender,
-            "hlc": "2026-07-05T00:00:00.000Z/node/1"
+            "created_at": "2026-07-05T00:00:00.000Z"
         });
-        let operation = Operation::create(
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
             operation_id.clone(),
             realm_id,
-            arkret_wire::EventKind::REALM_KEY_SHARE,
+            arkret_wire::EventKind::RealmKeyShare.as_str(),
             payload,
         );
 
@@ -1163,23 +1102,12 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(
             queued[0].content["kind"],
-            arkret_wire::EventKind::REALM_KEY_SHARE
+            arkret_wire::EventKind::RealmKeyShare
         );
         assert_eq!(
             queued[0].content["content"]["payload"]["ciphertext"],
             "sealed"
         );
-        assert!(
-            queued[0].content["content"]["payload"]
-                .get("event_id")
-                .is_none()
-        );
-        assert!(
-            queued[0].content["content"]["payload"]
-                .get("sender")
-                .is_none()
-        );
-        assert!(queued[0].content["content"]["payload"].get("hlc").is_none());
     }
 
     #[test]
@@ -1214,8 +1142,13 @@ mod tests {
         // Production assigns the `message_id` in the storage `append`
         // (the persistence adapter assigns a message id); this test builds the
         // record by hand, so inject it the same way the store would.
-        let mut content =
-            realm_key_share_device_message_content(sender_device, realm_id, operation_id, &payload);
+        let projected = RealmKeyShareProjectedDeviceMessage {
+            sender_device_id: sender_device.to_owned(),
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
+            operation_id: operation_id.to_owned(),
+            payload: serde_json::from_value(payload.clone()).unwrap(),
+        };
+        let mut content = serde_json::to_value(projected).unwrap();
         content.as_object_mut().unwrap().insert(
             "message_id".to_owned(),
             json!("ak:device_message:0196419b-1000-7000-8000-000000000099"),
@@ -1232,7 +1165,7 @@ mod tests {
 
         let delivered = device_message_envelopes_after(&[record]);
         assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].kind, arkret_wire::EventKind::REALM_KEY_SHARE);
+        assert_eq!(delivered[0].kind, arkret_wire::EventKind::RealmKeyShare);
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
         assert_eq!(delivered[0].content["payload"], payload);
@@ -1240,7 +1173,7 @@ mod tests {
 
     #[test]
     fn accepted_circle_member_context_only_adds_verified_capability() {
-        let operation = Operation::create(
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
             )
@@ -1249,7 +1182,7 @@ mod tests {
                 "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p".to_owned(),
             )
             .unwrap(),
-            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CircleMemberState.as_str(),
             json!({
                 "circle_id": "ak:circle:Acz03N1u4b-3h3OIv0LXsw-CHe-rsMKeWw7ZvA-ohkgx",
                 "actor_id": "did:web:agent.example",

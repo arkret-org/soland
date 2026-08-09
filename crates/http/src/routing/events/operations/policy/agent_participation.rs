@@ -73,7 +73,7 @@ pub(super) fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::EventKind::REALM_POLICY_BUNDLE) => {
+        Some(arkret_wire::EventKind::RealmPolicyBundle) => {
             let value = find()?;
             Some((
                 "realm",
@@ -82,8 +82,7 @@ pub(super) fn agent_participation_ceiling_change(
                 Vec::new(),
             ))
         }
-        Some(arkret_wire::EventKind::CIRCLE_CREATE)
-        | Some(arkret_wire::EventKind::CIRCLE_UPDATE) => {
+        Some(arkret_wire::EventKind::CircleCreate) | Some(arkret_wire::EventKind::CircleUpdate) => {
             let value = find()?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
@@ -93,8 +92,7 @@ pub(super) fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(arkret_wire::EventKind::STRAND_CREATE)
-        | Some(arkret_wire::EventKind::STRAND_UPDATE) => {
+        Some(arkret_wire::EventKind::StrandCreate) | Some(arkret_wire::EventKind::StrandUpdate) => {
             let value = find()?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
@@ -235,9 +233,9 @@ fn autonomous_participation_mode(
     operation: &Operation,
 ) -> Result<AgentParticipationMode, &'static str> {
     match agent_participation_action(operation) {
-        Some(arkret_wire::EventKind::MESSAGE_CREATE) => Ok(AgentParticipationMode::ReplyMessage),
-        Some(arkret_wire::EventKind::REACTION_ADD) => Ok(AgentParticipationMode::ReactionAdd),
-        Some(arkret_wire::EventKind::REACTION_REMOVE) => Ok(AgentParticipationMode::ReactionRemove),
+        Some(arkret_wire::EventKind::MessageCreate) => Ok(AgentParticipationMode::ReplyMessage),
+        Some(arkret_wire::EventKind::ReactionAdd) => Ok(AgentParticipationMode::ReactionAdd),
+        Some(arkret_wire::EventKind::ReactionRemove) => Ok(AgentParticipationMode::ReactionRemove),
         _ => Err("agent_participation_action_unknown"),
     }
 }
@@ -444,9 +442,10 @@ pub(super) fn operation_provenance_agent_id(operation: &Operation) -> Option<&st
 
 pub(super) fn operation_executed_by(operation: &Operation) -> Option<&str> {
     operation
-        .payload
-        .get("executed_by")
-        .and_then(Value::as_str)
+        .context
+        .executed_by
+        .as_ref()
+        .map(|did| did.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -479,7 +478,7 @@ async fn operation_agent_write_context(
     state: &AppState,
     operation: &Operation,
 ) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
-    let actor_id = operation.actor().map(|actor| actor.to_string());
+    let actor_id = Some(operation.context.sender.to_string());
     let executed_by = operation_executed_by(operation);
     let authorization_ref = operation
         .payload
@@ -523,7 +522,7 @@ async fn operation_agent_write_context(
     if operation_provenance_marks_agent(operation)
         && let Some(agent_id) = operation_provenance_agent_id(operation)
             .map(ToOwned::to_owned)
-            .or_else(|| operation.actor().map(|did| did.to_string()))
+            .or_else(|| Some(operation.context.sender.to_string()))
     {
         let mode = if operation_executed_by(operation).is_some() {
             AgentParticipationMode::ActOnBehalf
@@ -554,7 +553,7 @@ pub(super) fn validate_agent_context_authorization_ref(
     // instead of requiring a second capability grant that the materialization
     // protocol does not emit for the peer.
     if authorization_ref == operation.realm_id.as_str()
-        && agent_participation_action(operation) == Some(arkret_wire::EventKind::MESSAGE_CREATE)
+        && agent_participation_action(operation) == Some(arkret_wire::EventKind::MessageCreate)
     {
         let binding = super::governance::active_direct_conversation_binding_for_realm(
             state,

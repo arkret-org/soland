@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
@@ -1095,7 +1095,7 @@ mod policy_bundle_component_tests {
     #[test]
     fn realm_profile_declarations_ignore_removed_update_spellings() {
         let operation = |payload| {
-            Operation::create(
+            arkret_event_draft::test_support::raw_projected_operation(
                 arkret_identifiers::OperationId::new(
                     "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
                 )
@@ -1104,7 +1104,7 @@ mod policy_bundle_component_tests {
                     "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw",
                 )
                 .unwrap(),
-                arkret_wire::EventKind::REALM_CREATE,
+                arkret_wire::EventKind::RealmCreate.as_str(),
                 payload,
             )
         };

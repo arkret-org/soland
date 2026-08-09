@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::objects::profiles::StrandTrackConfig;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use serde::{Deserialize, Serialize};
@@ -514,24 +514,12 @@ pub(crate) fn space_container_id_from_payload(payload: &Value) -> Option<String>
 
 pub(crate) fn operation_history_basis_seals(operation: &Operation) -> Vec<String> {
     let mut seals = Vec::new();
-    if let Some(seal_ref) = operation
-        .payload
-        .get("seal_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        seals.push(seal_ref.to_owned());
+    if let Some(seal_ref) = &operation.context.seal_ref {
+        seals.push(seal_ref.to_string());
     }
-    if let Some(seal_basis) = operation.payload.get("seal_basis") {
-        if let Some(seal_ref) = seal_basis.as_str().filter(|value| !value.trim().is_empty()) {
-            seals.push(seal_ref.to_owned());
-        }
-        if let Some(leaves) = seal_basis.get("leaves").and_then(Value::as_array) {
-            for leaf in leaves {
-                if let Some(seal_ref) = leaf.as_str().filter(|value| !value.trim().is_empty()) {
-                    seals.push(seal_ref.to_owned());
-                }
-            }
+    if let Some(seal_basis) = &operation.context.seal_basis {
+        for leaf in &seal_basis.leaves {
+            seals.push(leaf.to_string());
         }
     }
     seals.sort();

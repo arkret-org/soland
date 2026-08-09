@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
@@ -9,13 +9,18 @@ use serde_json::json;
 use super::*;
 use crate::reducer::{MlsEffect, ProjectionEffect, ProjectionState};
 
-fn op_at(secs: i64, object_kind: &str, payload: serde_json::Value) -> Operation {
-    let mut op = Operation::create(
+fn op_at(secs: i64, object_kind: impl AsRef<str>, mut payload: serde_json::Value) -> Operation {
+    if let Some(payload) = payload.as_object_mut()
+        && let Some(accepted_event_id) = payload.remove("accepted_event_id")
+    {
+        payload.insert("event_id".to_owned(), accepted_event_id);
+    }
+    let mut op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000001")
             .expect("op id parses"),
         RealmId::new("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1")
             .expect("realm id parses"),
-        object_kind,
+        object_kind.as_ref(),
         payload,
     );
     op.created_at = Utc.timestamp_opt(secs, 0).single().expect("ts in range");
@@ -579,7 +584,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
     let authorize_event_id = "ak:event:Ad0zM3xkilGkLE8K9IPZrZvbQzit2do46Wb6ECOCaX6k";
     let authorize = op_at(
         200,
-        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::EventKind::AgentKeyAuthorize,
         json!({
             "agent_id": "did:web:bob.example",
             "key_id": "ak:agent_key:0196419b-0000-7000-8000-0000000000a2",

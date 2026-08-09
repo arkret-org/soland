@@ -151,7 +151,7 @@ async fn signed_account_data_submission(
         actor,
         device_id,
         &realm_id,
-        arkret_wire::EventKind::ACCOUNT_DATA_SET,
+        arkret_wire::EventKind::AccountDataSet,
         payload,
         frontier.next_actor_seq,
         frontier.frontier_event_ids,
@@ -249,11 +249,12 @@ fn signed_actor_private_event_envelope(
     actor: &str,
     device_id: &str,
     realm_id: &str,
-    kind: &str,
+    kind: impl AsRef<str>,
     payload: Value,
     actor_seq: u64,
     prev_refs: Vec<arkret_wire::EventId>,
 ) -> Value {
+    let kind = kind.as_ref();
     let now = chrono::Utc::now();
     let actor_id = arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID");
     let verification_method = arkret_wire::DidUrl::new(actor.strip_prefix("did:key:").map_or_else(
@@ -261,7 +262,7 @@ fn signed_actor_private_event_envelope(
         |key| format!("{actor}#{key}"),
     ))
     .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_with_derived_id_at(
+    let mut event = arkret_wire::test_support::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -295,7 +296,7 @@ fn signed_actor_private_event_envelope(
     // producer_allocated`, so the Operation id is the producer's to mint and a
     // receiver cannot derive one from the content-bound full-digest Event id.
     // Every real submitter carries it in this slot — that is what
-    // `arkret_event_draft::Operation::into_event_envelope` writes, after the
+    // `arkret_event_draft::ProjectedEventOperation::into_event_envelope` writes, after the
     // proofs, because `unsigned` is outside the signed canonical transcript.
     // Without it soland has no Operation for the Event and skips both the
     // kind's registered payload validator and the reducer projection, so the
@@ -516,7 +517,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     let event = account_data_entry(&phone_sync, account_data_key)
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
-    assert_eq!(event["kind"], arkret_wire::EventKind::ACCOUNT_DATA_SET);
+    assert_eq!(event["kind"], arkret_wire::EventKind::AccountDataSet);
     assert_eq!(event["actor_id"].as_str(), Some(actor.as_str()));
     assert_eq!(event["payload"]["owner"], actor);
     assert_eq!(event["payload"]["expected_revision"], 1);
@@ -570,7 +571,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap()
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_wire::EventKind::ACCOUNT_DATA_SET
+            record.kind == arkret_wire::EventKind::AccountDataSet.as_str()
                 && record
                     .envelope
                     .get("payload")

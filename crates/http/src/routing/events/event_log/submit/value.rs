@@ -82,7 +82,7 @@ pub(super) async fn derive_submit_cell_writes(
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
-    let projected = if parsed.kind == arkret_wire::EventKind::INVITE_CANCEL {
+    let projected = if parsed.kind == arkret_wire::EventKind::InviteCancel {
         state
             .projections()
             .project_cell_writes_with_pre_state(&event, &frozen_pre_state)
@@ -122,14 +122,11 @@ async fn validate_active_series_authority_before_commit(
     parsed: &ValidatedEventEnvelope,
     operation: &Operation,
 ) -> Result<(), SubmitOneError> {
-    if parsed.kind != arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES {
+    if parsed.kind != arkret_wire::EventKind::KeyBackupActiveSeries {
         return Ok(());
     }
     let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
-        serde_json::from_value(crate::routing::events::projection_context_stripped_payload(
-            &operation.payload,
-        ))
-        .map_err(|error| {
+        serde_json::from_value(operation.payload.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
@@ -210,7 +207,7 @@ pub(in crate::routing) async fn submit_event_value(
     envelope: Value,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::REALM_CREATE)
+        == Some(arkret_wire::EventKind::RealmCreate.as_str())
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return submit_ordinary_realm_genesis(state, session, envelope, None).await;
@@ -248,7 +245,7 @@ pub(in crate::routing) async fn submit_event_value(
 
 fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrapBatchContext> {
     if event_string_field_from_value(envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::REALM_CREATE)
+        == Some(arkret_wire::EventKind::RealmCreate.as_str())
     {
         match (
             event_realm_id_from_value(envelope),
@@ -281,7 +278,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let submit_context = if submission.event.kind == arkret_wire::EventKind::REALM_CREATE {
+    let submit_context = if submission.event.kind == arkret_wire::EventKind::RealmCreate {
         arkret_wire::EventSubmitContext::AnchorUnit
     } else {
         arkret_wire::EventSubmitContext::Standard
@@ -300,7 +297,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     } = submission;
     let envelope = typed_event_to_canonical_value(event)?;
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::REALM_CREATE)
+        == Some(arkret_wire::EventKind::RealmCreate.as_str())
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return submit_ordinary_realm_genesis(
@@ -426,7 +423,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
     idempotency: EventCommitIdempotency,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::REALM_CREATE)
+        == Some(arkret_wire::EventKind::RealmCreate.as_str())
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return submit_ordinary_realm_genesis(state, session, envelope, None).await;
@@ -654,7 +651,7 @@ pub(super) async fn submit_event_value_with_context(
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
     // value at every admissible Event CBA.
-    let profile = if parsed.kind == arkret_wire::EventKind::REALM_CREATE {
+    let profile = if parsed.kind == arkret_wire::EventKind::RealmCreate {
         envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))
@@ -699,7 +696,7 @@ pub(super) async fn submit_event_value_with_context(
     });
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
-    let _account_data_submit_guard = if parsed.kind == arkret_wire::EventKind::ACCOUNT_DATA_SET {
+    let _account_data_submit_guard = if parsed.kind == arkret_wire::EventKind::AccountDataSet {
         envelope
             .get("payload")
             .and_then(Value::as_object)
@@ -823,7 +820,7 @@ pub(super) async fn submit_event_value_with_context(
             super::identity_anchor::canonical_record(&parsed, envelope.clone(), received_at);
         return Err(quarantine_verified_event_collision(state, record).await);
     }
-    if parsed.kind == arkret_wire::EventKind::REALM_CREATE
+    if parsed.kind == arkret_wire::EventKind::RealmCreate
         && service
             .realm_event_stats(parsed.realm_id.as_str())
             .await
@@ -1092,11 +1089,7 @@ pub(super) async fn submit_event_value_with_context(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
         }
-        let policy_actor = operation.actor();
-        let policy_actor = policy_actor
-            .as_ref()
-            .map(arkret_identifiers::Did::as_str)
-            .unwrap_or(parsed.actor_id.as_str());
+        let policy_actor = operation.context.sender.as_str();
         if let Err(rejection) =
             policy_gate::enforce_operation_policy_server(state, policy_actor, operation).await
         {
@@ -1459,7 +1452,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_wire::EventKind::MorphSchemaMigrate {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -1801,7 +1794,7 @@ pub(super) async fn submit_event_value_with_context(
         deliveries: outbox,
     };
     if let Err(error) = state.events().commit_accepted_event(command).await {
-        if parsed.kind == arkret_wire::EventKind::REALM_CREATE && error.is_realm_already_exists() {
+        if parsed.kind == arkret_wire::EventKind::RealmCreate && error.is_realm_already_exists() {
             return Err(realm_already_exists_error());
         }
         if error.is_conflict_kind() {
@@ -2011,9 +2004,9 @@ pub(super) async fn submit_event_value_with_context(
 
 async fn preflight_moderation_dismiss(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), SubmitOneError> {
-    if operation.object_kind.as_str() != arkret_wire::EventKind::MODERATION_DECISION
+    if operation.event_kind != arkret_wire::EventKind::ModerationDecision
         || operation.payload.get("decision").and_then(Value::as_str) != Some("dismiss")
     {
         return Ok(());
@@ -2045,7 +2038,7 @@ async fn preflight_moderation_dismiss(
             )
         })?;
     if report.as_ref().is_none_or(|report| {
-        report.kind != arkret_wire::EventKind::SELF_MODERATION_REPORT
+        report.kind != arkret_wire::EventKind::SelfModerationReport
             || report.realm_id.as_deref() != Some(operation.realm_id.as_str())
     }) {
         return Err(SubmitOneError::new(
@@ -2059,10 +2052,10 @@ async fn preflight_moderation_dismiss(
 
 async fn resolve_moderation_dismiss_queue_item(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
     decision_event_id: &str,
 ) {
-    if operation.object_kind.as_str() != arkret_wire::EventKind::MODERATION_DECISION
+    if operation.event_kind != arkret_wire::EventKind::ModerationDecision
         || operation.payload.get("decision").and_then(Value::as_str) != Some("dismiss")
     {
         return;
@@ -2107,9 +2100,9 @@ async fn resolve_moderation_dismiss_queue_item(
 
 async fn preflight_account_data_cas(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), SubmitOneError> {
-    if operation.object_kind.as_str() != arkret_wire::EventKind::ACCOUNT_DATA_SET {
+    if operation.event_kind != arkret_wire::EventKind::AccountDataSet {
         return Ok(());
     }
     let payload = operation.payload.as_object().ok_or_else(|| {

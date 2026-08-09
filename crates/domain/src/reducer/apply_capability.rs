@@ -549,7 +549,7 @@ const CAPABILITY_GRANT_WRITE_INDEX: usize = 0;
 /// The format itself is pinned by `ak.vector.encoding.or_set_dot_and_batch_tag.v1`,
 /// so it is read from the SDK rather than re-spelled here.
 fn capability_add_dot(operation: &Operation) -> Option<String> {
-    let event_id = operation.payload.get("event_id").and_then(Value::as_str)?;
+    let event_id = operation.context.event_id.as_str();
     Some(arkret_schema::or_set_dot(
         event_id,
         CAPABILITY_GRANT_WRITE_INDEX,
@@ -1149,7 +1149,7 @@ impl ProjectionState {
                 return false;
             };
             if rule.required_registration_event_kind
-                != arkret_wire::EventKind::APPLET_REGISTRATION
+                != arkret_wire::EventKind::AppletRegistration.as_str()
                 || rule.required_claimed_profile != profile_id
                 || rule.subject_binding != "registration.service_id"
                 || rule.scope_binding != "grant.resource_exact_registration_scope"
@@ -1608,10 +1608,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        let actor = operation.actor();
-        let actor_is_target_issuer = actor
-            .as_ref()
-            .is_some_and(|actor| actor.as_str() == target.issuer);
+        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer;
         let actor_is_target_realm_controller = actor.as_ref().is_some_and(|actor| {
             self.realm_authority_root(&target.realm_id)
                 .is_some_and(|root| root.controller_id == *actor)
@@ -1645,11 +1642,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        if operation
-            .actor()
-            .as_ref()
-            .is_none_or(|actor| actor.as_str() != target.subject)
-        {
+        if operation.context.sender.as_str() != target.subject {
             return ProjectionEffect::Rejected {
                 reason: "grant_relinquish_not_subject".to_owned(),
             };
@@ -1691,7 +1684,7 @@ impl ProjectionState {
             .insert(cell_ref, CellState::Value(Value::Array(items)));
 
         if crate::kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::CAPABILITY_RELINQUISH)
+            == Some(arkret_wire::EventKind::CapabilityRelinquish)
         {
             ProjectionEffect::CapabilityRelinquishProjected {
                 grant_id: grant_id.to_owned(),
@@ -1764,7 +1757,7 @@ impl ProjectionState {
     /// grant cell or the authz index.
     pub fn check_authority_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::CAPABILITY_GRANT)
+            != Some(arkret_wire::EventKind::CapabilityGrant)
         {
             return Ok(());
         }
@@ -1813,16 +1806,7 @@ impl ProjectionState {
                 reason: "agent_key_authorize_missing_key_id".to_owned(),
             };
         };
-        let Some(authorized_event_ref) = operation
-            .payload
-            .get("accepted_event_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "agent_key_authorize_missing_accepted_event_id".to_owned(),
-            };
-        };
+        let authorized_event_ref = operation.context.accepted_event_id.to_string();
         let active = self
             .agent_authorized_keys
             .get(&agent_id)
@@ -2070,9 +2054,9 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod agent_key_tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
-    use arkret_wire::OperationKind;
+    use arkret_wire::EventKind;
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -2108,29 +2092,34 @@ mod agent_key_tests {
         );
     }
 
-    fn op(object_kind: &str, mut payload: serde_json::Value) -> Operation {
+    fn op(event_kind: EventKind, mut payload: serde_json::Value) -> Operation {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000ff";
         let object = payload.as_object_mut().expect("test payload object");
         object
             .entry("sender".to_owned())
             .or_insert_with(|| serde_json::Value::String(REALM_OWNER.to_owned()));
+        if let Some(accepted_event_id) = object.remove("accepted_event_id") {
+            object.insert("event_id".to_owned(), accepted_event_id);
+        }
         object.entry("event_id".to_owned()).or_insert_with(|| {
             serde_json::Value::String(super::fixture_event_id_for_operation(OPERATION_ID))
         });
-        Operation {
-            schema: "ak.schema.operation.v1".to_owned(),
-            operation_id: OperationId::new(OPERATION_ID).unwrap(),
-            record_kind: "operation".to_owned(),
-            operation_kind: OperationKind::Create,
-            realm_id: RealmId::new(REALM.to_owned()).unwrap(),
-            object_id: None,
-            object_kind: object_kind.to_owned(),
+        let accepted_scope_ref = object.remove("accepted_scope_ref");
+        let executed_by = object.remove("executed_by");
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            OperationId::new(OPERATION_ID).unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            event_kind,
             payload,
-            refs: Vec::new(),
-            idempotency_key: None,
-            created_at: chrono::Utc::now(),
-            canonical_event_digest: None,
+        );
+        if let Some(accepted_scope_ref) = accepted_scope_ref {
+            operation.context.accepted_scope_ref =
+                serde_json::from_value(accepted_scope_ref).unwrap();
         }
+        if let Some(executed_by) = executed_by {
+            operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
+        }
+        operation
     }
 
     fn grant_payload(
@@ -2195,7 +2184,8 @@ mod agent_key_tests {
         );
         owner_grant["grant"]["capability_action_registry_digest"] =
             json!(arkret_policy::current_capability_action_registry_digest().unwrap());
-        let effect = state.apply_capability_grant(&op("capability_grant", owner_grant), now);
+        let effect =
+            state.apply_capability_grant(&op(EventKind::CapabilityGrant, owner_grant), now);
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2235,7 +2225,7 @@ mod agent_key_tests {
 
         assert!(matches!(
             state.apply_agent_key_authorize(&op(
-                "agent_key_authorize",
+                EventKind::AgentKeyAuthorize,
                 json!({
                     "agent_id": AGENT,
                     "key_id": old_key,
@@ -2246,7 +2236,7 @@ mod agent_key_tests {
         ));
 
         let rejected = state.apply_agent_key_authorize(&op(
-            "agent_key_authorize",
+            EventKind::AgentKeyAuthorize,
             json!({
                 "agent_id": AGENT,
                 "key_id": new_key,
@@ -2265,7 +2255,7 @@ mod agent_key_tests {
         );
 
         let accepted = state.apply_agent_key_authorize(&op(
-            "agent_key_authorize",
+            EventKind::AgentKeyAuthorize,
             json!({
                 "agent_id": AGENT,
                 "key_id": new_key,
@@ -2295,7 +2285,7 @@ mod agent_key_tests {
 
         assert!(matches!(
             state.apply_agent_key_authorize(&op(
-                "agent_key_authorize",
+                EventKind::AgentKeyAuthorize,
                 json!({
                     "agent_id": AGENT,
                     "key_id": key_id,
@@ -2306,7 +2296,7 @@ mod agent_key_tests {
         ));
 
         let rejected = state.apply_agent_key_authorize(&op(
-            "agent_key_authorize",
+            EventKind::AgentKeyAuthorize,
             json!({
                 "agent_id": AGENT,
                 "key_id": key_id,
@@ -2325,7 +2315,7 @@ mod agent_key_tests {
         );
 
         let accepted = state.apply_agent_key_authorize(&op(
-            "agent_key_authorize",
+            EventKind::AgentKeyAuthorize,
             json!({
                 "agent_id": AGENT,
                 "key_id": key_id,
@@ -2353,7 +2343,7 @@ mod agent_key_tests {
         seed_realm_authority(&mut state);
         let effect = state.apply_capability_grant(
             &op(
-                "capability_grant",
+                EventKind::CapabilityGrant,
                 grant_payload(
                     GRANT_2,
                     "did:web:bob.example",
@@ -2377,7 +2367,7 @@ mod agent_key_tests {
         seed_realm_authority(&mut state);
         let effect = state.apply_capability_grant(
             &op(
-                "capability_grant",
+                EventKind::CapabilityGrant,
                 grant_payload(
                     GRANT,
                     "did:web:alice.example",
@@ -2393,7 +2383,7 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         let mut allowed_operation = op(
-            "capability_grant",
+            EventKind::CapabilityGrant,
             grant_payload(
                 GRANT_2,
                 "did:web:bob.example",
@@ -2410,7 +2400,7 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         let mut denied_operation = op(
-            "capability_grant",
+            EventKind::CapabilityGrant,
             grant_payload(
                 GRANT_3,
                 "did:web:bob.example",
@@ -2432,7 +2422,7 @@ mod agent_key_tests {
     fn project_bridge_registration(state: &mut ProjectionState) {
         let effect = state.apply_applet_registration(
             &op(
-                "applet_registration",
+                EventKind::AppletRegistration,
                 json!({
                     "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
                     "service_id": "did:web:bridge.example",
@@ -2479,7 +2469,7 @@ mod agent_key_tests {
         seed_realm_authority(&mut state);
         project_bridge_registration(&mut state);
         let effect = state.apply_capability_grant(
-            &op("capability_grant", bridge_grant_payload()),
+            &op(EventKind::CapabilityGrant, bridge_grant_payload()),
             chrono::Utc::now(),
         );
         assert!(matches!(
@@ -2512,8 +2502,8 @@ mod agent_key_tests {
             },
         );
         project_bridge_registration(&mut state);
-        let effect =
-            state.apply_capability_grant(&op("capability_grant", bridge_grant_payload()), now);
+        let effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, bridge_grant_payload()), now);
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
@@ -2550,7 +2540,7 @@ mod agent_key_tests {
 
         for payload in mutations {
             assert_eq!(
-                state.validate_grant_issuer_upper_bound(&op("capability_grant", payload)),
+                state.validate_grant_issuer_upper_bound(&op(EventKind::CapabilityGrant, payload)),
                 Err("grant_exceeds_issuer_authority")
             );
         }
@@ -2571,8 +2561,8 @@ mod agent_key_tests {
         );
         parent["grant"]["expires_at"] =
             json!(arkret_canonical::format_timestamp_canonical(parent_expiry));
-        let parent_effect =
-            state.apply_capability_grant(&op("capability_grant", parent), chrono::Utc::now());
+        let parent_effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
         assert!(matches!(
             parent_effect,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2588,8 +2578,8 @@ mod agent_key_tests {
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
         child["grant"]["expires_at"] =
             json!(arkret_canonical::format_timestamp_canonical(child_expiry));
-        let child_effect =
-            state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
+        let child_effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, child), chrono::Utc::now());
         assert!(matches!(
             child_effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
@@ -2608,14 +2598,14 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        let parent_effect =
-            state.apply_capability_grant(&op("capability_grant", parent), chrono::Utc::now());
+        let parent_effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, parent), chrono::Utc::now());
         assert!(matches!(
             parent_effect,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         let revoke_effect = state.apply_capability_revoke(
-            &op("capability_revoke", json!({ "grant_id": GRANT })),
+            &op(EventKind::CapabilityRevoke, json!({ "grant_id": GRANT })),
             chrono::Utc::now(),
         );
         assert!(matches!(
@@ -2634,8 +2624,8 @@ mod agent_key_tests {
         child["grant"]["expires_at"] = json!(arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(30)
         ));
-        let child_effect =
-            state.apply_capability_grant(&op("capability_grant", child), chrono::Utc::now());
+        let child_effect = state
+            .apply_capability_grant(&op(EventKind::CapabilityGrant, child), chrono::Utc::now());
         assert!(matches!(
             child_effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
@@ -2656,7 +2646,7 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         assert!(matches!(
-            state.apply_capability_grant(&op("capability_grant", parent), now),
+            state.apply_capability_grant(&op(EventKind::CapabilityGrant, parent), now),
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         let mut child = grant_payload(
@@ -2669,7 +2659,7 @@ mod agent_key_tests {
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
         child["sender"] = json!("did:web:bob.example");
         assert!(matches!(
-            state.apply_capability_grant(&op("capability_grant", child), now),
+            state.apply_capability_grant(&op(EventKind::CapabilityGrant, child), now),
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         assert!(state.issuer_has_projected_capability(
@@ -2684,7 +2674,7 @@ mod agent_key_tests {
 
         assert!(matches!(
             state.apply_capability_revoke(
-                &op("capability_revoke", json!({ "grant_id": GRANT })),
+                &op(EventKind::CapabilityRevoke, json!({ "grant_id": GRANT })),
                 now,
             ),
             crate::reducer::ProjectionEffect::CapabilityRevokeProjected { .. }
@@ -2712,7 +2702,7 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         assert!(matches!(
-            state.apply_capability_grant(&op("capability_grant", grant), now),
+            state.apply_capability_grant(&op(EventKind::CapabilityGrant, grant), now),
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
 
@@ -2757,7 +2747,7 @@ mod agent_key_tests {
         seed_realm_authority(&mut state);
         let now = chrono::Utc::now();
         let unknown = state.apply_capability_revoke(
-            &op("capability_revoke", json!({ "grant_id": GRANT_3 })),
+            &op(EventKind::CapabilityRevoke, json!({ "grant_id": GRANT_3 })),
             now,
         );
         assert!(matches!(
@@ -2777,10 +2767,10 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        state.apply_capability_grant(&op("capability_grant", grant), now);
+        state.apply_capability_grant(&op(EventKind::CapabilityGrant, grant), now);
         let rejected = state.apply_capability_relinquish(
             &op(
-                arkret_wire::EventKind::CAPABILITY_RELINQUISH,
+                arkret_wire::EventKind::CapabilityRelinquish,
                 json!({ "grant_id": GRANT, "sender": "did:web:mallory.example" }),
             ),
             now,
@@ -2792,7 +2782,7 @@ mod agent_key_tests {
         ));
         let relinquished = state.apply_capability_relinquish(
             &op(
-                arkret_wire::EventKind::CAPABILITY_RELINQUISH,
+                arkret_wire::EventKind::CapabilityRelinquish,
                 json!({ "grant_id": GRANT, "sender": AGENT }),
             ),
             now,
@@ -2807,7 +2797,7 @@ mod agent_key_tests {
 
 #[cfg(test)]
 mod authority_cycle_tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
@@ -2831,10 +2821,10 @@ mod authority_cycle_tests {
         constraints: serde_json::Value,
     ) -> Operation {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000fe";
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(OPERATION_ID).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             json!({
                 "event_id": arkret_identifiers::EventId::from_token_bytes(
                     arkret_identifiers::GrantId::new(grant_id.to_owned())
@@ -2867,10 +2857,10 @@ mod authority_cycle_tests {
         constraints: serde_json::Value,
     ) -> Operation {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000fd";
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(OPERATION_ID).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             json!({
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
@@ -3080,7 +3070,7 @@ mod authority_cycle_tests {
 
 #[cfg(test)]
 mod federation_revoke_fanout_tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
@@ -3093,7 +3083,11 @@ mod federation_revoke_fanout_tests {
     const GRANT: &str = "ak:grant:AZqtjPe_dBMbCiO1AaO3pl249mYTX42jAeK7WbxsUOP_";
     const OWNER_GRANT: &str = "ak:grant:AftcsV-S3Qgkuf_flS2xTzy_TzSq42hZip4BUCG8D6qv";
 
-    fn capability_op(operation_id: &str, kind: &str, mut payload: serde_json::Value) -> Operation {
+    fn capability_op(
+        operation_id: &str,
+        kind: impl AsRef<str>,
+        mut payload: serde_json::Value,
+    ) -> Operation {
         let object = payload.as_object_mut().expect("test payload object");
         object
             .entry("sender".to_owned())
@@ -3101,10 +3095,10 @@ mod federation_revoke_fanout_tests {
         object.entry("event_id".to_owned()).or_insert_with(|| {
             serde_json::Value::String(super::fixture_event_id_for_operation(operation_id))
         });
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         )
     }
@@ -3135,7 +3129,7 @@ mod federation_revoke_fanout_tests {
             .expect("embedded capability action registry");
         let owner_grant = capability_op(
             "ak:operation:01970000-0000-7000-8000-0000000000a0",
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant,
             json!({
                 "event_id": OWNER_GRANT.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
@@ -3204,7 +3198,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_grant(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                arkret_wire::EventKind::CAPABILITY_GRANT,
+                arkret_wire::EventKind::CapabilityGrant,
                 delivery_binding_grant_payload(),
             ),
             now,
@@ -3222,7 +3216,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_revoke(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                arkret_wire::EventKind::CAPABILITY_REVOKE,
+                arkret_wire::EventKind::CapabilityRevoke,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),
             now,
@@ -3255,7 +3249,7 @@ mod federation_revoke_fanout_tests {
 /// plausible-looking widening silently hands out authority nobody granted.
 #[cfg(test)]
 mod realm_owner_authority_tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use arkret_wire::CapabilityActionId;
     use serde_json::json;
@@ -3276,10 +3270,10 @@ mod realm_owner_authority_tests {
     ) -> Operation {
         let operation_id =
             format!("ak:operation:01980000-0000-7000-8000-0000000000{operation_slot}");
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(operation_id.clone()).unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             json!({
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {

@@ -79,6 +79,7 @@ tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
+arkret-event-draft = { workspace = true, features = ["test-support"] }
 arkret-models-collaboration.workspace = true
 arkret-schema = {workspace = true,features = ["embedded-artifacts"]}
 arkret-models-crypto.workspace = true
@@ -94,4 +95,3 @@ soland-test-support = {workspace = true}
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation
 # auth-failure timing-bucket pad deterministically without a real sleep.
 tokio = {workspace = true,features = ["test-util"]}
-

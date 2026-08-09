@@ -1,8 +1,8 @@
 use super::*;
 
 fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
-    arkret_wire::Event::new(
-        arkret_wire::EventKind::MESSAGE_CREATE,
+    arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::MessageCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
@@ -131,11 +131,17 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
 
 #[test]
 fn initial_security_baseline_is_limited_to_current_create_and_policy_facets() {
-    assert!(required_security_baseline_kind("ak.realm.create"));
-    assert!(required_security_baseline_kind("ak.realm.policy_bundle"));
-    assert!(!required_security_baseline_kind("ak.message.create"));
+    assert!(required_security_baseline_kind(
+        &arkret_wire::EventKind::RealmCreate
+    ));
+    assert!(required_security_baseline_kind(
+        &arkret_wire::EventKind::RealmPolicyBundle
+    ));
     assert!(!required_security_baseline_kind(
-        "ak.realm.history_visibility"
+        &arkret_wire::EventKind::MessageCreate
+    ));
+    assert!(!required_security_baseline_kind(
+        &arkret_wire::EventKind::RealmHistoryVisibility
     ));
 }
 
@@ -548,14 +554,14 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
 
 fn sync_test_operation_at(
     operation_id: &str,
-    kind: &str,
+    kind: impl AsRef<str>,
     payload: Value,
     created_at: DateTime<Utc>,
-) -> arkret_event_draft::Operation {
-    let mut operation = arkret_event_draft::Operation::create(
+) -> arkret_event_draft::ProjectedEventOperation {
+    let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     );
     operation.created_at = created_at;
@@ -643,7 +649,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         .expect("realm meta stored");
     let mut member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000ef",
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -663,7 +669,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let event_at = |event_id: &str, received_at| ProjectionEventRecord {
         event_id: event_id.to_owned(),
         realm_id: ROSTER_REALM.to_owned(),
-        event_kind: arkret_wire::EventKind::MLS_COMMIT.to_owned(),
+        event_kind: arkret_wire::EventKind::MlsCommit,
         operation_kind: "event".to_owned(),
         operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
         sender: Some(ROSTER_ACTOR.to_owned()),
@@ -706,7 +712,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
-    let apply = |operation_id: &str, kind: &str, payload: Value| {
+    let apply = |operation_id: &str, kind: arkret_wire::EventKind, payload: Value| {
         state.test_projection().lock().apply(
             &sync_test_operation_at(operation_id, kind, payload, created_at),
             state.hlc(),
@@ -714,7 +720,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     };
     apply(
         "ak:operation:01904100-0000-7000-8000-00000000a001",
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate,
         json!({
             "object": {
                 "id": ROSTER_REALM,
@@ -728,7 +734,7 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
     );
     apply(
         "ak:operation:01904100-0000-7000-8000-00000000a002",
-        arkret_wire::EventKind::SIDECAR_CREATE,
+        arkret_wire::EventKind::SidecarCreate,
         json!({
             "encryption_profile": "mls_rfc9420",
             "event_id": "ak:event:Aa1Yl71lEGMItLkW6kUVdeM4tRXg6z3J69ELu9xrdCXp",
@@ -743,20 +749,21 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
             .contains_key(SIDECAR_ID)
     );
 
-    let structural_event = |event_id: &str, kind: &str, payload: Value| ProjectionEventRecord {
-        event_id: event_id.to_owned(),
-        realm_id: ROSTER_REALM.to_owned(),
-        event_kind: kind.to_owned(),
-        operation_kind: "event".to_owned(),
-        operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
-        sender: Some(ROSTER_ACTOR.to_owned()),
-        payload,
-        created_at,
-        received_at: created_at,
-    };
+    let structural_event =
+        |event_id: &str, kind: arkret_wire::EventKind, payload: Value| ProjectionEventRecord {
+            event_id: event_id.to_owned(),
+            realm_id: ROSTER_REALM.to_owned(),
+            event_kind: kind,
+            operation_kind: "event".to_owned(),
+            operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
+            sender: Some(ROSTER_ACTOR.to_owned()),
+            payload,
+            created_at,
+            received_at: created_at,
+        };
     let attach_event = structural_event(
         "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
-        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+        arkret_wire::EventKind::SidecarContextAttach,
         json!({
             "sidecar_id": SIDECAR_ID,
             "source_context_ref": {"kind": "strand", "strand_id": SOURCE_STRAND_ID},
@@ -784,13 +791,14 @@ async fn native_sidecar_events_are_visible_only_to_the_controller() {
 
 fn canonical_event_record_received_at(
     actor_seq: u64,
-    kind: &str,
+    kind: impl AsRef<str>,
     payload: Value,
     actor_id: &str,
     created_at: DateTime<Utc>,
     received_at: DateTime<Utc>,
 ) -> soland_services::events::CanonicalEventRecord {
-    let event = arkret_wire::Event::new_with_derived_id_at(
+    let kind = kind.as_ref();
+    let event = arkret_wire::test_support::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
@@ -874,7 +882,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
 
     let mut member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002ef",
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -893,7 +901,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
 
     let pre_join_record = canonical_event_record_received_at(
         1,
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         json!({
             "strand_id": strand_id,
             "thread_id": strand_id,
@@ -905,7 +913,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     );
     let post_join_record = canonical_event_record_received_at(
         2,
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         json!({
             "strand_id": strand_id,
             "thread_id": strand_id,
@@ -943,13 +951,13 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let pre_join_message = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002e1",
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         pre_join_payload.clone(),
         created_at,
     );
     let post_join_message = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000002e2",
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         post_join_payload.clone(),
         created_at,
     );
@@ -1004,7 +1012,7 @@ fn insert_member_identity_subject(state: &AppState) {
         replaces: Vec::new(),
         raw_event: json!({
             "event_id": "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx",
-            "event_kind": arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
+            "event_kind": arkret_wire::EventKind::MemberIdentityUpdate,
             "realm_id": ROSTER_REALM,
             "created_at": now(),
             "payload": {
@@ -1091,7 +1099,7 @@ fn canonical_value_digest(value: &Value) -> String {
 // spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
 #[test]
 fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::OperationId;
 
     use crate::routing::events::projection::project_member_identity_update;
@@ -1114,10 +1122,10 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
 
     // First update. Operation carries the canonical `ak:event:` id in
     // `payload.event_id`, exactly as `projection_operation_from_event` threads it.
-    let first_op = Operation::create(
+    let first_op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
+        arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
         json!({
             "event_id": first_event_id,
             "realm_id": realm,
@@ -1141,10 +1149,10 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
             "display_profile": { "display_name": "Alice 2" }
         }
     });
-    let second_op = Operation::create(
+    let second_op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
-        arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
+        arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
         json!({
             "event_id": second_event_id,
             "realm_id": realm,
@@ -1530,7 +1538,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     });
     let first_record = canonical_event_record_received_at(
         1,
-        arkret_wire::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::StrandUpdate,
         first_payload.clone(),
         ROSTER_ACTOR,
         first_created_at,
@@ -1542,7 +1550,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         soland_services::events::ProjectedEvent {
             event_id: first_record.event_id.clone(),
             realm_id: ROSTER_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_wire::EventKind::StrandUpdate,
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
@@ -1580,7 +1588,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     });
     let second_record = canonical_event_record_received_at(
         2,
-        arkret_wire::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::StrandUpdate,
         second_payload.clone(),
         ROSTER_CALLER,
         second_created_at,
@@ -1592,7 +1600,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         soland_services::events::ProjectedEvent {
             event_id: second_record.event_id.clone(),
             realm_id: ROSTER_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_wire::EventKind::StrandUpdate,
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
@@ -1680,7 +1688,7 @@ async fn membership_only_projection_advances_incremental_roster() {
 
     let member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c6",
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -1730,7 +1738,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .with_timezone(&Utc);
     let realm_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c1",
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate,
         json!({
             "object": {
                 "id": ROSTER_REALM,
@@ -1746,7 +1754,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c2",
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -1758,7 +1766,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c3",
-        arkret_wire::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::StrandCreate,
         json!({
             "object": {
                 "id": strand_id,
@@ -1771,7 +1779,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c4",
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         json!({
             "event_id": message_event_id,
             "message_id": message_id,
@@ -1810,7 +1818,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     });
     let pin_record = canonical_event_record_received_at(
         5,
-        arkret_wire::EventKind::PIN_ADD,
+        arkret_wire::EventKind::PinAdd,
         pin_payload.clone(),
         ROSTER_ACTOR,
         base + ChronoDuration::seconds(4),
@@ -1818,7 +1826,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     );
     let pin_add = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
-        arkret_wire::EventKind::PIN_ADD,
+        arkret_wire::EventKind::PinAdd,
         json!({
             "event_id": pin_record.event_id.clone(),
             "pin_scope": {"kind": "strand", "id": strand_id},
@@ -1847,7 +1855,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     assert!(
         state_events
             .iter()
-            .any(|event| event["kind"] == arkret_wire::EventKind::PIN_ADD
+            .any(|event| event["kind"] == arkret_wire::EventKind::PinAdd
                 && event["payload"]["target_ref"] == message_id),
         "joined members must receive shared pin state events through account sync"
     );
@@ -1868,7 +1876,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         .with_timezone(&Utc);
     let revision_record = canonical_event_record_received_at(
         5,
-        arkret_wire::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MessageRevise,
         json!({
             "target_ref": message_id,
             "content": {"kind": "ak.content.text", "body": "edited"}
@@ -1880,7 +1888,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let revision_event_id = revision_record.event_id.clone();
     let realm_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c1",
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate,
         json!({
             "object": {
                 "id": ROSTER_REALM,
@@ -1896,7 +1904,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let member_join = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c2",
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
             "actor_id": ROSTER_CALLER,
@@ -1908,7 +1916,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let strand_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c3",
-        arkret_wire::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::StrandCreate,
         json!({
             "object": {
                 "id": strand_id,
@@ -1921,7 +1929,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_create = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c4",
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         json!({
             "event_id": message_event_id,
             "message_id": message_id,
@@ -1935,7 +1943,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_revise = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c5",
-        arkret_wire::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MessageRevise,
         json!({
             "event_id": revision_event_id,
             "target_ref": message_id,
@@ -1949,7 +1957,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     );
     let message_redact = sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000001c6",
-        arkret_wire::EventKind::MESSAGE_REDACT,
+        arkret_wire::EventKind::MessageRedact,
         json!({
             "event_id": redaction_event_id,
             "message_id": message_id,

@@ -169,7 +169,7 @@ pub(super) async fn submit_provision_event(
         .await
         .map_err(|error| {
             agent_fanout_submit_error(
-                arkret_wire::EventKind::AGENT_PROVISION,
+                arkret_wire::EventKind::AgentProvision.as_str(),
                 error.status,
                 error.code,
                 error.message,

@@ -113,7 +113,7 @@ pub(crate) fn direct_binding_matches_projection(
 }
 
 fn direct_binding_payload_from_operation(
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<
     arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
     &'static str,
@@ -124,17 +124,16 @@ fn direct_binding_payload_from_operation(
     // parse the same stripped wire payload used by the schema validator.  A
     // hand-maintained subset here regressed as soon as direct authoring began
     // attaching `seal_ref`, `seal_basis` and `preconditions`.
-    let payload =
-        crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
+    let payload = operation.payload.clone();
     serde_json::from_value(payload).map_err(|_| "direct_conversation_binding_invalid")
 }
 
 pub(crate) async fn validate_direct_binding_operation(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), &'static str> {
     if soland_services::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND)
+        != Some(arkret_wire::EventKind::DirectConversationBound)
     {
         return Ok(());
     }
@@ -147,18 +146,7 @@ pub(crate) async fn validate_direct_binding_operation(
         );
         "direct_conversation_binding_invalid"
     })?;
-    let issuer = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            tracing::warn!(
-                target: "soland_http::error",
-                stage = "issuer_missing",
-                "direct conversation binding validation failed"
-            );
-            "direct_conversation_binding_invalid"
-        })?;
+    let issuer = operation.context.sender.as_str();
     if !payload
         .participants_unordered
         .iter()
@@ -351,7 +339,7 @@ async fn validate_direct_binding_event_refs(
         .await
         .map_err(|_| "direct_conversation_binding_invalid")?;
     let has_main_strand = realm_events.iter().any(|event| {
-        event.event_kind == arkret_wire::EventKind::STRAND_CREATE
+        event.event_kind == arkret_wire::EventKind::StrandCreate
             && event
                 .payload
                 .get("object")
@@ -368,7 +356,7 @@ async fn validate_direct_binding_event_refs(
         state,
         &payload.initial_exact_pair_generation_ref,
         &payload.realm_id,
-        arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE,
+        arkret_wire::EventKind::DirectConversationMlsGenerationActivate.as_str(),
     )
     .await?;
     if activation.payload.get("phase").and_then(Value::as_str) != Some("exact_pair")
@@ -403,8 +391,8 @@ async fn validate_direct_binding_event_refs(
                 authorization_kinds.insert(accepted.kind);
             }
             let expected = BTreeSet::from([
-                arkret_wire::EventKind::AGENT_PROVISION.to_owned(),
-                arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                arkret_wire::EventKind::AgentProvision.as_str().to_owned(),
+                arkret_wire::EventKind::AgentKeyAuthorize.as_str().to_owned(),
             ]);
             if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
             {
@@ -467,7 +455,7 @@ async fn accepted_direct_realm_create(
         .await
         .map_err(|_| "direct_conversation_binding_invalid")?
         .into_iter()
-        .find(|event| event.event_kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|event| event.event_kind == arkret_wire::EventKind::RealmCreate)
         .map(|event| event.event_id)
         .ok_or("direct_conversation_binding_invalid")?;
     let event_id = arkret_identifiers::EventId::new(create_ref)
@@ -476,7 +464,7 @@ async fn accepted_direct_realm_create(
         state,
         &event_id,
         realm_id,
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate.as_str(),
     )
     .await
 }
@@ -561,32 +549,18 @@ fn accepted_contact_authorization_refs_match(
 /// [`validate_direct_binding_operation`] and surfaces as `suspended`.
 pub(crate) async fn project_canonical_direct_binding(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     if soland_services::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND)
+        != Some(arkret_wire::EventKind::DirectConversationBound)
     {
         return;
     }
     let Ok(payload) = direct_binding_payload_from_operation(operation) else {
         return;
     };
-    let Some(event_ref) = operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return;
-    };
-    let Some(actor_id) = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return;
-    };
+    let event_ref = operation.context.event_id.to_string();
+    let actor_id = operation.context.sender.to_string();
     let Ok(digest) = direct_binding_endorsement_digest(&payload) else {
         return;
     };
@@ -753,7 +727,7 @@ pub(crate) async fn direct_active_generation_ref(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
-        if event.event_kind != arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE {
+        if event.event_kind != arkret_wire::EventKind::DirectConversationMlsGenerationActivate {
             continue;
         }
         let generation = event

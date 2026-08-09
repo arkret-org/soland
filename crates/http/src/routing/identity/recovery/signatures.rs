@@ -1,5 +1,3 @@
-use arkret_wire::RECOVERY_POLICY_SIGNATURE_TYPE;
-
 use super::*;
 
 pub(super) async fn verify_recovery_policy_auth_signature(
@@ -9,15 +7,7 @@ pub(super) async fn verify_recovery_policy_auth_signature(
     session: &SessionRecord,
     existing: Option<&RecoveryPolicyState>,
 ) -> Result<(), AppError> {
-    let primary = verify_recovery_auth_signature(
-        state,
-        payload,
-        &record.principal_id,
-        RECOVERY_POLICY_SIGNATURE_TYPE,
-        POLICY_ALLOWED_SIGNED_FIELDS,
-        POLICY_REQUIRED_SIGNED_FIELDS,
-    )
-    .await;
+    let primary = verify_recovery_auth_signature(state, payload, &record.principal_id).await;
     if primary.is_ok() {
         return primary;
     }
@@ -77,15 +67,18 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
 
     let device_key =
         resolve_session_device_key_for_genesis_policy(state, &record.principal_id, session).await?;
-    let signed_fields = parse_signed_fields(
+    parse_signed_fields(
         auth_data,
         POLICY_ALLOWED_SIGNED_FIELDS,
         POLICY_REQUIRED_SIGNED_FIELDS,
         payload,
     )?;
-    let transcript =
-        recovery_signature_transcript(RECOVERY_POLICY_SIGNATURE_TYPE, payload, &signed_fields);
-    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
+    let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
+        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    let transcript_bytes = typed
+        .signature_transcript_bytes()
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data
@@ -144,9 +137,6 @@ pub(super) async fn verify_recovery_auth_signature(
     state: &AppState,
     payload: &Value,
     principal_id: &str,
-    transcript_type: &str,
-    allowed_fields: &[&str],
-    required_fields: &[&str],
 ) -> Result<(), AppError> {
     let auth_data = payload
         .get("auth_data")
@@ -172,9 +162,18 @@ pub(super) async fn verify_recovery_auth_signature(
         recovery_signature_error(format!("recovery verification key invalid: {error}"))
     })?;
 
-    let signed_fields = parse_signed_fields(auth_data, allowed_fields, required_fields, payload)?;
-    let transcript = recovery_signature_transcript(transcript_type, payload, &signed_fields);
-    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
+    parse_signed_fields(
+        auth_data,
+        POLICY_ALLOWED_SIGNED_FIELDS,
+        POLICY_REQUIRED_SIGNED_FIELDS,
+        payload,
+    )?;
+    let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
+        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    let transcript_bytes = typed
+        .signature_transcript_bytes()
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data

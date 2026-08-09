@@ -15,11 +15,14 @@
 
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{ConsentId, Did};
 use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestOutcome,
     ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
+};
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
 use arkret_wire::{AccountDataKey, Event};
 use chrono::{DateTime, Utc};
@@ -28,16 +31,13 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, ConsentCellRecord,
     SessionIdentityState as SessionRecord,
 };
 
 use super::{AuthArgs, append_audit_log, now, query_param, validate_did};
-use crate::routing::identity::device_messages::{
-    ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
-};
+use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
@@ -53,7 +53,7 @@ pub(super) fn router() -> Router {
 }
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
-    let kind = soland_services::operation_semantics::canonical_kind_string(operation);
+    let kind = soland_services::operation_semantics::canonical_kind(operation);
     let projected = match kind.as_str() {
         "ak.consent.grant" => project_consent_grant_operation(state, operation).await,
         "ak.consent.revoke" => project_consent_revoke_operation(state, operation).await,
@@ -205,7 +205,7 @@ async fn grant_consent_cell(
         &session.actor,
         &holder,
         &submission.event,
-        arkret_wire::EventKind::CONSENT_GRANT,
+        arkret_wire::EventKind::ConsentGrant,
     )?;
     submit_caller_signed_consent_event(state, &session, submission).await?;
     // Admission projected the or_set add through
@@ -255,7 +255,7 @@ async fn revoke_consent_cell(
         &session.actor,
         &holder,
         &submission.event,
-        arkret_wire::EventKind::CONSENT_REVOKE,
+        arkret_wire::EventKind::ConsentRevoke,
     )?;
     // The dots being removed come from the Event the holder signed, never from a
     // server-side enumeration: an observe-remove OR-Set revoke is only correct
@@ -747,11 +747,7 @@ fn consent_id(payload: &Value) -> Result<String, AppError> {
 }
 
 fn consent_holder(operation: &Operation) -> Result<String, AppError> {
-    let sender = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("event sender is required"))?;
+    let sender = operation.context.sender.as_str();
     let holder = first_payload_string(
         &operation.payload,
         &["holder_did", "holder", "consenter", "issuer"],
@@ -848,14 +844,7 @@ fn first_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn consent_grant_dot(operation: &Operation) -> Result<String, AppError> {
-    let event_id = operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("accepted consent projection is missing its Event id"))?;
-    arkret_identifiers::EventId::new(event_id.to_owned()).map_err(|_| {
-        AppError::internal("accepted consent projection carries an invalid Event id")
-    })?;
+    let event_id = operation.context.event_id.as_str();
     Ok(format!("{event_id}:0"))
 }
 
@@ -1038,21 +1027,6 @@ pub(super) async fn emit_consent_revoke_invalidation(
         "mutated_cells": mutated_cells,
         "revoked_at": arkret_canonical::format_timestamp_canonical(revoked_at),
     });
-    let _ = crate::routing::events::projection::append_projection_event(
-        state,
-        ProjectionEventRecord {
-            event_id: ids::generate_local_ref(),
-            realm_id: soland_services::identity::principal_control_realm_for_did(holder),
-            event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
-            operation_kind: "consent_revoke_cache_invalidation".to_owned(),
-            operation_id: None,
-            sender: Some(holder.to_owned()),
-            payload: payload.clone(),
-            created_at: revoked_at,
-            received_at: now(),
-        },
-    )
-    .await;
     append_audit_log(
         state,
         Some(holder),
@@ -1182,15 +1156,17 @@ async fn invalidate_quarantined_invites_for_revoke(
     fanout_actor_private_update(
         state,
         holder,
-        INVITE_QUARANTINE_ORIGIN_DEVICE,
-        ACCOUNT_DATA_UPDATE_TYPE,
-        json!({
-            "operation": "put",
-            "account_data_key": AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
-            "revision": record.revision,
-            "content": record.payload.clone(),
-            "updated_at": record.updated_at,
-        }),
+        ActorPrivateDeviceUpdate::AccountData {
+            sender_device_id: INVITE_QUARANTINE_ORIGIN_DEVICE.to_owned(),
+            content: ActorPrivateAccountDataUpdate {
+                operation: ActorPrivateAccountDataOperation::Put,
+                account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                revision: record.revision,
+                content: Some(record.payload.clone()),
+                updated_at: record.updated_at,
+            },
+            created_at: record.updated_at,
+        },
     )
     .await;
     append_audit_log(
@@ -1360,7 +1336,7 @@ mod tests {
     #[test]
     fn a_grant_event_reports_the_cell_it_names() {
         let event = consent_event(
-            arkret_wire::EventKind::CONSENT_GRANT,
+            arkret_wire::EventKind::ConsentGrant.as_str(),
             HOLDER,
             grant_payload(),
         );
@@ -1368,7 +1344,7 @@ mod tests {
             HOLDER,
             HOLDER,
             &event,
-            arkret_wire::EventKind::CONSENT_GRANT,
+            arkret_wire::EventKind::ConsentGrant,
         )
         .unwrap();
 
@@ -1386,23 +1362,18 @@ mod tests {
     #[test]
     fn a_consent_event_authored_by_someone_else_is_rejected() {
         let event = consent_event(
-            arkret_wire::EventKind::CONSENT_GRANT,
+            arkret_wire::EventKind::ConsentGrant.as_str(),
             "did:web:attacker.example",
             grant_payload(),
         );
-        caller_signed_consent_target(
-            HOLDER,
-            HOLDER,
-            &event,
-            arkret_wire::EventKind::CONSENT_GRANT,
-        )
-        .expect_err("only the holder may author a write to the holder's consent cell");
+        caller_signed_consent_target(HOLDER, HOLDER, &event, arkret_wire::EventKind::ConsentGrant)
+            .expect_err("only the holder may author a write to the holder's consent cell");
     }
 
     #[test]
     fn a_revoke_endpoint_refuses_a_grant_event() {
         let event = consent_event(
-            arkret_wire::EventKind::CONSENT_GRANT,
+            arkret_wire::EventKind::ConsentGrant.as_str(),
             HOLDER,
             grant_payload(),
         );
@@ -1410,7 +1381,7 @@ mod tests {
             HOLDER,
             HOLDER,
             &event,
-            arkret_wire::EventKind::CONSENT_REVOKE,
+            arkret_wire::EventKind::ConsentRevoke,
         )
         .expect_err("the revoke surface must not accept a grant Event");
     }
@@ -1421,13 +1392,21 @@ mod tests {
         // concurrent-revoke race the dot model exists to close.
         let mut payload = grant_payload();
         payload["revoked_at"] = json!("2026-07-06T00:00:00.000Z");
-        let event = consent_event(arkret_wire::EventKind::CONSENT_REVOKE, HOLDER, payload);
+        let event = consent_event(
+            arkret_wire::EventKind::ConsentRevoke.as_str(),
+            HOLDER,
+            payload,
+        );
         observed_dots(&event_payload_value(&event))
             .expect_err("observed_dots is required on ak.consent.revoke");
 
         let mut with_dots = grant_payload();
         with_dots["observed_dots"] = json!([format!("{GRANT_EVENT}:0")]);
-        let event = consent_event(arkret_wire::EventKind::CONSENT_REVOKE, HOLDER, with_dots);
+        let event = consent_event(
+            arkret_wire::EventKind::ConsentRevoke.as_str(),
+            HOLDER,
+            with_dots,
+        );
         assert_eq!(
             observed_dots(&event_payload_value(&event)).unwrap(),
             vec![format!("{GRANT_EVENT}:0")]
@@ -1439,7 +1418,7 @@ mod tests {
             "actor_seq": 0
         }]);
         let event = consent_event(
-            arkret_wire::EventKind::CONSENT_REVOKE,
+            arkret_wire::EventKind::ConsentRevoke.as_str(),
             HOLDER,
             legacy_object,
         );

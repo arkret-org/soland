@@ -6,7 +6,7 @@
 // Crate-private imports shared by the explicitly imported storage modules.
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) use arkret_event_draft::Operation;
+pub(crate) use arkret_event_draft::ProjectedEventOperation as Operation;
 pub(crate) use arkret_wire::EventBatchReceipt;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;

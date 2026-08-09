@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_collaboration::event_sync::{
     ControlGovernanceHealth, ControlGovernanceHealthStatus, ControlProposalDecisionState,
@@ -49,13 +49,7 @@ pub type MembershipReadModel = soland_domain::reducer::SolandMembershipState;
 pub type RealmLinkReadModel = soland_domain::reducer::RealmLinkState;
 
 fn projection_event_ref(operation: &Operation) -> String {
-    operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| operation.operation_id.as_str())
-        .to_owned()
+    operation.context.event_id.to_string()
 }
 
 pub type EffectiveRealmPolicyView =
@@ -915,7 +909,7 @@ impl ProjectionService {
         &self,
         event: &Event,
     ) -> Result<Vec<ProjectedCellWrite>, String> {
-        if event.kind.as_str() != arkret_wire::EventKind::INVITE_CANCEL {
+        if event.kind != arkret_wire::EventKind::InviteCancel {
             return self.project_cell_writes(event);
         }
         let invite_id = event
@@ -1248,7 +1242,7 @@ impl ProjectionService {
 
     pub fn invite_claim_proof_context(
         &self,
-        operation: &arkret_event_draft::Operation,
+        operation: &arkret_event_draft::ProjectedEventOperation,
     ) -> Result<Option<InviteClaimProofContext>, &'static str> {
         if !crate::operation_semantics::operation_is_invite_claim(operation) {
             return Ok(None);
@@ -1361,9 +1355,9 @@ impl ProjectionService {
         for (index, projected) in operations.iter().enumerate() {
             let operation = &projected.operation;
             let effect =
-                if uses_validated_realm_bootstrap_facet_reducer(operation.object_kind.as_str()) {
+                if uses_validated_realm_bootstrap_facet_reducer(operation.event_kind.as_str()) {
                     staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
-                } else if operation.object_kind == arkret_wire::EventKind::MEMBER_STATE {
+                } else if operation.event_kind == arkret_wire::EventKind::MemberState {
                     staged.apply_validated_realm_bootstrap_membership(
                         operation,
                         &projected.cell_writes,
@@ -1431,42 +1425,42 @@ impl ProjectionService {
     ) -> Option<ProjectionWriteThroughRecord> {
         let kind = crate::operation_semantics::canonical_kind_for_operation(operation)?;
         let is_space_container_kind = matches!(
-            kind,
-            arkret_wire::EventKind::SPACE_CREATE
-                | arkret_wire::EventKind::SPACE_UPDATE
-                | arkret_wire::EventKind::SPACE_PARENT
-                | arkret_wire::EventKind::SPACE_ARCHIVE
-                | arkret_wire::EventKind::SPACE_RESTORE
-                | arkret_wire::EventKind::SPACE_TOMBSTONE
+            &kind,
+            arkret_wire::EventKind::SpaceCreate
+                | arkret_wire::EventKind::SpaceUpdate
+                | arkret_wire::EventKind::SpaceParent
+                | arkret_wire::EventKind::SpaceArchive
+                | arkret_wire::EventKind::SpaceRestore
+                | arkret_wire::EventKind::SpaceTombstone
         );
         let is_strand_kind = matches!(
-            kind,
-            arkret_wire::EventKind::STRAND_CREATE
-                | arkret_wire::EventKind::STRAND_UPDATE
-                | arkret_wire::EventKind::STRAND_ARCHIVE
-                | arkret_wire::EventKind::STRAND_RESTORE
-                | arkret_wire::EventKind::STRAND_MOVE
-                | arkret_wire::EventKind::STRAND_REORDER
-                | arkret_wire::EventKind::STRAND_TRACKS_UPDATE
+            &kind,
+            arkret_wire::EventKind::StrandCreate
+                | arkret_wire::EventKind::StrandUpdate
+                | arkret_wire::EventKind::StrandArchive
+                | arkret_wire::EventKind::StrandRestore
+                | arkret_wire::EventKind::StrandMove
+                | arkret_wire::EventKind::StrandReorder
+                | arkret_wire::EventKind::StrandTracksUpdate
         );
         let is_morph_kind = matches!(
-            kind,
-            arkret_wire::EventKind::MORPH_CREATE
-                | arkret_wire::EventKind::MORPH_UPDATE
-                | arkret_wire::EventKind::MORPH_ARCHIVE
-                | arkret_wire::EventKind::MORPH_RESTORE
+            &kind,
+            arkret_wire::EventKind::MorphCreate
+                | arkret_wire::EventKind::MorphUpdate
+                | arkret_wire::EventKind::MorphArchive
+                | arkret_wire::EventKind::MorphRestore
         );
         let is_circle_kind = matches!(
-            kind,
-            arkret_wire::EventKind::CIRCLE_CREATE
-                | arkret_wire::EventKind::CIRCLE_UPDATE
-                | arkret_wire::EventKind::CIRCLE_ARCHIVE
-                | arkret_wire::EventKind::CIRCLE_RESTORE
-                | arkret_wire::EventKind::CIRCLE_TOMBSTONE
-                | arkret_wire::EventKind::CIRCLE_MEMBER_STATE
+            &kind,
+            arkret_wire::EventKind::CircleCreate
+                | arkret_wire::EventKind::CircleUpdate
+                | arkret_wire::EventKind::CircleArchive
+                | arkret_wire::EventKind::CircleRestore
+                | arkret_wire::EventKind::CircleTombstone
+                | arkret_wire::EventKind::CircleMemberState
         );
-        let is_strand_watch_kind = kind == arkret_wire::EventKind::STRAND_WATCH_SET;
-        let is_redaction = kind == arkret_wire::EventKind::REDACTION;
+        let is_strand_watch_kind = kind == arkret_wire::EventKind::StrandWatchSet;
+        let is_redaction = kind == arkret_wire::EventKind::Redaction;
         if !(is_space_container_kind
             || is_strand_kind
             || is_morph_kind
@@ -1494,7 +1488,7 @@ impl ProjectionService {
         };
         let state = self.state.lock();
         if is_circle_kind {
-            let id = if kind == arkret_wire::EventKind::CIRCLE_CREATE {
+            let id = if kind == arkret_wire::EventKind::CircleCreate {
                 object_id()
             } else {
                 string_field("circle_id").or_else(|| string_field("target_ref"))
@@ -1543,7 +1537,7 @@ impl ProjectionService {
         }
         if is_strand_watch_kind {
             let strand_id = string_field("strand_id").or_else(|| string_field("target_ref"))?;
-            let actor_id = operation.actor()?.to_string();
+            let actor_id = operation.context.sender.to_string();
             return state.strand_watches.get(&(strand_id, actor_id)).map(|row| {
                 ProjectionWriteThroughRecord::StrandWatch(
                     crate::events::StrandWatchProjectionRecord {
@@ -1608,13 +1602,13 @@ impl ProjectionService {
             });
         }
         if is_strand_kind {
-            let id = if kind == arkret_wire::EventKind::STRAND_CREATE {
+            let id = if kind == arkret_wire::EventKind::StrandCreate {
                 object_id()
             } else if matches!(
-                kind,
-                arkret_wire::EventKind::STRAND_UPDATE
-                    | arkret_wire::EventKind::STRAND_ARCHIVE
-                    | arkret_wire::EventKind::STRAND_RESTORE
+                &kind,
+                arkret_wire::EventKind::StrandUpdate
+                    | arkret_wire::EventKind::StrandArchive
+                    | arkret_wire::EventKind::StrandRestore
             ) {
                 string_field("target_ref")
             } else {
@@ -1639,7 +1633,7 @@ impl ProjectionService {
             });
         }
         if is_morph_kind {
-            let id = if kind == arkret_wire::EventKind::MORPH_CREATE {
+            let id = if kind == arkret_wire::EventKind::MorphCreate {
                 object_id()
             } else {
                 string_field("target_ref")
@@ -1737,9 +1731,15 @@ impl ProjectionService {
         Ok(())
     }
 
-    pub fn apply_mls_keypackage_publish(&self, operation: &Operation) -> ProjectionEffectView {
-        soland_domain::reducer::mls::apply_keypackage_publish(&mut self.state.lock(), operation)
-            .into()
+    pub fn apply_mls_keypackage_publish(
+        &self,
+        projection: &soland_domain::reducer::mls::MlsKeyPackagePublishProjection,
+    ) -> ProjectionEffectView {
+        soland_domain::reducer::mls::apply_keypackage_upload_projection(
+            &mut self.state.lock(),
+            projection,
+        )
+        .into()
     }
 
     pub fn mls_key_package_record(
@@ -1825,9 +1825,9 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::EventKind::CAPABILITY_GRANT,
-                arkret_wire::EventKind::CAPABILITY_REVOKE,
-                arkret_wire::EventKind::CAPABILITY_RELINQUISH,
+                arkret_wire::EventKind::CapabilityGrant,
+                arkret_wire::EventKind::CapabilityRevoke,
+                arkret_wire::EventKind::CapabilityRelinquish,
             ],
         )
     }
@@ -1841,9 +1841,9 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::EventKind::STRAND_CREATE,
-                arkret_wire::EventKind::STRAND_UPDATE,
-                arkret_wire::EventKind::RSVP_SET,
+                arkret_wire::EventKind::StrandCreate,
+                arkret_wire::EventKind::StrandUpdate,
+                arkret_wire::EventKind::RsvpSet,
             ],
         )
     }
@@ -1857,12 +1857,12 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::EventKind::MODERATION_DECISION,
-                arkret_wire::EventKind::MODERATION_DECISION_LIFT,
-                arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
-                arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
-                arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
-                arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
+                arkret_wire::EventKind::ModerationDecision,
+                arkret_wire::EventKind::ModerationDecisionLift,
+                arkret_wire::EventKind::ModerationAppealSubmit,
+                arkret_wire::EventKind::ModerationAppealReview,
+                arkret_wire::EventKind::ModerationAppealDecision,
+                arkret_wire::EventKind::ModerationAppealClose,
             ],
         )
     }
@@ -1876,8 +1876,8 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::EventKind::INVITE_THIRD_PARTY,
-                arkret_wire::EventKind::INVITE_CLAIM,
+                arkret_wire::EventKind::InviteThirdParty,
+                arkret_wire::EventKind::InviteClaim,
             ],
         )
     }
@@ -1891,19 +1891,19 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-                arkret_wire::EventKind::REALM_OWNER_TRANSFER,
-                arkret_wire::EventKind::REALM_AUTHORITY_RESET,
-                arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+                arkret_wire::EventKind::RealmPolicyBundle,
+                arkret_wire::EventKind::RealmOwnerTransfer,
+                arkret_wire::EventKind::RealmAuthorityReset,
+                arkret_wire::EventKind::RealmAuthorityBasisUpdate,
             ],
         )
     }
 
     pub fn preflight_mls_rejection(&self, operation: &Operation) -> Option<String> {
-        let kind = soland_domain::kinds::canonical_kind_string(operation);
+        let kind = soland_domain::kinds::canonical_kind_for_operation(operation)?;
         let mut state = self.state.lock().clone();
-        let effect = match kind.as_str() {
-            arkret_wire::EventKind::MLS_KEYPACKAGE => {
+        let effect = match kind {
+            arkret_wire::EventKind::MlsKeypackage => {
                 match operation.payload.get("action").and_then(Value::as_str) {
                     Some("publish") => {
                         soland_domain::reducer::mls::apply_keypackage_publish(&mut state, operation)
@@ -1919,16 +1919,16 @@ impl ProjectionService {
                     },
                 }
             }
-            arkret_wire::EventKind::MLS_WELCOME => {
+            arkret_wire::EventKind::MlsWelcome => {
                 soland_domain::reducer::mls::apply_welcome_enqueue(&mut state, operation)
             }
-            arkret_wire::EventKind::MLS_GENESIS => {
+            arkret_wire::EventKind::MlsGenesis => {
                 soland_domain::reducer::mls::apply_group_genesis(&mut state, operation)
             }
-            arkret_wire::EventKind::MLS_PROPOSAL => {
+            arkret_wire::EventKind::MlsProposal => {
                 soland_domain::reducer::mls::apply_remove_proposal(&mut state, operation)
             }
-            arkret_wire::EventKind::MLS_COMMIT => {
+            arkret_wire::EventKind::MlsCommit => {
                 soland_domain::reducer::mls::apply_commit_epoch(&mut state, operation)
             }
             _ => ProjectionEffect::Ignored,
@@ -1943,10 +1943,10 @@ impl ProjectionService {
         &self,
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
-        accepted_kinds: &[&str],
+        accepted_kinds: &[arkret_wire::EventKind],
     ) -> Option<String> {
-        let kind = soland_domain::kinds::canonical_kind_string(operation);
-        if !accepted_kinds.contains(&kind.as_str()) {
+        let kind = soland_domain::kinds::canonical_kind_for_operation(operation)?;
+        if !accepted_kinds.contains(&kind) {
             return None;
         }
         match self
@@ -2391,7 +2391,7 @@ pub(crate) fn uses_validated_realm_bootstrap_facet_reducer(kind: &str) -> bool {
     kind.starts_with("ak.realm.")
         && !matches!(
             kind,
-            arkret_wire::EventKind::REALM_CREATE | arkret_wire::EventKind::REALM_PROFILE
+            arkret_wire::event_kind_str::REALM_CREATE | arkret_wire::event_kind_str::REALM_PROFILE
         )
 }
 
@@ -2530,10 +2530,10 @@ mod fsm_registry_tests {
     #[test]
     fn realm_profile_uses_lifecycle_reducer_inside_bootstrap() {
         assert!(!uses_validated_realm_bootstrap_facet_reducer(
-            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::RealmProfile.as_str(),
         ));
         assert!(uses_validated_realm_bootstrap_facet_reducer(
-            arkret_wire::EventKind::REALM_ALIAS,
+            arkret_wire::EventKind::RealmAlias.as_str(),
         ));
     }
 

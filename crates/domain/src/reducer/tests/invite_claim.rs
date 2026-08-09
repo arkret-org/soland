@@ -68,7 +68,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
 
 fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
     let mut operation = make_operation(
-        arkret_wire::EventKind::INVITE_THIRD_PARTY,
+        arkret_wire::EventKind::InviteThirdParty,
         REALM,
         third_party_invite(expires_at),
     );
@@ -85,7 +85,7 @@ fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
 fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, services: Vec<&str>) {
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::RealmPolicyBundle,
             REALM,
             json!({
                 "policy_revision": 1,
@@ -109,7 +109,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -158,7 +158,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
     assert!(!matches!(
         state.apply(
             &make_operation(
-                arkret_wire::EventKind::INVITE_CLAIM,
+                arkret_wire::EventKind::InviteClaim,
                 REALM,
                 claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
             ),
@@ -169,7 +169,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
 
     let replay = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload("nonce-0000000001", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -189,7 +189,7 @@ fn invite_claim_rejects_bad_commitment_without_recording_nonce() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload(
                 "nonce-bad-commitment",
@@ -217,7 +217,7 @@ fn invite_claim_rechecks_verification_service_authorization() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload(
                 "nonce-service-0001",
@@ -241,7 +241,7 @@ fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() 
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload("nonce-no-policy-01", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -266,7 +266,7 @@ fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload("nonce-policy-rotated", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -287,7 +287,7 @@ fn invite_claim_rejects_empty_policy_allowlist() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::INVITE_CLAIM,
+            arkret_wire::EventKind::InviteClaim,
             REALM,
             claim_payload("nonce-empty-allowset", TOKEN_COMMITMENT, SERVICE),
         ),
@@ -325,13 +325,13 @@ fn invite_claim_ignores_non_normative_allowlist_spellings() {
         let hlc = ServerHlc::new("invite-claim-decoy-allowset");
         seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
         state.apply(
-            &make_operation(arkret_wire::EventKind::REALM_POLICY_BUNDLE, REALM, decoy),
+            &make_operation(arkret_wire::EventKind::RealmPolicyBundle, REALM, decoy),
             &hlc,
         );
 
         let rejected = state.apply(
             &make_operation(
-                arkret_wire::EventKind::INVITE_CLAIM,
+                arkret_wire::EventKind::InviteClaim,
                 REALM,
                 claim_payload("nonce-decoy-allowset", TOKEN_COMMITMENT, SERVICE),
             ),
@@ -355,7 +355,7 @@ fn expired_claim_is_rejected_without_mutating_the_pending_invite() {
     seed_invite(&mut state, &hlc, "2026-06-01T00:00:00.000Z");
 
     let mut claim = make_operation(
-        arkret_wire::EventKind::INVITE_CLAIM,
+        arkret_wire::EventKind::InviteClaim,
         REALM,
         claim_payload("nonce-expired-001", TOKEN_COMMITMENT, SERVICE),
     );

@@ -374,21 +374,6 @@ async fn append_account_deactivation_propagation_state(
             "targets": peer_targets,
         },
     });
-    let _ = crate::routing::events::projection::append_projection_event(
-        state,
-        soland_services::events::ProjectedEvent {
-            event_id: crate::ids::generate_local_ref(),
-            realm_id: soland_services::identity::principal_control_realm_for_did(did),
-            event_kind: "ak.account.status".to_owned(),
-            operation_kind: "account_status_deactivation_propagation".to_owned(),
-            operation_id: None,
-            sender: Some(changed_by.to_owned()),
-            payload: payload.clone(),
-            created_at: changed_at,
-            received_at: chrono::Utc::now(),
-        },
-    )
-    .await;
     append_audit_log(
         state,
         Some(did),
@@ -629,36 +614,6 @@ pub(super) async fn erase_account(
         "accepted",
     )
     .await;
-    let realm_operations = realm_erasure_receipts
-        .iter()
-        .filter_map(|receipt| erasure_receipt_operation(receipt.clone()))
-        .collect::<Vec<_>>();
-    if !realm_operations.is_empty()
-        && let Err(error) = crate::routing::events::projection::accept_local_operations(
-            state,
-            &actor,
-            &realm_operations,
-        )
-        .await
-    {
-        tracing::warn!(
-            %error,
-            actor = %actor,
-            "failed to accept realm-scoped erasure receipt operations"
-        );
-        append_audit_log(
-            state,
-            Some(&actor),
-            "org.arkret.soland.audit.erasure_receipt.projection_failed",
-            json!({
-                "actor": actor.clone(),
-                "affected_realms": affected_realms,
-                "reason": error,
-            }),
-            "failed",
-        )
-        .await;
-    }
     enqueue_erasure_receipt_fanout(
         state,
         &affected_realms,
@@ -710,7 +665,7 @@ async fn enqueue_erasure_receipt_fanout<'a>(
                 .as_deref()
                 .is_some_and(|realm_id| affected.contains(realm_id))
         })
-        .filter(|event| event.kind == arkret_wire::EventKind::MEMBER_STATE)
+        .filter(|event| event.kind == arkret_wire::EventKind::MemberState)
         .filter_map(|event| {
             event
                 .envelope
@@ -983,23 +938,6 @@ fn build_erasure_receipt_value(
         .map_err(|error| AppError::internal(format!("erasure receipt self-check: {error}")))?;
     serde_json::to_value(receipt)
         .map_err(|error| AppError::internal(format!("erasure receipt encode: {error}")))
-}
-
-fn erasure_receipt_operation(receipt: Value) -> Option<arkret_event_draft::Operation> {
-    let realm_id = receipt
-        .get("scope")
-        .and_then(Value::as_object)
-        .and_then(|scope| scope.get("realm_id"))
-        .and_then(Value::as_str)?;
-    let operation_id =
-        arkret_identifiers::OperationId::new(crate::ids::generate_operation_id()).ok()?;
-    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-    Some(arkret_event_draft::Operation::create(
-        operation_id,
-        realm_id,
-        arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT,
-        receipt,
-    ))
 }
 
 fn erasure_retained_stub(

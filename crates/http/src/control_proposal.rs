@@ -14,7 +14,7 @@ fn policy_from_realm_policy_bundle(
     realm_id: &RealmId,
     event: &Event,
 ) -> Result<Option<ControlProposalDecisionPolicy>, String> {
-    if event.kind != arkret_wire::EventKind::REALM_POLICY_BUNDLE {
+    if event.kind != arkret_wire::EventKind::RealmPolicyBundle {
         return Ok(None);
     }
     let payload: RealmPolicyBundlePayload = serde_json::from_value(serde_json::Value::Object(
@@ -48,7 +48,7 @@ pub(crate) async fn control_proposal_policy(
         .map_err(|error| format!("Realm proposal policy is unavailable: {error}"))?;
     if let Some(record) = records
         .into_iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
     {
         let event: Event = serde_json::from_value(record.envelope)
             .map_err(|error| format!("canonical Realm policy-bundle Event is invalid: {error}"))?;
@@ -129,7 +129,7 @@ pub(crate) async fn mint_control_proposal_acks(
             .map_err(|error| error.to_string())?;
     let is_closed_genesis = events
         .first()
-        .is_some_and(|event| event.kind == arkret_wire::EventKind::REALM_CREATE);
+        .is_some_and(|event| event.kind == arkret_wire::EventKind::RealmCreate);
     let authority_set_ref = select_control_proposal_ack_authority(
         notary_authority_set_ref,
         bootstrap_ingress_authority_set_ref,

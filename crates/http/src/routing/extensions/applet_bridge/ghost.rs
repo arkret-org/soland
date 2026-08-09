@@ -242,7 +242,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         event.applet_id.as_ref() == Some(&provision.applet_id)
             && event.authorization_ref.as_deref() == Some(authorization_ref.as_str())
     };
-    if accountability.kind.as_str() != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+    if accountability.kind != arkret_wire::EventKind::IdentityAccountabilityGrant
         || accountability.realm_id != provision.realm_id
         || accountability.actor_id != provision.service_id
         || accountability.executed_by.is_some()
@@ -252,7 +252,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability_grant_event envelope does not match the Applet provision binding",
         ));
     }
-    if profile.kind.as_str() != arkret_wire::EventKind::PROFILE_CREATE
+    if profile.kind != arkret_wire::EventKind::ProfileCreate
         || profile.realm_id != provision.realm_id
         || profile.actor_id != provision.ghost_actor_id
         || profile.executed_by.as_ref() != Some(&provision.service_id)

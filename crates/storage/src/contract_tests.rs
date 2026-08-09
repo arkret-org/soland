@@ -708,7 +708,7 @@ fn canonical_wire_event_record(
     actor_seq: u64,
     now: chrono::DateTime<Utc>,
 ) -> CanonicalEventRecord {
-    let event = arkret_wire::Event::new_with_derived_id_at(
+    let event = arkret_wire::test_support::raw_event_at(
         "ak.message.create",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())

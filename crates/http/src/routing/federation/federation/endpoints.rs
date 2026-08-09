@@ -8,9 +8,7 @@ use serde_json::Value;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
-use super::actor_signature::{
-    federation_verify_actor_unsigned_digest, verify_federation_actor_signature,
-};
+use super::actor_signature::verify_federation_actor_signature;
 use super::inbound_policy::ensure_private_inbound_read_rail_local;
 use super::signature::validate_federation_request_binding;
 use super::{now, sync_token};
@@ -168,13 +166,7 @@ pub(crate) async fn federation_verify_actor(
         );
     }
 
-    let unsigned_request_digest =
-        federation_verify_actor_unsigned_digest(&body).map_err(|message| {
-            AppError::new(soland_http::error::ErrorCode::SchemaViolation, message)
-                .with_status(StatusCode::BAD_REQUEST)
-        })?;
-    let verification =
-        verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
+    let verification = verify_federation_actor_signature(state, &body).await?;
 
     json_ok(
         arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome {

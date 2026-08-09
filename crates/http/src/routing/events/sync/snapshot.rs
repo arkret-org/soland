@@ -867,8 +867,8 @@ async fn timeline_events_for_realm(
         .unwrap_or_default()
     {
         if !matches!(
-            record.kind.as_str(),
-            arkret_wire::EventKind::REACTION_ADD | arkret_wire::EventKind::REACTION_REMOVE
+            arkret_wire::EventKind::from_wire(&record.kind),
+            arkret_wire::EventKind::ReactionAdd | arkret_wire::EventKind::ReactionRemove
         ) || !seen.insert(record.event_id.clone())
         {
             continue;
@@ -928,7 +928,7 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
 
     let mut slots = BTreeMap::<(String, String, u64), Vec<usize>>::new();
     for (index, (_, event)) in entries.iter().enumerate() {
-        if event.kind.as_str() != arkret_wire::EventKind::MESSAGE_CREATE {
+        if event.kind != arkret_wire::EventKind::MessageCreate {
             continue;
         }
         let Some(strand_id) = event.payload.get("strand_id").and_then(Value::as_str) else {
@@ -1069,7 +1069,7 @@ async fn state_events_for_realm(
         .iter()
         .filter(|event| required_security_baseline_kind(&event.event_kind))
         .fold(
-            BTreeMap::<String, (i64, String)>::new(),
+            BTreeMap::<arkret_wire::EventKind, (i64, String)>::new(),
             |mut newest, event| {
                 let position = projection_event_position(event);
                 let key = event.event_kind.clone();
@@ -1086,7 +1086,7 @@ async fn state_events_for_realm(
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
     for event in events {
-        if event.event_kind == arkret_wire::EventKind::MESSAGE_CREATE {
+        if event.event_kind == arkret_wire::EventKind::MessageCreate {
             continue;
         }
         let position = projection_event_position(&event);
@@ -1113,8 +1113,11 @@ async fn state_events_for_realm(
     )
 }
 
-pub(crate) fn required_security_baseline_kind(kind: &str) -> bool {
-    matches!(kind, "ak.realm.create" | "ak.realm.policy_bundle")
+pub(crate) fn required_security_baseline_kind(kind: &arkret_wire::EventKind) -> bool {
+    matches!(
+        kind,
+        arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::RealmPolicyBundle
+    )
 }
 
 fn projection_event_position(event: &soland_services::events::ProjectedEvent) -> i64 {
@@ -1247,7 +1250,7 @@ async fn account_data_events(
         .await
         .unwrap_or_default()
     {
-        if record.kind != arkret_wire::EventKind::ACCOUNT_DATA_SET {
+        if record.kind != arkret_wire::EventKind::AccountDataSet.as_str() {
             continue;
         }
         let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
@@ -1397,13 +1400,13 @@ pub(crate) async fn projection_record_visible_to_session(
         return false;
     }
     let projection = state.projections().snapshot();
-    let sidecar_id = match event.event_kind.as_str() {
-        arkret_wire::EventKind::SIDECAR_CREATE => event
+    let sidecar_id = match &event.event_kind {
+        arkret_wire::EventKind::SidecarCreate => event
             .event_id
             .strip_prefix("ak:event:")
             .map(|uuid| format!("ak:sidecar:{uuid}")),
-        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH
-        | arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL => event
+        arkret_wire::EventKind::SidecarContextAttach
+        | arkret_wire::EventKind::AgentSidecarExchangeControl => event
             .payload
             .get("sidecar_id")
             .and_then(Value::as_str)
@@ -1468,7 +1471,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == arkret_wire::EventKind::MESSAGE_CREATE {
+    if event.event_kind == arkret_wire::EventKind::MessageCreate {
         return event
             .payload
             .get("strand_id")
@@ -1507,7 +1510,7 @@ fn projection_event_scope_circle_id(
     if explicit_scope.is_some() {
         return explicit_scope;
     }
-    if event.event_kind == arkret_wire::EventKind::RELATION_CREATE {
+    if event.event_kind == arkret_wire::EventKind::RelationCreate {
         let relation = event.payload.get("relation").and_then(Value::as_object);
         return relation
             .and_then(|value| value.get("from_ref"))

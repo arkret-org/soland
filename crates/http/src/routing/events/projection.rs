@@ -58,7 +58,7 @@ pub fn retention_tombstone_for_event(
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::{Value, json};
 
@@ -67,11 +67,11 @@ mod tests {
     const REALM_ID: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
     const OPERATION_ID: &str = "ak:operation:01904100-0000-7000-8000-000000000002";
 
-    fn op(kind: &str, payload: Value) -> Operation {
-        Operation::create(
+    fn op(kind: impl AsRef<str>, payload: Value) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(OPERATION_ID.to_owned()).unwrap(),
             RealmId::new(REALM_ID.to_owned()).unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         )
     }
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn realm_projection_metadata_reads_each_canonical_facet_shape() {
         let profile = op(
-            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::RealmProfile,
             json!({
                 "schema": "ak.schema.realm_profile.v1",
                 "title": "Launch Room",
@@ -87,15 +87,15 @@ mod tests {
             }),
         );
         let discovery = op(
-            arkret_wire::EventKind::REALM_DISCOVERY,
+            arkret_wire::EventKind::RealmDiscovery,
             json!({"value": "listed"}),
         );
         let history_visibility = op(
-            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+            arkret_wire::EventKind::RealmHistoryVisibility,
             json!({"value": "shared"}),
         );
         let create = op(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -125,7 +125,7 @@ mod tests {
         let event = soland_services::events::ProjectedEvent {
             event_id: "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
             realm_id: REALM_ID.to_owned(),
-            event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
+            event_kind: arkret_wire::EventKind::StrandUpdate,
             operation_kind: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
@@ -149,7 +149,7 @@ mod tests {
         let service =
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let operation = op(
-            arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
+            arkret_wire::EventKind::RealmPlaintextVisibleServices,
             json!({
                 "services": [{
                     "service_id": service,
@@ -175,7 +175,7 @@ mod tests {
         let service =
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let operation = op(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate,
             json!({
                 "object": {
                     "id": REALM_ID,
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn plaintext_visible_services_projection_rejects_legacy_string_list() {
         let operation = op(
-            arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
+            arkret_wire::EventKind::RealmPlaintextVisibleServices,
             json!({
                 "plaintext_visible_services": ["did:web:legacy.local"]
             }),
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn member_state_without_title_does_not_project_realm_title() {
         let operation = op(
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::MemberState,
             json!({
                 "actor_id": "did:web:alice.example",
                 "membership": "join"
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn child_space_metadata_does_not_overwrite_realm_metadata() {
         let create = op(
-            arkret_wire::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SpaceCreate,
             json!({
                 "object": {
                     "id": "ak:space:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy",
@@ -238,7 +238,7 @@ mod tests {
             }),
         );
         let update = op(
-            arkret_wire::EventKind::SPACE_UPDATE,
+            arkret_wire::EventKind::SpaceUpdate,
             json!({
                 "space_id": "ak:space:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy",
                 "patch": {
@@ -258,7 +258,7 @@ mod tests {
     fn invite_acceptance_ref_reads_canonical_invite_id() {
         let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
         let operation = op(
-            arkret_wire::EventKind::INVITE_ACCEPT,
+            arkret_wire::EventKind::InviteAccept,
             json!({
                 "sender": "did:web:bob.example",
                 "invite_id": invite_id,
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn realm_profile_reads_title_without_realm_id_fallback() {
         let operation = op(
-            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::RealmProfile,
             json!({
                 "schema": "ak.schema.realm_profile.v1",
                 "title": "Renamed Room"

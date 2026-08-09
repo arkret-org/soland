@@ -390,7 +390,7 @@ impl ProjectedOperationPersistencePort for NoProjectedOperationPersistence {
     async fn persist_projected_operation(
         &self,
         _origin: &str,
-        _operation: &arkret_event_draft::Operation,
+        _operation: &arkret_event_draft::ProjectedEventOperation,
         _event_type: &str,
         _is_membership_or_realm_lifecycle: bool,
     ) -> Result<(), String> {

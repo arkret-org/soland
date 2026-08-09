@@ -113,8 +113,8 @@ pub async fn seed_sealed_capability_grant(
 
     // 1. The Event is authored first: its canonical digest IS the Move digest, so there is no
     //    opportunity to invent one.
-    let event = arkret_wire::Event::new(
-        arkret_wire::EventKind::CAPABILITY_GRANT,
+    let event = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::CapabilityGrant.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
@@ -191,10 +191,7 @@ pub async fn seal_accepted_capability_grant(
         .expect("accepted capability grant producer Event");
     let event: arkret_wire::Event =
         serde_json::from_value(record.envelope).expect("accepted capability grant envelope");
-    assert_eq!(
-        event.kind.as_str(),
-        arkret_wire::EventKind::CAPABILITY_GRANT
-    );
+    assert_eq!(event.kind.as_str(), arkret_wire::EventKind::CapabilityGrant);
     assert_eq!(event.realm_id, realm);
     assert_eq!(event.event_id, event_id);
 
@@ -376,7 +373,7 @@ async fn persist_canonical_event(
             actor_id: event.actor_id.to_string(),
             actor_seq: event.actor_seq,
             realm_id: Some(realm_id.to_owned()),
-            kind: arkret_wire::EventKind::CAPABILITY_GRANT.to_owned(),
+            kind: arkret_wire::EventKind::CapabilityGrant.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: canonical_digest.to_owned(),
             canonical_bytes: arkret_canonical::canonical_json_bytes(

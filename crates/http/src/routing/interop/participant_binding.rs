@@ -22,7 +22,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
 use arkret_wire::REALM_MEDIA_SERVICE_CELL_FAMILY;

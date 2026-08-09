@@ -839,7 +839,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
-    let operation = Operation::create(
+    let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(control_realm).unwrap(),
         "ak.device.authorize",
@@ -909,7 +909,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
         .unwrap();
 
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
-    let operation = Operation::create(
+    let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(soland_test_support::principal_control_realm_for_did(alice)).unwrap(),
         "ak.device.authorize",
@@ -952,7 +952,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
     let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
-    let operation = Operation::create(
+    let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id).unwrap(),
         RealmId::new(control_realm).unwrap(),
         "ak.device.authorize",

@@ -14,7 +14,7 @@ fn strand_lifecycle_round_trip() {
 
     let create_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -38,7 +38,7 @@ fn strand_lifecycle_round_trip() {
 
     let archive_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_ARCHIVE,
+            arkret_wire::EventKind::StrandArchive,
             realm_id,
             serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
@@ -58,7 +58,7 @@ fn strand_lifecycle_round_trip() {
 
     let restore_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_RESTORE,
+            arkret_wire::EventKind::StrandRestore,
             realm_id,
             serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
         ),
@@ -86,7 +86,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -102,7 +102,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     // restore on Active → strand_not_archived
     let restore_op = make_operation(
-        arkret_wire::EventKind::STRAND_RESTORE,
+        arkret_wire::EventKind::StrandRestore,
         realm_id,
         serde_json::json!({ "target_ref": strand_id }),
     );
@@ -114,14 +114,14 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
     // Archive then re-archive → strand_not_active
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_ARCHIVE,
+            arkret_wire::EventKind::StrandArchive,
             realm_id,
             serde_json::json!({ "target_ref": strand_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
-        arkret_wire::EventKind::STRAND_ARCHIVE,
+        arkret_wire::EventKind::StrandArchive,
         realm_id,
         serde_json::json!({ "target_ref": strand_id }),
     );
@@ -132,7 +132,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 
     // Update on Archived → strand_not_active
     let update_op = make_operation(
-        arkret_wire::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::StrandUpdate,
         realm_id,
         serde_json::json!({
             "target_ref": strand_id,
@@ -149,7 +149,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
 fn strand_lifecycle_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        arkret_wire::EventKind::STRAND_ARCHIVE,
+        arkret_wire::EventKind::StrandArchive,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({ "target_ref": "ak:strand:nope-not-here" }),
     );
@@ -170,7 +170,7 @@ fn morph_lifecycle_round_trip() {
 
     let create_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MorphCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -195,7 +195,7 @@ fn morph_lifecycle_round_trip() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_ARCHIVE,
+            arkret_wire::EventKind::MorphArchive,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
@@ -205,7 +205,7 @@ fn morph_lifecycle_round_trip() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_RESTORE,
+            arkret_wire::EventKind::MorphRestore,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
@@ -223,7 +223,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MorphCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -240,7 +240,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     // restore on Active → morph_not_archived
     let restore_op = make_operation(
-        arkret_wire::EventKind::MORPH_RESTORE,
+        arkret_wire::EventKind::MorphRestore,
         realm_id,
         serde_json::json!({ "target_ref": morph_id }),
     );
@@ -251,14 +251,14 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_ARCHIVE,
+            arkret_wire::EventKind::MorphArchive,
             realm_id,
             serde_json::json!({ "target_ref": morph_id }),
         ),
         &hlc,
     );
     let archive_again = make_operation(
-        arkret_wire::EventKind::MORPH_ARCHIVE,
+        arkret_wire::EventKind::MorphArchive,
         realm_id,
         serde_json::json!({ "target_ref": morph_id }),
     );
@@ -269,7 +269,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 
     // Update on Archived → morph_not_active
     let update_op = make_operation(
-        arkret_wire::EventKind::MORPH_UPDATE,
+        arkret_wire::EventKind::MorphUpdate,
         realm_id,
         serde_json::json!({
             "target_ref": morph_id,
@@ -286,7 +286,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
 fn morph_lifecycle_preflight_tolerates_unknown_morph() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        arkret_wire::EventKind::MORPH_ARCHIVE,
+        arkret_wire::EventKind::MorphArchive,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({ "target_ref": "ak:morph:nope-not-here" }),
     );
@@ -311,7 +311,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -335,7 +335,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     // ak.strand.move — state unchanged, updated_at advances.
     let move_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_MOVE,
+            arkret_wire::EventKind::StrandMove,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -367,7 +367,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     // ak.strand.reorder — same family, same effect.
     let reorder_effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_REORDER,
+            arkret_wire::EventKind::StrandReorder,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -398,7 +398,7 @@ fn strand_position_events_queue_unknown_strand() {
     let strand_id = "ak:strand:AfPOoNzailKc-Iv8HrKJc7cV-a6XBnZOJ6gkRV2XI7xm";
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_MOVE,
+            arkret_wire::EventKind::StrandMove,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -415,7 +415,7 @@ fn strand_position_events_queue_unknown_strand() {
     ));
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -446,7 +446,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -463,7 +463,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REDACTION,
+            arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
@@ -498,7 +498,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MorphCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -514,7 +514,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
     );
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REDACTION,
+            arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUYmiWygi5zNhCFs6fat_lSDpnktIttb8rT9AIwOHC5i",
@@ -547,7 +547,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     // Materialise + redact a Strand once (legal first redaction).
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -562,7 +562,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REDACTION,
+            arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUjlgn4nYH_fSr1KSG7RGczLy67WEbCUAwgZxRWSWeVV",
@@ -578,7 +578,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
 
     // Second redaction against the now-Redacted Strand → preflight rejects.
     let second_redact = make_operation(
-        arkret_wire::EventKind::REDACTION,
+        arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:AcJZwpHoLnl8gt3a7i-eGe5eXRORCzvRNhbunn_arfUk",
@@ -593,7 +593,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     // Same path for Morph.
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MorphCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -609,7 +609,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REDACTION,
+            arkret_wire::EventKind::Redaction,
             realm_id,
             serde_json::json!({
                 "target_event_id": "ak:event:AUoKFAblyZ8FTmGILTwrp8-QvuGeSJ3_9PJ0uQl4S6Da",
@@ -619,7 +619,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
         &hlc,
     );
     let second_morph_redact = make_operation(
-        arkret_wire::EventKind::REDACTION,
+        arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:AWOSoyRcAABZT-emSL_OMbFhcDghvn0yier07wSAVfmk",
@@ -647,7 +647,7 @@ fn strand_tracks_update_touches_active_strand_only() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -663,7 +663,7 @@ fn strand_tracks_update_touches_active_strand_only() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
+            arkret_wire::EventKind::StrandTracksUpdate,
             realm_id,
             serde_json::json!({
                 "strand_id": strand_id,
@@ -697,7 +697,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -717,7 +717,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
     );
 
     let tracks_op = make_operation(
-        arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
+        arkret_wire::EventKind::StrandTracksUpdate,
         realm_id,
         serde_json::json!({
             "strand_id": strand_id,
@@ -764,7 +764,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -779,7 +779,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_ARCHIVE,
+            arkret_wire::EventKind::StrandArchive,
             realm_id,
             serde_json::json!({ "target_ref": strand_id }),
         ),
@@ -791,7 +791,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
     );
 
     let tracks_op = make_operation(
-        arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
+        arkret_wire::EventKind::StrandTracksUpdate,
         realm_id,
         serde_json::json!({
             "strand_id": strand_id,
@@ -816,7 +816,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
 fn strand_tracks_preflight_tolerates_unknown_strand() {
     let state = ProjectionState::new();
     let tracks_op = make_operation(
-        arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
+        arkret_wire::EventKind::StrandTracksUpdate,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "strand_id": "ak:strand:nope-not-here",
@@ -835,7 +835,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     // Unknown object_ref.
     let unknown = make_operation(
-        arkret_wire::EventKind::REDACTION,
+        arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:Ab9oE_tzbcCqFJMmwLq9c6rt2grDdJgQy1JXeT9W5nH-",
@@ -845,7 +845,7 @@ fn redaction_preflight_tolerates_unknown_object_or_message_path() {
     assert_eq!(state.check_redaction_target_transition(&unknown), Ok(()));
     // Missing object_ref (message redaction path).
     let message_redact = make_operation(
-        arkret_wire::EventKind::REDACTION,
+        arkret_wire::EventKind::Redaction,
         realm_id,
         serde_json::json!({
             "target_event_id": "ak:event:Ac0LRpyxnIykXaDwQskZnvwSYer8TAeFhe0YNbbfj1Ec",

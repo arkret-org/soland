@@ -28,7 +28,7 @@ fn mod_decision_cell_ref() -> CellRef {
 
 fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
     let op = make_operation(
-        arkret_wire::EventKind::MODERATION_DECISION,
+        arkret_wire::EventKind::ModerationDecision,
         MOD_REALM,
         serde_json::json!({
             // A decision's `decision_id` is its own Event id, and the add dot
@@ -53,7 +53,7 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
 
 fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) {
     let op = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+        arkret_wire::EventKind::ModerationAppealSubmit,
         MOD_REALM,
         serde_json::json!({
             "event_id": MOD_APPEAL_EVENT_ID,
@@ -99,7 +99,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
     );
 
     let lift = make_operation(
-        arkret_wire::EventKind::MODERATION_DECISION_LIFT,
+        arkret_wire::EventKind::ModerationDecisionLift,
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
@@ -137,7 +137,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
     );
 
     let review = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -155,7 +155,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
     );
 
     let decide = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
+        arkret_wire::EventKind::ModerationAppealDecision,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -181,7 +181,7 @@ fn moderation_appeal_invalid_transition_rejected() {
     let hlc = ServerHlc::new("did:web:test.soland");
     // review before submit => (none) -> under_review is illegal.
     let review = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -203,7 +203,7 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -217,7 +217,7 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
     ));
 
     let close = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
+        arkret_wire::EventKind::ModerationAppealClose,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -241,7 +241,7 @@ fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
 
     let close = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
+        arkret_wire::EventKind::ModerationAppealClose,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -265,7 +265,7 @@ fn moderation_appeal_self_review_forbidden() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -287,7 +287,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     seed_decision(&mut state, &hlc, "did:web:mod.example");
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
     let review = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -301,7 +301,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     ));
     // overturn WITHOUT a prior lift on the moderation_state cell => reject.
     let decide = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
+        arkret_wire::EventKind::ModerationAppealDecision,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
@@ -320,7 +320,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
     // Project the paired lift first (ordered-batch semantics), then the
     // overturn decision converges.
     let lift = make_operation(
-        arkret_wire::EventKind::MODERATION_DECISION_LIFT,
+        arkret_wire::EventKind::ModerationDecisionLift,
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
@@ -348,7 +348,7 @@ fn moderation_appeal_duplicate_active_rejected() {
     submit_appeal(&mut state, &hlc, "did:web:appellant.example");
 
     let duplicate = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+        arkret_wire::EventKind::ModerationAppealSubmit,
         MOD_REALM,
         serde_json::json!({
             "event_id": "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1",
@@ -372,7 +372,7 @@ fn moderation_appeal_submit_rejects_carried_appeal_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("did:web:test.soland");
     let legacy = make_operation(
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+        arkret_wire::EventKind::ModerationAppealSubmit,
         MOD_REALM,
         serde_json::json!({
             "event_id": MOD_APPEAL_EVENT_ID,

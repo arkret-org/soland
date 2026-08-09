@@ -200,7 +200,7 @@ fn unguarded_policy_server_move<'a>(
     seal: &SealId,
 ) -> CallerSignedEvent<'a> {
     CallerSignedEvent::new(
-        arkret_wire::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::RealmPolicyServer.as_str(),
         ALICE,
         ALICE_DEVICE,
         realm_id,
@@ -357,7 +357,7 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
     let seal = accepted_seal_id(state, token, realm_id).await;
     let request = RealmLinkCreateRequestBody {
         link_event: CallerSignedEvent::new(
-            arkret_wire::EventKind::REALM_LINK,
+            arkret_wire::EventKind::RealmLink.as_str(),
             ALICE,
             ALICE_DEVICE,
             realm_id,
@@ -628,11 +628,11 @@ async fn policy_server_same_basis_sibling_fails_closed() {
             "cell": POLICY_CELL,
             "predicate": {"op": "head_eq", "value": settled_basis.clone()},
         }]);
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             arkret_identifiers::RealmId::new(child_realm).unwrap(),
-            arkret_wire::EventKind::REALM_POLICY_SERVER,
+            arkret_wire::EventKind::RealmPolicyServer.as_str(),
             payload,
         )
     };

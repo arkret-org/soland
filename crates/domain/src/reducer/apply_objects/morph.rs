@@ -56,14 +56,7 @@ impl ProjectionState {
             .get("created_by")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("sender")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_default();
+            .unwrap_or_else(|| operation.context.sender.to_string());
         let versions = morph_document_body(&fields)
             .map(|body| vec![document_version_from_operation(&morph_id, operation, body)])
             .unwrap_or_default();
@@ -134,11 +127,7 @@ impl ProjectionState {
             // invariant also holds for any event that bypasses admission.
             apply_morph_fields_patch(&mut morph.fields, patch);
         }
-        morph.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        morph.updated_by = Some(operation.context.sender.to_string());
         morph.updated_at = Some(now);
         if let Some(body) = morph_document_body(&morph.fields) {
             let next = document_version_from_operation(&morph_id, operation, body);
@@ -228,11 +217,7 @@ impl ProjectionState {
             }
         }
         morph.schema_refs = to_schema_refs;
-        morph.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        morph.updated_by = Some(operation.context.sender.to_string());
         morph.updated_at = Some(now);
         ProjectionEffect::MorphLifecycle {
             morph_id,
@@ -280,11 +265,7 @@ impl ProjectionState {
         }
         morph.state = target_state;
         morph.state_changed_at = Some(now);
-        morph.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        morph.updated_by = Some(operation.context.sender.to_string());
         morph.updated_at = Some(now);
         ProjectionEffect::MorphLifecycle {
             morph_id,

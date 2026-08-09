@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::events_payloads::{RealmKeyShareMaterial, RealmKeyShareTarget};
 use arkret_models_collaboration::objects::read_receipts::{
     ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
@@ -14,7 +14,7 @@ pub(crate) async fn validate_history_visibility_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_HISTORY_VISIBILITY)
+        != Some(arkret_wire::EventKind::RealmHistoryVisibility)
     {
         return Ok(());
     }
@@ -50,9 +50,9 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::EventKind::REALM_CREATE)
-        | Some(arkret_wire::EventKind::REALM_HISTORY_VISIBILITY)
-        | Some(arkret_wire::EventKind::REALM_POLICY_BUNDLE) => {}
+        Some(arkret_wire::EventKind::RealmCreate)
+        | Some(arkret_wire::EventKind::RealmHistoryVisibility)
+        | Some(arkret_wire::EventKind::RealmPolicyBundle) => {}
         _ => return Ok(()),
     }
     let realm_id = operation.realm_id.as_str();
@@ -126,8 +126,7 @@ fn restricted_history_sharing_requirement(
     operations: &[Operation],
     operation: &Operation,
 ) -> Result<RestrictedHistorySharingRequirement, &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::REALM_CREATE)
-    {
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::RealmCreate) {
         return Ok(RestrictedHistorySharingRequirement::NotApplicable);
     }
     let Some(object) = operation.payload.get("object") else {
@@ -144,7 +143,7 @@ fn restricted_history_sharing_requirement(
     let realm_id = operation.realm_id.as_str();
     let in_batch = operations.iter().any(|candidate| {
         kinds::canonical_kind_for_operation(candidate)
-            == Some(arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY)
+            == Some(arkret_wire::EventKind::RealmHistorySharingPolicy)
             && candidate.realm_id.as_str() == realm_id
             && candidate.payload.get("value").is_some()
     });
@@ -171,7 +170,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY) => {
+        Some(arkret_wire::EventKind::RealmReadReceiptPolicy) => {
             let policy = read_receipt_policy_projection_from_payload(&operation.payload)?;
             let history_visibility = intended_history_visibility_for_realm(
                 state,
@@ -182,7 +181,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
             validate_read_receipt_policy_against_history(&policy, &history_visibility)?;
             validate_read_receipt_child_policy_write(state, operations, operation, &policy).await
         }
-        Some(arkret_wire::EventKind::REALM_HISTORY_VISIBILITY) => {
+        Some(arkret_wire::EventKind::RealmHistoryVisibility) => {
             if operation.payload.get("value").and_then(Value::as_str) != Some("world_readable") {
                 return Ok(());
             }
@@ -201,7 +200,7 @@ pub(crate) async fn validate_read_receipt_policy_combination_write(
 fn read_receipt_policy_projection_from_payload(
     payload: &Value,
 ) -> Result<ReadReceiptPolicy, &'static str> {
-    serde_json::from_value(projection_context_stripped_payload(payload))
+    serde_json::from_value(payload.clone())
         .map_err(|_| "ak.realm.read_receipt_policy payload is invalid")
 }
 
@@ -212,14 +211,14 @@ async fn intended_history_visibility_for_realm(
 ) -> String {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::REALM_HISTORY_VISIBILITY)
+            == Some(arkret_wire::EventKind::RealmHistoryVisibility)
             && operation.realm_id.as_str() == realm_id
             && let Some(value) = operation.payload.get("value").and_then(Value::as_str)
         {
             return value.to_owned();
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::REALM_CREATE)
+            == Some(arkret_wire::EventKind::RealmCreate)
             && operation.realm_id.as_str() == realm_id
             && let Some(value) = operation
                 .payload
@@ -250,13 +249,13 @@ async fn intended_content_scheme_for_realm(
             continue;
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+            == Some(arkret_wire::EventKind::RealmPolicyBundle)
             && let Some(value) = policy_bundle_content_scheme(&operation.payload)
         {
             return Some(value);
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::REALM_CREATE)
+            == Some(arkret_wire::EventKind::RealmCreate)
             && let Some(value) = operation
                 .payload
                 .get("object")
@@ -280,7 +279,7 @@ async fn intended_encryption_profile_for_realm(
     for operation in operations.iter().rev() {
         if operation.realm_id.as_str() == realm_id
             && kinds::canonical_kind_for_operation(operation)
-                == Some(arkret_wire::EventKind::REALM_CREATE)
+                == Some(arkret_wire::EventKind::RealmCreate)
             && let Some(value) = operation
                 .payload
                 .get("object")
@@ -300,7 +299,7 @@ async fn intended_encryption_profile_for_realm(
 }
 
 fn policy_bundle_content_scheme(payload: &Value) -> Option<String> {
-    let value = projection_context_stripped_payload(payload);
+    let value = payload.clone();
     value
         .get("content_scheme")
         .and_then(Value::as_str)
@@ -314,7 +313,7 @@ async fn intended_read_receipt_policy_for_realm(
 ) -> Result<ReadReceiptPolicy, &'static str> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY)
+            == Some(arkret_wire::EventKind::RealmReadReceiptPolicy)
             && operation.realm_id.as_str() == realm_id
         {
             return read_receipt_policy_projection_from_payload(&operation.payload);
@@ -401,7 +400,7 @@ fn read_receipt_policy_parent_realm_id(
     if !policy
         .allowed_policies
         .iter()
-        .any(|policy| policy == EventKind::REALM_READ_RECEIPT_POLICY)
+        .any(|policy| policy == EventKind::RealmReadReceiptPolicy)
     {
         return None;
     }
@@ -415,7 +414,7 @@ fn pending_read_receipt_policy_source_realm(
 ) -> Option<Option<String>> {
     for operation in operations.iter().rev() {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::REALM_INHERITANCE_POLICY)
+            != Some(arkret_wire::EventKind::RealmInheritancePolicy)
             || operation.realm_id.as_str() != realm_id
         {
             continue;
@@ -424,7 +423,7 @@ fn pending_read_receipt_policy_source_realm(
             soland_services::operation_semantics::inheritance_allowed_policies(&operation.payload);
         if !policies
             .iter()
-            .any(|policy| policy == EventKind::REALM_READ_RECEIPT_POLICY)
+            .any(|policy| policy == EventKind::RealmReadReceiptPolicy)
         {
             return Some(None);
         }
@@ -449,8 +448,7 @@ fn active_read_receipt_parent_link(
         return false;
     }
     for operation in operations.iter().rev() {
-        if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::REALM_LINK)
+        if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::RealmLink)
             || operation.realm_id.as_str() != realm_id
             || operation
                 .payload
@@ -493,18 +491,16 @@ pub(crate) async fn validate_realm_key_share_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_KEY_SHARE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::RealmKeyShare)
     {
         return Ok(());
     }
-    let share = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::RealmKeySharePayload,
-    >(projection_context_stripped_payload(&operation.payload))
-    .map_err(|error| {
-        tracing::debug!(%error, "realm key share projection payload parse failed");
-        "policy_denied"
-    })?;
+    let share = operation
+        .typed_payload::<arkret_wire::event_spec::RealmKeyShare>()
+        .map_err(|error| {
+            tracing::debug!(%error, "realm key share projection payload parse failed");
+            "policy_denied"
+        })?;
     // encryption-and-audit.md §2.10.8 — a `ak.realm_key.share` with
     // `share_kind=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
     // sealing path: provider-initiated, the recipient is an OFFLINE recovery org
@@ -787,13 +783,15 @@ fn realm_key_share_epoch_span(from_epoch: Option<u64>, to_epoch: Option<u64>) ->
 }
 
 pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("actor_id")
-        .or_else(|| operation.payload.get("member"))
-        .or_else(|| operation.payload.get("actor"))
-        .or_else(|| operation.payload.get("sender"))
-        .and_then(Value::as_str)
+    Some(
+        operation
+            .payload
+            .get("actor_id")
+            .or_else(|| operation.payload.get("member"))
+            .or_else(|| operation.payload.get("actor"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| operation.context.sender.as_str()),
+    )
 }
 
 pub(crate) async fn validate_realm_moderation_policy(
@@ -801,7 +799,7 @@ pub(crate) async fn validate_realm_moderation_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_MODERATION_POLICY)
+        != Some(arkret_wire::EventKind::RealmModerationPolicy)
     {
         return Ok(());
     }
@@ -854,7 +852,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
 ) -> Result<(), &'static str> {
     if !matches!(
         kinds::canonical_kind_for_operation(operation),
-        Some(arkret_wire::EventKind::MESSAGE_CREATE | arkret_wire::EventKind::MESSAGE_REVISE)
+        Some(arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise)
     ) {
         return Ok(());
     }
@@ -863,8 +861,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     if mentions.is_empty() {
         return Ok(());
     }
-    let actor = operation.actor().ok_or("audience_mention_actor_missing")?;
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
     let resource = operation
         .payload
@@ -1208,39 +1205,22 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn read_receipt_policy_projection_ignores_projection_context() {
-        let policy = read_receipt_policy_projection_from_payload(&json!({
-            "disclosure": "required",
-            "event_id": "ak:event:AS7sAiMECgEJwCHUwE8S98ip6QzcGDeSpVFOk1xjb-u4",
-            "sender": "did:web:alice.example",
-            "hlc": "2026-06-14T10:00:00.000Z/node/1",
-            "seal_ref": "ak:seal:sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        }))
-        .unwrap();
-
-        assert_eq!(
-            policy.disclosure,
-            arkret_models_collaboration::objects::read_receipts::ReadReceiptDisclosure::Required
-        );
-    }
-
     fn realm_create_op(realm_id: &str, object: Value) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             arkret_identifiers::RealmId::new(realm_id).unwrap(),
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             json!({"object": object}),
         )
     }
 
     fn history_sharing_policy_op(realm_id: &str) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             arkret_identifiers::RealmId::new(realm_id).unwrap(),
-            arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY,
+            arkret_wire::EventKind::RealmHistorySharingPolicy.as_str(),
             json!({"value": {"version": 1}}),
         )
     }

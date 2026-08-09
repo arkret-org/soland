@@ -85,7 +85,7 @@ impl ProjectionState {
         );
         ProjectionEffect::RealmLifecycle {
             realm_id,
-            action: arkret_wire::EventKind::REALM_UPGRADE.to_owned(),
+            action: arkret_wire::EventKind::RealmUpgrade.as_str().to_owned(),
         }
     }
 
@@ -118,7 +118,7 @@ impl ProjectionState {
     pub(crate) fn apply_realm_authority_transition(
         &mut self,
         operation: &Operation,
-        kind: &'static str,
+        kind: arkret_wire::EventKind,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let Some(mut root) = self.realm_authority_root(&realm_id) else {
@@ -126,11 +126,7 @@ impl ProjectionState {
                 reason: "realm_authority_root_missing".to_owned(),
             };
         };
-        if operation
-            .actor()
-            .as_ref()
-            .is_none_or(|actor| actor != &root.controller_id)
-        {
+        if operation.context.sender != root.controller_id {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_controller_mismatch".to_owned(),
             };
@@ -159,16 +155,10 @@ impl ProjectionState {
             };
         }
 
-        match kind {
-            arkret_wire::EventKind::REALM_OWNER_TRANSFER => {
-                let typed = serde_json::from_value::<
-                    arkret_models_collaboration::events_payloads::RealmOwnerTransferPayload,
-                >(serde_json::json!({
-                    "realm_id": operation.payload.get("realm_id"),
-                    "expected_state_digest": operation.payload.get("expected_state_digest"),
-                    "patch": operation.payload.get("patch"),
-                    "successor_acceptance": operation.payload.get("successor_acceptance"),
-                }));
+        match &kind {
+            arkret_wire::EventKind::RealmOwnerTransfer => {
+                let typed =
+                    operation.typed_payload::<arkret_wire::event_spec::RealmOwnerTransfer>();
                 let Ok(payload) = typed else {
                     return ProjectionEffect::Rejected {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
@@ -193,21 +183,15 @@ impl ProjectionState {
                 root.controller_id = payload.patch.controller_id;
                 root.controller_epoch = payload.patch.controller_epoch;
             }
-            arkret_wire::EventKind::REALM_AUTHORITY_RESET => {
-                let typed = serde_json::from_value::<
-                    arkret_models_collaboration::events_payloads::RealmAuthorityResetPayload,
-                >(serde_json::json!({
-                    "realm_id": operation.payload.get("realm_id"),
-                    "expected_state_digest": operation.payload.get("expected_state_digest"),
-                    "patch": operation.payload.get("patch"),
-                    "destructive_confirmation": operation.payload.get("destructive_confirmation"),
-                }));
+            arkret_wire::EventKind::RealmAuthorityReset => {
+                let typed =
+                    operation.typed_payload::<arkret_wire::event_spec::RealmAuthorityReset>();
                 let Ok(payload) = typed else {
                     return ProjectionEffect::Rejected {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                     };
                 };
-                if payload.destructive_confirmation != kind
+                if payload.destructive_confirmation != kind.as_str()
                     || payload.patch.authority_generation
                         != root.authority_generation.saturating_add(1)
                 {
@@ -217,14 +201,9 @@ impl ProjectionState {
                 }
                 root.authority_generation = payload.patch.authority_generation;
             }
-            arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE => {
-                let typed = serde_json::from_value::<
-                    arkret_models_collaboration::events_payloads::RealmAuthorityBasisUpdatePayload,
-                >(serde_json::json!({
-                    "realm_id": operation.payload.get("realm_id"),
-                    "expected_state_digest": operation.payload.get("expected_state_digest"),
-                    "patch": operation.payload.get("patch"),
-                }));
+            arkret_wire::EventKind::RealmAuthorityBasisUpdate => {
+                let typed =
+                    operation.typed_payload::<arkret_wire::event_spec::RealmAuthorityBasisUpdate>();
                 let Ok(payload) = typed else {
                     return ProjectionEffect::Rejected {
                         reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
@@ -263,7 +242,11 @@ impl ProjectionState {
         );
         ProjectionEffect::RealmLifecycle {
             realm_id,
-            action: kind.strip_prefix("ak.realm.").unwrap_or(kind).to_owned(),
+            action: kind
+                .as_str()
+                .strip_prefix("ak.realm.")
+                .unwrap_or(kind.as_str())
+                .to_owned(),
         }
     }
 
@@ -385,7 +368,14 @@ impl ProjectionState {
             }
         }
 
-        self.project_accepted_membership(operation, now, new_state.to_owned(), member, realm_id)
+        self.project_accepted_membership(
+            operation,
+            &operation.payload,
+            now,
+            new_state.to_owned(),
+            member,
+            realm_id,
+        )
     }
 
     /// Project the final creator-membership slot of an already-validated
@@ -402,7 +392,7 @@ impl ProjectionState {
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
-        if operation.object_kind != arkret_wire::EventKind::MEMBER_STATE {
+        if operation.event_kind != arkret_wire::EventKind::MemberState {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
             };
@@ -417,7 +407,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if operation.payload.get("sender").and_then(Value::as_str) != Some(member)
+        if operation.context.sender.as_str() != member
             || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
             || self.member(operation.realm_id.as_str(), member).is_some()
         {
@@ -520,6 +510,7 @@ impl ProjectionState {
         };
         self.project_accepted_membership(
             operation,
+            &operation.payload,
             now,
             new_state,
             member,
@@ -530,6 +521,7 @@ impl ProjectionState {
     fn project_accepted_membership(
         &mut self,
         operation: &Operation,
+        payload: &Value,
         now: chrono::DateTime<chrono::Utc>,
         new_state: String,
         member: String,
@@ -538,8 +530,7 @@ impl ProjectionState {
         // Side-band data: `role` lives outside the FSM cell and is captured
         // here for the structured cache. `joined_at` is set on the first
         // `join` transition; subsequent transitions preserve the original.
-        let role = operation
-            .payload
+        let role = payload
             .get("role")
             .and_then(|v| v.as_str())
             .unwrap_or("member")
@@ -560,15 +551,9 @@ impl ProjectionState {
             (_, Some(previous)) => previous.joined_at,
             _ => now,
         };
-        let event_ref = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned);
+        let event_ref = Some(operation.context.event_id.to_string());
         let delivery_status = if new_state == "join" {
-            operation
-                .payload
+            payload
                 .get("delivery_status")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
@@ -577,8 +562,7 @@ impl ProjectionState {
         };
         let recipient_service_id =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                operation
-                    .payload
+                payload
                     .get("delivery_binding")
                     .and_then(Value::as_object)
                     .and_then(|binding| binding.get("recipient_service_id"))
@@ -590,8 +574,7 @@ impl ProjectionState {
             };
         let delivery_binding_frontier =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                operation
-                    .payload
+                payload
                     .get("delivery_binding")
                     .and_then(Value::as_object)
                     .and_then(|binding| binding.get("delivery_binding_frontier"))
@@ -625,8 +608,7 @@ impl ProjectionState {
                 invited_at,
                 joined_at,
                 updated_at: now,
-                reason: operation
-                    .payload
+                reason: payload
                     .get("reason")
                     .and_then(Value::as_str)
                     .filter(|value| !value.trim().is_empty())
@@ -634,11 +616,7 @@ impl ProjectionState {
             },
         );
         if matches!(new_state.as_str(), "leave" | "ban") {
-            let updated_by = operation
-                .payload
-                .get("sender")
-                .and_then(Value::as_str)
-                .unwrap_or(member.as_str());
+            let updated_by = operation.context.sender.as_str();
             self.enqueue_realm_mls_member_removal(
                 &realm_id,
                 &member,
@@ -966,7 +944,7 @@ impl ProjectionState {
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
         match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::REALM_PROFILE) => {
+            Some(arkret_wire::EventKind::RealmProfile) => {
                 let realm_id = operation.realm_id.to_string();
                 if matches!(
                     self.realm_profile_cells.get(&realm_id),
@@ -999,20 +977,20 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
-        kind: &'static str,
+        kind: arkret_wire::EventKind,
     ) -> ProjectionEffect {
         // Defensive: only canonical Realm-lifecycle kinds may
         // reach this function. The dispatch table enforces this; the
         // assertion keeps internal callers honest.
         debug_assert!(
             matches!(
-                kind,
-                arkret_wire::EventKind::REALM_CREATE
-                    | arkret_wire::EventKind::REALM_PROFILE
-                    | arkret_wire::EventKind::REALM_ARCHIVE
-                    | arkret_wire::EventKind::REALM_FREEZE
-                    | arkret_wire::EventKind::REALM_TOMBSTONE
-                    | arkret_wire::EventKind::REALM_DESTROY
+                &kind,
+                arkret_wire::EventKind::RealmCreate
+                    | arkret_wire::EventKind::RealmProfile
+                    | arkret_wire::EventKind::RealmArchive
+                    | arkret_wire::EventKind::RealmFreeze
+                    | arkret_wire::EventKind::RealmTombstone
+                    | arkret_wire::EventKind::RealmDestroy
             ),
             "apply_realm_lifecycle dispatched with non-realm kind: {kind}",
         );
@@ -1033,7 +1011,7 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
-        let create_reducer_profile = if kind == arkret_wire::EventKind::REALM_CREATE {
+        let create_reducer_profile = if kind == arkret_wire::EventKind::RealmCreate {
             let Some(profile) = payload_object
                 .and_then(|object| object.get("reducer_profile"))
                 .and_then(Value::as_str)
@@ -1053,7 +1031,7 @@ impl ProjectionState {
         } else {
             None
         };
-        let creator = if kind == arkret_wire::EventKind::REALM_CREATE {
+        let creator = if kind == arkret_wire::EventKind::RealmCreate {
             registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
                 value
                     .get("controller_id")
@@ -1125,8 +1103,8 @@ impl ProjectionState {
         if let Some(existing) = self.realm_states.get(&realm_id)
             && existing.terminal_state.is_some()
             && matches!(
-                kind,
-                arkret_wire::EventKind::REALM_TOMBSTONE | arkret_wire::EventKind::REALM_DESTROY
+                &kind,
+                arkret_wire::EventKind::RealmTombstone | arkret_wire::EventKind::RealmDestroy
             )
         {
             return ProjectionEffect::Rejected {
@@ -1144,7 +1122,7 @@ impl ProjectionState {
             .get("successor_realm_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        if kind == arkret_wire::EventKind::REALM_TOMBSTONE {
+        if kind == arkret_wire::EventKind::RealmTombstone {
             match payload_successor_realm_id.as_deref() {
                 None => {
                     return ProjectionEffect::Rejected {
@@ -1166,14 +1144,13 @@ impl ProjectionState {
             }
         }
         // ak.realm.destroy MUST NOT carry successor_realm_id (spec §2.5).
-        if kind == arkret_wire::EventKind::REALM_DESTROY && payload_successor_realm_id.is_some() {
+        if kind == arkret_wire::EventKind::RealmDestroy && payload_successor_realm_id.is_some() {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
 
-        if kind == arkret_wire::EventKind::REALM_CREATE
-            && self.realm_create_log(&realm_id).is_some()
+        if kind == arkret_wire::EventKind::RealmCreate && self.realm_create_log(&realm_id).is_some()
         {
             return ProjectionEffect::Rejected {
                 reason: "realm_already_exists".to_owned(),
@@ -1185,7 +1162,7 @@ impl ProjectionState {
         // cache mutation so a create that cannot establish an authority root
         // rejects the whole atomic bootstrap unit instead of materializing a
         // Realm nobody can govern.
-        let authority_root = if kind == arkret_wire::EventKind::REALM_CREATE {
+        let authority_root = if kind == arkret_wire::EventKind::RealmCreate {
             let projected = registered_authority_root_write(self.projected_cell_writes());
             let derived = match creator.as_deref() {
                 Some(creator) => match genesis_authority_root_value(payload_object, creator) {
@@ -1261,24 +1238,24 @@ impl ProjectionState {
         // Stream-F (Wave 1B): both terminal-state events flip the
         // summary `deleted` flag. The richer `terminal_state` /
         // `successor_realm_id` fields are the source of truth.
-        if kind == arkret_wire::EventKind::REALM_DESTROY
-            || kind == arkret_wire::EventKind::REALM_TOMBSTONE
+        if kind == arkret_wire::EventKind::RealmDestroy
+            || kind == arkret_wire::EventKind::RealmTombstone
         {
             realm.deleted = true;
         }
-        if kind == arkret_wire::EventKind::REALM_TOMBSTONE {
+        if kind == arkret_wire::EventKind::RealmTombstone {
             realm.terminal_state = Some("tombstoned".to_owned());
             realm.successor_realm_id = payload_successor_realm_id.clone();
-        } else if kind == arkret_wire::EventKind::REALM_DESTROY {
+        } else if kind == arkret_wire::EventKind::RealmDestroy {
             realm.terminal_state = Some("destroyed".to_owned());
             realm.successor_realm_id = None;
-        } else if kind == arkret_wire::EventKind::REALM_ARCHIVE {
+        } else if kind == arkret_wire::EventKind::RealmArchive {
             realm.archived = operation
                 .payload
                 .get("archived")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-        } else if kind == arkret_wire::EventKind::REALM_FREEZE {
+        } else if kind == arkret_wire::EventKind::RealmFreeze {
             realm.frozen = operation
                 .payload
                 .get("frozen")
@@ -1302,7 +1279,7 @@ impl ProjectionState {
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
         match kind {
-            k if k == arkret_wire::EventKind::REALM_CREATE => {
+            k if k == arkret_wire::EventKind::RealmCreate => {
                 self.realm_create_cells.insert(
                     realm_id.clone(),
                     CellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
@@ -1339,13 +1316,13 @@ impl ProjectionState {
                     );
                 }
             }
-            k if k == arkret_wire::EventKind::REALM_PROFILE => {
+            k if k == arkret_wire::EventKind::RealmProfile => {
                 self.realm_profile_cells.insert(
                     realm_id.clone(),
                     CellState::Value(operation.payload.clone()),
                 );
             }
-            k if k == arkret_wire::EventKind::REALM_ARCHIVE => {
+            k if k == arkret_wire::EventKind::RealmArchive => {
                 let mut value = serde_json::Map::new();
                 value.insert(
                     "archived".to_owned(),
@@ -1371,7 +1348,7 @@ impl ProjectionState {
                     CellState::Value(Value::Object(value)),
                 );
             }
-            k if k == arkret_wire::EventKind::REALM_FREEZE => {
+            k if k == arkret_wire::EventKind::RealmFreeze => {
                 let mut value = serde_json::Map::new();
                 value.insert(
                     "frozen".to_owned(),
@@ -1401,7 +1378,7 @@ impl ProjectionState {
                     CellState::Value(Value::Object(value)),
                 );
             }
-            k if k == arkret_wire::EventKind::REALM_TOMBSTONE => {
+            k if k == arkret_wire::EventKind::RealmTombstone => {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
@@ -1424,7 +1401,7 @@ impl ProjectionState {
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
-            k if k == arkret_wire::EventKind::REALM_DESTROY => {
+            k if k == arkret_wire::EventKind::RealmDestroy => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 let value = serde_json::json!({
                     "terminal_kind": "destroyed",
@@ -1451,32 +1428,22 @@ impl ProjectionState {
         // genesis Event. The peer remains the unit's sole explicit membership
         // Event. Ordinary Realm creates intentionally do not take this branch:
         // their creator membership is an explicit final bootstrap slot.
-        if kind == arkret_wire::EventKind::REALM_CREATE
+        if kind == arkret_wire::EventKind::RealmCreate
             && payload_object
                 .and_then(|object| object.get("purpose"))
                 .and_then(Value::as_str)
                 == Some("direct_conversation")
             && let Some(founder) = creator
         {
-            let mut founder_payload = serde_json::json!({
+            let founder_payload = serde_json::json!({
                 "actor_id": founder,
-                "sender": founder,
                 "membership": "join",
                 "role": "member",
                 "reason": "direct_conversation_bootstrap"
             });
-            if let Some(event_id) = operation.realm_id.event_id() {
-                founder_payload["event_id"] = Value::String(event_id.to_string());
-            }
-            let mut founder_projection = Operation::create(
-                operation.operation_id.clone(),
-                operation.realm_id.clone(),
-                arkret_wire::EventKind::MEMBER_STATE,
-                founder_payload,
-            );
-            founder_projection.created_at = operation.created_at;
             let _ = self.project_accepted_membership(
-                &founder_projection,
+                operation,
+                &founder_payload,
                 now,
                 "join".to_owned(),
                 founder.to_string(),

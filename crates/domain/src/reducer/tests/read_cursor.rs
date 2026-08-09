@@ -32,11 +32,7 @@ fn cursor_operation(
         payload[READ_CURSOR_CAUSAL_RELATION_CONTEXT] =
             serde_json::Value::String(relation.to_owned());
     }
-    make_operation(
-        arkret_wire::EventKind::READ_CURSOR_ADVANCE,
-        REALM_ID,
-        payload,
-    )
+    make_operation(arkret_wire::EventKind::ReadCursorAdvance, REALM_ID, payload)
 }
 
 fn stored_event_suffix(state: &ProjectionState) -> String {

@@ -19,7 +19,7 @@ fn message_create_and_query() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let op = make_operation(
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -46,7 +46,7 @@ fn redaction_hides_message() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -59,7 +59,7 @@ fn redaction_hides_message() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -102,7 +102,7 @@ fn redaction_hides_message() {
 fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &str) {
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
@@ -123,7 +123,7 @@ fn mal14_tombstone_visible_to_author() {
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -151,7 +151,7 @@ fn mal14_tombstone_hidden_from_members() {
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -174,7 +174,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     // Redact.
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -187,7 +187,7 @@ fn mal14_unredaction_clears_cell_and_index() {
     // Un-redact via cas-register set null.
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -222,7 +222,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
     // Now a delayed redaction arrives.
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
@@ -253,7 +253,7 @@ fn reaction_or_set_convergence() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REACTION_ADD,
+            arkret_wire::EventKind::ReactionAdd,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -272,7 +272,7 @@ fn reaction_or_set_convergence() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REACTION_REMOVE,
+            arkret_wire::EventKind::ReactionRemove,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -307,7 +307,7 @@ fn membership_join_leave() {
     // suite).
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::MemberState,
             realm_id,
             serde_json::json!({
                 "actor_id": "did:web:bob",
@@ -322,7 +322,7 @@ fn membership_join_leave() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::MemberState,
             realm_id,
             serde_json::json!({
                 "actor_id": "did:web:bob",
@@ -341,7 +341,7 @@ fn message_revise_creates_chain() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -354,7 +354,7 @@ fn message_revise_creates_chain() {
     );
 
     let revise = make_operation(
-        arkret_wire::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MessageRevise,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "target_ref": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
@@ -386,7 +386,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
@@ -401,7 +401,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MessageRevise,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": revision_event_id,
@@ -435,7 +435,7 @@ fn redaction_accepts_schema_message_id_target() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
@@ -449,7 +449,7 @@ fn redaction_accepts_schema_message_id_target() {
     );
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": redaction_event_id,
@@ -486,7 +486,7 @@ fn redaction_by_message_id_hides_latest_revision() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
@@ -500,7 +500,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MessageRevise,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": revision_event_id,
@@ -512,7 +512,7 @@ fn redaction_by_message_id_hides_latest_revision() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AaviAQUPcXQA_m9RNFUvox0-znrutEvE8BkTgEoWNTJx",

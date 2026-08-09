@@ -297,12 +297,12 @@ async fn admit_caller_signed_account_data_set(
     expect_tombstone: bool,
 ) -> Result<u64, AppError> {
     let event = &set_event.event;
-    if event.kind.as_str() != arkret_wire::EventKind::ACCOUNT_DATA_SET {
+    if event.kind != arkret_wire::EventKind::AccountDataSet {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             format!(
                 "set_event.event.kind must be {}",
-                arkret_wire::EventKind::ACCOUNT_DATA_SET
+                arkret_wire::EventKind::AccountDataSet
             ),
         ));
     }

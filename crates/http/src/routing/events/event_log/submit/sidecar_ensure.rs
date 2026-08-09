@@ -4,7 +4,7 @@ use super::*;
 
 struct PreparedSidecarEvent {
     command: soland_services::events::CommitAcceptedEventCommand,
-    operation: arkret_event_draft::Operation,
+    operation: arkret_event_draft::ProjectedEventOperation,
     projected_event: soland_services::events::ProjectedEvent,
     cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
 }
@@ -188,7 +188,7 @@ pub(crate) async fn submit_sidecar_ensure_batch(
     let mut prepared = Vec::with_capacity(usize::from(create_event.is_some()) + 1);
     let mut parsed_create: Option<(String, u64)> = None;
     if let Some(create_event) = create_event {
-        if create_event.kind != arkret_wire::EventKind::SIDECAR_CREATE
+        if create_event.kind != arkret_wire::EventKind::SidecarCreate
             || create_event.realm_id != context_attach_event.realm_id
             || create_event.actor_id != context_attach_event.actor_id
         {
@@ -212,7 +212,7 @@ pub(crate) async fn submit_sidecar_ensure_batch(
         ));
         prepared.push(event);
     }
-    if context_attach_event.kind != arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH {
+    if context_attach_event.kind != arkret_wire::EventKind::SidecarContextAttach {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",

@@ -74,19 +74,22 @@ pub(crate) async fn persist_canonical_moderation_report_event(
     let service_did = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let created_at = now();
-    let mut event = arkret_wire::Event::new_with_derived_id_at(
-        arkret_wire::EventKind::SELF_MODERATION_REPORT,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        service_did.clone(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?,
-        payload,
-        created_at,
-    )
-    .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
+    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
+        .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?;
+    let typed_payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
+        serde_json::from_value(payload).map_err(|error| {
+            AppError::internal(format!("moderation Event payload invalid: {error}"))
+        })?;
+    let mut event =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            service_did.clone(),
+            typed_payload,
+        )
+        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
     if let Some(max_actor_seq) = max_actor_seq {
         event.prev_refs = records
             .iter()
@@ -482,7 +485,9 @@ async fn validate_moderation_franking_proof(
     let object = franking_proof
         .as_object()
         .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
-    if object.get("kind").and_then(Value::as_str) != Some(EventKind::MODERATION_FRANKING_PROOF) {
+    if object.get("kind").and_then(Value::as_str)
+        != Some(EventKind::ModerationFrankingProof.as_str())
+    {
         return Err(AppError::invalid_param(
             "franking_proof.kind must be ak.moderation.franking_proof",
         ));

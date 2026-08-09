@@ -12,7 +12,7 @@ impl ProjectionState {
         admission_time: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::INVITE_THIRD_PARTY)
+            != Some(arkret_wire::EventKind::InviteThirdParty)
         {
             return ProjectionEffect::Ignored;
         }
@@ -22,18 +22,15 @@ impl ProjectionState {
         if payload.get("invite").is_some() || payload.get("invite_id").is_some() {
             return rejected("invite_id_must_be_event_derived");
         }
-        let Some(invite_id) = payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-            .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id).to_string())
+        let Some(invite_id) =
+            arkret_identifiers::EventId::new(operation.context.event_id.to_string())
+                .ok()
+                .map(|event_id| arkret_identifiers::InviteId::from_event_id(&event_id).to_string())
         else {
             return rejected("invite_create_event_id_required");
         };
         let realm_id = operation.realm_id.to_string();
-        let Some(inviter) = operation.actor().map(|actor| actor.to_string()) else {
-            return rejected("inviter_required");
-        };
+        let inviter = operation.context.sender.to_string();
         if arkret_identifiers::Did::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
@@ -111,7 +108,7 @@ impl ProjectionState {
         admission_time: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::INVITE_CLAIM)
+            != Some(arkret_wire::EventKind::InviteClaim)
         {
             return ProjectionEffect::Ignored;
         }

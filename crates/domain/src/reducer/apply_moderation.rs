@@ -39,11 +39,9 @@
 //! close timer, cool-off window, or timer-service check (content-moderation.md
 //! §5.5.2; spec §5.5 deleted the cool-off path).
 
-use super::*;
+use arkret_models_collaboration::governance::moderation_appeal::AppealVerdict;
 
-/// Canonical closed verdict enum for `ak.moderation.appeal.decision`
-/// (content-moderation.md §5.5.1.1 / moderation-appeal.schema.json).
-const APPEAL_VERDICTS: [&str; 3] = ["uphold", "overturn", "modify"];
+use super::*;
 
 fn payload_str(operation: &Operation, field: &str) -> Option<String> {
     operation
@@ -52,6 +50,13 @@ fn payload_str(operation: &Operation, field: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn appeal_verdict(operation: &Operation) -> Result<AppealVerdict, &'static str> {
+    operation
+        .typed_payload::<arkret_wire::event_spec::ModerationAppealDecide>()
+        .map(|payload| payload.verdict)
+        .map_err(|_| "schema_violation")
 }
 
 fn payload_ref(operation: &Operation, field: &str) -> Option<String> {
@@ -110,7 +115,7 @@ const MODERATION_DECISION_WRITE_INDEX: usize = 0;
 /// `content-moderation.md` §5.5.1 makes lift remove producer-enumerated
 /// `observed_dots[]`, and those dots are this value.
 fn moderation_add_tag(operation: &Operation) -> Option<String> {
-    let event_id = operation.payload.get("event_id").and_then(Value::as_str)?;
+    let event_id = operation.context.event_id.as_str();
     Some(arkret_schema::or_set_dot(
         event_id,
         MODERATION_DECISION_WRITE_INDEX,
@@ -507,14 +512,12 @@ impl ProjectionState {
                     reason: "moderation_appeal_submit_id_must_be_event_derived".to_owned(),
                 };
             }
-            let Some(appeal_id) = operation
-                .payload
-                .get("event_id")
-                .and_then(Value::as_str)
-                .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-                .map(|event_id| {
-                    arkret_identifiers::TypedAppealId::from_event_id(&event_id).to_string()
-                })
+            let Some(appeal_id) =
+                arkret_identifiers::EventId::new(operation.context.event_id.to_string())
+                    .ok()
+                    .map(|event_id| {
+                        arkret_identifiers::TypedAppealId::from_event_id(&event_id).to_string()
+                    })
             else {
                 return ProjectionEffect::Rejected {
                     reason: "moderation_appeal_submit_event_id_required".to_owned(),
@@ -605,9 +608,12 @@ impl ProjectionState {
                 }
             }
             if target_state == "decided"
-                && let Some(verdict) = payload_str(operation, "verdict")
+                && let Ok(verdict) = appeal_verdict(operation)
             {
-                map.insert("verdict".to_owned(), Value::String(verdict));
+                map.insert(
+                    "verdict".to_owned(),
+                    serde_json::to_value(verdict).expect("AppealVerdict serialization cannot fail"),
+                );
             }
         }
         self.cells.insert(cell_ref, CellState::Value(value));
@@ -641,15 +647,11 @@ impl ProjectionState {
             // modify↔new decision).
             "decided" => {
                 self.enforce_appeal_separation_of_duties(appeal_id, operation)?;
-                let verdict =
-                    payload_str(operation, "verdict").ok_or("moderation_appeal_verdict_missing")?;
-                if !APPEAL_VERDICTS.contains(&verdict.as_str()) {
-                    return Err("schema_violation");
-                }
+                let verdict = appeal_verdict(operation)?;
                 // Resolve the appealed decision_ref from the submit-time cell.
                 let decision_ref = self.moderation_appeal_decision_ref(appeal_id);
-                match verdict.as_str() {
-                    "overturn" => {
+                match verdict {
+                    AppealVerdict::Overturn => {
                         let Some(decision_ref) = decision_ref else {
                             return Err("appeal_overturn_missing_lift");
                         };
@@ -661,7 +663,7 @@ impl ProjectionState {
                         }
                         Ok(())
                     }
-                    "modify" => {
+                    AppealVerdict::Modify => {
                         let modify_ref = payload_str(operation, "modify_decision_ref")
                             .ok_or("appeal_modify_missing_decision")?;
                         // The new decision MUST already be present (ordered
@@ -672,7 +674,7 @@ impl ProjectionState {
                         Ok(())
                     }
                     // uphold: original decision stands, no pairing required.
-                    _ => Ok(()),
+                    AppealVerdict::Uphold => Ok(()),
                 }
             }
             // close: reviewer close OR appellant withdrawal. Withdrawal is
@@ -770,12 +772,12 @@ impl ProjectionState {
 
 /// Map an appeal event kind to its target FSM state. Used by the dispatch
 /// adapter and the ingest preflight.
-pub(crate) fn appeal_target_state(kind: &str) -> Option<&'static str> {
+pub(crate) fn appeal_target_state(kind: &arkret_wire::EventKind) -> Option<&'static str> {
     match kind {
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT => Some("submitted"),
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW => Some("under_review"),
-        arkret_wire::EventKind::MODERATION_APPEAL_DECISION => Some("decided"),
-        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE => Some("closed"),
+        arkret_wire::EventKind::ModerationAppealSubmit => Some("submitted"),
+        arkret_wire::EventKind::ModerationAppealReview => Some("under_review"),
+        arkret_wire::EventKind::ModerationAppealDecision => Some("decided"),
+        arkret_wire::EventKind::ModerationAppealClose => Some("closed"),
         _ => None,
     }
 }

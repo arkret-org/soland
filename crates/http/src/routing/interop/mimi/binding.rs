@@ -15,12 +15,12 @@ pub(super) async fn latest_mimi_room_binding(
 ) -> Result<Option<MimiRoomBindingProjection>, AppError> {
     let entries = state
         .event_queries()
-        .projected_events_for_kind(arkret_wire::EventKind::MIMI_ROOM_BINDING)
+        .projected_events_for_kind(arkret_wire::EventKind::MimiRoomBinding)
         .await
         .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
-        if entry.event_kind != "ak.mimi.room_binding" {
+        if entry.event_kind != arkret_wire::EventKind::MimiRoomBinding {
             continue;
         }
         let payload_room = entry
@@ -318,24 +318,13 @@ pub(super) fn non_empty_json_value(value: &Value) -> bool {
 
 /// Emit a `ak.mimi.room_binding` projection event capturing the
 /// binding state. Returns the generated event_id so the caller can
-/// echo it back to the MIMI client. The binding payload is captured
-/// verbatim under `payload.binding` and `mimi_room_id` is hoisted to
-/// the top level so [`mimi_bound_realm_id`] can dispatch lookups
-/// efficiently.
-///
-/// Returns `None` when the binding payload declares no Arkret
-/// `realm_id` (neither under `binding_scope.realm_id` nor at the top
-/// level). The caller is expected to surface that to the client as a
-/// 400 rather than implicitly bind the room to some default Realm.
+/// A binding becomes visible only after its caller-authored canonical Event is
+/// accepted. This facade has no signing authority for that Event.
 pub(super) async fn emit_mimi_room_binding_event(
-    state: &AppState,
-    room_id: &str,
+    _state: &AppState,
+    _room_id: &str,
     binding: &Value,
 ) -> Result<Option<String>, AppError> {
-    // KNOWN DEFECT: this names an Event that was never authored. It stays a
-    // minted `ak:event:` value only because the consuming field is validated as
-    // one; the fix is to author the Event and use its derived id.
-    let event_id = ids::generate_event_id();
     let realm_id = binding
         .get("binding_scope")
         .and_then(|s| s.get("realm_id"))
@@ -346,48 +335,9 @@ pub(super) async fn emit_mimi_room_binding_event(
         return Ok(None);
     };
     validate_mimi_room_binding_payload(binding)?;
-    enforce_mimi_room_binding_transition(state, room_id, binding).await?;
-    let mimi_room_uri_value = binding
-        .get("mimi_room_uri")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| mimi_room_uri(state, room_id));
-    let record = ProjectionEventRecord {
-        event_id: event_id.clone(),
-        realm_id: realm_id.clone(),
-        event_kind: "ak.mimi.room_binding".to_owned(),
-        operation_kind: "mimi_facade_room_binding".to_owned(),
-        operation_id: None,
-        sender: None,
-        payload: json!({
-            "profile": "ak.profile.mimi_interop.v1",
-            "mimi_room_uri": mimi_room_uri_value,
-            "mimi_room_id": room_id,
-            "binding_scope": {
-                "realm_id": realm_id,
-                "strand_id": binding
-                    .get("binding_scope")
-                    .and_then(|s| s.get("strand_id"))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            },
-            "binding": binding.clone(),
-            "mimi_provenance": {
-                "facade": "soland.mimi.v1",
-                "mimi_provider_id": mimi_provider_id(state),
-                "accepted_at": chrono::Utc::now(),
-            },
-        }),
-        created_at: chrono::Utc::now(),
-        received_at: chrono::Utc::now(),
-    };
-    if let Err(error) =
-        crate::routing::events::projection::persist_and_publish_projection_event(state, record)
-            .await
-    {
-        tracing::error!(%error, "mimi: failed to append room_binding to projection_events");
-    }
-    Ok(Some(event_id))
+    Err(AppError::unsupported_feature(format!(
+        "MIMI Realm {realm_id} binding requires a caller-authored canonical ak.mimi.room_binding Event"
+    )))
 }
 
 pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {

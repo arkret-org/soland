@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_state::lattice::CellState;
@@ -532,7 +532,7 @@ impl ProjectionState {
             }
         };
         let derived_subject = match private_registry.derive_subject(
-            arkret_wire::EventKind::DEVICE_PUSH_ROUTE,
+            arkret_wire::EventKind::DevicePushRoute,
             principal_id,
             &operation.payload,
         ) {
@@ -798,28 +798,18 @@ impl ProjectionState {
     /// treated as satisfied for `head_eq`, but other op kinds are deferred to
     /// their dedicated reducer gates and ignored here).
     pub fn check_move_preconditions(&self, operation: &Operation) -> Result<(), &'static str> {
-        let Some(preconditions) = operation
-            .payload
-            .get("preconditions")
-            .and_then(Value::as_array)
-        else {
-            return Ok(());
-        };
-        for precondition in preconditions {
-            let Some(predicate) = precondition.get("predicate") else {
-                continue;
-            };
-            let op = predicate.get("op").and_then(Value::as_str);
-            if op != Some("head_eq") {
+        for precondition in &operation.context.preconditions {
+            if precondition.predicate.op != arkret_wire::cba::PredicateOp::HeadEq {
                 continue;
             }
-            let Some(cell_ref) = precondition.get("cell").and_then(Value::as_str) else {
+            let Some(expected) = precondition.predicate.value.as_ref() else {
                 return Err("failed_precondition");
             };
-            let Some(expected) = predicate.get("value") else {
-                return Err("failed_precondition");
-            };
-            if !self.head_eq_holds(operation.realm_id.as_str(), cell_ref, expected) {
+            if !self.head_eq_holds(
+                operation.realm_id.as_str(),
+                precondition.cell.as_str(),
+                expected,
+            ) {
                 return Err("failed_precondition");
             }
         }
@@ -1085,11 +1075,16 @@ impl ProjectionState {
     /// handles the read-receipt cache fast path explicitly.
     fn apply_once(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
         let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
-            return ProjectionEffect::Ignored;
+            return ProjectionEffect::Rejected {
+                reason: "unknown_event_kind".to_owned(),
+            };
         };
-        match APPLY_REGISTRY.get(kind) {
+        match APPLY_REGISTRY.get(&kind) {
             Some(dispatch) => dispatch(self, operation, hlc),
-            None => ProjectionEffect::Ignored,
+            None if !kind.is_reducer_input() => ProjectionEffect::Ignored,
+            None => ProjectionEffect::Rejected {
+                reason: "unregistered_reducer_event_kind".to_owned(),
+            },
         }
     }
 
@@ -1140,7 +1135,7 @@ impl ProjectionState {
             Some(k) => k,
             None => {
                 tracing::error!(
-                    object_kind = %operation.object_kind,
+                    event_kind = %operation.event_kind,
                     operation_id = %operation.operation_id,
                     "lattice registry dispatch: unknown canonical kind for operation; \
                      dropping with bottom (reject)"
@@ -1150,7 +1145,7 @@ impl ProjectionState {
                 };
             }
         };
-        if registry.lookup_for_event_kind(kind).is_some() {
+        if registry.lookup_for_event_kind(kind.as_str()).is_some() {
             // Canonical hit — log at trace + delegate to inline helpers.
             // The inline helpers and the LatticeRegistry-resolved cell
             // family agree by construction (this whole module has one
@@ -1189,22 +1184,22 @@ impl ProjectionState {
         // `ak.strand.update` requires Active source.
         // `ak.strand.archive` requires Active source.
         // `ak.strand.restore` requires Archived source.
-        let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_wire::EventKind::STRAND_CREATE => return Ok(()),
-            arkret_wire::EventKind::STRAND_UPDATE => {
+        let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match &kind {
+            arkret_wire::EventKind::StrandCreate => return Ok(()),
+            arkret_wire::EventKind::StrandUpdate => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_wire::EventKind::STRAND_ARCHIVE => {
+            arkret_wire::EventKind::StrandArchive => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_wire::EventKind::STRAND_RESTORE => {
+            arkret_wire::EventKind::StrandRestore => {
                 (&[ObjectLifecycleState::Archived], "strand_not_archived")
             }
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            arkret_wire::EventKind::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
-            arkret_wire::EventKind::STRAND_ARCHIVE | arkret_wire::EventKind::STRAND_RESTORE => {
+            arkret_wire::EventKind::StrandUpdate => strand_id_from_payload(&operation.payload),
+            arkret_wire::EventKind::StrandArchive | arkret_wire::EventKind::StrandRestore => {
                 operation
                     .payload
                     .get("target_ref")
@@ -1236,7 +1231,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::EventKind::StrandUpdate)
         {
             return Ok(());
         }
@@ -1258,7 +1253,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::EventKind::StrandUpdate)
         {
             return None;
         }
@@ -1297,7 +1292,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::REDACTION)
+            != Some(arkret_wire::EventKind::Redaction)
         {
             return Ok(());
         }
@@ -1330,14 +1325,14 @@ impl ProjectionState {
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_wire::EventKind::MORPH_CREATE => return Ok(()),
-            arkret_wire::EventKind::MORPH_UPDATE => {
+            arkret_wire::EventKind::MorphCreate => return Ok(()),
+            arkret_wire::EventKind::MorphUpdate => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_wire::EventKind::MORPH_ARCHIVE => {
+            arkret_wire::EventKind::MorphArchive => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_wire::EventKind::MORPH_RESTORE => {
+            arkret_wire::EventKind::MorphRestore => {
                 (&[ObjectLifecycleState::Archived], "morph_not_archived")
             }
             _ => return Ok(()),
@@ -1373,7 +1368,7 @@ impl ProjectionState {
     ///   `morph_schema_refs_precondition_mismatch`.
     pub fn check_morph_schema_migrate(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE)
+            != Some(arkret_wire::EventKind::MorphSchemaMigrate)
         {
             return Ok(());
         }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::DidResolver;
 use salvo::http::StatusCode;
@@ -118,9 +118,10 @@ pub(crate) async fn enforce_operation_policy_server(
     operation: &Operation,
 ) -> Result<(), PolicyGateRejection> {
     let realm_id = operation.realm_id.as_str();
-    let operation_kind = kinds::canonical_kind_for_operation(operation)
-        .unwrap_or(operation.object_kind.as_str())
-        .to_owned();
+    let operation_kind = kinds::canonical_kind_for_operation(operation).map_or_else(
+        || operation.event_kind.as_str().to_owned(),
+        |kind| kind.as_str().to_owned(),
+    );
     // `authz/policy-server.md` §7 — the Policy Server grants nothing; it only
     // narrows what capability authorization already allows. The Move that
     // *declares or removes* the binding is therefore authorized by
@@ -130,7 +131,7 @@ pub(crate) async fn enforce_operation_policy_server(
     // clear the bad declaration is itself denied by the declaration. The spec
     // requires a break-glass path for exactly this, and keeping the binding's
     // own control surface on pure capability authorization is that path.
-    if operation_kind == arkret_wire::EventKind::REALM_POLICY_SERVER {
+    if operation_kind == arkret_wire::EventKind::RealmPolicyServer.as_str() {
         return Ok(());
     }
     let realm_config = state
@@ -279,7 +280,7 @@ async fn policy_request_for_operation(
         auth_context: json!({
             "surface": {"surface": "local_submit"},
             "operation_id": operation.operation_id.as_str(),
-            "object_kind": operation.object_kind.as_str(),
+            "object_kind": operation.event_kind.as_str(),
         }),
         expected_frontiers: zero_frontiers(),
         bypass_cache: false,

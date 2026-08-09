@@ -6,19 +6,9 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
+        let event_id = operation.context.event_id.to_string();
         let message_id = message_id_from_payload_or_event_id(&operation.payload, &event_id);
-        let sender = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let sender = operation.context.sender.to_string();
         let thread_id = operation
             .payload
             .get("thread_id")
@@ -185,13 +175,7 @@ impl ProjectionState {
         let original_id = self
             .message_by_target_ref(target_ref)
             .map(|message| message.event_id.clone());
-        let new_event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.operation_id.to_string());
+        let new_event_id = operation.context.event_id.to_string();
 
         if let Some(original_id) = original_id {
             let Some(original) = self.messages.get(&original_id) else {
@@ -274,17 +258,10 @@ impl ProjectionState {
             .payload
             .get("by")
             .or_else(|| operation.payload.get("redacted_by"))
-            .or_else(|| operation.payload.get("sender"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+            .map_or_else(|| operation.context.sender.to_string(), ToOwned::to_owned);
         let reason = redaction_human_reason(&operation.payload);
-        let redaction_event_id = operation
-            .payload
-            .get("event_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
+        let redaction_event_id = operation.context.event_id.to_string();
         let cell = RedactionCellValue {
             redacted_at: operation.created_at,
             by,
@@ -308,9 +285,11 @@ impl ProjectionState {
             .payload
             .get("by")
             .or_else(|| operation.payload.get("redacted_by"))
-            .or_else(|| operation.payload.get("sender"))
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+            .map_or_else(
+                || Some(operation.context.sender.to_string()),
+                |value| Some(value.to_owned()),
+            );
         if let Some(object_ref) = redaction_object_ref(operation) {
             if let Some(strand) = self.strands.get_mut(&object_ref) {
                 strand.state = ObjectLifecycleState::Redacted;
@@ -353,10 +332,8 @@ impl ProjectionState {
         let actor = operation
             .payload
             .get("actor")
-            .or_else(|| operation.payload.get("sender"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+            .map_or_else(|| operation.context.sender.to_string(), ToOwned::to_owned);
         let key = operation
             .payload
             .get("key")
@@ -395,10 +372,8 @@ impl ProjectionState {
         let actor = operation
             .payload
             .get("actor")
-            .or_else(|| operation.payload.get("sender"))
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+            .map_or_else(|| operation.context.sender.to_string(), ToOwned::to_owned);
         let key = operation
             .payload
             .get("key")
@@ -601,7 +576,7 @@ impl ProjectionState {
         }
         let map_key = (pin_scope_key.clone(), target_ref.to_owned());
         let operation_kind = crate::kinds::canonical_kind_for_operation(operation);
-        if operation_kind == Some(arkret_wire::EventKind::PIN_REMOVE) {
+        if operation_kind == Some(arkret_wire::EventKind::PinRemove) {
             if let Some(pin) = self.pins.get_mut(&map_key) {
                 pin.active = false;
                 pin.updated_at = now;
@@ -618,7 +593,7 @@ impl ProjectionState {
             };
         };
         let previous = self.pins.get(&map_key);
-        let note = if operation_kind == Some(arkret_wire::EventKind::PIN_REORDER) {
+        let note = if operation_kind == Some(arkret_wire::EventKind::PinReorder) {
             previous.and_then(|pin| pin.note.clone())
         } else {
             operation.payload.get("note").cloned()
@@ -644,7 +619,7 @@ impl ProjectionState {
 
     pub fn check_pin_scope_safety(&self, operation: &Operation) -> Result<(), &'static str> {
         if !crate::kinds::canonical_kind_for_operation(operation)
-            .is_some_and(arkret_wire::events::kinds::is_pin_kind)
+            .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(kind.as_str()))
         {
             return Ok(());
         }
@@ -1006,7 +981,7 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     else {
         return false;
     };
-    envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind
+    envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind.as_str()
 }
 
 /// Envelope `causal_refs` surfaced onto the RSVP projection payload.
@@ -1015,27 +990,15 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
 /// basis subset admission and which existing heads a new response dominates.
 fn rsvp_causal_refs(operation: &Operation) -> Vec<String> {
     operation
-        .payload
-        .get("envelope_causal_refs")
-        .or_else(|| operation.payload.get("causal_refs"))
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+        .context
+        .envelope_causal_refs
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn rsvp_source_event_id(operation: &Operation) -> String {
-    operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| operation.operation_id.as_str().to_owned())
+    operation.context.event_id.to_string()
 }
 
 /// Identity a later RSVP names in `causal_refs` to dominate this head.
@@ -1044,17 +1007,7 @@ fn rsvp_source_event_id(operation: &Operation) -> String {
 /// exposed forever; the fallback keeps that visible instead of silently
 /// merging unrelated responses.
 fn rsvp_source_event_digest(operation: &Operation) -> String {
-    operation
-        .canonical_event_digest
-        .clone()
-        .or_else(|| {
-            operation
-                .payload
-                .get("canonical_event_digest")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| format!("operation-id:{}", operation.operation_id))
+    operation.context.canonical_event_digest.to_string()
 }
 
 struct PinEffectiveScope {

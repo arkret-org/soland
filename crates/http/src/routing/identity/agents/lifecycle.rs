@@ -1,3 +1,4 @@
+use arkret_event_draft::EventPayloadExt as _;
 use salvo::oapi::endpoint;
 
 use super::*;
@@ -1299,7 +1300,7 @@ pub(super) async fn attach_agent_grant(
     let grant_payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
         body.grant_event
             .event
-            .payload_as()
+            .typed_payload::<arkret_wire::event_spec::CapabilityGrant>()
             .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let grant = &grant_payload.grant;
     if !agent_grant_within_requested_scope(

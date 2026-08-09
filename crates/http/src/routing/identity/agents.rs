@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{BlobRef, Did, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
@@ -457,7 +457,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        let authorize_event = arkret_wire::Event::new(
+        let authorize_event = arkret_wire::test_support::raw_event(
             "ak.agent.key.authorize",
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(

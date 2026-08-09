@@ -43,21 +43,14 @@ fn relation_value_string<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a st
     })
 }
 
-fn operation_source_event_id(operation: &arkret_event_draft::Operation) -> String {
-    operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| operation.operation_id.as_str())
-        .to_owned()
+fn operation_source_event_id(operation: &arkret_event_draft::ProjectedEventOperation) -> String {
+    operation.context.event_id.to_string()
 }
 
-fn operation_source_actor_id(operation: &arkret_event_draft::Operation) -> Option<String> {
-    value_string(
-        &operation.payload,
-        &["sender", "actor_id", "created_by", "updated_by"],
-    )
-    .map(ToOwned::to_owned)
+fn operation_source_actor_id(
+    operation: &arkret_event_draft::ProjectedEventOperation,
+) -> Option<String> {
+    Some(operation.context.sender.to_string())
 }
 
 fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Option<String> {
@@ -295,14 +288,10 @@ async fn put_message_notification(
 /// Fan out message notifications for an accepted `ak.message.create`.
 pub(crate) async fn dispatch_message_notifications(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     let payload = &operation.payload;
-    let sender = payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+    let sender = operation.context.sender.to_string();
     let realm_id = operation.realm_id.as_str().to_owned();
     let realm_uuid = uuid_tail(&realm_id).to_owned();
     let source_event_id = operation_source_event_id(operation);
@@ -439,7 +428,7 @@ pub(crate) async fn dispatch_message_notifications(
 /// Fan out assignment notifications for an accepted `ak.relation.create`.
 pub(crate) async fn dispatch_assignment_notifications(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     let payload = &operation.payload;
     if relation_value_string(payload, &["relation_kind", "kind"]) != Some("assigned_to") {
@@ -581,7 +570,7 @@ fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<S
 /// profile exists.
 pub(crate) async fn dispatch_schedule_notifications(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) {
     let due_schedule = patch_touches_due_schedule(&operation.payload);
     let calendar_schedule = patch_touches_calendar(&operation.payload);
@@ -801,7 +790,11 @@ mod tests {
             .expect("agent participation circle ceiling");
     }
 
-    fn plain_message(realm_id: &str, seed: &str, sender: &str) -> arkret_event_draft::Operation {
+    fn plain_message(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+    ) -> arkret_event_draft::ProjectedEventOperation {
         plain_message_with_strand(realm_id, seed, sender, None)
     }
 
@@ -817,7 +810,7 @@ mod tests {
         seed: &str,
         sender: &str,
         strand_id: Option<&str>,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
         let mut payload = json!({
             "sender": sender,
@@ -832,13 +825,13 @@ mod tests {
                 .expect("message payload object")
                 .insert("strand_id".to_owned(), json!(strand_id));
         }
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             payload,
         )
     }
@@ -910,16 +903,16 @@ mod tests {
         sender: &str,
         strand_id: &str,
         assignee: &str,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
         let relation_id = arkret_identifiers::RelationId::from_event_id(&event_id);
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RelationCreate.as_str(),
             json!({
                 "sender": sender,
                 "event_id": event_id,
@@ -936,15 +929,15 @@ mod tests {
         seed: &str,
         sender: &str,
         strand_id: &str,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::StrandUpdate.as_str(),
             json!({
                 "sender": sender,
                 "event_id": event_id,
@@ -964,15 +957,15 @@ mod tests {
         seed: &str,
         sender: &str,
         strand_id: &str,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::RSVP_SET,
+            arkret_wire::EventKind::RsvpSet.as_str(),
             json!({
                 "sender": sender,
                 "event_id": event_id,
@@ -993,7 +986,7 @@ mod tests {
         seed: &str,
         sender: &str,
         agent: &str,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         mention_message_with_strand(realm_id, seed, sender, agent, None)
     }
 
@@ -1003,7 +996,7 @@ mod tests {
         sender: &str,
         agent: &str,
         strand_id: Option<&str>,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
         let mut payload = json!({
             "sender": sender,
@@ -1022,13 +1015,13 @@ mod tests {
                 .expect("message payload object")
                 .insert("strand_id".to_owned(), json!(strand_id));
         }
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             payload,
         )
     }
@@ -1037,15 +1030,15 @@ mod tests {
         realm_id: &str,
         seed: &str,
         sender: &str,
-    ) -> arkret_event_draft::Operation {
+    ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             json!({
                 "sender": sender,
                 "event_id": event_id,
@@ -1224,13 +1217,13 @@ mod tests {
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009932", alice, strand_id, bob);
         state.projections().apply(&assignment, state.hlc());
-        let operation = arkret_event_draft::Operation::create(
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000009933".to_owned(),
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::StrandUpdate.as_str(),
             json!({
                 "sender": alice,
                 "event_id": "ak:event:Aa_qcpHgRDcZFoRX6jMUFjWIJktoe_GppP1Pl1zg0pGs",

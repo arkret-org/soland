@@ -113,6 +113,24 @@ pub(crate) fn verify_contact_service_signature<T: Serialize>(
     signed_value: &T,
     evidence_field: &str,
 ) -> Result<(), AppError> {
+    let signature_bytes = arkret_canonical::canonical_json_bytes(signed_value)
+        .map_err(|error| AppError::internal(format!("Contact receipt canonicalize: {error}")))?;
+    verify_contact_service_signature_bytes(
+        state,
+        expected_service_id,
+        signature,
+        &signature_bytes,
+        evidence_field,
+    )
+}
+
+pub(crate) fn verify_contact_service_signature_bytes(
+    state: &AppState,
+    expected_service_id: &str,
+    signature: &ProtocolSignature,
+    signature_bytes: &[u8],
+    evidence_field: &str,
+) -> Result<(), AppError> {
     let expected_method =
         crate::routing::federation::federation_service_signature_key_id(expected_service_id);
     if signature.verification_method.as_str() != expected_method {
@@ -137,8 +155,6 @@ pub(crate) fn verify_contact_service_signature<T: Serialize>(
                 )
             })?
     };
-    let signature_bytes = arkret_canonical::canonical_json_bytes(signed_value)
-        .map_err(|error| AppError::internal(format!("Contact receipt canonicalize: {error}")))?;
     let signature = URL_SAFE_NO_PAD
         .decode(signature.jws.as_str())
         .ok()
@@ -152,7 +168,7 @@ pub(crate) fn verify_contact_service_signature<T: Serialize>(
             )
         })?;
     verifying_key
-        .verify_strict(&signature_bytes, &signature)
+        .verify_strict(signature_bytes, &signature)
         .map_err(|_| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
@@ -272,7 +288,7 @@ async fn validate_request_acceptance_receipt(
             "event_digest": request_digest,
         }),
     )?;
-    if request_event.kind.as_str() != arkret_wire::EventKind::CONTACT_REQUESTED
+    if request_event.kind != arkret_wire::EventKind::ContactRequested
         || request_event.event_id != receipt.core.request_event_ref
         || request_event.actor_id != *receipt.core.holder.subject_id()
         || requested_payload.peer != receipt.core.peer
@@ -329,54 +345,24 @@ fn contact_scope_strings(scopes: &[ContactScope]) -> Vec<String> {
         .collect()
 }
 
-fn new_unsigned_contact_event(
+fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     holder: &ContactPeer,
-    event_id: EventId,
-    kind: &'static str,
     realm_id: RealmId,
     actor_seq: u64,
+    hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
     seal_basis: arkret_wire::SealBasis,
     created_at: chrono::DateTime<chrono::Utc>,
-    payload: Value,
+    payload: K::Payload,
 ) -> Result<Event, AppError> {
-    let payload = payload
-        .as_object()
-        .cloned()
-        .ok_or_else(|| AppError::internal("Contact Event payload must be an object"))?
-        .into_iter()
-        .collect();
-    let event = Event {
-        event_id,
-        kind: arkret_wire::EventKind::from_wire(kind),
-        realm_id: realm_id.clone(),
-        scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
-        actor_id: holder.subject_id().clone(),
-        executed_by: None,
-        authorization_ref: None,
-        applet_id: None,
-        external_ref: None,
-        actor_kind: None,
-        actor_seq,
-        created_at,
-        hlc: None,
-        prev_refs,
-        refs: Vec::new(),
-        causal_refs: Vec::new(),
-        preconditions: Vec::new(),
-        seal_ref: None,
-        auth_context: None,
-        seal_basis: Some(seal_basis),
+    arkret_event_draft::TypedEventDraft::<K>::new(
+        arkret_wire::ScopeRef::Realm { realm_id },
+        holder.subject_id().clone(),
         payload,
-        redacts: None,
-        unsigned: BTreeMap::new(),
-        proofs: Vec::new(),
-        requirements: arkret_wire::EventRequirements::default(),
-    };
-    event
-        .validate_for_authoring_structural()
-        .map_err(|error| AppError::internal(format!("Contact Event draft invalid: {error}")))?;
-    Ok(event)
+    )
+    .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
+    .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+    .map_err(|error| AppError::internal(format!("Contact typed Event draft invalid: {error}")))
 }
 
 fn contact_event_draft(event: &Event) -> Result<ContactPreparedEventDraft, AppError> {
@@ -530,14 +516,13 @@ async fn persist_final(
         .map_err(|error| AppError::internal(format!("Contact outcome store: {error}")))
 }
 
-async fn prepare(
+async fn prepare<K: arkret_event_draft::EventSpec>(
     state: &AppState,
     session: &SessionRecord,
     operation_id: ProtocolOperationId,
     idempotency_key: IdempotencyKey,
     branch: ContactReservationBranch,
-    payload: Value,
-    event_kind: &'static str,
+    payload: K::Payload,
 ) -> JsonResult<ContactOperationOutcome> {
     let holder = holder_peer(state, &session.actor).await?;
     validate_distinct_peer(&holder, branch.peer())?;
@@ -546,7 +531,7 @@ async fn prepare(
         "idempotency_key": idempotency_key,
         "branch": branch,
         "payload": payload,
-        "event_kind": event_kind,
+        "event_kind": K::KIND,
     });
     let request_hash = arkret_canonical::canonical_sha256(&request_value)
         .map_err(|error| AppError::internal(format!("Contact prepare digest: {error}")))?;
@@ -595,26 +580,17 @@ async fn prepare(
         leaves: vec![accepted_seal.id],
     };
     let created_at = now();
-    let event = new_unsigned_contact_event(
+    let event = new_unsigned_contact_event::<K>(
         &holder,
-        // Placeholder: `new_unsigned_contact_event` needs an id up front; the
-        // real one is derived from the finished envelope below.
-        EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
-            .expect("placeholder Event id is canonical"),
-        event_kind,
         realm_id,
         frontier.next_actor_seq,
+        arkret_identifiers::Hlc::new(state.hlc().now())
+            .map_err(|error| AppError::internal(format!("Contact Event HLC: {error}")))?,
         frontier.frontier_event_ids,
         seal_basis,
         created_at,
         payload,
     )?;
-    // Stamped last: the id is a function of the finished envelope.
-    let mut event = event;
-    event.event_id = event
-        .derive_event_id()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let event = event;
     let reservation = ContactReservation {
         operation_id,
         idempotency_key: idempotency_key.clone(),
@@ -809,7 +785,7 @@ fn signed_current_proof(
     basis_id: Hash,
     event: &Event,
 ) -> Result<ContactCurrentProof, AppError> {
-    let terminal = event.kind.as_str() == arkret_wire::EventKind::CONTACT_TOMBSTONED;
+    let terminal = event.kind == arkret_wire::EventKind::ContactTombstoned;
     let head_digest = Hash::new(
         event
             .event_digest()
@@ -1287,15 +1263,14 @@ pub(super) async fn request(
                 "ak.contact.introduction-evidence.v1",
                 &body.introduction_evidence,
             )?;
-            let payload = serde_json::to_value(ContactRequestedPayload {
+            let payload = ContactRequestedPayload {
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
                 previous_terminal_basis_id: body.previous_terminal_basis_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
-            })
-            .map_err(|error| AppError::internal(format!("Contact request payload: {error}")))?;
-            prepare(
+            };
+            prepare::<arkret_wire::event_spec::ContactRequested>(
                 state,
                 session,
                 body.operation_id,
@@ -1306,7 +1281,6 @@ pub(super) async fn request(
                     previous_terminal_basis_id: body.previous_terminal_basis_id,
                 },
                 payload,
-                arkret_wire::EventKind::CONTACT_REQUESTED,
             )
             .await
         }
@@ -1343,7 +1317,7 @@ pub(super) async fn respond(
                     "normal Contact response requires no outgoing request slot",
                 ));
             }
-            let payload = serde_json::to_value(ContactAcceptedPayload {
+            let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
                 basis_id: basis_id.clone(),
                 version: 1,
@@ -1355,9 +1329,8 @@ pub(super) async fn respond(
                     .previous_terminal_basis_id
                     .clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
-            })
-            .map_err(|error| AppError::internal(format!("Contact accept payload: {error}")))?;
-            prepare(
+            };
+            prepare::<arkret_wire::event_spec::ContactAccepted>(
                 state,
                 session,
                 body.operation_id,
@@ -1369,7 +1342,6 @@ pub(super) async fn respond(
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                 },
                 payload,
-                arkret_wire::EventKind::CONTACT_ACCEPTED,
             )
             .await
         }
@@ -1394,14 +1366,13 @@ pub(super) async fn reject(
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
             validate_request_acceptance_receipt(state, &record, &holder, &body.request_receipt)
                 .await?;
-            let payload = serde_json::to_value(ContactRejectedPayload {
+            let payload = ContactRejectedPayload {
                 peer: peer.clone(),
                 request_event_ref: body.request_receipt.core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
                 reason: None,
-            })
-            .map_err(|error| AppError::internal(format!("Contact reject payload: {error}")))?;
-            prepare(
+            };
+            prepare::<arkret_wire::event_spec::ContactRejected>(
                 state,
                 session,
                 body.operation_id,
@@ -1411,7 +1382,6 @@ pub(super) async fn reject(
                     peer,
                 },
                 payload,
-                arkret_wire::EventKind::CONTACT_REJECTED,
             )
             .await
         }
@@ -1426,16 +1396,15 @@ pub(super) async fn scope_update(
 ) -> JsonResult<ContactOperationOutcome> {
     match body {
         ContactScopeUpdateRequestBody::Prepare(body) => {
-            let payload = serde_json::to_value(ContactScopeUpdatePayload {
+            let payload = ContactScopeUpdatePayload {
                 schema: ContactScopeUpdateSchema::V1,
                 peer: body.peer.clone(),
                 basis_id: body.basis_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
-            })
-            .map_err(|error| AppError::internal(format!("Contact scope payload: {error}")))?;
-            prepare(
+            };
+            prepare::<arkret_wire::event_spec::ContactScopeUpdate>(
                 state,
                 session,
                 body.operation_id,
@@ -1448,7 +1417,6 @@ pub(super) async fn scope_update(
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                 },
                 payload,
-                arkret_wire::EventKind::CONTACT_SCOPE_UPDATE,
             )
             .await
         }
@@ -1463,15 +1431,14 @@ pub(super) async fn tombstone(
 ) -> JsonResult<ContactOperationOutcome> {
     match body {
         ContactTombstoneRequestBody::Prepare(body) => {
-            let payload = serde_json::to_value(ContactTombstonedPayload {
+            let payload = ContactTombstonedPayload {
                 peer: body.peer.clone(),
                 basis_id: body.basis_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 reason: None,
-            })
-            .map_err(|error| AppError::internal(format!("Contact tombstone payload: {error}")))?;
-            prepare(
+            };
+            prepare::<arkret_wire::event_spec::ContactTombstoned>(
                 state,
                 session,
                 body.operation_id,
@@ -1483,7 +1450,6 @@ pub(super) async fn tombstone(
                     predecessor_event_ref: body.predecessor_event_ref,
                 },
                 payload,
-                arkret_wire::EventKind::CONTACT_TOMBSTONED,
             )
             .await
         }

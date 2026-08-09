@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
 use super::{DocumentVersionProjection, PushRouteCellValue, StrandProjection};
@@ -565,23 +565,13 @@ pub(crate) fn document_version_from_operation(
     operation: &Operation,
     body: Value,
 ) -> DocumentVersionProjection {
-    let event_id = operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or(operation.operation_id.as_str())
-        .to_owned();
+    let event_id = operation.context.event_id.to_string();
     let body_digest = arkret_canonical::canonical_sha256(&body)
         .unwrap_or_else(|_| arkret_canonical::sha256_digest(body.to_string().as_bytes()));
     DocumentVersionProjection {
         version_id: format!("{morph_id}:version:{event_id}"),
         event_id,
-        author: operation
-            .payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned(),
+        author: operation.context.sender.to_string(),
         created_at: operation.created_at,
         body_digest,
         body,

@@ -306,14 +306,14 @@ struct AnchorIssueContext {
 fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppError> {
     if events
         .first()
-        .is_none_or(|event| event.kind.as_str() != arkret_wire::EventKind::REALM_CREATE)
+        .is_none_or(|event| event.kind != arkret_wire::EventKind::RealmCreate)
     {
         return Ok(None);
     }
     let (realm_id, actor_id, self_principal_pcr_bootstrap, authority_root) = if events.len() == 2
         && events
             .get(1)
-            .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::DEVICE_AUTHORIZE)
+            .is_some_and(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize)
     {
         arkret_bootstrap::validate_self_principal_pcr_genesis_unit(
             &events[0],
@@ -681,9 +681,9 @@ mod tests {
     const REGISTRY_DIGEST: &str =
         "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
 
-    fn event(kind: &str, actor_seq: u64, payload: Value) -> Event {
-        Event::new_at(
-            kind,
+    fn event(kind: impl AsRef<str>, actor_seq: u64, payload: Value) -> Event {
+        arkret_wire::test_support::raw_event_at(
+            kind.as_ref(),
             ScopeRef::Realm {
                 realm_id: RealmId::new(REALM).expect("fixture Realm id"),
             },
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn ordinary_anchor_lease_context_preserves_staged_authority_root_for_followups() {
         let create = event(
-            EventKind::REALM_CREATE,
+            EventKind::RealmCreate,
             0,
             json!({"object": {
                 "schema": "ak.schema.realm_genesis.v1",
@@ -719,33 +719,33 @@ mod tests {
         let events = vec![
             create,
             event(
-                EventKind::REALM_PROFILE,
+                EventKind::RealmProfile,
                 1,
                 json!({"schema": "ak.schema.realm_profile.v1", "title": "Realm"}),
             ),
             event(
-                EventKind::REALM_POLICY_BUNDLE,
+                EventKind::RealmPolicyBundle,
                 2,
                 json!({"policy_revision": 1}),
             ),
-            event(EventKind::REALM_JOIN_RULE, 3, json!({"value": "invite"})),
+            event(EventKind::RealmJoinRule, 3, json!({"value": "invite"})),
             event(
-                EventKind::REALM_HISTORY_VISIBILITY,
+                EventKind::RealmHistoryVisibility,
                 4,
                 json!({"value": "shared"}),
             ),
             event(
-                EventKind::REALM_DISCOVERY,
+                EventKind::RealmDiscovery,
                 5,
                 json!({"value": "invite_only"}),
             ),
             event(
-                EventKind::REALM_DELIVERY_BINDING_POLICY,
+                EventKind::RealmDeliveryBindingPolicy,
                 6,
                 json!({"allow_unroutable_members": true}),
             ),
             event(
-                EventKind::MEMBER_STATE,
+                EventKind::MemberState,
                 7,
                 json!({
                     "realm_id": REALM,

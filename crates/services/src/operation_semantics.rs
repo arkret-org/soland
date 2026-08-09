@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
 pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = soland_domain::kinds::AUDIT_COMPLIANCE_PROFILES;
@@ -10,12 +10,12 @@ pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_REALM_MISMATCH;
 pub const CHILD_ORDER_CELL_FAMILY: &str = soland_domain::reducer::CHILD_ORDER_CELL_FAMILY;
 
-pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
+pub fn canonical_kind_for_operation(operation: &Operation) -> Option<arkret_wire::EventKind> {
     soland_domain::kinds::canonical_kind_for_operation(operation)
 }
 
-pub fn canonical_kind_string(operation: &Operation) -> String {
-    soland_domain::kinds::canonical_kind_string(operation)
+pub fn canonical_kind(operation: &Operation) -> arkret_wire::EventKind {
+    soland_domain::kinds::canonical_kind(operation)
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {

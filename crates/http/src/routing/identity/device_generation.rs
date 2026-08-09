@@ -161,7 +161,7 @@ async fn bootstrap_generation_ref(
 ) -> Result<Option<String>, ServiceError> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_wire::EventKind::REALM_CREATE
+            && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record
                 .envelope
                 .pointer("/payload/object/purpose")
@@ -182,7 +182,7 @@ async fn bootstrap_generation_ref(
     };
     let paired = records.iter().any(|record| {
         record.actor_id == principal_id
-            && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+            && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
             && record
                 .envelope
                 .get("prev_refs")

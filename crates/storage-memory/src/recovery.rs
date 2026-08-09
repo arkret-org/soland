@@ -426,8 +426,8 @@ mod tests {
         AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
         AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-        BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId, Did, DidUrl, Event,
-        EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
+        BackupSeriesId, CanonicalPublicMaterial, DeviceId, Did, DidUrl, Event, EventId,
+        EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
         SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
@@ -447,8 +447,8 @@ mod tests {
             BackupRotationKind::SecretStorage => "secret_storage",
             BackupRotationKind::MlsHistory => "mls_history",
         };
-        let value = serde_json::Value::Array(
-            binding
+        CanonicalPublicMaterial::canonical_json(json!({
+            "backups": binding
                 .new_backups
                 .iter()
                 .map(|backup| {
@@ -460,15 +460,9 @@ mod tests {
                         "series_id": binding.new_series_id,
                     })
                 })
-                .collect(),
-        );
-        let bytes = arkret_canonical::canonical_json_bytes(&value).unwrap();
-        CanonicalPublicMaterial {
-            canonical_encoding: CanonicalEncoding::CanonicalJson,
-            value,
-            canonical_bytes_base64url: arkret_canonical::base64url_encode(&bytes),
-            digest: Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap(),
-        }
+                .collect::<Vec<_>>()
+        }))
+        .unwrap()
     }
 
     fn erase_authorization_lease() -> AuthorizationLease {
@@ -592,10 +586,14 @@ mod tests {
         }
     }
 
-    fn event_unit(service_id: &Did, kind: &str, seed: &str) -> (EventId, PreparedEventUnit) {
+    fn event_unit(
+        service_id: &Did,
+        kind: impl AsRef<str>,
+        seed: &str,
+    ) -> (EventId, PreparedEventUnit) {
         let authorization_lease = erase_authorization_lease();
-        let event = Event::new_with_derived_id_at(
-            kind,
+        let event = arkret_wire::test_support::raw_event_at(
+            kind.as_ref(),
             authorization_lease.scope_ref.clone(),
             authorization_lease.actor_id.clone(),
             1,
@@ -616,8 +614,7 @@ mod tests {
         let event_id = request.events[0].event.event_id.clone();
         (
             event_id,
-            PreparedEventUnit::new(service_id.clone(), serde_json::to_value(request).unwrap())
-                .unwrap(),
+            PreparedEventUnit::new(service_id.clone(), request).unwrap(),
         )
     }
 

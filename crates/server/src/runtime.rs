@@ -156,7 +156,7 @@ impl ProjectedOperationPersistencePort for RuntimeProjectedOperationPersistence 
     async fn persist_projected_operation(
         &self,
         origin: &str,
-        operation: &arkret_event_draft::Operation,
+        operation: &arkret_event_draft::ProjectedEventOperation,
         event_type: &str,
         is_membership_or_realm_lifecycle: bool,
     ) -> Result<(), String> {

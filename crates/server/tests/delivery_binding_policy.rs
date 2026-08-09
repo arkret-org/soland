@@ -7,19 +7,19 @@
 //! Move/Seal pipeline. The HTTP wire path that feeds these reducer
 //! calls is exercised separately in `tests/http_api/`.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
 const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 
-fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
-    Operation::create(
+fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
+    arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     )
 }
@@ -27,7 +27,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
             REALM_A,
             payload,
         ),
@@ -45,7 +45,7 @@ fn join_op(member: &str, binding: Value) -> Operation {
 
 fn join_op_for_realm(realm_id: &str, member: &str, binding: Value) -> Operation {
     op(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         realm_id,
         json!({
             "actor_id": member,
@@ -70,8 +70,8 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
     )
     .unwrap();
     let payload = serde_json::to_value(payload).unwrap();
-    let event = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::REALM_CREATE,
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         creator,
         0,
@@ -88,11 +88,11 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
-    let create = Operation::create(
+    let create = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         realm_id.clone(),
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate.as_str(),
         payload,
     );
     let effect = state.apply_projected(&create, &writes, hlc);
@@ -386,7 +386,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     let realm_id = create_direct_conversation(&mut state, &hlc);
 
     let founding_peer = op(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         &realm_id,
         json!({
             "actor_id": "did:web:bob.example",
@@ -410,7 +410,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     );
 
     let third_member = op(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         &realm_id,
         json!({
             "actor_id": "did:web:carol.example",

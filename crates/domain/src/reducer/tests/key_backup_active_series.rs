@@ -51,7 +51,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             REALM,
             active_series_payload(),
         ),
@@ -110,7 +110,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             REALM,
             payload,
         ),
@@ -133,7 +133,7 @@ fn key_backup_active_series_rejects_active_series_in_previous_set() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             REALM,
             payload,
         ),
@@ -155,7 +155,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
     gap["series_pointer_version"] = json!(2);
 
     let initial_gap = state.apply(
-        &make_operation(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES, REALM, gap),
+        &make_operation(arkret_wire::EventKind::KeyBackupActiveSeries, REALM, gap),
         &hlc,
     );
     assert!(matches!(
@@ -166,7 +166,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let accepted = state.apply(
         &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             REALM,
             active_series_payload(),
         ),
@@ -179,7 +179,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
 
     let duplicate = state.apply(
         &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KeyBackupActiveSeries,
             REALM,
             active_series_payload(),
         ),
@@ -190,11 +190,7 @@ fn key_backup_active_series_enforces_contiguous_pointer_versions() {
     let mut fork = active_series_payload();
     fork["issued_at"] = json!("2026-07-18T00:00:01.000Z");
     let fork = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
-            REALM,
-            fork,
-        ),
+        &make_operation(arkret_wire::EventKind::KeyBackupActiveSeries, REALM, fork),
         &hlc,
     );
     assert!(matches!(

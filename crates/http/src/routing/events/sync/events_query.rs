@@ -241,12 +241,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 )
                 .await;
                 replay_cursor = Some(cursor.clone());
-                let frame = json!({
-                    "kind": "event",
-                    "realm_id": event.realm_id.clone(),
-                    "cursor": cursor,
-                    "payload": event_envelope,
-                });
+                let Some(frame) = events_event_frame(&event.realm_id, &cursor, &event_envelope) else {
+                    yield Ok(ndjson_line(&json!({"kind": "resync_required"})));
+                    return;
+                };
                 yield Ok(ndjson_line(&frame));
             }
             if has_more {
@@ -345,21 +343,14 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         }
                                         continue;
                                     };
-                                    json!({
-                                        "kind": "event",
-                                        "realm_id": realm_id,
-                                        "cursor": live_cursor,
-                                        "payload": event_envelope,
-                                    })
+                                    let Some(frame) = events_event_frame(&realm_id, &live_cursor, &event_envelope) else {
+                                        continue;
+                                    };
+                                    serde_json::to_value(frame).unwrap_or_else(|_| json!({"kind": "resync_required"}))
                                 }
                                 EventNotificationKind::EpochRotation { previous_epoch: _, new_epoch } => {
-                                    json!({
-                                        "kind": "epoch_rotation",
-                                        "realm_id": realm_id,
-                                        "payload": {
-                                            "new_epoch": new_epoch,
-                                        },
-                                    })
+                                    serde_json::to_value(events_epoch_rotation_frame(&realm_id, new_epoch))
+                                        .unwrap_or_else(|_| json!({"kind": "resync_required"}))
                                 }
                                 EventNotificationKind::Frontier { .. } => continue,
                                 EventNotificationKind::ResyncRequired { .. } => {
@@ -424,6 +415,36 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+fn events_event_frame(
+    realm_id: &str,
+    cursor: &str,
+    event: &arkret_wire::Event,
+) -> Option<EventsSubscribeFrame> {
+    let payload = serde_json::to_value(event)
+        .ok()?
+        .as_object()?
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Some(EventsSubscribeFrame {
+        kind: EventsSubscribeFrameKind::Event,
+        realm_id: RealmId::new(realm_id.to_owned()).ok(),
+        cursor: Cursor::new(cursor.to_owned()).ok(),
+        payload: Some(payload),
+        reconnect_after_ms: None,
+    })
+}
+
+fn events_epoch_rotation_frame(realm_id: &str, new_epoch: Value) -> EventsSubscribeFrame {
+    EventsSubscribeFrame {
+        kind: EventsSubscribeFrameKind::EpochRotation,
+        realm_id: RealmId::new(realm_id.to_owned()).ok(),
+        cursor: None,
+        payload: Some(BTreeMap::from([("new_epoch".to_owned(), new_epoch)])),
+        reconnect_after_ms: None,
+    }
 }
 
 /// Serialize a JSON frame to a length-prefixed
@@ -1013,10 +1034,7 @@ async fn range_completeness_for_query(
         RangeCompletenessAttestationWitnessAttestationWitnessesItem,
     };
     use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
-    use arkret_wire::{
-        Event, EventId, EventKind, EventRequirements, Hash, PayloadProofPurpose, PayloadSigner,
-        Proof, ScopeRef, proof_kind,
-    };
+    use arkret_wire::{Hash, PayloadProofPurpose, PayloadSigner, Proof, proof_kind};
 
     if !parts.include_completeness
         || realms.len() != 1
@@ -1151,55 +1169,28 @@ async fn range_completeness_for_query(
     payload_proof.jws = signature.jws;
     payload.proofs.push(payload_proof);
 
-    let payload = serde_json::to_value(payload)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let Value::Object(payload) = payload else {
-        return Err(soland_http::error::AppError::internal(
-            "typed completeness payload is not an object",
-        ));
-    };
     let actor_seq = accepted_events
         .iter()
         .filter(|event| event.actor_id == issuer)
         .map(|event| event.actor_seq)
         .max()
         .map_or(0, |sequence| sequence.saturating_add(1));
-    let mut attestation_event = Event {
-        // Placeholder: stamped from the finished envelope below.
-        event_id: EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
-            .expect("placeholder Event id is canonical"),
-        kind: EventKind::AttestationRangeCompleteness,
-        realm_id: realm_id.clone(),
-        scope_ref: ScopeRef::Realm {
+    let attestation_hlc = arkret_identifiers::Hlc::new(state.hlc().now())
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let mut attestation_event = arkret_event_draft::TypedEventDraft::<
+        arkret_wire::event_spec::AttestationRangeCompleteness,
+    >::new(
+        arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        actor_id: issuer,
-        executed_by: None,
-        authorization_ref: None,
-        applet_id: None,
-        external_ref: None,
-        actor_kind: None,
-        actor_seq,
-        created_at: observed_at,
-        hlc: None,
-        prev_refs: to_frontier,
-        refs: Vec::new(),
-        causal_refs: Vec::new(),
-        preconditions: Vec::new(),
-        seal_ref: None,
-        auth_context: None,
-        seal_basis: None,
-        payload: payload.into_iter().collect(),
-        redacts: None,
-        unsigned: BTreeMap::new(),
-        proofs: Vec::new(),
-        requirements: EventRequirements::default(),
-    };
-    // Stamped before signing: the id is a function of the content the signature
-    // covers, so deriving it afterwards would sign a different Event.
-    attestation_event.event_id = attestation_event
-        .derive_event_id_with_digest_suite(digest_suite)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+        issuer,
+        payload,
+    )
+    .map(|draft| draft.with_prev_refs(to_frontier))
+    .and_then(|draft| {
+        draft.author_with_digest_suite(actor_seq, attestation_hlc, observed_at, digest_suite)
+    })
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let event_id = attestation_event.event_id.clone();
     sign_event_with_digest_suite(
         &mut attestation_event,
@@ -1275,73 +1266,32 @@ async fn full_events_from_projection_json(
 /// frame. Projection rows are useful for visibility filtering and pagination,
 /// but are not wire Event envelopes (`event_kind` vs `kind`, no actor_seq,
 /// prev_refs, proofs, ...). Reuse the query path's canonical lookup and its
-/// explicit projection-only tombstone fallback so stream and scan expose the
-/// same typed payload contract.
+/// fail-closed redaction filter so stream and scan expose the same typed
+/// envelope contract without synthesizing an Event from projection data.
 pub(crate) async fn full_event_from_projection_json(
     state: &AppState,
     row: &Value,
 ) -> Option<arkret_wire::Event> {
     let event_id = row.get("event_id").and_then(Value::as_str)?;
     if projection_row_is_redacted_message_tombstone(row) {
-        return projection_only_event_from_row(state, row);
+        return None;
     }
     if let Ok(Some(record)) = state.event_queries().canonical_event(event_id).await
         && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
     {
         return Some(event);
     }
-    projection_only_event_from_row(state, row)
+    None
 }
 
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
-        Some(arkret_wire::EventKind::MESSAGE_CREATE | arkret_wire::EventKind::MESSAGE_REVISE)
+        Some(arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise)
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
             || payload.get("state").and_then(Value::as_str) == Some("redacted")
     })
-}
-
-fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkret_wire::Event> {
-    let event_id = row.get("event_id").and_then(Value::as_str)?;
-    let realm_id = row.get("realm_id").and_then(Value::as_str)?;
-    let kind = row.get("event_kind").and_then(Value::as_str)?;
-    let created_at = row
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))?;
-    let sender = row.get("sender").and_then(Value::as_str);
-    let actor_id = sender
-        .filter(|value| validate_did(value).is_ok())
-        .unwrap_or(state.service_id().as_str());
-    let millis = created_at.timestamp_millis().max(0);
-    let hlc = format!("{millis:012x}-0000-00000000");
-    let event = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "realm_id": realm_id,
-        // `scope_ref` is a required, producer-signed envelope field. A
-        // projection-only tombstone has no signed envelope to copy it from, so
-        // it is restated from the row's Realm — the same scope the projection
-        // row itself was filtered by.
-        "scope_ref": {"kind": "realm", "realm_id": realm_id},
-        "actor_id": actor_id,
-        "actor_seq": 0,
-        "created_at": arkret_canonical::format_timestamp_canonical(created_at),
-        "hlc": hlc,
-        "prev_refs": [],
-        "payload": row.get("payload").cloned().unwrap_or_else(|| json!({})),
-        "unsigned": {
-            "projection_only": true,
-            "operation_kind": row.get("operation_kind").cloned().unwrap_or(Value::Null),
-            "operation_id": row.get("operation_id").cloned().unwrap_or(Value::Null),
-            "sender": row.get("sender").cloned().unwrap_or(Value::Null),
-        },
-        "proofs": [],
-    });
-    serde_json::from_value(event).ok()
 }
 
 #[cfg(test)]
@@ -1371,8 +1321,8 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let sidecar_id = "ak:sidecar:AQYqC06461HNyfIIzUY8eXmafXvmC9i29nNObXCIbj0-";
-        let event = arkret_wire::Event::new_with_derived_id_at(
-            arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+        let event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::SidecarContextAttach.as_str(),
             arkret_wire::ScopeRef::Sidecar {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
                 sidecar_id: arkret_identifiers::SidecarId::new(sidecar_id.to_owned()).unwrap(),
@@ -1397,7 +1347,7 @@ mod tests {
         put_durable_event(
             &state,
             event.event_id.as_str(),
-            arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+            arkret_wire::EventKind::SidecarContextAttach.as_str(),
             event_envelope,
             created_at,
         )
@@ -1415,7 +1365,7 @@ mod tests {
         let row = soland_services::events::ProjectedEvent {
             event_id: event.event_id.to_string(),
             realm_id: TEST_REALM.to_owned(),
-            event_kind: arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH.to_owned(),
+            event_kind: arkret_wire::EventKind::SidecarContextAttach,
             operation_kind: "event".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-00000000aa43".to_owned()),
             sender: Some(TEST_ACTOR.to_owned()),
@@ -1434,14 +1384,14 @@ mod tests {
 
     fn operation_at(
         operation_id: &str,
-        kind: &str,
+        kind: impl AsRef<str>,
         payload: Value,
         created_at: DateTime<Utc>,
-    ) -> arkret_event_draft::Operation {
-        let mut operation = arkret_event_draft::Operation::create(
+    ) -> arkret_event_draft::ProjectedEventOperation {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
             RealmId::new(TEST_REALM.to_owned()).unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         );
         operation.created_at = created_at;
@@ -1493,7 +1443,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn events_query_enrich_keeps_redaction_tombstone_over_durable_plaintext() {
+    async fn events_query_omits_redacted_canonical_plaintext() {
         let state = test_state();
         let created_at = DateTime::parse_from_rfc3339("2026-07-06T10:00:00.000Z")
             .unwrap()
@@ -1503,8 +1453,8 @@ mod tests {
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
         let actor_id = arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap();
-        let message_event = arkret_wire::Event::new_with_derived_id_at(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+        let message_event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
@@ -1521,8 +1471,8 @@ mod tests {
         .unwrap();
         let message_event_id = message_event.event_id.to_string();
         let message_id = arkret_identifiers::MessageId::from_event_id(&message_event.event_id);
-        let revise_event = arkret_wire::Event::new_with_derived_id_at(
-            arkret_wire::EventKind::MESSAGE_REVISE,
+        let revise_event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::MessageRevise.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
@@ -1539,8 +1489,8 @@ mod tests {
         )
         .unwrap();
         let revise_event_id = revise_event.event_id.to_string();
-        let redaction_event = arkret_wire::Event::new_with_derived_id_at(
-            arkret_wire::EventKind::MESSAGE_REDACT,
+        let redaction_event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::MessageRedact.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             actor_id,
             3,
@@ -1573,19 +1523,19 @@ mod tests {
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             plaintext_payload.clone(),
             created_at,
         );
         let revise = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa43",
-            arkret_wire::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MessageRevise,
             revised_payload.clone(),
             revised_at,
         );
         let redaction = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact,
             json!({
                 "event_id": redaction_event_id,
                 "message_id": message_id,
@@ -1597,7 +1547,7 @@ mod tests {
         put_durable_event(
             &state,
             message_event_id.as_str(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             serde_json::to_value(&message_event).unwrap(),
             created_at,
         )
@@ -1605,7 +1555,7 @@ mod tests {
         put_durable_event(
             &state,
             revise_event_id.as_str(),
-            arkret_wire::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MessageRevise.as_str(),
             serde_json::to_value(&revise_event).unwrap(),
             revised_at,
         )
@@ -1613,7 +1563,7 @@ mod tests {
         put_durable_event(
             &state,
             redaction_event_id.as_str(),
-            arkret_wire::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MessageRedact.as_str(),
             serde_json::to_value(&redaction_event).unwrap(),
             redacted_at,
         )
@@ -1646,30 +1596,20 @@ mod tests {
         assert_eq!(revise_row["payload"]["redacted"], json!(true));
 
         let events = full_events_from_projection_json(&state, &rows).await;
-        let message_event = events
-            .iter()
-            .find(|event| event.event_id.as_str() == message_event_id)
-            .expect("message event returned");
-        assert_eq!(message_event.payload["redacted"], json!(true));
-        assert_eq!(
-            message_event.payload["content"]["body"],
-            json!("[redacted]")
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event_id.as_str() != message_event_id)
         );
         assert!(
-            !serde_json::to_string(&message_event.payload)
-                .unwrap()
-                .contains("secret that must not leak")
+            events
+                .iter()
+                .all(|event| event.event_id.as_str() != revise_event_id)
         );
-        let revise_event = events
-            .iter()
-            .find(|event| event.event_id.as_str() == revise_event_id)
-            .expect("revision event returned");
-        assert_eq!(revise_event.payload["redacted"], json!(true));
-        assert_eq!(revise_event.payload["content"]["body"], json!("[redacted]"));
         assert!(
-            !serde_json::to_string(&revise_event.payload)
-                .unwrap()
-                .contains("revised secret that must not leak")
+            events
+                .iter()
+                .any(|event| event.event_id.as_str() == redaction_event_id)
         );
     }
 }

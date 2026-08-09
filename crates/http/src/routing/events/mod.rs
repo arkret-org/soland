@@ -12,7 +12,6 @@ pub(super) mod peer;
 pub(crate) mod mention_routing;
 pub(super) mod notify;
 pub(super) mod operations;
-pub(crate) use operations::projection_context_stripped_payload;
 pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(crate) mod strand;

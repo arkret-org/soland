@@ -320,7 +320,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::EventKind::InviteCreate)
         {
             return Ok(());
         }
@@ -353,7 +353,7 @@ impl ProjectionState {
 
     pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::EventKind::InviteCreate)
         {
             return;
         }
@@ -573,12 +573,12 @@ mod tests {
         state
     }
 
-    fn invite(refs: &[&str]) -> arkret_event_draft::Operation {
-        let mut operation = arkret_event_draft::Operation::create(
+    fn invite(refs: &[&str]) -> arkret_event_draft::ProjectedEventOperation {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000020".to_owned())
                 .unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::InviteCreate.as_str(),
             json!({}),
         );
         operation.refs = refs

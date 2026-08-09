@@ -8,7 +8,7 @@ const EVENT: &str = "ak:event:AUiaY2u0jL7j0v1YowBxmn8e4QEpBDWA7QtOlNdhtZ1N";
 
 fn space_create() -> Operation {
     make_operation(
-        arkret_wire::EventKind::SPACE_CREATE,
+        arkret_wire::EventKind::SpaceCreate,
         REALM,
         serde_json::json!({
             "object": {
@@ -24,7 +24,7 @@ fn space_create() -> Operation {
 
 fn strand_create() -> Operation {
     make_operation(
-        arkret_wire::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::StrandCreate,
         REALM,
         serde_json::json!({
             "object": {
@@ -42,7 +42,7 @@ fn space_lifecycle_pending_replays_after_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let archive = make_operation(
-        arkret_wire::EventKind::SPACE_ARCHIVE,
+        arkret_wire::EventKind::SpaceArchive,
         REALM,
         serde_json::json!({ "space_id": SPACE }),
     );
@@ -68,7 +68,7 @@ fn strand_update_pending_replays_after_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let update = make_operation(
-        arkret_wire::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::StrandUpdate,
         REALM,
         serde_json::json!({
             "target_ref": STRAND,
@@ -92,7 +92,7 @@ fn relation_create_waits_for_unknown_endpoint() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let relation = make_operation(
-        arkret_wire::EventKind::RELATION_CREATE,
+        arkret_wire::EventKind::RelationCreate,
         REALM,
         serde_json::json!({
             "relation_id": RELATION,
@@ -119,7 +119,7 @@ fn relation_update_pending_replays_after_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let update = make_operation(
-        arkret_wire::EventKind::RELATION_UPDATE,
+        arkret_wire::EventKind::RelationUpdate,
         REALM,
         serde_json::json!({
             "relation_id": RELATION,
@@ -133,7 +133,7 @@ fn relation_update_pending_replays_after_create() {
     ));
 
     let create = make_operation(
-        arkret_wire::EventKind::RELATION_CREATE,
+        arkret_wire::EventKind::RelationCreate,
         REALM,
         serde_json::json!({
             "relation_id": RELATION,
@@ -153,7 +153,7 @@ fn message_revision_pending_replays_after_original_event() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let revise = make_operation(
-        arkret_wire::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MessageRevise,
         REALM,
         serde_json::json!({
             "target_ref": EVENT,
@@ -168,7 +168,7 @@ fn message_revision_pending_replays_after_original_event() {
     ));
 
     let create = make_operation(
-        arkret_wire::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MessageCreate,
         REALM,
         serde_json::json!({
             "event_id": EVENT,
@@ -192,7 +192,7 @@ fn object_redaction_pending_replays_after_object_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let redaction = make_operation(
-        arkret_wire::EventKind::REDACTION,
+        arkret_wire::EventKind::Redaction,
         REALM,
         serde_json::json!({
             "target_event_id": EVENT,

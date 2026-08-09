@@ -1,3 +1,4 @@
+use arkret_event_draft::{EventPayloadExt as _, TypedEventDraft};
 use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
@@ -5,6 +6,9 @@ use arkret_models_collaboration::agent_operations::{
     AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
     PendingSidecarAccessReconciliationItem, PendingSidecarAccessReconciliationStage,
     agent_sidecar_participant_authority_digest,
+};
+use arkret_models_collaboration::events_payloads::sidecar::{
+    SidecarCreatePayload, SidecarEncryptionProfile,
 };
 use arkret_models_collaboration::sidecar_operations::{
     SidecarContextAttachPayload, SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody,
@@ -359,7 +363,8 @@ pub(crate) fn validate_sidecar_exchange_control_event(
     actor_id: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if operation.object_kind.as_str() != arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL {
+    if operation.event_kind.as_str() != arkret_wire::EventKind::AgentSidecarExchangeControl.as_str()
+    {
         return Ok(());
     }
     const REASON: &str = "sidecar_exchange_control_forbidden";
@@ -397,11 +402,11 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !matches!(
-        operation.object_kind.as_str(),
-        arkret_wire::EventKind::MLS_GENESIS
-            | arkret_wire::EventKind::MLS_PROPOSAL
-            | arkret_wire::EventKind::MLS_COMMIT
-            | arkret_wire::EventKind::MLS_WELCOME
+        &operation.event_kind,
+        arkret_wire::EventKind::MlsGenesis
+            | arkret_wire::EventKind::MlsProposal
+            | arkret_wire::EventKind::MlsCommit
+            | arkret_wire::EventKind::MlsWelcome
     ) {
         return Ok(());
     }
@@ -468,8 +473,8 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         .filter(|row| row.effective_scope == expected_scope)
         .max_by_key(|row| row.epoch)
         .map(|row| row.group_id.clone());
-    match operation.object_kind.as_str() {
-        arkret_wire::EventKind::MLS_GENESIS => {
+    match operation.event_kind.clone() {
+        arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
                 || operation
                     .payload
@@ -486,7 +491,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
                 return Err("mls_sidecar_genesis_authority_mismatch");
             }
         }
-        arkret_wire::EventKind::MLS_WELCOME => {
+        arkret_wire::EventKind::MlsWelcome => {
             if current_group.as_deref() != Some(payload_group_id) {
                 return Err("mls_sidecar_group_mismatch");
             }
@@ -646,14 +651,6 @@ fn sidecar_context_for_realm(
     }
 }
 
-fn event_payload_map(payload: Value) -> Result<BTreeMap<String, Value>, AppError> {
-    payload
-        .as_object()
-        .cloned()
-        .map(|fields| fields.into_iter().collect())
-        .ok_or_else(|| AppError::internal("Sidecar draft payload must be an object"))
-}
-
 fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEventDraft, AppError> {
     let unsigned_bytes = arkret_canonical::canonical_json_bytes(
         &event
@@ -678,50 +675,20 @@ fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEven
     })
 }
 
-fn new_unsigned_sidecar_event(
-    kind: &'static str,
-    realm_id: RealmId,
+fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
     actor_id: Did,
     actor_seq: u64,
+    hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
     refs: Vec<arkret_wire::EventRef>,
     created_at: chrono::DateTime<chrono::Utc>,
-    payload: Value,
+    payload: K::Payload,
 ) -> Result<arkret_wire::Event, AppError> {
-    let placeholder = EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
-        .expect("static content-bound Event placeholder is valid");
-    let mut event = arkret_wire::Event {
-        event_id: placeholder,
-        kind: arkret_wire::EventKind::from_wire(kind),
-        realm_id,
-        scope_ref,
-        actor_id,
-        executed_by: None,
-        authorization_ref: None,
-        applet_id: None,
-        external_ref: None,
-        actor_kind: None,
-        actor_seq,
-        created_at,
-        hlc: None,
-        prev_refs,
-        refs,
-        causal_refs: Vec::new(),
-        preconditions: Vec::new(),
-        seal_ref: None,
-        auth_context: None,
-        seal_basis: None,
-        payload: event_payload_map(payload)?,
-        redacts: None,
-        unsigned: BTreeMap::new(),
-        proofs: Vec::new(),
-        requirements: arkret_wire::EventRequirements::default(),
-    };
-    event.event_id = event
-        .derive_event_id()
-        .map_err(|error| AppError::internal(format!("Sidecar Event id derivation: {error}")))?;
-    Ok(event)
+    TypedEventDraft::<K>::new(scope_ref, actor_id, payload)
+        .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
+        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+        .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
 fn sidecar_reservation_key(handle: &arkret_wire::ReservationHandle) -> String {
@@ -867,18 +834,22 @@ async fn prepare_sidecar(
     .await?;
     let created_at = chrono::Utc::now();
     let create_event = if existing_sidecar.is_none() {
-        Some(new_unsigned_sidecar_event(
-            arkret_wire::EventKind::SIDECAR_CREATE,
-            body.source_realm_id.clone(),
+        Some(author_typed_sidecar_event::<
+            arkret_wire::event_spec::SidecarCreate,
+        >(
             arkret_wire::ScopeRef::Realm {
                 realm_id: body.source_realm_id.clone(),
             },
             controller_id.clone(),
             frontier.next_actor_seq,
+            arkret_identifiers::Hlc::new(state.hlc().now())
+                .map_err(|error| AppError::internal(format!("Sidecar create HLC: {error}")))?,
             frontier.frontier_event_ids.clone(),
             Vec::new(),
             created_at,
-            json!({"encryption_profile": "mls_rfc9420"}),
+            SidecarCreatePayload {
+                encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
+            },
         )?)
     } else {
         None
@@ -893,15 +864,15 @@ async fn prepare_sidecar(
         .next_actor_seq
         .checked_add(u64::from(create_event.is_some()))
         .ok_or_else(|| AppError::conflict("Sidecar actor sequence is exhausted"))?;
-    let attach_event = new_unsigned_sidecar_event(
-        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
-        body.source_realm_id.clone(),
+    let attach_event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarContextAttach>(
         arkret_wire::ScopeRef::Sidecar {
             realm_id: body.source_realm_id.clone(),
             sidecar_id: sidecar_id.clone(),
         },
         controller_id.clone(),
         attach_seq,
+        arkret_identifiers::Hlc::new(state.hlc().now())
+            .map_err(|error| AppError::internal(format!("Sidecar attach HLC: {error}")))?,
         create_event.as_ref().map_or_else(
             || frontier.frontier_event_ids.clone(),
             |event| vec![event.event_id.clone()],
@@ -916,13 +887,12 @@ async fn prepare_sidecar(
             })
             .unwrap_or_default(),
         created_at,
-        serde_json::to_value(SidecarContextAttachPayload {
+        SidecarContextAttachPayload {
             sidecar_id: sidecar_id.clone(),
             source_context_ref: body.context_ref.clone(),
             version: 1,
             predecessor_event_ref: None,
-        })
-        .map_err(|error| AppError::internal(format!("Sidecar context payload: {error}")))?,
+        },
     )?;
     let context_attach_event_id = attach_event.event_id.clone();
     let context_attach_event_draft = sidecar_event_draft(&attach_event)?;
@@ -1189,7 +1159,7 @@ async fn ensure_sidecar_impl(
             let sidecar_id = sidecar_prepared_sidecar_id(&prepared);
             let source_context_ref = body
                 .context_attach_event
-                .payload_as::<SidecarContextAttachPayload>()
+                .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
                 .map_err(|error| AppError::internal(format!("accepted Sidecar context: {error}")))?
                 .source_context_ref;
             let outcome = SidecarEnsureOutcome::Accepted {
@@ -1269,7 +1239,7 @@ async fn ensure_sidecar_impl(
             let sidecar_id = sidecar_prepared_sidecar_id(&prepared);
             let source_context_ref = body
                 .context_attach_event
-                .payload_as::<SidecarContextAttachPayload>()
+                .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
                 .map_err(|error| AppError::internal(format!("accepted Sidecar context: {error}")))?
                 .source_context_ref;
             let outcome = SidecarEnsureOutcome::Accepted {
@@ -1378,16 +1348,17 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b".to_owned())
                 .unwrap();
-        let event = new_unsigned_sidecar_event(
-            arkret_wire::EventKind::SIDECAR_CREATE,
-            realm_id.clone(),
+        let event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarCreate>(
             arkret_wire::ScopeRef::Realm { realm_id },
             Did::new("did:web:example.com:users:alice").unwrap(),
             1,
+            arkret_identifiers::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             Vec::new(),
             Vec::new(),
             created_at,
-            json!({"encryption_profile": "mls_rfc9420"}),
+            SidecarCreatePayload {
+                encryption_profile: SidecarEncryptionProfile::MlsRfc9420,
+            },
         )
         .unwrap();
         event.verify_event_id_matches_content().unwrap();

@@ -209,8 +209,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let create = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::REALM_CREATE,
+    let create = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         Did::new("did:web:alice.example").unwrap(),
         0,
@@ -707,11 +707,11 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .collect::<Vec<_>>();
     assert_eq!(install_events.len(), accepted_event_refs.len());
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::EventKind::APPLET_REGISTRATION
+        event.kind == arkret_wire::EventKind::AppletRegistration
             && event.envelope["payload"]["applet_id"] == json!(applet_id)
     }));
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::EventKind::CAPABILITY_GRANT
+        event.kind == arkret_wire::EventKind::CapabilityGrant
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_kind"]
                 == json!("authority_control")
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_subkind"]
@@ -1173,7 +1173,7 @@ async fn applet_message_event(
             "body": text,
         },
     });
-    let mut event = arkret_wire::Event::new_with_derived_id_at(
+    let mut event = arkret_wire::test_support::raw_event_at(
         "ak.message.create",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new((*realm_id).to_owned())
@@ -1757,8 +1757,8 @@ async fn signed_install_events(
     let now =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let millis = now.timestamp_millis().max(0) as u64;
-    let mut registration_event = Event::new(
-        arkret_wire::EventKind::APPLET_REGISTRATION,
+    let mut registration_event = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::AppletRegistration.as_str(),
         scope_ref.clone(),
         actor_id.clone(),
         frontier.actor_seq + 1,
@@ -1815,8 +1815,8 @@ async fn signed_install_events(
         };
         let payload = CapabilityGrantPayload { grant };
         let counter = offset + 2;
-        let mut event = Event::new(
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+        let mut event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             scope_ref.clone(),
             actor_id.clone(),
             frontier.actor_seq + counter as u64,
@@ -1894,8 +1894,8 @@ async fn signed_revoke_events(
     let mut submissions = Vec::with_capacity(intents.len());
     for (offset, intent) in intents.iter().enumerate() {
         let counter = offset + 1;
-        let mut event = Event::new(
-            arkret_wire::EventKind::CAPABILITY_REVOKE,
+        let mut event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::CapabilityRevoke.as_str(),
             scope_ref.clone(),
             actor_id.clone(),
             frontier.actor_seq + counter as u64,

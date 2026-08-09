@@ -1,8 +1,6 @@
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::routing::events::event_log::DataEventQueryGrade;
-
 /// The registry projection evaluator for a bootstrap unit.
 ///
 /// A genesis unit has no accepted Realm yet, so there is no
@@ -174,170 +172,25 @@ pub(in crate::routing) fn projection_operation_from_event(
         tracing::debug!(kind = %parsed.kind, "projection: kind is not registered");
         return None;
     }
-    let realm_id_raw = parsed.realm_id.clone();
-    let realm_id = match RealmId::new(realm_id_raw.clone()) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::debug!(kind = %parsed.kind, realm_id = %realm_id_raw, %error, "projection: RealmId::new failed");
-            return None;
-        }
-    };
-    let mut payload = envelope
-        .get("payload")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let Some(payload_object) = payload.as_object_mut() else {
-        tracing::debug!(kind = %parsed.kind, "projection: payload not an object");
-        return None;
-    };
-    payload_object
-        .entry("event_id".to_owned())
-        .or_insert_with(|| Value::String(parsed.event_id.clone()));
-    payload_object
-        .entry("sender".to_owned())
-        .or_insert_with(|| Value::String(parsed.actor_id.clone()));
-    if matches!(parsed.data_event_query_grade, DataEventQueryGrade::Stale) {
-        payload_object.insert("query_grade".to_owned(), Value::String("stale".to_owned()));
-    }
-    if let Some(hlc) = envelope.get("hlc").and_then(Value::as_str) {
-        payload_object
-            .entry("hlc".to_owned())
-            .or_insert_with(|| Value::String(hlc.to_owned()));
-    }
-    // morph.md §4.1 S1 — the schema-migration preflight validates that the
-    // event `requirements.schema[]` binds the migration schema set. That field
-    // lives on the envelope, not the payload, so surface it on the projection
-    // operation for this kind (scoped to avoid changing other reducers' payload
-    // shape).
-    if parsed.kind == arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE
-        && let Some(requirements) = envelope.get("requirements")
-    {
-        payload_object
-            .entry("requirements".to_owned())
-            .or_insert_with(|| requirements.clone());
-    }
-    // ak.rsvp.set converges through the mv_register cell, so the projection
-    // needs the envelope causal edges: they decide both the schedule-basis
-    // subset admission and which existing heads this response dominates.
-    // Scoped to this kind so other reducers keep their payload shape.
-    if matches!(
-        parsed.kind.as_str(),
-        arkret_wire::EventKind::RSVP_SET | arkret_wire::EventKind::STRAND_UPDATE
-    ) && let Some(causal_refs) = envelope.get("causal_refs")
-    {
-        payload_object.insert("envelope_causal_refs".to_owned(), causal_refs.clone());
-    }
-    if parsed.kind == arkret_wire::EventKind::RSVP_SET
-        && let Some(digest) = envelope
-            .get("proofs")
-            .and_then(Value::as_array)
-            .and_then(|proofs| proofs.first())
-            .and_then(|proof| proof.get("event_digest"))
-    {
-        payload_object
-            .entry("canonical_event_digest".to_owned())
-            .or_insert_with(|| digest.clone());
-    }
-    if parsed.kind == arkret_wire::EventKind::APPLET_REGISTRATION
-        && let Some(scope_ref) = envelope.get("scope_ref")
-    {
-        payload_object.insert("accepted_scope_ref".to_owned(), scope_ref.clone());
-    }
-    if parsed.kind == arkret_wire::EventKind::RELATION_CREATE {
-        normalize_relation_create_payload(payload_object, parsed);
-    }
-    if let Some(target_ref) = payload_object
-        .get("target_ref")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        && target_ref.starts_with("ak:strand:")
-    {
-        payload_object
-            .entry("strand_id".to_owned())
-            .or_insert_with(|| Value::String(target_ref.clone()));
-    }
-    if !payload_object.contains_key("thread_id")
-        && let Some(strand_id) = payload_object
-            .get("strand_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    {
-        payload_object.insert("thread_id".to_owned(), Value::String(strand_id));
-    }
-    payload_object.remove("executed_by");
-    payload_object.remove("authorization_ref");
-    if let Some(executed_by) = envelope.get("executed_by").and_then(Value::as_str) {
-        payload_object.insert(
-            "executed_by".to_owned(),
-            Value::String(executed_by.to_owned()),
-        );
-        if let Some(authorization_ref) = envelope.get("authorization_ref").and_then(Value::as_str) {
-            payload_object.insert(
-                "authorization_ref".to_owned(),
-                Value::String(authorization_ref.to_owned()),
-            );
-        }
-    }
-    if parsed.kind == arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE {
-        if let Some(authorization_ref) = parsed.authorized_refs.first() {
-            payload_object
-                .entry("authorization_ref".to_owned())
-                .or_insert_with(|| Value::String(authorization_ref.clone()));
-        }
-        payload_object
-            .entry("capability_action".to_owned())
-            .or_insert_with(|| Value::String("ak.morph.schema.migrate".to_owned()));
-    }
-    if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
-        payload_object
-            .entry("seal_ref".to_owned())
-            .or_insert_with(|| Value::String(seal_ref.to_owned()));
-    }
-    if let Some(seal_basis) = envelope.get("seal_basis") {
-        payload_object
-            .entry("seal_basis".to_owned())
-            .or_insert_with(|| seal_basis.clone());
-    }
-    if let Some(preconditions) = envelope.get("preconditions") {
-        payload_object
-            .entry("preconditions".to_owned())
-            .or_insert_with(|| preconditions.clone());
-    }
-    if let Some(effects) = envelope.get("effects") {
-        payload_object
-            .entry("effects".to_owned())
-            .or_insert_with(|| effects.clone());
-    }
-    if matches!(
-        parsed.kind.as_str(),
-        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_wire::EventKind::AGENT_KEY_REVOKE
-            | arkret_wire::EventKind::CALL_RECORDING_START
-    ) {
-        payload_object.insert(
-            "accepted_event_id".to_owned(),
-            Value::String(parsed.event_id.clone()),
-        );
-    }
     let Some(operation_id) = event_operation_id(envelope, &parsed.event_id) else {
         tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, "projection: event_operation_id failed");
         return None;
     };
-    let mut operation = Operation::create(
+    let event = event_for_canonical_digest(envelope).map_err(|error| {
+        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, %error, "projection: SDK Event decode failed");
+        error
+    }).ok()?;
+    Operation::from_accepted_event(
         operation_id,
-        realm_id,
-        parsed.kind.clone(),
-        Value::Object(payload_object.clone()),
-    );
-    operation.refs = event_refs(envelope.get("refs"));
-    operation.canonical_event_digest = Some(parsed.canonical_digest.clone());
-    operation.created_at = envelope
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .unwrap_or_else(now);
-    Some(operation)
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .map_err(|error| {
+        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, %error, "projection: SDK accepted Event projection failed");
+        error
+    })
+    .ok()
 }
 
 /// Rebuild the exact internal projection DTO used at admission from one
@@ -391,53 +244,6 @@ pub(crate) fn projection_operation_from_canonical_record(
         data_event_query_grade: DataEventQueryGrade::Observed,
     };
     projection_operation_from_event(&parsed, &record.envelope)
-}
-
-fn normalize_relation_create_payload(
-    payload_object: &mut serde_json::Map<String, Value>,
-    parsed: &ValidatedEventEnvelope,
-) {
-    if let Some(relation) = payload_object
-        .get("relation")
-        .and_then(Value::as_object)
-        .cloned()
-    {
-        if let Some(id) = relation
-            .get("id")
-            .or_else(|| relation.get("relation_id"))
-            .and_then(Value::as_str)
-        {
-            payload_object
-                .entry("relation_id".to_owned())
-                .or_insert_with(|| Value::String(id.to_owned()));
-        }
-        if let Some(relation_kind) = relation
-            .get("relation_kind")
-            .or_else(|| relation.get("kind"))
-            .and_then(Value::as_str)
-        {
-            payload_object
-                .entry("relation_kind".to_owned())
-                .or_insert_with(|| Value::String(relation_kind.to_owned()));
-        }
-        for field in ["from_ref", "to_ref", "rank", "fields", "scope_circle_id"] {
-            if let Some(value) = relation.get(field) {
-                payload_object
-                    .entry(field.to_owned())
-                    .or_insert_with(|| value.clone());
-            }
-        }
-    }
-
-    if !payload_object.contains_key("relation_id")
-        && !payload_object.contains_key("id")
-        && let Some(suffix) = parsed.event_id.strip_prefix("ak:event:")
-    {
-        payload_object.insert(
-            "relation_id".to_owned(),
-            Value::String(format!("ak:relation:{suffix}")),
-        );
-    }
 }
 
 /// Domain separator for the Operation handle soland derives for an accepted
@@ -500,133 +306,6 @@ fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     .ok()
 }
 
-#[cfg(test)]
-mod projection_operation_tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn parsed(kind: &str) -> ValidatedEventEnvelope {
-        ValidatedEventEnvelope {
-            event_id: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
-            actor_seq: 1,
-            realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
-            kind: kind.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            prev_refs: Vec::new(),
-            authorized_refs: Vec::new(),
-            canonical_digest: "sha256:test".to_owned(),
-            canonical_bytes: Vec::new(),
-            data_event_query_grade: DataEventQueryGrade::Observed,
-        }
-    }
-
-    #[test]
-    fn accepted_event_id_is_only_projected_for_agent_key_authorize() {
-        let agent_key = projection_operation_from_event(
-            &parsed(arkret_wire::EventKind::AGENT_KEY_AUTHORIZE),
-            &json!({ "payload": { "agent_id": "did:web:agent.example", "key_id": "ak:agent_key:test" } }),
-        )
-        .unwrap();
-        assert_eq!(
-            agent_key
-                .payload
-                .get("accepted_event_id")
-                .and_then(Value::as_str),
-            Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
-        );
-
-        let device_authorize = projection_operation_from_event(
-            &parsed(arkret_wire::EventKind::DEVICE_AUTHORIZE),
-            &json!({ "payload": {} }),
-        )
-        .unwrap();
-        assert!(device_authorize.payload.get("accepted_event_id").is_none());
-
-        let agent_key_revoke = projection_operation_from_event(
-            &parsed(arkret_wire::EventKind::AGENT_KEY_REVOKE),
-            &json!({ "payload": {} }),
-        )
-        .unwrap();
-        assert_eq!(
-            agent_key_revoke
-                .payload
-                .get("accepted_event_id")
-                .and_then(Value::as_str),
-            Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
-        );
-    }
-
-    #[test]
-    fn agent_key_authorize_projection_passes_reducer_schema_validation() {
-        let kind = arkret_wire::EventKind::AGENT_KEY_AUTHORIZE;
-        let operation = projection_operation_from_event(
-            &parsed(kind),
-            &json!({
-                "payload": {
-                    "agent_id": "did:web:agent.example",
-                    "key_id": "did:web:agent.example#runtime-1",
-                    "verification_method": "did:web:agent.example#runtime-1",
-                    "public_key_digest": concat!(
-                        "sha256:",
-                        "1111111111111111111111111111111111111111111111111111111111111111"
-                    ),
-                    "signing_key_binding_digest": concat!(
-                        "sha256:",
-                        "2222222222222222222222222222222222222222222222222222222222222222"
-                    ),
-                    "accountable_principal_id": "did:web:controller.example",
-                    "agent_key_scope": {
-                        "actions": ["ak.self.events.command.submit"],
-                        "resources": [{
-                            "kind": "operation",
-                            "operation": "ak.self.events.command.submit"
-                        }]
-                    },
-                    "audience": ["did:web:principal.example"],
-                    "issued_at": "2026-07-20T15:09:03.628Z",
-                    "approval_evidence": {
-                        "kind": "pairing_request",
-                        "request_canonical_digest": concat!(
-                            "sha256:",
-                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        ),
-                        "pairing_request_id": "agent_pairing_request:test",
-                        "approved_by": "did:web:controller.example"
-                    }
-                }
-            }),
-        )
-        .expect("valid Agent key Event must build its canonical projection Operation");
-
-        assert_eq!(
-            crate::routing::events::operations::validate_operation_payload_schema(kind, &operation),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn realm_bootstrap_join_and_discovery_facets_are_projectable() {
-        for (kind, value) in [
-            (arkret_wire::EventKind::REALM_JOIN_RULE, "invite"),
-            (arkret_wire::EventKind::REALM_DISCOVERY, "listed"),
-        ] {
-            let operation = projection_operation_from_event(
-                &parsed(kind),
-                &json!({ "payload": { "value": value } }),
-            )
-            .unwrap_or_else(|| panic!("{kind} must build a projection Operation"));
-
-            assert_eq!(
-                operation.payload.get("value").and_then(Value::as_str),
-                Some(value)
-            );
-        }
-    }
-}
-
 /// Resolve the Event's producer-signed `scope_ref` for read-path visibility.
 pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     let scope = envelope.get("scope_ref")?.as_object()?;
@@ -670,7 +349,7 @@ pub(crate) fn sdk_event_for_state(
     record: &CanonicalEventRecord,
 ) -> Result<Event, AppError> {
     let realm_id = canonical_realm_id_for_record(record);
-    let actor_erased = record.kind != arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT
+    let actor_erased = record.kind != arkret_wire::EventKind::AuditErasureReceipt.as_str()
         && realm_id.as_deref().is_some_and(|realm_id| {
             actor_erased_in_realm(&state.projections().snapshot(), &record.actor_id, realm_id)
         });

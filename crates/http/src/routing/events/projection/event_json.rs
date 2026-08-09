@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::json;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
@@ -18,7 +18,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         "event_id": event.event_id,
         "message_id": message_id_from_event_id(&event.event_id),
         "realm_id": event.realm_id,
-        "event_kind": event.event_kind,
+        "event_kind": event.event_kind.as_str(),
         "operation_kind": event.operation_kind,
         "operation_id": event.operation_id,
         "sender": event.sender,
@@ -41,12 +41,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
 }
 
 pub fn operation_event_id(operation: &Operation) -> String {
-    operation
-        .payload
-        .get("event_id")
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| operation.operation_id.to_string())
+    operation.context.event_id.to_string()
 }
 
 pub fn operation_type_string(operation: &Operation) -> String {

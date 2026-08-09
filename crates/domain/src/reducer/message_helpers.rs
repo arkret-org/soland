@@ -3,7 +3,7 @@
 //! re-exports them (`pub(crate) use`) so in-crate `super::*` consumers
 //! and sibling `apply_*` modules keep resolving these by name.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_wire::ReadCursorScope as ReadScopeWire;
 use serde_json::Value;
 
@@ -19,10 +19,10 @@ use super::PollOptionState;
 /// from the Event the projection already carries.
 pub(crate) fn event_derived_object_id(operation: &Operation, kind_prefix: &str) -> Option<String> {
     operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .and_then(|event_id| event_id.strip_prefix("ak:event:"))
+        .context
+        .event_id
+        .as_str()
+        .strip_prefix("ak:event:")
         .map(|suffix| format!("{kind_prefix}{suffix}"))
 }
 
@@ -101,10 +101,7 @@ pub(crate) fn reaction_target_event_id(operation: &Operation) -> Option<String> 
 /// back to the operation id string, preserving the projection's
 /// non-optional sender attribution.
 pub(crate) fn operation_actor_id(operation: &Operation) -> String {
-    operation
-        .actor()
-        .map(|did| did.to_string())
-        .unwrap_or_else(|| operation.operation_id.to_string())
+    operation.context.sender.to_string()
 }
 
 pub(crate) fn pin_scope_key(pin_scope: &Value) -> Option<String> {

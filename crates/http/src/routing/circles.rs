@@ -11,14 +11,9 @@
 //! sign for the caller (spec `zh/extensions/capabilities.md` sections 118/361,
 //! `zh/security/key-management.md` section 411).
 //!
-//! The remaining handlers still build a `ak.circle.*` Operation and route it
-//! through the `accept_local_operations` pipeline so the reducer's invariants
-//! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
-//! `circle_not_active`, the lifecycle transition matrix) fire identically
-//! to events arriving over the wire. That pipeline persists no Event, so each of
-//! them is still declaring a durable `event_log` effect it cannot produce; they
-//! are tracked in `EVENT_LOG_OPERATIONS_WITHOUT_A_SIGNED_REQUEST` in
-//! `arkret-spec/tools/lint_artifacts.py` and close the same way create just did.
+//! Mutating handlers accept caller-signed Events. A route whose request shape
+//! cannot carry the signature fails closed instead of manufacturing a local
+//! projection with no durable Event.
 //!
 //! Routes (mirror of `/_soland/self/realms` / `/_soland/self/spaces` style):
 //!
@@ -37,8 +32,7 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{CircleId, Did, EventId, OperationId, RealmId};
+use arkret_identifiers::{CircleId, Did, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberRequestBody,
     CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval, CircleRestoreRequestBody,
@@ -61,7 +55,7 @@ use soland_services::projection::{
     MlsRemoveObligationView as MlsRemoveObligation, ProjectionSnapshot as ProjectionState,
 };
 
-use super::{AuthArgs, accept_local_operations};
+use super::AuthArgs;
 use crate::ids;
 use crate::routing::events::event_log::{
     submit_event_value, submit_initial_event_submission, submit_one_error_to_app_error,
@@ -273,9 +267,12 @@ fn validate_scope_rotate_events(
     let mut saw_commit = false;
     let mut group_ref = circle.mls_group_ref.clone();
     for event in events {
-        let kind = event.kind.as_str();
+        let kind = &event.kind;
         match kind {
-            "ak.mls.genesis" | "ak.mls.proposal" | "ak.mls.commit" | "ak.mls.welcome" => {}
+            arkret_wire::EventKind::MlsGenesis
+            | arkret_wire::EventKind::MlsProposal
+            | arkret_wire::EventKind::MlsCommit
+            | arkret_wire::EventKind::MlsWelcome => {}
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_event_kind_invalid",
@@ -318,7 +315,7 @@ fn validate_scope_rotate_events(
             Some(_) => {}
             None => group_ref = Some(event_group_ref),
         }
-        if kind == "ak.mls.commit" {
+        if kind == &arkret_wire::EventKind::MlsCommit {
             saw_commit = true;
         }
     }
@@ -441,7 +438,7 @@ async fn post_circle(
 /// the authenticated session and the Event it submitted, plus the two fields the
 /// reducer owns and an actor therefore MUST NOT supply.
 fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId, AppError> {
-    if event.kind != arkret_wire::EventKind::CIRCLE_CREATE {
+    if event.kind != arkret_wire::EventKind::CircleCreate {
         return Err(AppError::invalid_param(
             "create_event.event.kind must be ak.circle.create",
         ));
@@ -551,7 +548,7 @@ fn caller_signed_circle_member_target(
     circle_id: &str,
     event: &Event,
 ) -> Result<CircleMemberTarget, AppError> {
-    if event.kind != arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
+    if event.kind != arkret_wire::EventKind::CircleMemberState {
         return Err(AppError::invalid_param(
             "member_event.event.kind must be ak.circle.member.state",
         ));
@@ -617,30 +614,9 @@ async fn delete_circle_member(
         )
         .await?;
     }
-    let payload = json!({
-        "circle_id": circle_id,
-        "actor_id": actor_id,
-        "membership": "leave",
-        "sender": session.actor.clone(),
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
-    json_ok(CircleMembershipOutcome {
-        circle_id: CircleId::new(circle_id)
-            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
-        actor_id: Did::new(actor_id)
-            .map_err(|e| AppError::invalid_param(format!("actor_id: {e}")))?,
-        membership: CircleMembership::Leave,
-    })
+    Err(AppError::unsupported_feature(
+        "circle member removal requires a caller-signed ak.circle.member.state Event",
+    ))
 }
 
 #[endpoint(
@@ -746,7 +722,7 @@ async fn post_circle_archive(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_wire::EventKind::CIRCLE_ARCHIVE,
+        arkret_wire::EventKind::CircleArchive,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -770,7 +746,7 @@ async fn post_circle_restore(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_wire::EventKind::CIRCLE_RESTORE,
+        arkret_wire::EventKind::CircleRestore,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -794,7 +770,7 @@ async fn post_circle_tombstone(
         req,
         aa,
         circle_id.into_inner(),
-        arkret_wire::EventKind::CIRCLE_TOMBSTONE,
+        arkret_wire::EventKind::CircleTombstone,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -805,14 +781,14 @@ async fn submit_circle_lifecycle(
     req: &mut Request,
     aa: AuthArgs,
     circle_id: String,
-    kind: &'static str,
+    kind: arkret_wire::EventKind,
     submission: arkret_wire::EventInitialSubmission,
 ) -> JsonResult<CircleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     // `ak.circle.manage` and the lifecycle transition matrix are both the
     // admission path's job now; this only binds the submitted Event to the path.
-    caller_signed_circle_lifecycle_target(&session.actor, &circle_id, kind, &submission.event)?;
+    caller_signed_circle_lifecycle_target(&session.actor, &circle_id, &kind, &submission.event)?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
     let projection = state.projections().snapshot();
     // For tombstone the read-helper hides the row; fall back to direct
@@ -833,10 +809,10 @@ async fn submit_circle_lifecycle(
 fn caller_signed_circle_lifecycle_target(
     actor: &str,
     circle_id: &str,
-    kind: &'static str,
+    kind: &arkret_wire::EventKind,
     event: &Event,
 ) -> Result<(), AppError> {
-    if event.kind.as_str() != kind {
+    if &event.kind != kind {
         return Err(AppError::invalid_param(format!(
             "lifecycle_event.event.kind must be {kind}"
         )));
@@ -960,7 +936,7 @@ mod tests {
     fn circle_create_event(object: Value) -> Event {
         serde_json::from_value(json!({
             "event_id": CREATE_EVENT,
-            "kind": arkret_wire::EventKind::CIRCLE_CREATE,
+            "kind": arkret_wire::EventKind::CircleCreate,
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": ACTOR,
@@ -1032,7 +1008,7 @@ mod tests {
     fn member_state_event(actor: &str, payload: Value) -> Event {
         serde_json::from_value(json!({
             "event_id": "ak:event:AQjIQt4hWgG0gHmho_Q8M--CUwYCFv3bpsg0dgfdcgs-",
-            "kind": arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+            "kind": arkret_wire::EventKind::CircleMemberState,
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": actor,
@@ -1100,8 +1076,12 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CIRCLE_ARCHIVE,
-            &lifecycle_event(arkret_wire::EventKind::CIRCLE_ARCHIVE, ACTOR, CIRCLE),
+            arkret_wire::EventKind::CircleArchive,
+            &lifecycle_event(
+                arkret_wire::EventKind::CircleArchive.as_str(),
+                ACTOR,
+                CIRCLE,
+            ),
         )
         .unwrap();
 
@@ -1109,8 +1089,12 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CIRCLE_ARCHIVE,
-            &lifecycle_event(arkret_wire::EventKind::CIRCLE_TOMBSTONE, ACTOR, CIRCLE),
+            arkret_wire::EventKind::CircleArchive,
+            &lifecycle_event(
+                arkret_wire::EventKind::CircleTombstone.as_str(),
+                ACTOR,
+                CIRCLE,
+            ),
         )
         .expect_err("the archive surface must not accept a tombstone Event");
 
@@ -1119,9 +1103,9 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CIRCLE_ARCHIVE,
+            arkret_wire::EventKind::CircleArchive,
             &lifecycle_event(
-                arkret_wire::EventKind::CIRCLE_ARCHIVE,
+                arkret_wire::EventKind::CircleArchive.as_str(),
                 ACTOR,
                 "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
             ),

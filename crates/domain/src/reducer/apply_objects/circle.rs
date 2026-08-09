@@ -130,9 +130,7 @@ impl ProjectionState {
         let created_by = object
             .get("created_by")
             .and_then(Value::as_str)
-            .or_else(|| payload.get("sender").and_then(Value::as_str))
-            .unwrap_or("")
-            .to_owned();
+            .map_or_else(|| operation.context.sender.to_string(), ToOwned::to_owned);
         let projection = CircleProjection {
             circle_id: circle_id.to_owned(),
             realm_id: realm_id.clone(),
@@ -266,10 +264,7 @@ impl ProjectionState {
                 circle.metadata_encryption_floor = floor.as_str().map(ToOwned::to_owned);
             }
         }
-        circle.updated_by = payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
         ProjectionEffect::CircleLifecycle {
             circle_id,
@@ -320,10 +315,7 @@ impl ProjectionState {
         }
         circle.state = target;
         circle.state_changed_at = Some(now);
-        circle.updated_by = payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
         let tombstoned_mls_scope = if target == CircleLifecycleState::Tombstoned {
             let members = if circle.encryption_profile == "mls_rfc9420" {
@@ -398,15 +390,7 @@ impl ProjectionState {
         // The requester (`sender`) is distinct from the membership target
         // (`actor`). When they differ, the operation is "admin pulls another
         // actor into the Circle"; when they match, it is a self-service join.
-        let Some(sender) = payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "circle_member_state_missing_sender".to_owned(),
-            };
-        };
+        let sender = operation.context.sender.to_string();
         // Snapshot the parent Realm id + the Circle's `join_rule` and the
         // target's current active-membership BEFORE taking a mutable borrow on
         // the Circle entry so we can run the strict-subset and AKP-0007 §8
@@ -481,12 +465,7 @@ impl ProjectionState {
         match target_state.as_str() {
             "join" => {
                 circle.members.insert(actor.clone());
-                let control_ref = operation
-                    .payload
-                    .get("event_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_else(|| operation.operation_id.as_str())
-                    .to_owned();
+                let control_ref = operation.context.event_id.to_string();
                 self.circle_member_join_refs
                     .insert((circle_id.clone(), actor.clone()), control_ref);
             }
@@ -509,10 +488,7 @@ impl ProjectionState {
                 };
             }
         }
-        circle.updated_by = payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
         self.update_circle_membership_projection(&circle_id, &actor, &target_state, now);
         if let Some((realm_id, mls_group_ref)) = removed_mls_member {

@@ -21,7 +21,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
-use soland_services::events::{MessageState, ProjectedEvent as ProjectionEventRecord};
+use soland_services::events::MessageState;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
@@ -77,7 +77,7 @@ fn validate_formal_install_events(
     let package = &commit.applet_package;
     let realm_id = commit.effective_scope.realm_id();
     let registration = &commit.registration_event;
-    if registration.kind.as_str() != arkret_wire::EventKind::APPLET_REGISTRATION
+    if registration.kind != arkret_wire::EventKind::AppletRegistration
         || registration.actor_id.as_str() != install_actor
         || &registration.realm_id != realm_id
         || registration.scope_ref != commit.effective_scope
@@ -138,7 +138,7 @@ fn validate_formal_install_events(
     let mut event_ids = BTreeSet::new();
 
     for event in &commit.capability_grant_events {
-        if event.kind.as_str() != arkret_wire::EventKind::CAPABILITY_GRANT
+        if event.kind != arkret_wire::EventKind::CapabilityGrant
             || event.actor_id.as_str() != install_actor
             || &event.realm_id != realm_id
             || event.scope_ref != commit.effective_scope
@@ -545,7 +545,7 @@ fn install_execution_steps(
     if let Some(event) = record.registration_event.as_ref() {
         steps.push(install_execution_step(
             0,
-            arkret_wire::EventKind::APPLET_REGISTRATION,
+            arkret_wire::EventKind::AppletRegistration,
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!("registration Event serialization failed: {error}"))
@@ -558,7 +558,7 @@ fn install_execution_steps(
         let grant_id = arkret_identifiers::GrantId::from_event_id(&event.event_id);
         steps.push(install_execution_step(
             offset + 1,
-            arkret_wire::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CapabilityGrant,
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!(
@@ -733,35 +733,6 @@ pub(super) async fn append_portal_message(
         tracing::error!(%error, "applet bridge: failed to persist portal MessageRecord");
         return Err(AppError::internal("failed to persist portal message"));
     }
-    let projection_record = ProjectionEventRecord {
-        event_id: event_id.clone(),
-        realm_id: realm_id.to_owned(),
-        event_kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
-        operation_kind: "applet_portal_ingress".to_owned(),
-        operation_id: Some(operation_id.clone()),
-        sender: Some(ghost.ghost_actor_id.clone()),
-        payload: json!({
-            "thread_id": thread_id,
-            "content": content_with_portal,
-            "encrypted": false,
-            "portal_realm_id": applet.portal_realm_id,
-            "applet_id": applet.applet_id,
-            "bot_actor_id": applet.bot_actor_id,
-            "ghost_actor_id": ghost.ghost_actor_id,
-            "external_id": ghost.external_id,
-        }),
-        created_at,
-        received_at: chrono::Utc::now(),
-    };
-    if let Err(error) = crate::routing::events::projection::persist_and_publish_projection_event(
-        state,
-        projection_record,
-    )
-    .await
-    {
-        tracing::error!(%error, "applet bridge: failed to append projection event");
-        return Err(AppError::internal("failed to persist portal projection"));
-    }
     Ok(AppletPortalMessageOutcome {
         message_id: message_record.message_id.clone(),
         event_id,
@@ -814,10 +785,10 @@ pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, A
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| AppError::invalid_param("payload.text is required"))?;
-    Ok(Some(json!({
-        "kind": "ak.content.text",
-        "body": text,
-    })))
+    arkret_models_collaboration::events_payloads::message::ContentBlock::text(text)
+        .to_value()
+        .map(Some)
+        .map_err(|error| AppError::internal(format!("portal message content: {error}")))
 }
 
 pub(super) fn enrich_content_with_portal_metadata(
@@ -1119,7 +1090,7 @@ pub(super) async fn build_install_plan(
         "approved_scopes": approved_scopes,
         "denied_scopes": denied_scopes,
         "events_to_submit": [{
-            "event_kind": arkret_wire::EventKind::APPLET_REGISTRATION,
+            "event_kind": arkret_wire::EventKind::AppletRegistration,
             "payload": registration_payload,
         }],
         "capability_constraints": capability_constraints_for_scope(scope),
@@ -1145,7 +1116,9 @@ pub(super) async fn build_install_plan(
         approved_scopes,
         denied_scopes,
         events_to_submit: vec![EventSubmission {
-            event_kind: arkret_wire::EventKind::APPLET_REGISTRATION.to_owned(),
+            event_kind: arkret_wire::EventKind::AppletRegistration
+                .as_str()
+                .to_owned(),
             payload: event_payload,
             refs: None,
         }],
@@ -1711,8 +1684,8 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let registration_event = Event::new_with_derived_id_at(
-            arkret_wire::EventKind::APPLET_REGISTRATION,
+        let registration_event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::AppletRegistration.as_str(),
             scope_ref.clone(),
             actor_id.clone(),
             1,
@@ -1726,8 +1699,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(offset, grant_id)| {
-                Event::new_with_derived_id_at(
-                    arkret_wire::EventKind::CAPABILITY_GRANT,
+                arkret_wire::test_support::raw_event_at(
+                    arkret_wire::EventKind::CapabilityGrant.as_str(),
                     scope_ref.clone(),
                     actor_id.clone(),
                     offset as u64 + 2,
@@ -1903,7 +1876,7 @@ mod tests {
         assert_eq!(pending_steps.len(), 3);
         assert_eq!(
             pending_steps[0]["target_event_kind"],
-            json!(arkret_wire::EventKind::APPLET_REGISTRATION)
+            json!(arkret_wire::EventKind::AppletRegistration)
         );
         assert_eq!(pending_steps[0]["status"], json!("pending"));
         assert_eq!(pending_steps[0]["event_ref"], Value::Null);

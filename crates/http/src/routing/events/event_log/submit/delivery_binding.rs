@@ -95,7 +95,7 @@ async fn realm_sync_endpoint_binding_is_current(
     };
     let Some(policy_bundle) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
     else {
         return false;
     };

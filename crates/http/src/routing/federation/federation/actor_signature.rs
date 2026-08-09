@@ -2,46 +2,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
-use serde_json::{Value, json};
 use soland_http::error::AppError;
 
 use crate::state::AppState;
-
-pub(super) fn federation_verify_actor_unsigned_digest(
-    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
-) -> Result<String, &'static str> {
-    let mut value = serde_json::to_value(body)
-        .map_err(|_| "federation verify-actor request must serialize to JSON")?;
-    let Some(object) = value.as_object_mut() else {
-        return Err("federation verify-actor request must serialize to a JSON object");
-    };
-    object.remove("signature");
-    arkret_canonical::canonical_sha256(&value)
-        .map_err(|_| "federation verify-actor unsigned request must be canonical JSON")
-}
-
-/// Federation actor signature transcript v1.
-///
-/// The actor signs the canonical JSON bytes of this object. It deliberately
-/// covers the digest of the verify-actor request with `signature` removed:
-/// signing the full body would be self-referential because the signature field
-/// is populated after signing. The HTTP message signature still binds the
-/// complete request body, including `signature`, through `Content-Digest`.
-fn federation_verify_actor_signature_transcript(
-    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
-    unsigned_request_digest: &str,
-) -> Value {
-    let scope_id = body.realm_id.as_ref().map(|value| value.as_str());
-    json!({
-        "type": "ak.federation.verify_actor.signature.v1",
-        "actor_id": body.actor_id.as_str(),
-        "purpose": body.purpose,
-        "challenge": body.challenge,
-        "signed_payload_digest": body.signed_payload_digest.as_ref().map(|digest| digest.as_str()),
-        "realm_id": scope_id,
-        "request_binding_digest": unsigned_request_digest,
-    })
-}
 
 pub(super) struct VerifiedFederationActor {
     pub(super) verified_key_id: String,
@@ -58,7 +21,6 @@ struct FederationActorSignature {
 pub(super) async fn verify_federation_actor_signature(
     state: &AppState,
     body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
-    unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = FederationActorSignature {
         verification_method: body.signature.key_id.clone(),
@@ -81,8 +43,8 @@ pub(super) async fn verify_federation_actor_signature(
         }
     })?;
 
-    let transcript = federation_verify_actor_signature_transcript(body, unsigned_request_digest);
-    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = body
+        .actor_signature_transcript_bytes()
         .map_err(|error| AppError::internal(format!("verify-actor transcript failed: {error}")))?;
 
     if let Some(jws) = actor_signature.jws.as_deref() {

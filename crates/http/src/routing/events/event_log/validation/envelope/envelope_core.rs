@@ -11,7 +11,7 @@ pub(crate) async fn validate_event_envelope(
 }
 
 fn require_verified_mls_commit_frontier_material(kind: &str) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::EventKind::MLS_COMMIT {
+    if kind != arkret_wire::event_kind_str::MLS_COMMIT {
         return Ok(());
     }
     Err(EventValidationError {
@@ -343,7 +343,7 @@ async fn validate_event_envelope_with_ingress(
     // recover its stored Control Proposal Ack. Let an already accepted Event id
     // reach the submitter's canonical-byte duplicate check; only a different
     // create for the existing Realm is a `realm_already_exists` conflict here.
-    let historical_realm_create = if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists {
+    let historical_realm_create = if kind == arkret_wire::EventKind::RealmCreate && realm_exists {
         state
             .event_queries()
             .canonical_event(&event_id)
@@ -359,7 +359,7 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists && !historical_realm_create {
+    if kind == arkret_wire::EventKind::RealmCreate && realm_exists && !historical_realm_create {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -393,7 +393,7 @@ async fn validate_event_envelope_with_ingress(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
-    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -407,7 +407,7 @@ async fn validate_event_envelope_with_ingress(
                             .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
                     })
         });
-    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DEVICE_REANCHOR
+    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -441,7 +441,7 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
     require_object_field(object, "payload")?;
-    let is_self_principal_pcr_bootstrap_create = kind == arkret_wire::EventKind::REALM_CREATE
+    let is_self_principal_pcr_bootstrap_create = kind == arkret_wire::EventKind::RealmCreate
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
                 && context.realm_id == realm_id
@@ -519,7 +519,7 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
-    if kind == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_wire::EventKind::MemberIdentityUpdate {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }
@@ -527,7 +527,7 @@ async fn validate_event_envelope_with_ingress(
         validate_device_authorization_binding(state, object, &actor_id, realm_bootstrap_contexts)
             .await?;
     }
-    if kind == arkret_wire::EventKind::ACCOUNT_STATUS {
+    if kind == arkret_wire::EventKind::AccountStatus {
         validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -626,7 +626,7 @@ async fn validate_event_envelope_with_ingress(
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
     let sidecar_bootstrap = internal_admission.is_some_and(|admission| {
-        kind == arkret_wire::EventKind::SIDECAR_CREATE
+        kind == arkret_wire::EventKind::SidecarCreate
             && admission.is_sidecar_ensure(session, object)
     });
     let cba_context = if bootstrap_unit_member || sidecar_bootstrap {
@@ -856,7 +856,7 @@ fn is_realm_bootstrap_unit_member(
     if is_realm_bootstrap_followup || is_identity_anchor_authorize || is_identity_anchor_reanchor {
         return true;
     }
-    kind == arkret_wire::EventKind::REALM_CREATE
+    kind == arkret_wire::event_kind_str::REALM_CREATE
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id)
@@ -927,7 +927,7 @@ fn enforce_registered_cell_contract(
     // "is the registered contract evaluable for this Event" — a row whose
     // projection cannot be derived fails the Event closed, and a row that is
     // not an active reducer input projects nothing and passes.
-    let contract_validation = if kind == arkret_wire::EventKind::INVITE_CANCEL {
+    let contract_validation = if kind == arkret_wire::event_kind_str::INVITE_CANCEL {
         // `ak.invite.cancel` is the one active contract whose validity depends
         // on authoritative invite lifecycle fields. The submit admission lane
         // freezes those fields while holding the per-Invite lock and calls
@@ -946,7 +946,7 @@ fn enforce_registered_cell_contract(
             error.to_string(),
         )
     })?;
-    if kind == arkret_wire::EventKind::REALM_CREATE {
+    if kind == arkret_wire::event_kind_str::REALM_CREATE {
         // The canonical Realm-create genesis write set is likewise recomputed,
         // never compared against a submitted array. Only the *targets* are
         // asserted: the lattice ops come from the registered
@@ -1046,7 +1046,7 @@ mod security_frontier_material_tests {
             "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
         )
         .unwrap();
-        let mut event = arkret_wire::Event::new(
+        let mut event = arkret_wire::test_support::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
             arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
@@ -1082,7 +1082,7 @@ mod security_frontier_material_tests {
             "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
         )
         .unwrap();
-        let mut event = arkret_wire::Event::new(
+        let mut event = arkret_wire::test_support::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
             arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
@@ -1114,9 +1114,10 @@ mod security_frontier_material_tests {
 
     #[test]
     fn mls_commit_fails_closed_without_verified_group_state_material() {
-        let error =
-            require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MLS_COMMIT)
-                .unwrap_err();
+        let error = require_verified_mls_commit_frontier_material(
+            arkret_wire::EventKind::MlsCommit.as_str(),
+        )
+        .unwrap_err();
         assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error.code, arkret_wire::ErrorCode::FRONTIER_UNAVAILABLE);
         assert_eq!(
@@ -1127,6 +1128,7 @@ mod security_frontier_material_tests {
 
     #[test]
     fn non_commit_events_do_not_use_the_commit_material_gate() {
-        require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MLS_GENESIS).unwrap();
+        require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MlsGenesis.as_str())
+            .unwrap();
     }
 }

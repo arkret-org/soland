@@ -608,7 +608,7 @@ fn build_revoke_plan(
         for grant_id in &response.capability_grant_refs {
             if active_grant_ids.contains(grant_id.as_str()) {
                 capability_revocations.push(AppletCapabilityRevokeIntent {
-                    event_kind: EventKind::CAPABILITY_REVOKE.to_owned(),
+                    event_kind: EventKind::CapabilityRevoke.as_str().to_owned(),
                     grant_id: grant_id.clone(),
                     registration_epoch: package.registration_epoch.clone(),
                     reason_code: preview.reason_code.clone(),
@@ -664,7 +664,7 @@ fn validate_revoke_submissions(
     let mut submitted_grants = std::collections::BTreeSet::new();
     for submission in &revoke.capability_revoke_events {
         let event = &submission.event;
-        if event.kind.as_str() != EventKind::CAPABILITY_REVOKE
+        if event.kind != EventKind::CapabilityRevoke
             || event.actor_id.as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {
@@ -712,7 +712,7 @@ fn validate_revoke_submissions(
     let mut submitted_members = std::collections::BTreeSet::new();
     for submission in &revoke.membership_state_events {
         let event = &submission.event;
-        if event.kind.as_str() != EventKind::MEMBER_STATE
+        if event.kind != EventKind::MemberState
             || event.actor_id.as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {

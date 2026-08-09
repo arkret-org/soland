@@ -226,8 +226,8 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
-    let mut authorize = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::DEVICE_AUTHORIZE,
+    let mut authorize = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm { realm_id: realm },
         actor.clone(),
         1,
@@ -848,8 +848,8 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     let hlc =
         arkret_identifiers::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis()))
             .unwrap();
-    let provision_event = arkret_wire::Event::new(
-        arkret_wire::EventKind::AGENT_PROVISION,
+    let provision_event = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::AgentProvision.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: controller_realm_id.clone(),
         },

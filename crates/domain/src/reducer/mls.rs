@@ -20,7 +20,7 @@
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use serde_json::{Map, Value};
 
@@ -57,19 +57,111 @@ const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
 /// but does not reference a matching `ak.mls.proposal{proposal_type="remove"}`.
 const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
 
-/// G3.S1 — project a `ak.mls.keypackage` event with
-/// `payload.action == "publish"`.
+#[derive(Clone, Debug)]
+pub enum MlsKeyPackagePublishTrustAnchor {
+    DeviceAuthorize(String),
+    AgentKeyAuthorize(String),
+}
+
+/// Strongly typed local projection input for a KeyPackage upload.
 ///
-/// Payload shape (validated below):
-/// ```json
-/// {
-///   "keypackage_id": "ak:mls_keypackage:<uuid>",
-///   "actor_id": "did:web:alice.example",
-///   "device_id": "ak:device:<uuid>",
-///   "lifetime": { "not_before": <unix_secs>, "not_after": <unix_secs> },
-///   "key_package_bytes_b64": "<base64url(opaque MLS KeyPackage)>"
-/// }
-/// ```
+/// This is not an Arkret Event payload. KeyPackage upload is an HTTP/storage
+/// workflow, so it must not manufacture a `ProjectedEventOperation` merely to
+/// reuse reducer code.
+#[derive(Clone, Debug)]
+pub struct MlsKeyPackagePublishProjection {
+    pub keypackage_id: String,
+    pub keypackage_ref: String,
+    pub keypackage_digest: String,
+    pub actor_id: String,
+    pub device_id: String,
+    pub lifetime: KeyPackageLifetime,
+    pub key_package_bytes: Vec<u8>,
+    pub capabilities: Vec<String>,
+    pub device_signature: arkret_models_crypto::KeyOperationSignature,
+    pub last_resort: bool,
+    pub trust_anchor: MlsKeyPackagePublishTrustAnchor,
+    pub created_at: i64,
+}
+
+pub fn apply_keypackage_upload_projection(
+    state: &mut ProjectionState,
+    projection: &MlsKeyPackagePublishProjection,
+) -> ProjectionEffectOut {
+    if projection.keypackage_id.is_empty() {
+        return reject("mls_keypackage_id_missing");
+    }
+    if projection.actor_id.is_empty() {
+        return reject("mls_keypackage_actor_missing");
+    }
+    if projection.device_id.is_empty() {
+        return reject("mls_keypackage_device_missing");
+    }
+    if projection.lifetime.not_after <= projection.lifetime.not_before {
+        return reject("mls_keypackage_lifetime_invalid");
+    }
+    if projection.key_package_bytes.is_empty() {
+        return reject("mls_keypackage_bytes_empty");
+    }
+    let computed_keypackage_digest = arkret_canonical::sha256_digest(&projection.key_package_bytes);
+    if projection.keypackage_digest != computed_keypackage_digest {
+        return reject("mls_keypackage_digest_mismatch");
+    }
+    let capabilities_digest = match arkret_canonical::canonical_json_bytes(&projection.capabilities)
+    {
+        Ok(bytes) => arkret_canonical::sha256_digest(bytes),
+        Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
+    };
+    let device_signature = match serde_json::to_value(&projection.device_signature) {
+        Ok(value) => value,
+        Err(_) => return reject("mls_keypackage_device_signature_invalid"),
+    };
+    let (device_authorize_event_id, agent_key_authorize_event_id) = match &projection.trust_anchor {
+        MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(event_id) => {
+            (Some(event_id.clone()), None)
+        }
+        MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize(event_id) => {
+            (None, Some(event_id.clone()))
+        }
+    };
+    let row = MlsKeyPackage {
+        id: projection.keypackage_id.clone(),
+        keypackage_ref: projection.keypackage_ref.clone(),
+        keypackage_digest: projection.keypackage_digest.clone(),
+        actor_id: projection.actor_id.clone(),
+        device_id: projection.device_id.clone(),
+        lifetime: projection.lifetime.clone(),
+        key_package_bytes: projection.key_package_bytes.clone(),
+        capabilities: projection.capabilities.clone(),
+        capabilities_digest,
+        device_signature,
+        last_resort: projection.last_resort,
+        last_resort_realm_id: None,
+        claimed_by: None,
+        device_authorize_event_id,
+        agent_key_authorize_event_id,
+        claimed_at: None,
+        claim_expires_at_unix_ms: None,
+        consumed_at: None,
+        created_at: projection.created_at,
+    };
+
+    // Insert is structural — duplicates of the same `keypackage_id`
+    // replace in place (a republish of the same id by the same device
+    // re-arms the row; the device is the sole source-of-truth for the
+    // opaque bytes). Production deployments will route duplicate-id
+    // detection through the wire validator before reaching here.
+    state
+        .mls_key_packages
+        .insert(projection.keypackage_id.clone(), row);
+
+    ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
+        keypackage_id: projection.keypackage_id.clone(),
+        actor_id: projection.actor_id.clone(),
+        device_id: projection.device_id.clone(),
+    })
+}
+
 pub fn apply_keypackage_publish(
     state: &mut ProjectionState,
     op: &Operation,
@@ -146,7 +238,6 @@ pub fn apply_keypackage_publish(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-
     let created_at =
         parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
     let trust_binding = match keypackage_claim_trust_binding(payload) {
@@ -174,14 +265,7 @@ pub fn apply_keypackage_publish(
         consumed_at: None,
         created_at,
     };
-
-    // Insert is structural — duplicates of the same `keypackage_id`
-    // replace in place (a republish of the same id by the same device
-    // re-arms the row; the device is the sole source-of-truth for the
-    // opaque bytes). Production deployments will route duplicate-id
-    // detection through the wire validator before reaching here.
     state.mls_key_packages.insert(id.to_owned(), row);
-
     ProjectionEffectOut::Mls(MlsEffect::KeyPackagePublished {
         keypackage_id: id.to_owned(),
         actor_id: actor_id.to_owned(),

@@ -66,7 +66,7 @@ pub(super) fn validate_pre_schema_wire_shape(
     payload: &Value,
 ) -> Result<(), EventValidationError> {
     scan_sidecar_forbidden_wire_fields(payload)?;
-    if kind == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_wire::event_kind_str::MEMBER_IDENTITY_UPDATE {
         soland_http::wire_validators::member_identity::validate_member_identity_update_payload(
             payload,
         )
@@ -90,7 +90,7 @@ pub(in crate::routing::events::event_log) fn validate_realm_create_policy_constr
     payload: &Value,
     is_self_principal_pcr_bootstrap_create: bool,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::EventKind::REALM_CREATE {
+    if kind != arkret_wire::event_kind_str::REALM_CREATE {
         return Ok(());
     }
     let Some(object_value) = payload.get("object") else {
@@ -244,9 +244,11 @@ mod tests {
                 }
             }
         });
-        let error =
-            validate_pre_schema_wire_shape(arkret_wire::EventKind::MESSAGE_CREATE, &payload)
-                .expect_err("plaintext metadata must not carry the exchange binding");
+        let error = validate_pre_schema_wire_shape(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            &payload,
+        )
+        .expect_err("plaintext metadata must not carry the exchange binding");
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.code, "schema_violation");
     }
@@ -259,9 +261,11 @@ mod tests {
             "content": {"kind": "ak.content.text", "body": "hello"},
             "refs": [{"role": "after", "exchange_id": "018f-abc"}]
         });
-        let error =
-            validate_pre_schema_wire_shape(arkret_wire::EventKind::MESSAGE_CREATE, &payload)
-                .expect_err("plaintext exchange_id must be rejected in any nested position");
+        let error = validate_pre_schema_wire_shape(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            &payload,
+        )
+        .expect_err("plaintext exchange_id must be rejected in any nested position");
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.code, "schema_violation");
     }
@@ -276,9 +280,11 @@ mod tests {
                 "strand_id": "ak:strand:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1",
                 "metadata": {"fields": {"schema": schema_id}}
             });
-            let error =
-                validate_pre_schema_wire_shape(arkret_wire::EventKind::MESSAGE_CREATE, &payload)
-                    .expect_err("Sidecar schema ids must never appear as plaintext wire values");
+            let error = validate_pre_schema_wire_shape(
+                arkret_wire::EventKind::MessageCreate.as_str(),
+                &payload,
+            )
+            .expect_err("Sidecar schema ids must never appear as plaintext wire values");
             assert_eq!(error.status, StatusCode::BAD_REQUEST);
             assert_eq!(error.code, "schema_violation");
         }
@@ -292,7 +298,7 @@ mod tests {
             "content": {"kind": "ak.content.text", "body": "hello"},
             "metadata": {"fields": {"jira_status": "open"}}
         });
-        validate_pre_schema_wire_shape(arkret_wire::EventKind::MESSAGE_CREATE, &message)
+        validate_pre_schema_wire_shape(arkret_wire::EventKind::MessageCreate.as_str(), &message)
             .expect("ordinary messages are unaffected by the sidecar forbidden-wire scan");
 
         // The exchange control Event's outer payload is only strand_id plus an
@@ -305,7 +311,7 @@ mod tests {
             }
         });
         validate_pre_schema_wire_shape(
-            arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+            arkret_wire::EventKind::AgentSidecarExchangeControl.as_str(),
             &control,
         )
         .expect("conforming exchange control outer payloads carry no plaintext exchange material");
@@ -320,7 +326,7 @@ mod tests {
     #[test]
     fn ordinary_restricted_realm_is_left_to_the_batch_level_check() {
         validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             &restricted_realm_create_payload(),
             false,
         )
@@ -347,7 +353,7 @@ mod tests {
             }
         });
         validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             &payload,
             false,
         )
@@ -382,7 +388,7 @@ mod tests {
                 "a half-declared PCR marker must not unlock the exemption"
             );
             validate_realm_create_policy_constraints(
-                arkret_wire::EventKind::REALM_CREATE,
+                arkret_wire::EventKind::RealmCreate.as_str(),
                 &json!({"object": object}),
                 false,
             )
@@ -393,7 +399,7 @@ mod tests {
     #[test]
     fn recognized_self_principal_pcr_does_not_require_a_third_bootstrap_slot() {
         validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             &restricted_realm_create_payload(),
             true,
         )
@@ -408,7 +414,7 @@ mod tests {
     #[test]
     fn managed_agent_pcr_is_recognized_from_its_own_profile_markers() {
         validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             &json!({
                 "object": {
                     "history_visibility": "restricted",
@@ -433,7 +439,7 @@ mod tests {
             }
         });
         let error = validate_realm_create_policy_constraints(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             &payload,
             false,
         )

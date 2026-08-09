@@ -511,7 +511,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
 }
 
 fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Option<&'a str> {
-    if kind != arkret_wire::EventKind::MEMBER_STATE {
+    if kind != arkret_wire::EventKind::MemberState {
         return None;
     }
     let payload = envelope.get("payload")?;
@@ -728,7 +728,7 @@ async fn realm_event_dependency_records(
         })?;
     let Some(create) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     else {
         return Ok(Vec::new());
     };
@@ -827,7 +827,7 @@ async fn realm_bootstrap_fanout_record(
             )
         })?;
     let Some(create) = records.iter().find(|record| {
-        record.kind == arkret_wire::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
     }) else {
         return Ok(None);
@@ -1046,7 +1046,7 @@ async fn dynamic_peer_event_targets(
         .await
         && let Some(policy_bundle) = records
             .iter()
-            .find(|record| record.kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE)
+            .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
         && let Some(endpoints) = policy_bundle
             .envelope
             .pointer("/payload/sync_endpoints")
@@ -1182,16 +1182,16 @@ mod tests {
             }
         });
         assert_eq!(
-            routable_member_delivery_service(arkret_wire::EventKind::MEMBER_STATE, &envelope,),
+            routable_member_delivery_service(arkret_wire::EventKind::MemberState, &envelope,),
             Some("did:web:soland-beta.example")
         );
         assert_eq!(
-            routable_member_delivery_service(arkret_wire::EventKind::REALM_CREATE, &envelope,),
+            routable_member_delivery_service(arkret_wire::EventKind::RealmCreate, &envelope,),
             None
         );
         assert_eq!(
             routable_member_delivery_service(
-                arkret_wire::EventKind::MEMBER_STATE,
+                arkret_wire::EventKind::MemberState,
                 &json!({
                     "payload": {
                         "membership": "join",

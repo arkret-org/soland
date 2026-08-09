@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{Did, RealmId};
 use arkret_models_collaboration::events_payloads::agent::{
     AgentProvisionAccountabilityScope, AgentProvisionPayload,
@@ -395,7 +395,7 @@ pub fn paired_replacement_authorize<'a>(
     records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
 ) -> Option<&'a CanonicalEventRecord> {
     records.into_iter().find(|candidate| {
-        candidate.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+        candidate.kind == arkret_wire::EventKind::DeviceAuthorize
             && candidate.actor_id == reanchor.actor_id
             && candidate
                 .envelope
@@ -486,7 +486,7 @@ impl<'a> CanonicalCausalGraph<'a> {
             .collect();
         let event_id_by_message_id = records
             .iter()
-            .filter(|record| record.kind == arkret_wire::EventKind::MESSAGE_CREATE)
+            .filter(|record| record.kind == arkret_wire::EventKind::MessageCreate.as_str())
             .map(|record| {
                 let message_id = record
                     .envelope
@@ -679,7 +679,7 @@ fn collect_string_array(value: Option<&Value>, output: &mut BTreeSet<String>, co
 pub struct ProjectedEvent {
     pub event_id: String,
     pub realm_id: String,
-    pub event_kind: String,
+    pub event_kind: arkret_wire::EventKind,
     pub operation_kind: String,
     pub operation_id: Option<String>,
     pub sender: Option<String>,
@@ -919,7 +919,7 @@ pub trait EventReadPort: Send + Sync {
     ) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn projected_events_for_kind(
         &self,
-        event_kind: &str,
+        event_kind: arkret_wire::EventKind,
     ) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn append_projected_event(
         &self,
@@ -1012,7 +1012,7 @@ fn active_agent_accountability(
         .envelope
         .get("payload")
         .unwrap_or(&original_event.envelope);
-    if original_event.kind == arkret_wire::EventKind::AGENT_PROVISION {
+    if original_event.kind == arkret_wire::EventKind::AgentProvision {
         let Ok(provision) =
             serde_json::from_value::<AgentProvisionPayload>(original_payload.clone())
         else {
@@ -1375,7 +1375,7 @@ impl EventQueryService {
 
     pub async fn projected_events_for_kind(
         &self,
-        event_kind: &str,
+        event_kind: arkret_wire::EventKind,
     ) -> ServiceResult<Vec<ProjectedEvent>> {
         self.events.projected_events_for_kind(event_kind).await
     }
@@ -2153,7 +2153,7 @@ mod tests {
             actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
             actor_seq: u64::from(suffix),
             realm_id: Some("ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6".to_owned()),
-            kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
             schema_id: "ak.schema.message.v1".to_owned(),
             canonical_digest: format!("sha256:{digest_suffix:064x}"),
             canonical_bytes: Vec::new(),
@@ -2316,7 +2316,7 @@ mod tests {
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,
-                    event_kind: "ak.message.create".to_owned(),
+                    event_kind: arkret_wire::EventKind::MessageCreate,
                     operation_kind: "create".to_owned(),
                     operation_id: None,
                     sender: Some("did:web:alice.example".to_owned()),

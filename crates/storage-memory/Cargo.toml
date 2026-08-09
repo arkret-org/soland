@@ -29,4 +29,5 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 arkret-models-crypto.workspace = true
+arkret-wire = {workspace = true,features = ["test-support"]}
 tokio = {workspace = true,features = ["macros", "rt-multi-thread"]}

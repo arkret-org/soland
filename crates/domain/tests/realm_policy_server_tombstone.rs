@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_state::lattice::CellState;
 use arkret_wire::{Bottom, BottomKind, CellRef};
@@ -11,13 +11,22 @@ const CHILD_REALM: &str = "ak:realm:ARUgpqlRQEOsctG13hpmVzQjx09UVbnHOe3BxpK76Jj_
 const ORG_REALM: &str = "ak:realm:AWJFMKcHr4DUa3zaD-8OM-lGsu9eMHxFq5OHnkdJrT07";
 const CELL_ID: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
 
-fn operation(realm_id: &str, payload: Value) -> Operation {
-    Operation::create(
+fn operation(realm_id: &str, mut payload: Value) -> Operation {
+    let preconditions = payload
+        .as_object_mut()
+        .and_then(|payload| payload.remove("preconditions"))
+        .map(serde_json::from_value)
+        .transpose()
+        .unwrap()
+        .unwrap_or_default();
+    let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        arkret_wire::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::RealmPolicyServer.as_str(),
         payload,
-    )
+    );
+    operation.context.preconditions = preconditions;
+    operation
 }
 
 #[test]

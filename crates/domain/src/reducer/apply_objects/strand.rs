@@ -98,14 +98,7 @@ impl ProjectionState {
             .get("created_by")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("sender")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_default();
+            .unwrap_or_else(|| operation.context.sender.to_string());
 
         let has_calendar_subtree = fields.contains_key(
             arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
@@ -240,11 +233,7 @@ impl ProjectionState {
                 }
             }
         }
-        strand.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
         ProjectionEffect::StrandLifecycle {
             strand_id,
@@ -294,11 +283,7 @@ impl ProjectionState {
         }
         strand.state = target_state;
         strand.state_changed_at = Some(now);
-        strand.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
         ProjectionEffect::StrandLifecycle {
             strand_id,
@@ -382,11 +367,7 @@ impl ProjectionState {
         let Some(strand) = self.strands.get_mut(&strand_id) else {
             return self.queue_pending_replay(strand_id, operation, "strand_unknown");
         };
-        strand.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
         let projected_state = strand.state;
         if let Some((board_space_id, list_space_id, rank)) = position {
@@ -456,11 +437,7 @@ impl ProjectionState {
                 };
             }
         }
-        strand.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
         ProjectionEffect::StrandLifecycle {
             strand_id,
@@ -792,31 +769,14 @@ fn patched_schema_refs(patch: &serde_json::Map<String, Value>) -> Option<Vec<Str
 /// with no resolvable digest contributes no head rather than a synthetic one a
 /// responder could never reference.
 fn strand_event_digest(operation: &Operation) -> Option<String> {
-    operation
-        .canonical_event_digest
-        .clone()
-        .or_else(|| {
-            operation
-                .payload
-                .get("canonical_event_digest")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .filter(|digest| arkret_identifiers::Hash::new(digest.clone()).is_ok())
+    Some(operation.context.canonical_event_digest.to_string())
 }
 
 fn strand_causal_refs(operation: &Operation) -> Vec<String> {
     operation
-        .payload
-        .get("envelope_causal_refs")
-        .or_else(|| operation.payload.get("causal_refs"))
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+        .context
+        .envelope_causal_refs
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }

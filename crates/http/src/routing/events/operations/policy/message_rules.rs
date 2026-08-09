@@ -15,8 +15,8 @@ pub(super) fn validate_reaction_scope_policy(
         return Ok(());
     };
     if !matches!(
-        kind,
-        arkret_wire::EventKind::REACTION_ADD | arkret_wire::EventKind::REACTION_REMOVE
+        &kind,
+        arkret_wire::EventKind::ReactionAdd | arkret_wire::EventKind::ReactionRemove
     ) {
         return Ok(());
     }
@@ -96,27 +96,27 @@ pub(super) fn operation_target_scope_circle_id(
             .and_then(|morph_id| projection.morph_scope_circle_id(morph_id))
     };
     match kinds::canonical_kind_for_operation(operation)? {
-        arkret_wire::EventKind::STRAND_CREATE
-        | arkret_wire::EventKind::MORPH_CREATE
-        | arkret_wire::EventKind::SPACE_CREATE => inline_scope("object"),
-        arkret_wire::EventKind::RELATION_CREATE => inline_scope("relation")
+        arkret_wire::EventKind::StrandCreate
+        | arkret_wire::EventKind::MorphCreate
+        | arkret_wire::EventKind::SpaceCreate => inline_scope("object"),
+        arkret_wire::EventKind::RelationCreate => inline_scope("relation")
             .or_else(|| inline_scope("object"))
             .or_else(top_level_scope),
-        arkret_wire::EventKind::RELATION_UPDATE | arkret_wire::EventKind::RELATION_TOMBSTONE => {
+        arkret_wire::EventKind::RelationUpdate | arkret_wire::EventKind::RelationTombstone => {
             relation_scope("relation_id")
         }
-        arkret_wire::EventKind::MESSAGE_CREATE => strand_scope("strand_id"),
-        arkret_wire::EventKind::STRAND_UPDATE => strand_scope("target_ref"),
-        arkret_wire::EventKind::MORPH_UPDATE
-        | arkret_wire::EventKind::MORPH_ARCHIVE
-        | arkret_wire::EventKind::MORPH_RESTORE => morph_scope("target_ref"),
-        arkret_wire::EventKind::STRAND_ARCHIVE
-        | arkret_wire::EventKind::STRAND_RESTORE
-        | arkret_wire::EventKind::STRAND_MOVE
-        | arkret_wire::EventKind::STRAND_REORDER => {
+        arkret_wire::EventKind::MessageCreate => strand_scope("strand_id"),
+        arkret_wire::EventKind::StrandUpdate => strand_scope("target_ref"),
+        arkret_wire::EventKind::MorphUpdate
+        | arkret_wire::EventKind::MorphArchive
+        | arkret_wire::EventKind::MorphRestore => morph_scope("target_ref"),
+        arkret_wire::EventKind::StrandArchive
+        | arkret_wire::EventKind::StrandRestore
+        | arkret_wire::EventKind::StrandMove
+        | arkret_wire::EventKind::StrandReorder => {
             strand_scope("target_ref").or_else(|| strand_scope("strand_id"))
         }
-        arkret_wire::EventKind::REACTION_ADD | arkret_wire::EventKind::REACTION_REMOVE => {
+        arkret_wire::EventKind::ReactionAdd | arkret_wire::EventKind::ReactionRemove => {
             // A reaction's scope is the target Message's Strand scope — reacting
             // into a Circle is a write into that scope and requires Circle
             // membership just like authoring there. Unknown target (not yet
@@ -173,10 +173,7 @@ pub(super) fn validate_circle_scope_membership(
         return Ok(());
     };
     projection.validate_scope_circle_id(&scope_circle_id, operation.realm_id.as_str())?;
-    let Some(actor) = operation.actor() else {
-        return Ok(());
-    };
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     if projection.circle_scope_visible_to_actor(&scope_circle_id, actor) {
         Ok(())
     } else {
@@ -198,14 +195,11 @@ pub(super) async fn validate_applet_registration_authz(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::APPLET_REGISTRATION)
+        != Some(arkret_wire::EventKind::AppletRegistration)
     {
         return Ok(());
     }
-    let Some(actor) = operation.actor() else {
-        return Ok(());
-    };
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -247,7 +241,7 @@ pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
 pub(in crate::routing::events::operations) fn validate_principal_control_realm_binding(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let kind = kinds::canonical_kind_string(operation);
+    let kind = kinds::canonical_kind(operation);
     if !PRINCIPAL_CONTROL_EVENT_KINDS.contains(&kind.as_str()) {
         return Ok(());
     }
@@ -268,7 +262,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let kind = kinds::canonical_kind_string(operation);
+    let kind = kinds::canonical_kind(operation);
     let explicit_agent_control = matches!(
         kind.as_str(),
         "ak.agent.key.authorize"
@@ -304,7 +298,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
             .and_then(|object| object.get("actor_id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .or_else(|| operation.actor().map(|actor| actor.as_str().to_owned()))
+            .or_else(|| Some(operation.context.sender.to_string()))
     };
     let Some(agent_id) = agent_id else {
         return if explicit_agent_control {
@@ -378,17 +372,14 @@ pub(super) async fn validate_message_edit_redact_window_policy(
         return Ok(());
     };
     let is_redact = matches!(
-        kind,
-        arkret_wire::EventKind::MESSAGE_REDACT | arkret_wire::EventKind::REDACTION
+        &kind,
+        arkret_wire::EventKind::MessageRedact | arkret_wire::EventKind::Redaction
     );
-    let is_revise = matches!(kind, arkret_wire::EventKind::MESSAGE_REVISE);
+    let is_revise = matches!(&kind, arkret_wire::EventKind::MessageRevise);
     if !is_redact && !is_revise {
         return Ok(());
     }
-    let Some(actor) = operation.actor() else {
-        return Ok(());
-    };
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
 
     // Resolve the target Message's creation time.
@@ -400,14 +391,12 @@ pub(super) async fn validate_message_edit_redact_window_policy(
             .or_else(|| operation.payload.get("target_ref"))
             .or_else(|| operation.payload.get("target"))
             .or_else(|| operation.payload.get("redacts"))
-            .or_else(|| operation.payload.get("event_id"))
     } else {
         operation
             .payload
             .get("target_event_id")
             .or_else(|| operation.payload.get("target_ref"))
             .or_else(|| operation.payload.get("revision_of"))
-            .or_else(|| operation.payload.get("event_id"))
     }
     .and_then(Value::as_str)
     .filter(|value| !value.is_empty());
@@ -537,12 +526,12 @@ pub async fn validate_content_encryption_floor(
 ) -> Result<(), &'static str> {
     for operation in operations {
         match kinds::canonical_kind_for_operation(operation) {
-            Some(arkret_wire::EventKind::CIRCLE_UPDATE)
+            Some(arkret_wire::EventKind::CircleUpdate)
                 if operation_touches_encryption_profile(operation) =>
             {
                 return Err(CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED);
             }
-            Some(arkret_wire::EventKind::CIRCLE_CREATE) => {
+            Some(arkret_wire::EventKind::CircleCreate) => {
                 if let Some(profile) = operation_circle_encryption_profile(operation)
                     && !encryption_profile_requires_content_encryption(Some(profile))
                     && realm_requires_content_encryption(state, operation.realm_id.as_str()).await

@@ -83,29 +83,14 @@ pub fn actor_erased_in_realm(
 }
 
 pub fn projection_event_actor(event: &ProjectionEventRecord) -> Option<&str> {
-    event.sender.as_deref().or_else(|| {
-        event
-            .payload
-            .get("sender")
-            .or_else(|| event.payload.get("actor_id"))
-            .or_else(|| event.payload.get("actor"))
-            .and_then(Value::as_str)
-            .or_else(|| {
-                event
-                    .payload
-                    .get("object")
-                    .and_then(Value::as_object)
-                    .and_then(|object| object.get("created_by"))
-                    .and_then(Value::as_str)
-            })
-    })
+    event.sender.as_deref()
 }
 
 pub fn tombstone_projection_event_for_erased_actor(
     projection: &soland_domain::reducer::ProjectionState,
     event: &mut ProjectionEventRecord,
 ) {
-    if event.event_kind == arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT {
+    if event.event_kind == arkret_wire::EventKind::AuditErasureReceipt {
         return;
     }
     let Some(actor) = projection_event_actor(event) else {
@@ -123,8 +108,8 @@ pub fn tombstone_projection_event_for_message_redaction(
     event: &mut ProjectionEventRecord,
 ) {
     if !matches!(
-        event.event_kind.as_str(),
-        arkret_wire::EventKind::MESSAGE_CREATE | arkret_wire::EventKind::MESSAGE_REVISE
+        &event.event_kind,
+        arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
     ) {
         return;
     }
@@ -146,7 +131,7 @@ pub fn stub_projection_event_for_message_expiry(
     event: &mut ProjectionEventRecord,
     now: DateTime<Utc>,
 ) {
-    if event.event_kind != arkret_wire::EventKind::MESSAGE_CREATE {
+    if event.event_kind != arkret_wire::EventKind::MessageCreate {
         return;
     }
     let expiry = projection
@@ -193,10 +178,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
     let mut value = payload.clone();
     let Some(object) = value.as_object_mut() else {
         return json!({
-            "content": {
-                "kind": "ak.content.text",
-                "body": RETENTION_EXPIRED_PLACEHOLDER,
-            },
+            "content": placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
             "expiry_stub": true,
             "expiry_state": expiry.state_str(),
             "expiry_trigger": expiry.trigger.as_str(),
@@ -230,10 +212,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
     );
     object.insert(
         "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": RETENTION_EXPIRED_PLACEHOLDER,
-        }),
+        placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
     );
     object.insert("encrypted".to_owned(), json!(false));
     value
@@ -246,10 +225,7 @@ pub fn retention_tombstone_payload_value(
     let mut value = payload.clone();
     let Some(object) = value.as_object_mut() else {
         return json!({
-            "content": {
-                "kind": "ak.content.text",
-                "body": RETENTION_EXPIRED_PLACEHOLDER,
-            },
+            "content": placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
             "retention_tombstone": true,
             "retention_state": "tombstoned",
             "retention_reason": tombstone.reason.as_str(),
@@ -298,10 +274,7 @@ pub fn retention_tombstone_payload_value(
     insert_retention_risk_markers(object, tombstone);
     object.insert(
         "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": RETENTION_EXPIRED_PLACEHOLDER,
-        }),
+        placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
     );
     object.insert("encrypted".to_owned(), json!(false));
     value
@@ -380,10 +353,7 @@ pub fn erasure_tombstone_payload_value(payload: &Value) -> Value {
     let mut value = payload.clone();
     let Some(object) = value.as_object_mut() else {
         return json!({
-            "content": {
-                "kind": "ak.content.text",
-                "body": ERASED_USER_PLACEHOLDER,
-            },
+            "content": placeholder_content(ERASED_USER_PLACEHOLDER),
             "erasure_tombstone": true,
         });
     };
@@ -395,13 +365,16 @@ pub fn erasure_tombstone_payload_value(payload: &Value) -> Value {
     object.insert("erasure_tombstone".to_owned(), json!(true));
     object.insert(
         "content".to_owned(),
-        json!({
-            "kind": "ak.content.text",
-            "body": ERASED_USER_PLACEHOLDER,
-        }),
+        placeholder_content(ERASED_USER_PLACEHOLDER),
     );
     object.insert("encrypted".to_owned(), json!(false));
     value
+}
+
+fn placeholder_content(body: &str) -> Value {
+    arkret_models_collaboration::events_payloads::message::ContentBlock::text(body)
+        .to_value()
+        .expect("ContentBlock text serialization is infallible")
 }
 
 fn pin_target_locked_stub_payload(payload: &Value) -> Value {
@@ -555,7 +528,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: event_id.to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
+            event_kind: arkret_wire::EventKind::MessageCreate,
             operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -701,7 +674,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_wire::EventKind::PIN_ADD.to_owned(),
+            event_kind: arkret_wire::EventKind::PinAdd,
             operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
@@ -735,7 +708,7 @@ mod tests {
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
-            event_kind: arkret_wire::EventKind::PIN_ADD.to_owned(),
+            event_kind: arkret_wire::EventKind::PinAdd,
             operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),

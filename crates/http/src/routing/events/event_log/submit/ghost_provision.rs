@@ -4,7 +4,7 @@ use super::*;
 
 struct PreparedGhostEvent {
     command: soland_services::events::CommitAcceptedEventCommand,
-    operation: Option<arkret_event_draft::Operation>,
+    operation: Option<arkret_event_draft::ProjectedEventOperation>,
     projected_event: Option<soland_services::events::ProjectedEvent>,
     actor_id: String,
     device_id: String,
@@ -16,7 +16,7 @@ async fn prepare_ghost_event(
     envelope: Value,
     admission: &InternalEventAdmission,
     _batch_event_ids: &BTreeSet<String>,
-    preceding_operations: &[arkret_event_draft::Operation],
+    preceding_operations: &[arkret_event_draft::ProjectedEventOperation],
 ) -> Result<PreparedGhostEvent, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -366,13 +366,13 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     let accountability_admission = InternalEventAdmission::applet_formal(
         realm_id,
         service_id,
-        arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+        arkret_wire::EventKind::IdentityAccountabilityGrant,
         event_string_field_from_value(&accountability_value, "event_id").unwrap_or_default(),
     );
     let profile_admission = InternalEventAdmission::applet_formal(
         realm_id,
         ghost_actor_id,
-        arkret_wire::EventKind::PROFILE_CREATE,
+        arkret_wire::EventKind::ProfileCreate,
         event_string_field_from_value(&profile_value, "event_id").unwrap_or_default(),
     );
     let accountability_prepared = prepare_ghost_event(

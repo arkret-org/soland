@@ -194,10 +194,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 outbox_inserted: 0,
             });
         }
-        if request.event.kind == arkret_wire::EventKind::REALM_CREATE
+        if request.event.kind == arkret_wire::EventKind::RealmCreate
             && request.event.realm_id.is_some()
             && staged_events.values().any(|existing| {
-                existing.kind == arkret_wire::EventKind::REALM_CREATE
+                existing.kind == arkret_wire::EventKind::RealmCreate
                     && existing.realm_id == request.event.realm_id
             })
         {
@@ -358,10 +358,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 }
                 continue;
             }
-            if event_request.event.kind == arkret_wire::EventKind::REALM_CREATE
+            if event_request.event.kind == arkret_wire::EventKind::RealmCreate
                 && event_request.event.realm_id.is_some()
                 && staged_events.values().any(|existing| {
-                    existing.kind == arkret_wire::EventKind::REALM_CREATE
+                    existing.kind == arkret_wire::EventKind::RealmCreate
                         && existing.realm_id == event_request.event.realm_id
                 })
             {
@@ -505,7 +505,7 @@ mod tests {
         actor_id: &str,
         idempotency: Option<IdempotencyRecord>,
     ) -> EventCommitRequest {
-        let event = arkret_wire::Event::new_with_derived_id_at(
+        let event = arkret_wire::test_support::raw_event_at(
             "ak.test.data",
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),

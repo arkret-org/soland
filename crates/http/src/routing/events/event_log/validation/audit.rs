@@ -23,7 +23,7 @@ pub(crate) async fn append_encrypted_message_franking(
     append_audit_log(
         state,
         Some(&parsed.actor_id),
-        arkret_wire::EventKind::MODERATION_FRANKING_PROOF,
+        arkret_wire::EventKind::ModerationFrankingProof,
         proof,
         "accepted",
     )
@@ -35,12 +35,12 @@ fn encrypted_message_franking_proof(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Value> {
-    if parsed.kind != arkret_wire::EventKind::MESSAGE_CREATE {
+    if parsed.kind != arkret_wire::EventKind::MessageCreate {
         return None;
     }
     let ciphertext_digest = encrypted_message_ciphertext_digest(envelope)?;
     let mut proof = json!({
-        "kind": arkret_wire::EventKind::MODERATION_FRANKING_PROOF,
+        "kind": arkret_wire::EventKind::ModerationFrankingProof,
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
@@ -70,7 +70,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "kind": proof
             .get("kind")
             .and_then(Value::as_str)
-            .unwrap_or(arkret_wire::EventKind::MODERATION_FRANKING_PROOF),
+            .unwrap_or(arkret_wire::EventKind::ModerationFrankingProof),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_id": proof.get("receiving_service_id").and_then(Value::as_str).unwrap_or_default(),
@@ -100,7 +100,7 @@ pub(super) fn validate_audit_accessed_payload(
     kind: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::EventKind::AUDIT_ACCESSED {
+    if kind != arkret_wire::event_kind_str::AUDIT_ACCESSED {
         return Ok(());
     }
     let payload = audit_accessed_payload(object)?;
@@ -152,7 +152,7 @@ pub(super) fn validate_strand_watch_manage_others_levels(
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::EventKind::STRAND_WATCH_SET {
+    if kind != arkret_wire::event_kind_str::STRAND_WATCH_SET {
         return Ok(());
     }
     let payload = strand_watch_set_payload(object)?;
@@ -207,7 +207,7 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
     validate_watch_set_others_audit_pairs_with_digest(envelopes, |envelope, object, realm_id| {
         let suite = event_digest_suite(
             state,
-            arkret_wire::EventKind::STRAND_WATCH_SET,
+            arkret_wire::EventKind::StrandWatchSet.as_str(),
             realm_id,
             object,
             &[],
@@ -233,7 +233,7 @@ where
         .filter_map(Value::as_object)
         .filter(|object| {
             object.get("kind").and_then(Value::as_str)
-                == Some(arkret_wire::EventKind::AUDIT_ACCESSED)
+                == Some(arkret_wire::EventKind::AuditAccessed.as_str())
         })
         .filter_map(|object| Some((object, audit_accessed_payload(object).ok()?)))
         .collect();
@@ -243,7 +243,7 @@ where
             continue;
         };
         if object.get("kind").and_then(Value::as_str)
-            != Some(arkret_wire::EventKind::STRAND_WATCH_SET)
+            != Some(arkret_wire::EventKind::StrandWatchSet.as_str())
         {
             continue;
         }
@@ -406,7 +406,7 @@ mod tests {
     fn others_watch_write() -> Value {
         json!({
             "event_id": WRITE_ID,
-            "kind": arkret_wire::EventKind::STRAND_WATCH_SET,
+            "kind": arkret_wire::EventKind::StrandWatchSet,
             "actor_id": WRITER,
             "realm_id": "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv",
             "payload": {
@@ -429,7 +429,7 @@ mod tests {
     fn paired_audit() -> Value {
         json!({
             "event_id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
-            "kind": arkret_wire::EventKind::AUDIT_ACCESSED,
+            "kind": arkret_wire::EventKind::AuditAccessed,
             "actor_id": WRITER,
             "refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
             "payload": {
@@ -541,7 +541,7 @@ mod tests {
             "critical": true
         }]);
         let error = validate_strand_watch_manage_others_levels(
-            arkret_wire::EventKind::STRAND_WATCH_SET,
+            arkret_wire::EventKind::StrandWatchSet.as_str(),
             old_direction.as_object().unwrap(),
             WRITER,
         )
@@ -552,7 +552,7 @@ mod tests {
         );
 
         validate_strand_watch_manage_others_levels(
-            arkret_wire::EventKind::STRAND_WATCH_SET,
+            arkret_wire::EventKind::StrandWatchSet.as_str(),
             others_watch_write().as_object().unwrap(),
             WRITER,
         )
@@ -565,7 +565,7 @@ mod tests {
         muted["payload"]["level"] = json!("muted");
         assert_eq!(
             validate_strand_watch_manage_others_levels(
-                arkret_wire::EventKind::STRAND_WATCH_SET,
+                arkret_wire::EventKind::StrandWatchSet.as_str(),
                 muted.as_object().unwrap(),
                 WRITER,
             )
@@ -578,7 +578,7 @@ mod tests {
         public["payload"]["level_public"] = json!(true);
         assert_eq!(
             validate_strand_watch_manage_others_levels(
-                arkret_wire::EventKind::STRAND_WATCH_SET,
+                arkret_wire::EventKind::StrandWatchSet.as_str(),
                 public.as_object().unwrap(),
                 WRITER,
             )
@@ -593,14 +593,14 @@ mod tests {
         let mut impersonating = paired_audit();
         impersonating["actor_id"] = json!(TARGET);
         let error = validate_audit_accessed_payload(
-            arkret_wire::EventKind::AUDIT_ACCESSED,
+            arkret_wire::EventKind::AuditAccessed.as_str(),
             impersonating.as_object().unwrap(),
         )
         .expect_err("an audit cannot record a write as someone else");
         assert_eq!(error.code, "actor_session_mismatch");
 
         validate_audit_accessed_payload(
-            arkret_wire::EventKind::AUDIT_ACCESSED,
+            arkret_wire::EventKind::AuditAccessed.as_str(),
             paired_audit().as_object().unwrap(),
         )
         .expect("the paired audit fixture is well formed");
@@ -610,7 +610,7 @@ mod tests {
     fn encrypted_message_franking_is_not_gated_by_audit_applet_policy() {
         let proof = encrypted_message_franking_proof(
             "did:web:soland.example",
-            &parsed(arkret_wire::EventKind::MESSAGE_CREATE),
+            &parsed(arkret_wire::EventKind::MessageCreate),
             &json!({
                 "payload": {
                     "encrypted_content": {
@@ -624,7 +624,7 @@ mod tests {
 
         assert_eq!(
             proof.get("kind").and_then(Value::as_str),
-            Some(arkret_wire::EventKind::MODERATION_FRANKING_PROOF)
+            Some(arkret_wire::EventKind::ModerationFrankingProof.as_str())
         );
         assert_eq!(
             proof.get("receiving_service_id").and_then(Value::as_str),
@@ -639,7 +639,7 @@ mod tests {
         assert!(
             encrypted_message_franking_proof(
                 "did:web:soland.example",
-                &parsed(arkret_wire::EventKind::MESSAGE_CREATE),
+                &parsed(arkret_wire::EventKind::MessageCreate),
                 &json!({"payload": {"content": {"body": "hello"}}}),
             )
             .is_none()

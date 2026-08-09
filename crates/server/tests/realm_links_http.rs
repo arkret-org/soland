@@ -186,7 +186,7 @@ async fn link_move(
 ) -> arkret_wire::EventInitialSubmission {
     let seal = accepted_seal_id(state, token, realm_id).await;
     CallerSignedEvent::new(
-        arkret_wire::EventKind::REALM_LINK,
+        arkret_wire::EventKind::RealmLink.as_str(),
         ALICE,
         ALICE_DEVICE,
         realm_id,
@@ -275,12 +275,12 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::OperationId;
-    let op = Operation::create(
+    let op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::RealmInheritancePolicy.as_str(),
         json!({
             "source_realm_id": source_realm_id,
             "allowed_policies": allowed_policies,

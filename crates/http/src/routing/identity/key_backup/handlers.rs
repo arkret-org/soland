@@ -199,35 +199,15 @@ pub(super) fn key_backup_idempotent_retry(
     Ok(true)
 }
 
-pub(super) fn key_backup_metadata_for_list(mut backup: Value) -> Value {
-    if let Some(object) = backup.as_object_mut() {
-        object.remove("ciphertext");
-        if let Some(auth_data) = object.get_mut("auth_data").and_then(Value::as_object_mut) {
-            auth_data.remove("signature");
-        }
-        if let Some(encryption) = object.get_mut("encryption").and_then(Value::as_object_mut) {
-            let recipient_method = encryption.get("recipient_method").cloned();
-            let recipient_key_ref = encryption.get("recipient_key_ref").cloned();
-            encryption.clear();
-            if let Some(value) = recipient_method {
-                encryption.insert("recipient_method".to_owned(), value);
-            }
-            if let Some(value) = recipient_key_ref {
-                encryption.insert("recipient_key_ref".to_owned(), value);
-            }
-        }
-    }
-    backup
-}
-
 pub(super) fn key_backup_summary_for_list(
     backup: Value,
 ) -> Result<arkret_models_crypto::KeyBackupSummary, AppError> {
-    serde_json::from_value(key_backup_metadata_for_list(backup)).map_err(|error| {
-        AppError::internal(format!(
-            "stored key backup metadata does not match SDK summary: {error}"
-        ))
-    })
+    let backup = serde_json::from_value::<KeyBackup>(backup)
+        .map_err(|error| AppError::internal(format!("stored key backup is invalid: {error}")))?;
+    backup
+        .validate()
+        .map_err(|error| AppError::internal(format!("stored key backup is invalid: {error}")))?;
+    Ok(backup.summary())
 }
 
 pub(super) async fn owned_key_backup_snapshot(

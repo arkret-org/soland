@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};

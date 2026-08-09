@@ -44,7 +44,7 @@ fn principal_control_realm_binding_enforced() {
         "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
     });
     let mk = |realm: &str, kind: &str, payload: serde_json::Value| {
-        arkret_event_draft::Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(crate::ids::generate_operation_id()).unwrap(),
             arkret_identifiers::RealmId::new(realm.to_owned()).unwrap(),
             kind,

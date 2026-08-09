@@ -2,7 +2,7 @@
 
 use arkret_identifiers::{BackupId, Did, EventId};
 use arkret_models_crypto::{
-    BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod,
+    BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod, KeyBackupUnlockProof,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use base64::Engine as _;
@@ -82,20 +82,6 @@ const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "contents",
     "ciphertext_digest",
 ];
-const KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS: &[&str] = &[
-    "schema",
-    "recovery_session_id",
-    "principal_id",
-    "requesting_device_id",
-    "backup_id",
-    "backup_kind",
-    "series_id",
-    "ciphertext_digest",
-    "proof_kind",
-    "proof_digest",
-    "issued_at",
-];
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;

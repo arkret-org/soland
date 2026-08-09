@@ -1,21 +1,11 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::events::MessageState;
 
 use crate::state::AppState;
 
-pub async fn project_federated_message(state: &AppState, origin: &str, operation: &Operation) {
-    let event_id = operation
-        .payload
-        .get("event_id")
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            format!(
-                "ak:event:{}",
-                operation.operation_id.as_str().replace(':', "")
-            )
-        });
+pub async fn project_federated_message(state: &AppState, _origin: &str, operation: &Operation) {
+    let event_id = operation.context.event_id.to_string();
     let message_id = soland_services::operation_semantics::message_id_from_payload_or_event_id(
         &operation.payload,
         &event_id,
@@ -41,12 +31,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
     ) {
         return;
     }
-    let sender = operation
-        .payload
-        .get("sender")
-        .and_then(|value| value.as_str())
-        .unwrap_or(origin)
-        .to_owned();
+    let sender = operation.context.sender.to_string();
     let thread_id = operation
         .payload
         .get("thread_id")

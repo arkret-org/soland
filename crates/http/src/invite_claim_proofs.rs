@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::Did;
 #[cfg(test)]
 use arkret_identity::DidResolver;

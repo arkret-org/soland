@@ -1474,8 +1474,8 @@ mod tests {
             "2026-07-26T00:00:01.000Z".parse().unwrap();
 
         let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
-            let mut event = arkret_wire::Event::new_with_derived_id_at(
-                arkret_wire::EventKind::MESSAGE_CREATE,
+            let mut event = arkret_wire::test_support::raw_event_at(
+                arkret_wire::EventKind::MessageCreate.as_str(),
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),
                 },

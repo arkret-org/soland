@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
@@ -97,11 +97,11 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
 }
 
 fn call_state_op(binding: Value) -> Operation {
-    let mut op = Operation::create(
+    let mut op = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(REALM_ID.to_owned()).unwrap(),
-        arkret_wire::EventKind::CALL_STATE,
+        arkret_wire::EventKind::CallState.as_str(),
         json!({
             "call_id": CALL_ID,
             "roster_delta": {

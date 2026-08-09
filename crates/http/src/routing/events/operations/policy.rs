@@ -33,8 +33,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::SIDECAR_CREATE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::SidecarCreate)
     {
         return Err("sidecar_create_denied");
     }
@@ -42,7 +41,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .payload
         .as_object()
         .ok_or("sidecar_create_denied")?;
-    if operation.actor().as_ref().map(|actor| actor.as_str()) != Some(controller)
+    if operation.context.sender.as_str() != controller
         || payload.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
         || payload.keys().any(|field| {
             !matches!(
@@ -186,7 +185,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::SIDECAR_CREATE)
+            == Some(arkret_wire::EventKind::SidecarCreate)
         {
             // Only the authenticated ensure aggregate may construct this
             // reducer-derived event; the generic submit path is closed.
@@ -203,7 +202,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
             );
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE)
+            == Some(arkret_wire::EventKind::MorphSchemaMigrate)
         {
             validate_morph_schema_migrate_capability(operation)?;
             validate_morph_schema_migrate_authz(state, operation).await?;
@@ -217,7 +216,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         .await?;
         // Verify the canonical device possession proof on every
         // ak.device.authorize at ingest.
-        if kinds::canonical_kind_string(operation) == "ak.device.authorize" {
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {
             crate::routing::identity::device_signing::validate_device_authorize_binding(
                 state,
                 &operation.payload,
@@ -265,7 +264,7 @@ mod tests {
     use super::*;
 
     fn circle_create_with_payload(payload: Value) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01964137-0000-7000-8000-000000000040",
             )
@@ -274,7 +273,7 @@ mod tests {
                 "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
             )
             .unwrap(),
-            arkret_wire::EventKind::CIRCLE_CREATE,
+            arkret_wire::EventKind::CircleCreate.as_str(),
             payload,
         )
     }
@@ -326,7 +325,7 @@ async fn validate_managed_agent_grant_ceiling(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::CAPABILITY_GRANT)
+        != Some(arkret_wire::EventKind::CapabilityGrant)
     {
         return Ok(());
     }

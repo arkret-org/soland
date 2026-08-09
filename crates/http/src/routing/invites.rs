@@ -16,6 +16,9 @@ use arkret_models_collaboration::governance::member_delivery_binding_candidate::
     CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
+};
 use arkret_models_discovery::DirectoryIntent;
 use arkret_models_identity::HandleClaim;
 use arkret_models_identity::handle::{Handle, HandleBindingState};
@@ -44,9 +47,7 @@ use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
 };
 
-use crate::routing::identity::device_messages::{
-    ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
-};
+use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
@@ -755,15 +756,17 @@ async fn persist_invite_quarantine_entry(
     fanout_actor_private_update(
         state,
         subject,
-        INVITE_QUARANTINE_ORIGIN_DEVICE,
-        ACCOUNT_DATA_UPDATE_TYPE,
-        json!({
-            "operation": "put",
-            "account_data_key": AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
-            "revision": record.revision,
-            "content": record.payload.clone(),
-            "updated_at": record.updated_at,
-        }),
+        ActorPrivateDeviceUpdate::AccountData {
+            sender_device_id: INVITE_QUARANTINE_ORIGIN_DEVICE.to_owned(),
+            content: ActorPrivateAccountDataUpdate {
+                operation: ActorPrivateAccountDataOperation::Put,
+                account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                revision: record.revision,
+                content: Some(record.payload.clone()),
+                updated_at: record.updated_at,
+            },
+            created_at: record.updated_at,
+        },
     )
     .await;
     super::append_audit_log(
@@ -1562,7 +1565,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(arkret_wire::EventKind::INVITE_CREATE)
+        != Some(arkret_wire::EventKind::InviteCreate.as_str())
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ak.invite.create",
@@ -1713,7 +1716,7 @@ mod invite_locator_security_tests {
             device_id: "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
             actor_seq: 7,
             realm_id: realm_id.to_owned(),
-            kind: arkret_wire::EventKind::INVITE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             prev_refs: Vec::new(),
             authorized_refs: Vec::new(),

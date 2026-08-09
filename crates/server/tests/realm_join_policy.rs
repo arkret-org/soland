@@ -4,7 +4,7 @@
 //! the `ak.realm.policy_bundle` payload path `join_policy` contains it, `membership=join`
 //! must pass before the member FSM is updated.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_state::lattice::CellState;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
@@ -16,12 +16,12 @@ const REALM_PARENT: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksg
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
 
-fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
-    Operation::create(
+fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
+    arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     )
 }
@@ -29,7 +29,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value) {
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::RealmPolicyBundle,
             REALM_A,
             json!({
                 "policy_revision": 1,
@@ -50,8 +50,8 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
     // (`event-and-patch.md` section 2.4.2). `realm_join_rule_payload` is
     // `{"value": <enum>}` and the registered projection sets the whole payload.
     let payload = json!({"value": join_rule});
-    let event = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::REALM_JOIN_RULE,
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmJoinRule.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
         },
@@ -67,7 +67,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
         arkret_canonical::DigestSuite::Sha256,
     )
     .expect("registered join-rule contract must be evaluable");
-    let operation = op(arkret_wire::EventKind::REALM_JOIN_RULE, REALM_A, payload);
+    let operation = op(arkret_wire::EventKind::RealmJoinRule, REALM_A, payload);
     let effect = state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes);
     assert!(
         matches!(
@@ -80,7 +80,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
 
 fn join_op(member: &str) -> Operation {
     op(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         REALM_A,
         json!({
             "actor_id": member,
@@ -93,7 +93,7 @@ fn join_op(member: &str) -> Operation {
 
 fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation {
     op(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         realm_id,
         json!({
             "actor_id": member,
@@ -236,7 +236,7 @@ fn principal_admission_requires_selector_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::RealmPolicyBundle,
             REALM_A,
             json!({
                 "policy_revision": 1,
@@ -268,7 +268,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::RealmPolicyBundle,
             REALM_A,
             json!({
                 "policy_revision": 1,

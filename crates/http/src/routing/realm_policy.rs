@@ -206,7 +206,7 @@ fn caller_signed_policy_server_payload(
     realm_id: &str,
     event: &arkret_wire::Event,
 ) -> Result<RealmPolicyServerPayload, AppError> {
-    if event.kind != arkret_wire::EventKind::REALM_POLICY_SERVER {
+    if event.kind != arkret_wire::EventKind::RealmPolicyServer {
         return Err(AppError::invalid_param(format!(
             "{field}.event.kind must be ak.realm.policy_server"
         )));
@@ -440,7 +440,7 @@ mod caller_signed_policy_server_tests {
     fn policy_server_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
         serde_json::from_value(json!({
             "event_id": "ak:event:AUbhLbszCE22Bm-rjOxxh9NLjudxjc1Jm38OX5PZttdw",
-            "kind": arkret_wire::EventKind::REALM_POLICY_SERVER,
+            "kind": arkret_wire::EventKind::RealmPolicyServer,
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,

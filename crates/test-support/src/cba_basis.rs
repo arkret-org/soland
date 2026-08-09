@@ -342,19 +342,19 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         .expect("fixture Realm genesis lookup");
     if let Some(existing) = existing_records
         .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
         let event: arkret_wire::Event = serde_json::from_value(existing.envelope.clone())
             .expect("stored fixture genesis envelope");
         let payload = serde_json::to_value(&event.payload).expect("stored fixture genesis payload");
         let has_complete_ordinary_bootstrap = [
-            arkret_wire::EventKind::REALM_PROFILE,
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            arkret_wire::EventKind::REALM_JOIN_RULE,
-            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
-            arkret_wire::EventKind::REALM_DISCOVERY,
-            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::RealmProfile,
+            arkret_wire::EventKind::RealmPolicyBundle,
+            arkret_wire::EventKind::RealmJoinRule,
+            arkret_wire::EventKind::RealmHistoryVisibility,
+            arkret_wire::EventKind::RealmDiscovery,
+            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
+            arkret_wire::EventKind::MemberState,
         ]
         .into_iter()
         .all(|kind| existing_records.iter().any(|record| record.kind == kind));
@@ -427,8 +427,8 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         "ak:trust_domain:soland.test",
         created_at,
     );
-    let event = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::REALM_CREATE,
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         0,
@@ -508,13 +508,13 @@ async fn project_fixture_genesis_event(
     if projection.realm_genesis_cell_value(realm_id).is_none() {
         let writes = fixture_registered_projection(&event)
             .expect("fixture PCR genesis registered projection");
-        let operation = arkret_event_draft::Operation::create(
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
                 "ak:operation:",
             ))
             .expect("fixture PCR genesis Operation id"),
             realm.clone(),
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             payload,
         );
         let effect = projection.apply_projected(&operation, &writes, state.test_hlc());
@@ -554,8 +554,8 @@ pub async fn seed_event_derived_realm_genesis_event(
             .expect("fixture Realm genesis salt")
             .into_string()
     );
-    let event = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::REALM_CREATE,
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         0,
@@ -590,31 +590,31 @@ async fn persist_and_project_realm_genesis_event(
 
     let followups = [
         (
-            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::RealmProfile,
             serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": profile_title}),
         ),
         (
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::RealmPolicyBundle,
             serde_json::json!({"policy_revision": 1, "content_scheme": "mls_exporter_aead_v1"}),
         ),
         (
-            arkret_wire::EventKind::REALM_JOIN_RULE,
+            arkret_wire::EventKind::RealmJoinRule,
             serde_json::json!({"value": "invite"}),
         ),
         (
-            arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+            arkret_wire::EventKind::RealmHistoryVisibility,
             serde_json::json!({"value": "joined"}),
         ),
         (
-            arkret_wire::EventKind::REALM_DISCOVERY,
+            arkret_wire::EventKind::RealmDiscovery,
             serde_json::json!({"value": "invite_only"}),
         ),
         (
-            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
             serde_json::json!({"allow_unroutable_members": false}),
         ),
         (
-            arkret_wire::EventKind::MEMBER_STATE,
+            arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,
                 "actor_id": subject,
@@ -627,7 +627,7 @@ async fn persist_and_project_realm_genesis_event(
     let mut previous_event_id = event.event_id.clone();
     for (offset, (kind, followup_payload)) in followups.into_iter().enumerate() {
         let actor_seq = u64::try_from(offset + 1).expect("fixture bootstrap sequence");
-        let mut followup = arkret_wire::Event::new_at(
+        let mut followup = arkret_wire::test_support::raw_event_at(
             kind,
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
@@ -689,13 +689,13 @@ async fn persist_and_project_realm_genesis_event(
             arkret_canonical::DigestSuite::Sha256,
         )
         .expect("fixture genesis registered projection");
-        let operation = arkret_event_draft::Operation::create(
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
                 "ak:operation:",
             ))
             .expect("fixture genesis Operation id"),
             realm.clone(),
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             payload,
         );
         let effect = projection.apply_projected(&operation, &writes, state.test_hlc());
@@ -774,7 +774,7 @@ pub fn apply_registered_cba_plane_seal(
 fn carries_a_cba_basis(event: &arkret_wire::Event) -> bool {
     event.kind.descriptor().is_some_and(|row| row.reducer_input)
         && !matches!(
-            event.kind.as_str(),
-            arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
+            &event.kind,
+            arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::DeviceReanchor
         )
 }

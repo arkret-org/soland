@@ -1,5 +1,3 @@
-use serde::de::DeserializeOwned;
-
 use super::*;
 
 impl ProjectionState {
@@ -9,16 +7,7 @@ impl ProjectionState {
                 reason: "audit_binding_id_must_be_event_derived".to_owned(),
             };
         }
-        let Some(event_id) = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "audit_binding_create_event_id_required".to_owned(),
-            };
-        };
+        let event_id = operation.context.event_id.clone();
         let binding_id = arkret_identifiers::AuditBindingId::from_event_id(&event_id).to_string();
         let config_cell = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.audit.binding.v1:{binding_id}"
@@ -178,17 +167,17 @@ impl ProjectionState {
         operation: &Operation,
         cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
-        let kind = operation.object_kind.as_str();
-        if kind != arkret_wire::EventKind::REALM_POLICY_BUNDLE
+        let kind = operation.event_kind.clone();
+        if kind != arkret_wire::EventKind::RealmPolicyBundle
             && !matches!(
-                kind,
-                arkret_wire::EventKind::REALM_ALIAS
-                    | arkret_wire::EventKind::REALM_JOIN_RULE
-                    | arkret_wire::EventKind::REALM_HISTORY_VISIBILITY
-                    | arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
-                    | arkret_wire::EventKind::REALM_DISCOVERY
-                    | arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY
-                    | arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
+                &kind,
+                arkret_wire::EventKind::RealmAlias
+                    | arkret_wire::EventKind::RealmJoinRule
+                    | arkret_wire::EventKind::RealmHistoryVisibility
+                    | arkret_wire::EventKind::RealmHistorySharingPolicy
+                    | arkret_wire::EventKind::RealmDiscovery
+                    | arkret_wire::EventKind::RealmDeliveryBindingPolicy
+                    | arkret_wire::EventKind::RealmPlaintextVisibleServices
             )
         {
             return ProjectionEffect::Rejected {
@@ -210,7 +199,7 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE {
+        if kind == arkret_wire::EventKind::RealmPolicyBundle {
             // Projection Operations carry receiver-only metadata such as
             // event_id/sender/hlc beside their Event payload. The registered
             // cell write is the authoritative closed policy-bundle value, so
@@ -240,7 +229,7 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
-        if kind == arkret_wire::EventKind::REALM_JOIN_RULE {
+        if kind == arkret_wire::EventKind::RealmJoinRule {
             // `realm_join_rule_payload` is `{"value": <enum>}` and the
             // registered projection sets the cell to that whole object, so the
             // scalar rule lives one level down.
@@ -261,23 +250,19 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::RealmNotaryPayload =
-            match typed_realm_control_payload::<
-                arkret_models_collaboration::events_payloads::RealmNotaryPayload,
-            >(&operation.payload, &["realm_id", "notary"])
+        let payload = match operation.typed_payload::<arkret_wire::event_spec::RealmNotary>() {
+            Ok(payload)
+                if payload.validate().is_ok()
+                    && payload.realm_id.as_str() == operation.realm_id.as_str() =>
             {
-                Ok(payload)
-                    if payload.validate().is_ok()
-                        && payload.realm_id.as_str() == operation.realm_id.as_str() =>
-                {
-                    payload
-                }
-                _ => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
+                payload
+            }
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
         let realm_id = payload.realm_id.to_string();
         if matches!(
             self.realm_notary_cells.get(&realm_id),
@@ -301,23 +286,16 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
     ) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload =
-            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload>(
-                &operation.payload,
-                &[
-                    "from_digest_algorithm",
-                    "to_digest_algorithm",
-                    "transition_snapshot_ref",
-                    "snapshot_commitment",
-                ],
-            ) {
-                Ok(payload) if payload.validate().is_ok() => payload,
-                _ => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
-            };
+        let payload = match operation
+            .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
+        {
+            Ok(payload) if payload.validate().is_ok() => payload,
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
         let realm_id = operation.realm_id.to_string();
         if self.realm_digest_algorithm(&realm_id).as_deref()
             != Some(payload.from_digest_algorithm.as_str())
@@ -379,30 +357,8 @@ impl ProjectionState {
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
-        let mut wire_value = value.clone();
-        if let Some(object) = wire_value.as_object_mut() {
-            for field in [
-                "event_id",
-                "sender",
-                "hlc",
-                "executed_by",
-                "authorization_ref",
-                "seal_ref",
-                "seal_basis",
-                "preconditions",
-                "effects",
-                "accepted_event_id",
-                "accepted_scope_ref",
-                "envelope_causal_refs",
-                "canonical_event_digest",
-                "query_grade",
-            ] {
-                object.remove(field);
-            }
-        }
-        let Ok(bundle) = serde_json::from_value::<
-            arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload,
-        >(wire_value) else {
+        let Ok(bundle) = operation.typed_payload::<arkret_wire::event_spec::RealmPolicyBundle>()
+        else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
@@ -604,16 +560,7 @@ impl ProjectionState {
                 reason: "call_id_must_be_event_derived".to_owned(),
             };
         }
-        let Some(event_id) = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "call_create_event_id_required".to_owned(),
-            };
-        };
+        let event_id = operation.context.event_id.clone();
         let call_id = arkret_identifiers::CallId::from_event_id(&event_id).to_string();
         let Some(initial_state) = operation
             .payload
@@ -684,10 +631,7 @@ impl ProjectionState {
             }
         }
         if recording_start {
-            let event_id = operation
-                .payload
-                .get("accepted_event_id")
-                .and_then(Value::as_str);
+            let event_id = operation.context.accepted_event_id.as_str();
             let result = payload.get("result");
             let expected_ref = match payload.get("capture_kind").and_then(Value::as_str) {
                 Some("recording") => result
@@ -704,8 +648,7 @@ impl ProjectionState {
                 .and_then(Value::as_bool);
             if payload.get("visible_notice").and_then(Value::as_bool) != Some(true)
                 || consent != Some(true)
-                || event_id.is_none()
-                || expected_ref != event_id
+                || expected_ref != Some(event_id)
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ReasonCode::RECORDING_CONSENT_REQUIRED.to_owned(),
@@ -1300,23 +1243,6 @@ impl ProjectionState {
     }
 }
 
-fn typed_realm_control_payload<T: DeserializeOwned>(
-    payload: &Value,
-    fields: &[&str],
-) -> std::result::Result<T, serde_json::Error> {
-    let object = payload.as_object().cloned().unwrap_or_default();
-    let wire_payload = fields
-        .iter()
-        .filter_map(|field| {
-            object
-                .get(*field)
-                .cloned()
-                .map(|value| ((*field).to_owned(), value))
-        })
-        .collect();
-    serde_json::from_value(Value::Object(wire_payload))
-}
-
 /// `call-state.md` §4.2 — terminal call lifecycle states.
 fn is_terminal_call_state(state: &str) -> bool {
     matches!(state, "ended" | "missed" | "failed" | "cancelled")
@@ -1503,14 +1429,20 @@ fn validate_call_fsm_edge(
 
 fn call_fsm_conflict_basis(operation: &Operation) -> String {
     operation
-        .payload
-        .get("seal_ref")
-        .or_else(|| operation.payload.get("conflict_basis"))
-        .or_else(|| operation.payload.get("state_witness"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| operation.operation_id.as_str())
-        .to_owned()
+        .context
+        .seal_ref
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| {
+            operation
+                .payload
+                .get("conflict_basis")
+                .or_else(|| operation.payload.get("state_witness"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| operation.operation_id.to_string())
 }
 
 fn project_call_or_set(

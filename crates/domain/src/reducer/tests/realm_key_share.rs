@@ -48,7 +48,7 @@ fn realm_key_share_dispatch_projects_effect() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_KEY_SHARE,
+            arkret_wire::EventKind::RealmKeyShare,
             REALM,
             realm_key_share_payload(realm_scope(REALM)),
         ),
@@ -77,7 +77,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     payload["hlc"] = json!("2026-07-05T00:00:00.000Z/node/1");
 
     let effect = state.apply(
-        &make_operation(arkret_wire::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,
     );
 
@@ -106,7 +106,7 @@ fn realm_key_share_without_material_fails_typed_parsing() {
     object.remove("encrypted_key_ref");
 
     let effect = state.apply(
-        &make_operation(arkret_wire::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,
     );
 
@@ -129,7 +129,7 @@ fn realm_key_share_rejects_whitespace_only_ciphertext() {
     object.insert("ciphertext".to_owned(), serde_json::json!("   "));
 
     let effect = state.apply(
-        &make_operation(arkret_wire::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,
     );
 
@@ -147,7 +147,7 @@ fn realm_key_share_rejects_scope_mismatch() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_KEY_SHARE,
+            arkret_wire::EventKind::RealmKeyShare,
             REALM,
             realm_key_share_payload(realm_scope(OTHER_REALM)),
         ),
@@ -170,7 +170,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
     payload["key_scope"]["to_epoch"] = json!(3);
 
     let effect = state.apply(
-        &make_operation(arkret_wire::EventKind::REALM_KEY_SHARE, REALM, payload),
+        &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,
     );
 
@@ -184,7 +184,7 @@ fn realm_key_share_rejects_inverted_epoch_range() {
 #[test]
 fn realm_key_share_is_registered_in_default_apply_registry() {
     assert!(
-        default_apply_registry().contains_key(arkret_wire::EventKind::REALM_KEY_SHARE),
+        default_apply_registry().contains_key(&arkret_wire::EventKind::RealmKeyShare),
         "ak.realm_key.share should dispatch through the reducer registry"
     );
 }

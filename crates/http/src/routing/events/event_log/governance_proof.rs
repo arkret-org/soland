@@ -519,7 +519,7 @@ async fn materialize_realm_control_with_transported_seals(
             )
         })?;
     if realm_records.iter().any(|record| {
-        record.kind == arkret_wire::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record
                 .envelope
                 .pointer("/payload/object/purpose")
@@ -537,7 +537,7 @@ async fn materialize_realm_control_with_transported_seals(
     let principal_control_actor = realm_records
         .iter()
         .find(|record| {
-            record.kind == arkret_wire::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && record
                     .envelope
                     .pointer("/payload/object/purpose")
@@ -630,7 +630,7 @@ async fn materialize_realm_control_with_transported_seals(
         })
         .collect::<BTreeSet<_>>();
     for bootstrap in realm_records.iter().filter(|record| {
-        record.kind == arkret_wire::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record
                 .envelope
                 .pointer("/payload/object/purpose")
@@ -642,7 +642,7 @@ async fn materialize_realm_control_with_transported_seals(
             realm_records
                 .iter()
                 .filter(|record| {
-                    record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+                    record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
                         && record
                             .envelope
                             .get("prev_refs")
@@ -699,7 +699,7 @@ async fn materialize_realm_control_with_transported_seals(
             )
         })?;
         let requires_invite_membership_validation =
-            event.kind.as_str() == arkret_wire::EventKind::INVITE_ACCEPT;
+            event.kind == arkret_wire::EventKind::InviteAccept;
         // v1 has no producer `effects[]`: whether a stored Event contributes
         // governance writes is decided by its registered contract, not by an
         // array on the envelope.
@@ -1517,7 +1517,7 @@ fn canonical_event_sealed_ops(
         }
     }
 
-    if event.kind.as_str() == arkret_wire::EventKind::INVITE_ACCEPT {
+    if event.kind == arkret_wire::EventKind::InviteAccept {
         let from = invite_accept_from.ok_or_else(|| {
             AppError::new(
                 ErrorCode::StateMismatch,
@@ -1545,7 +1545,7 @@ fn canonical_event_sealed_ops(
                 "invite acceptance member transition does not match prior membership state",
             ));
         }
-    } else if event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE {
+    } else if event.kind == arkret_wire::EventKind::RealmCreate {
         // Only the genesis targets are asserted; the lattice ops come from the
         // registered `effect_projection`.
         let expected = arkret_bootstrap::expected_realm_create_cells(event);
@@ -1689,8 +1689,8 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
-        Event::new(
-            arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
@@ -1768,8 +1768,8 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
-        let event = Event::new(
-            arkret_wire::EventKind::INVITE_ACCEPT,
+        let event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::InviteAccept.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },

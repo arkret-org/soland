@@ -48,21 +48,27 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .unwrap_or(0);
     let service_did = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = arkret_wire::Event::new_at(
-        arkret_wire::EventKind::MESSAGE_CREATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
-                .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
-        },
-        service_did.clone(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?,
-        payload,
-        created_at,
-    )
-    .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
-    event.prev_refs = prev_refs;
+    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
+        .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?;
+    let typed_payload: arkret_models_collaboration::events_payloads::MessageCreatePayload =
+        serde_json::from_value(payload)
+            .map_err(|error| AppError::internal(format!("MIMI Event payload invalid: {error}")))?;
+    let mut event =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).map_err(
+                    |error| AppError::internal(format!("MIMI realm id invalid: {error}")),
+                )?,
+            },
+            service_did.clone(),
+            typed_payload,
+        )
+        .and_then(|draft| {
+            draft
+                .with_prev_refs(prev_refs)
+                .author(actor_seq, hlc, created_at)
+        })
+        .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     let verification_method =
         arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
             |error| {

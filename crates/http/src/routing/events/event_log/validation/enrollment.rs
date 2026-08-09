@@ -1,3 +1,5 @@
+use arkret_event_draft::EventPayloadExt as _;
+
 use super::super::*;
 
 /// Enforce the closed device-authorization source model. Root-anchored
@@ -190,7 +192,7 @@ pub(crate) async fn project_federated_device_signing_key_evidence(
         .ok_or_else(|| "portable device authorization Event is unavailable".to_owned())?;
     let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
         authorize_event
-            .typed_payload(arkret_wire::EventKind::DEVICE_AUTHORIZE)
+            .typed_payload(arkret_wire::EventKind::DeviceAuthorize)
             .map_err(|error| format!("portable device authorization payload: {error}"))?;
     let principal_id = evidence.actor_id.as_str();
     let device_id = evidence.device_id.as_str();
@@ -424,7 +426,7 @@ async fn verify_federated_range_attestation(
 
     let payload: arkret_models_collaboration::sync_frames::snapshot::RangeCompletenessAttestation =
         event
-            .payload_as()
+            .typed_payload::<arkret_wire::event_spec::AttestationRangeCompleteness>()
             .map_err(|error| format!("PCR range attestation payload is invalid: {error}"))?;
     if &payload.issuer != expected_issuer
         || payload.realm_id != event.realm_id

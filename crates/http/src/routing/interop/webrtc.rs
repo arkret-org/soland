@@ -14,8 +14,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{CellRef, DeviceId, Did, Hash, OperationId, RealmId};
+use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_identifiers::{CellRef, DeviceId, Did, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
@@ -921,7 +921,7 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_wire::EventKind::CALL_STATE
+            record.kind == arkret_wire::EventKind::CallState.as_str()
                 && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
@@ -982,47 +982,19 @@ fn record_call_id(record: &CanonicalEventRecord) -> Option<&str> {
 fn call_state_operation_from_record(
     record: &CanonicalEventRecord,
 ) -> Result<Option<Operation>, AppError> {
-    let Some(realm_id) = crate::routing::events::event_log::canonical_realm_id_for_record(record)
+    let Some(operation) =
+        crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     else {
         return Ok(None);
     };
-    let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
-    let Some(suffix) = record.event_id.strip_prefix("ak:event:") else {
-        return Ok(None);
-    };
-    let operation_id = OperationId::new(format!("ak:operation:{suffix}"))
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut payload = record
-        .envelope
-        .get("payload")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if let Some(object) = payload.as_object_mut() {
-        if let Some(effects) = record.envelope.get("effects") {
-            object.insert("effects".to_owned(), effects.clone());
-        }
-        if let Some(seal_ref) = record.envelope.get("seal_ref") {
-            object.insert("seal_ref".to_owned(), seal_ref.clone());
-        }
-        object.insert(
-            "accepted_event_id".to_owned(),
-            Value::String(record.event_id.clone()),
-        );
+    if operation.event_kind != arkret_wire::EventKind::CallState {
+        return Err(AppError::internal(format!(
+            "stored Event {} hydrated as {}, expected {}",
+            record.event_id,
+            operation.event_kind.as_str(),
+            arkret_wire::EventKind::CallState.as_str(),
+        )));
     }
-    let mut operation = Operation::create(
-        operation_id,
-        realm_id,
-        arkret_wire::EventKind::CALL_STATE,
-        payload,
-    );
-    operation.canonical_event_digest = Some(record.canonical_digest.clone());
-    operation.created_at = record
-        .envelope
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .unwrap_or(record.received_at);
     Ok(Some(operation))
 }
 

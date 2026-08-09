@@ -17,14 +17,13 @@
 
 use std::collections::BTreeMap;
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{OperationId, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_wire::JoinRule;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
@@ -32,11 +31,10 @@ use soland_services::events::{
 use soland_services::operation_semantics as kinds;
 
 use super::{
-    accept_local_operations, append_audit_log, discussion_track_for_projection_event,
-    policy_document_to_response, projection_event_from_operation, strand_id_for_projection_event,
-    strand_id_from_realm_id, strand_projection_for_realm,
+    append_audit_log, discussion_track_for_projection_event, policy_document_to_response,
+    projection_event_from_operation, strand_id_for_projection_event, strand_id_from_realm_id,
+    strand_projection_for_realm,
 };
-use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
 
@@ -259,45 +257,10 @@ pub(super) async fn admin_create_realm(
             "discoverability must be public, invite_only, or private",
         ));
     }
-    let realm_id = ids::generate_realm_id();
-    let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
-    // The create-locked genesis basis of the Realm's authority root
-    // (`realm-and-space.md` section 2.5). It is a `state_root` leaf input, so
-    // the author states its own embedded snapshot rather than letting a
-    // receiver re-infer one.
-    let capability_action_registry_digest =
-        arkret_policy::current_capability_action_registry_digest().map_err(|error| {
-            AppError::internal(format!("capability action registry unavailable: {error}"))
-        })?;
-    let object = json!({
-        "id": realm_id,
-        "title": title,
-        "summary": body.topic.filter(|value| !value.trim().is_empty()),
-        "default_discoverability": discoverability,
-        "default_join_rule": body.default_join_rule.unwrap_or(JoinRule::Invite),
-        "history_visibility": "joined",
-        "encryption_profile": if body.is_encrypted { "mls_rfc9420" } else { "plaintext" },
-        "realm_class": body.realm_class,
-        "created_by": session.actor.clone(),
-        "capability_action_registry_digest": capability_action_registry_digest,
-    });
-    let payload = json!({
-        "object": object,
-        "sender": session.actor.clone(),
-    });
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|error| AppError::invalid_param(format!("operation_id: {error}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::EventKind::REALM_CREATE,
-        payload,
-    );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(|reason| AppError::new(ErrorCode::FailedPrecondition, reason.to_owned()))?;
-    json_ok(admin_get_realm_item(state, &realm_id).await?)
+    let _ = (body, discoverability, session);
+    Err(AppError::unsupported_feature(
+        "Realm creation requires a caller-signed canonical ak.realm.create Event",
+    ))
 }
 
 #[salvo::oapi::endpoint(
@@ -513,7 +476,7 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
                 "operation_id": operation.operation_id,
                 "realm_id": operation.realm_id,
                 "operation_kind": operation.operation_kind,
-                "canonical_kind": kinds::canonical_kind_string(&operation),
+                "canonical_kind": kinds::canonical_kind(&operation),
                 "strand_id": strand_id_for_projection_event(&projected),
                 "track": discussion_track_for_projection_event(
                     &projected,

@@ -68,7 +68,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         (frontier.next_actor_seq, frontier.frontier_event_ids)
     } else {
         assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
-        assert_eq!(drafts[0]["kind"], arkret_wire::EventKind::REALM_CREATE);
+        assert_eq!(drafts[0]["kind"], arkret_wire::EventKind::RealmCreate);
         (0, Vec::new())
     };
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{ALICE_SIGNING_DEVICE}"))

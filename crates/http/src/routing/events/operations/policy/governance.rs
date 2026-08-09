@@ -20,8 +20,8 @@ pub(super) fn validate_direct_conversation_realm_policy(
     // / `ak.realm.freeze` stay available through ordinary Realm authority and
     // only surface as resolver send blockers.
     if matches!(
-        kinds::canonical_kind_string(operation).as_str(),
-        arkret_wire::EventKind::REALM_TOMBSTONE | arkret_wire::EventKind::REALM_DESTROY
+        kinds::canonical_kind(operation),
+        arkret_wire::EventKind::RealmTombstone | arkret_wire::EventKind::RealmDestroy
     ) {
         return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN);
     }
@@ -42,12 +42,12 @@ pub(super) fn operation_is_space_container(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
         Some(
-            arkret_wire::EventKind::SPACE_CREATE
-                | arkret_wire::EventKind::SPACE_UPDATE
-                | arkret_wire::EventKind::SPACE_PARENT
-                | arkret_wire::EventKind::SPACE_ARCHIVE
-                | arkret_wire::EventKind::SPACE_RESTORE
-                | arkret_wire::EventKind::SPACE_TOMBSTONE
+            arkret_wire::EventKind::SpaceCreate
+                | arkret_wire::EventKind::SpaceUpdate
+                | arkret_wire::EventKind::SpaceParent
+                | arkret_wire::EventKind::SpaceArchive
+                | arkret_wire::EventKind::SpaceRestore
+                | arkret_wire::EventKind::SpaceTombstone
         )
     )
 }
@@ -56,8 +56,7 @@ pub(super) async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::MEMBER_STATE)
-    {
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::MemberState) {
         return Ok(());
     }
     if let Some(reason) = direct_conversation_member_state_guard(state, operation) {
@@ -75,16 +74,7 @@ pub(super) async fn validate_member_state_policy(
         {
             return Err("organization_policy_denied");
         }
-        let Some(actor) = operation
-            .payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        else {
-            // Peer/service-originated federation operations are authenticated
-            // by their transport and convergence path.
-            return Ok(());
-        };
+        let actor = operation.context.sender.as_str();
         let Some(target) = target else {
             return Err("invalid_membership_target");
         };
@@ -130,14 +120,7 @@ pub(super) async fn validate_member_state_policy(
         return Err("missing_capability");
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("leave") {
-        let Some(actor) = operation
-            .payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        else {
-            return Ok(());
-        };
+        let actor = operation.context.sender.as_str();
         let Some(target) = membership_target(operation) else {
             return Err("invalid_membership_target");
         };
@@ -161,12 +144,7 @@ pub(super) async fn validate_member_state_policy(
     if operation.payload.get("membership").and_then(Value::as_str) != Some("ban") {
         return Ok(());
     }
-    let Some(actor) = operation.payload.get("sender").and_then(Value::as_str) else {
-        // Peer/service-originated federation operations predate a typed actor
-        // envelope. They stay accepted so existing convergence/backfill
-        // paths keep working; direct client submits always carry `sender`.
-        return Ok(());
-    };
+    let actor = operation.context.sender.as_str();
     // capabilities.md section 16 - `ak.realm.admin` governs `ak.member.state`
     // writes, and section 3.2 lets the Realm owner aggregate stand in for it.
     // Both legs are resolved by the shared governance predicate; the
@@ -257,25 +235,17 @@ async fn native_agent_controlled_by(
 /// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the
 /// ban / moderation gates: the actor MUST hold `ak.realm.set_default_strand`
 /// (or the broader `ak.realm.admin`) on it.
-/// fail-closed `missing_capability` otherwise. Peer/service-originated
-/// federation operations (no `sender`) stay accepted for convergence/backfill.
+/// fail-closed `missing_capability` otherwise.
 pub(super) async fn validate_set_default_strand_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND)
+        != Some(arkret_wire::EventKind::RealmSetDefaultStrand)
     {
         return Ok(());
     }
-    let Some(actor) = operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(());
-    };
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -371,14 +341,14 @@ pub(super) async fn validate_realm_organization_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_ORGANIZATION)
+        != Some(arkret_wire::EventKind::RealmOrganization)
     {
         return Ok(());
     }
     // Organization side — strong-typed parse + SDK verifier (fail-closed).
-    let payload: arkret_models_collaboration::RealmOrganizationPayload =
-        serde_json::from_value(operation.payload.clone())
-            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::RealmOrganization>()
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
     arkret_policy::verify_realm_organization_statement(
         &payload,
         &operation.realm_id,
@@ -399,10 +369,7 @@ pub(super) async fn validate_realm_organization_policy(
     // Realm side — explicit `ak.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is
     // not sufficient on its own.
-    let Some(actor) = operation.actor() else {
-        return Err("missing_capability");
-    };
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -454,34 +421,34 @@ pub(super) async fn validate_moderation_event_policy(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Ok(());
     };
-    let actions = match kind {
-        arkret_wire::EventKind::MODERATION_DECISION => &[
+    let actions = match &kind {
+        arkret_wire::EventKind::ModerationDecision => &[
             "ak.realm.moderation_policy",
             "ak.policy.manage",
             "ak.moderation.decision",
         ][..],
-        arkret_wire::EventKind::MODERATION_DECISION_LIFT => &[
+        arkret_wire::EventKind::ModerationDecisionLift => &[
             "ak.realm.moderation_policy",
             "ak.policy.manage",
             "ak.moderation.decision.lift",
         ][..],
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT => &["ak.moderation.appeal.submit"][..],
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW
-        | arkret_wire::EventKind::MODERATION_APPEAL_DECISION
-        | arkret_wire::EventKind::MODERATION_APPEAL_CLOSE => &["ak.moderation.appeal.review"][..],
+        arkret_wire::EventKind::ModerationAppealSubmit => &["ak.moderation.appeal.submit"][..],
+        arkret_wire::EventKind::ModerationAppealReview
+        | arkret_wire::EventKind::ModerationAppealDecision
+        | arkret_wire::EventKind::ModerationAppealClose => &["ak.moderation.appeal.review"][..],
         _ => return Ok(()),
     };
 
     // Peer/service-originated federation operations predate a typed actor
     // envelope; they stay accepted so convergence/backfill keep working
     // (mirrors the ban gate). Direct client submits always carry an actor.
-    let Some(actor) = moderation_actor(operation, kind)? else {
+    let Some(actor) = moderation_actor(operation, &kind)? else {
         return Ok(());
     };
 
     // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
     // without the review capability (closer == cell appellant).
-    if kind == arkret_wire::EventKind::MODERATION_APPEAL_CLOSE
+    if kind == arkret_wire::EventKind::ModerationAppealClose
         && moderation_close_is_appellant_withdrawal(state, operation, actor)
     {
         return Ok(());
@@ -496,7 +463,7 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if kind == arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT
+    if kind == arkret_wire::EventKind::ModerationAppealSubmit
         && members.iter().any(|member| member == actor)
     {
         return Ok(());
@@ -525,13 +492,11 @@ pub(super) async fn validate_realm_policy_server_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::REALM_POLICY_SERVER)
+        != Some(arkret_wire::EventKind::RealmPolicyServer)
     {
         return Ok(());
     }
-    let Some(actor) = operation.actor() else {
-        return Err("missing_capability");
-    };
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -564,15 +529,12 @@ pub(super) async fn validate_call_recording_start_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::CALL_RECORDING_START {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::CallRecordingStart {
         return Ok(());
     }
     let payload = call_recording_start_payload(operation)?;
     let action = call_recording_start_required_action(&payload);
-    let Some(actor) = operation.actor() else {
-        return Ok(());
-    };
-    let actor = actor.as_str();
+    let actor = operation.context.sender.as_str();
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -608,27 +570,8 @@ fn call_recording_start_payload(
     operation: &Operation,
 ) -> Result<arkret_models_collaboration::events_payloads::call::RecordingStartPayload, &'static str>
 {
-    let Some(payload) = operation.payload.as_object() else {
-        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-    };
-    let wire_payload = [
-        "call_id",
-        "recording_id",
-        "recording_agent",
-        "capture_kind",
-        "mode",
-        "visible_notice",
-        "result",
-    ]
-    .into_iter()
-    .filter_map(|field| {
-        payload
-            .get(field)
-            .cloned()
-            .map(|value| (field.to_owned(), value))
-    })
-    .collect();
-    serde_json::from_value(Value::Object(wire_payload))
+    operation
+        .typed_payload::<arkret_wire::event_spec::CallRecordingStart>()
         .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }
 
@@ -651,38 +594,33 @@ pub(super) fn call_recording_start_required_action(
 /// they must match so a privileged sender cannot spoof the decision issuer.
 pub(super) fn moderation_actor<'a>(
     operation: &'a Operation,
-    kind: &str,
+    kind: &arkret_wire::EventKind,
 ) -> Result<Option<&'a str>, &'static str> {
     let actor = match kind {
-        arkret_wire::EventKind::MODERATION_DECISION => operation
+        arkret_wire::EventKind::ModerationDecision => operation
             .payload
             .get("issuer")
             .or_else(|| operation.payload.get("decided_by"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,
-        arkret_wire::EventKind::MODERATION_DECISION_LIFT => {
-            return Ok(operation
-                .payload
-                .get("sender")
-                .or_else(|| operation.payload.get("actor_id"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty()));
+        arkret_wire::EventKind::ModerationDecisionLift => {
+            return Ok(Some(operation.context.sender.as_str()));
         }
-        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT => operation
+        arkret_wire::EventKind::ModerationAppealSubmit => operation
             .payload
             .get("appellant")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW
-        | arkret_wire::EventKind::MODERATION_APPEAL_DECISION => operation
+        arkret_wire::EventKind::ModerationAppealReview
+        | arkret_wire::EventKind::ModerationAppealDecision => operation
             .payload
             .get("reviewer")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE => operation
+        arkret_wire::EventKind::ModerationAppealClose => operation
             .payload
             .get("closer")
             .and_then(Value::as_str)
@@ -690,13 +628,7 @@ pub(super) fn moderation_actor<'a>(
             .ok_or("moderation_appeal_actor_missing")?,
         _ => return Ok(None),
     };
-    if operation
-        .payload
-        .get("sender")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .is_some_and(|sender| sender != actor)
-    {
+    if operation.context.sender.as_str() != actor {
         return Err("moderation_actor_mismatch");
     }
     Ok(Some(actor))

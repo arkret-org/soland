@@ -294,19 +294,7 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
             .data
             .lock()
             .iter()
-            .filter(|event| {
-                event.sender.as_deref() == Some(actor_id)
-                    || event.payload.get("sender").and_then(Value::as_str) == Some(actor_id)
-                    || event.payload.get("actor_id").and_then(Value::as_str) == Some(actor_id)
-                    || event.payload.get("actor").and_then(Value::as_str) == Some(actor_id)
-                    || event
-                        .payload
-                        .get("object")
-                        .and_then(Value::as_object)
-                        .and_then(|object| object.get("created_by"))
-                        .and_then(Value::as_str)
-                        == Some(actor_id)
-            })
+            .filter(|event| event.sender.as_deref() == Some(actor_id))
             .cloned()
             .collect())
     }

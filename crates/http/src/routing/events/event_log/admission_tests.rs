@@ -56,8 +56,8 @@ fn terminal_realm_blocks_non_audit_kind() {
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
     assert!(frozen_realm_check(true, "ak.message.create").is_some());
-    assert!(frozen_realm_check(true, arkret_wire::EventKind::REALM_FREEZE).is_none());
-    assert!(frozen_realm_check(true, arkret_wire::EventKind::REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, arkret_wire::EventKind::RealmFreeze.as_str()).is_none());
+    assert!(frozen_realm_check(true, arkret_wire::EventKind::RealmDestroy.as_str()).is_none());
     assert!(frozen_realm_check(true, "ak.audit.accessed").is_none());
     assert!(frozen_realm_check(false, "ak.message.create").is_none());
 }

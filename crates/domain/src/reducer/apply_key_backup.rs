@@ -8,14 +8,13 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            != Some(arkret_wire::EventKind::KeyBackupActiveSeries)
         {
             return ProjectionEffect::Ignored;
         }
 
-        let wire_payload = projection_context_stripped_payload(&operation.payload);
-        let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
-            match serde_json::from_value(wire_payload.clone()) {
+        let record =
+            match operation.typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>() {
                 Ok(record) => record,
                 Err(_) => {
                     return ProjectionEffect::Rejected {

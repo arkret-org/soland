@@ -177,7 +177,7 @@ fn signed_event(
     actor: &str,
     device_id: &str,
     realm_id: &str,
-    kind: &str,
+    kind: impl AsRef<str>,
     payload: Value,
     seal_basis: Option<arkret_wire::SealBasis>,
 ) -> Value {
@@ -185,8 +185,8 @@ fn signed_event(
     let actor = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{}#{device_id}", actor.as_str()))
         .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_at(
-        kind,
+    let mut event = arkret_wire::test_support::raw_event_at(
+        kind.as_ref(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         },

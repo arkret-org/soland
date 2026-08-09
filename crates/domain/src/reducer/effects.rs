@@ -4,6 +4,7 @@
 //! `crate::reducer::ProjectionEffect` / `MlsEffect` paths stay unchanged.
 
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_wire::EventKind;
 use serde_json::Value;
 
 use super::{
@@ -266,7 +267,7 @@ pub enum ProjectionEffect {
     /// Wire-accepted and surfaced to audit-log consumers, but does NOT
     /// advance the seal frontier / actor_seq.
     AgentPrivateEventAccepted {
-        kind: &'static str,
+        kind: EventKind,
         event_id: String,
     },
     /// MID-1..6 (R3.1/R3.2, arkret-spec @ b56cab1) —

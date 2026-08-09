@@ -93,7 +93,7 @@ impl<'a> CallerSignedEvent<'a> {
     #[must_use]
     pub fn realm_genesis(actor_id: &'a str, device_id: &'a str, payload: Value) -> Self {
         let mut event = Self::new(
-            arkret_wire::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::RealmCreate,
             actor_id,
             device_id,
             "",
@@ -155,7 +155,7 @@ impl<'a> CallerSignedEvent<'a> {
         let now = chrono::Utc::now();
         let actor = Did::new(self.actor_id.to_owned()).expect("fixture actor DID");
         let verification_method = self.verification_method();
-        let mut event = Event::new_at(
+        let mut event = arkret_wire::test_support::raw_event_at(
             self.kind,
             if self.genesis_scope {
                 ScopeRef::RealmGenesis

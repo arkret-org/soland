@@ -157,39 +157,12 @@ pub(super) async fn mimi_notify(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::invalid_param("invalid MIMI room id"));
     }
-    // Fan out a synthetic `ak.open.mimi.command.notify` projection event so live
-    // subscribers observe the MIMI provider-to-provider
-    // notification. The notify event is an ephemeral signal in the
-    // spec's wire_scope taxonomy - we broadcast but don't persist
-    // into projection_events so it doesn't pollute durable history.
-    let realm_id = mimi_bound_realm_id(state, &room_id).await?.ok_or_else(|| {
+    // Notify is an ephemeral MIMI control signal, not an Arkret Event. It must
+    // not mint an Event id or enter the canonical projection timeline.
+    let _realm_id = mimi_bound_realm_id(state, &room_id).await?.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
     })?;
-    let event_id = ids::generate_event_id();
-    let notify_record = ProjectionEventRecord {
-        event_id: event_id.clone(),
-        realm_id: realm_id.clone(),
-        event_kind: "ak.open.mimi.command.notify".to_owned(),
-        operation_kind: "mimi_facade_notify".to_owned(),
-        operation_id: None,
-        sender: None,
-        payload: json!({
-            "mimi_room_uri": mimi_room_uri(state, &room_id),
-            "mimi_room_id": room_id,
-            "mimi_provider_id": mimi_provider_id(state),
-            "notify_body": body.clone(),
-            "facade": "soland.mimi.v1",
-        }),
-        created_at: chrono::Utc::now(),
-        received_at: chrono::Utc::now(),
-    };
-    let _ = crate::routing::events::projection::persist_and_publish_projection_event(
-        state,
-        notify_record,
-    )
-    .await;
-
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.command.notify",
@@ -197,8 +170,7 @@ pub(super) async fn mimi_notify(
         json!({
             "delivery": "queued",
             "mimi_room_uri": mimi_room_uri(state, &room_id),
-            "broadcast_emitted": true,
-            "broadcast_event_id": event_id,
+            "broadcast_emitted": false,
         }),
     );
     json_ok(MimiNotifyOutcome {
@@ -1041,7 +1013,7 @@ mod consent_proof_tests {
         let realm_id =
             RealmId::new("ak:realm:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".to_owned())
                 .unwrap();
-        let consent_event = Event::new_at(
+        let consent_event = arkret_wire::test_support::raw_event_at(
             EventKind::ConsentGrant.as_str(),
             ScopeRef::Realm { realm_id },
             actor_id.clone(),

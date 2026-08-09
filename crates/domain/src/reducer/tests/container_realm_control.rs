@@ -32,7 +32,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     let hlc = ServerHlc::new("test");
     let first = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_wire::EventKind::ContainerMoveItem,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -53,7 +53,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
     let current = state.cell_value(&cell_id).cloned().unwrap();
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_wire::EventKind::ContainerMoveItem,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -73,7 +73,7 @@ fn container_move_uses_canonical_position_cell_and_enforces_cas() {
 
     let accepted = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
+            arkret_wire::EventKind::ContainerMoveItem,
             REALM_ID,
             serde_json::json!({
                 "item_ref": ITEM_A,
@@ -106,7 +106,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
     let initial_digest = cell_digest(&Value::Null);
     let accepted = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CONTAINER_REBALANCE,
+            arkret_wire::EventKind::ContainerRebalance,
             REALM_ID,
             serde_json::json!({
                 "container_ref": CONTAINER_A,
@@ -132,7 +132,7 @@ fn container_rebalance_is_atomic_against_order_digest() {
 
     let rejected = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CONTAINER_REBALANCE,
+            arkret_wire::EventKind::ContainerRebalance,
             REALM_ID,
             serde_json::json!({
                 "container_ref": CONTAINER_A,
@@ -164,7 +164,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
 
     let notary = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_NOTARY,
+            arkret_wire::EventKind::RealmNotary,
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
@@ -202,7 +202,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
     .expect("transition fixture matches the SDK type");
     let transition = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            arkret_wire::EventKind::RealmDigestSuiteTransition,
             REALM_ID,
             transition_payload,
         ),
@@ -223,7 +223,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
 
     let downgrade = state.apply(
         &make_operation(
-            arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+            arkret_wire::EventKind::RealmDigestSuiteTransition,
             REALM_ID,
             serde_json::json!({
                 "from_digest_algorithm": "blake3",

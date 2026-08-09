@@ -1,24 +1,20 @@
-use arkret_event_draft::Operation;
-use arkret_models_collaboration::governance::membership_invite::{
-    InviteCreatePayload, validate_invite_create_wire_keys,
-};
+use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_models_collaboration::governance::membership_invite::validate_invite_create_wire_keys;
 use arkret_schema::event_payload_validator_catalog;
 use serde_json::Value;
-pub(crate) use soland_domain::reducer::{
-    PROJECTION_CONTEXT_FIELDS, projection_context_stripped_payload,
-};
 
 use super::*;
 
 pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
-    let wire_payload = invite_create_wire_payload(&operation.payload);
+    let wire_payload = operation.payload.clone();
     event_payload_validator_catalog()
         .map_err(|_| "operation payload validator catalog is unavailable")?
         .validate_payload("ak.invite.create", &wire_payload)
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     validate_invite_create_wire_keys(&wire_payload)
         .map_err(|_| "operation payload carries unsupported fields")?;
-    let payload: InviteCreatePayload = serde_json::from_value(wire_payload)
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::InviteCreate>()
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     payload
         .invite_delivery_target
@@ -27,18 +23,13 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
     Ok(())
 }
 
-fn invite_create_wire_payload(payload: &Value) -> Value {
-    projection_context_stripped_payload(payload)
-}
-
 pub(crate) fn validate_key_backup_active_series_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    serde_json::from_value::<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries>(
-        projection_context_stripped_payload(&operation.payload),
-    )
-    .map(|_| ())
-    .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
+    operation
+        .typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>()
+        .map(|_| ())
+        .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
 }
 
 pub(crate) fn validate_invite_third_party_payload(
@@ -321,14 +312,15 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
 pub(crate) fn validate_read_receipt_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let wire_payload = projection_context_stripped_payload(&operation.payload);
-    let payload = wire_payload
+    let payload_value = &operation.payload;
+    let payload = payload_value
         .as_object()
         .ok_or("ak.realm.read_receipt_policy payload must be an object")?;
     if payload.is_empty() {
         return Err("ak.realm.read_receipt_policy payload must set at least one field");
     }
-    serde_json::from_value::<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy>(wire_payload)
+    operation
+        .typed_payload::<arkret_wire::event_spec::RealmReadReceiptPolicy>()
         .map_err(|_| "ak.realm.read_receipt_policy payload violates SDK artifact schema")?;
     Ok(())
 }
@@ -336,10 +328,9 @@ pub(crate) fn validate_read_receipt_policy_payload(
 pub(crate) fn validate_realm_inheritance_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let wire_payload = projection_context_stripped_payload(&operation.payload);
-    let payload: arkret_models_collaboration::events_payloads::RealmInheritancePolicyPayload =
-        serde_json::from_value(wire_payload)
-            .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::RealmInheritancePolicy>()
+        .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
     if payload.mode != "narrow_only" {
         return Err("ak.realm.inheritance_policy mode must be narrow_only");
     }
@@ -826,14 +817,10 @@ fn collect_nonempty_unique_string_array(
 }
 
 pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result<(), &'static str> {
-    let payload: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        serde_json::from_value(device_authorize_wire_payload(&operation.payload))
-            .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
     payload.validate_wire_constraints()
-}
-
-fn device_authorize_wire_payload(payload: &Value) -> Value {
-    projection_context_stripped_payload(payload)
 }
 
 pub fn validate_encrypted_payload_envelope(
@@ -846,16 +833,16 @@ pub fn validate_encrypted_payload_envelope(
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;
 
     use super::{
-        projection_context_stripped_payload, validate_encrypted_payload_envelope,
-        validate_invite_create_payload, validate_message_expiry_payload,
+        validate_encrypted_payload_envelope, validate_invite_create_payload,
+        validate_message_expiry_payload,
     };
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
-        Operation::create(
+        arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
             )
@@ -864,7 +851,7 @@ mod tests {
                 "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             )
             .unwrap(),
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate.as_str(),
             json!({
                 "content": {"kind": "ak.content.text", "body": "secret"},
                 "expiry": expiry
@@ -895,81 +882,6 @@ mod tests {
         assert_eq!(
             validate_message_expiry_payload(&operation),
             Err("ak.message.create.payload.expiry has unknown field")
-        );
-    }
-
-    #[test]
-    fn invite_create_validation_ignores_projection_context() {
-        let operation = Operation::create(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned(),
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(
-                "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            )
-            .unwrap(),
-            arkret_wire::EventKind::INVITE_CREATE,
-            json!({
-                "invitee": "did:web:bob.example",
-                "invite_delivery_target": {
-                    "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
-                },
-                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "expires_at": "2026-07-20T00:00:00.000Z",
-                "event_id": "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD",
-                "sender": "did:web:alice.example",
-                "hlc": "019041000000-0001-00000001",
-                "preconditions": {"expected_state": "pending"},
-                "effects": {"transition": "created"},
-                "accepted_event_id": "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD"
-            }),
-        );
-
-        assert_eq!(validate_invite_create_payload(&operation), Ok(()));
-        assert_eq!(
-            projection_context_stripped_payload(&operation.payload),
-            json!({
-                "invitee": "did:web:bob.example",
-                "invite_delivery_target": {
-                    "recipient_service_id": "did:webvh:z6mkfixture:bob.example"
-                },
-                "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "expires_at": "2026-07-20T00:00:00.000Z"
-            })
-        );
-    }
-
-    #[test]
-    fn causal_projection_context_is_not_revalidated_as_wire_payload() {
-        let payload = json!({
-            "event_ref": "ak:strand:AZjAeb1mLSt8cKVn8rw_kdOZBkHfWaxx_jcr4hc0atPJ",
-            "occurrence": null,
-            "entry": {
-                "schedule_basis_refs": [
-                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                ],
-                "response": {"status": "accepted"}
-            },
-            "envelope_causal_refs": [
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-            ],
-            "canonical_event_digest":
-                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-        });
-
-        assert_eq!(
-            projection_context_stripped_payload(&payload),
-            json!({
-                "event_ref": "ak:strand:AZjAeb1mLSt8cKVn8rw_kdOZBkHfWaxx_jcr4hc0atPJ",
-                "occurrence": null,
-                "entry": {
-                    "schedule_basis_refs": [
-                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                    ],
-                    "response": {"status": "accepted"}
-                }
-            })
         );
     }
 

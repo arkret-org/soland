@@ -27,18 +27,18 @@ impl ProjectionState {
         // `ak.space.restore` requires Archived.
         // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            arkret_wire::EventKind::SPACE_CREATE => return Ok(()),
-            arkret_wire::EventKind::SPACE_UPDATE | arkret_wire::EventKind::SPACE_PARENT => {
+            arkret_wire::EventKind::SpaceCreate => return Ok(()),
+            arkret_wire::EventKind::SpaceUpdate | arkret_wire::EventKind::SpaceParent => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_wire::EventKind::SPACE_ARCHIVE => {
+            arkret_wire::EventKind::SpaceArchive => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_wire::EventKind::SPACE_RESTORE => (
+            arkret_wire::EventKind::SpaceRestore => (
                 &[SpaceContainerLifecycleState::Archived],
                 "space_not_archived",
             ),
-            arkret_wire::EventKind::SPACE_TOMBSTONE => (
+            arkret_wire::EventKind::SpaceTombstone => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -151,14 +151,7 @@ impl ProjectionState {
             .get("created_by")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("sender")
-                    .and_then(|v| v.as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_default();
+            .unwrap_or_else(|| operation.context.sender.to_string());
 
         let projection = SpaceContainerProjection {
             container_space_id: container_space_id.clone(),
@@ -250,11 +243,7 @@ impl ProjectionState {
             space_container.kind = candidate_kind.to_owned();
             space_container.fields = candidate_fields;
         }
-        space_container.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        space_container.updated_by = Some(operation.context.sender.to_string());
         space_container.updated_at = Some(now);
         ProjectionEffect::SpaceContainerLifecycle {
             container_space_id,
@@ -319,11 +308,7 @@ impl ProjectionState {
             };
         }
         space_container.parent_ref = parent_ref;
-        space_container.updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        space_container.updated_by = Some(operation.context.sender.to_string());
         space_container.updated_at = Some(now);
         ProjectionEffect::SpaceContainerLifecycle {
             container_space_id,
@@ -371,11 +356,7 @@ impl ProjectionState {
             ),
         };
 
-        let updated_by = operation
-            .payload
-            .get("sender")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+        let updated_by = Some(operation.context.sender.to_string());
         {
             let Some(space_container) = self.space_containers.get_mut(&container_space_id) else {
                 // Unknown Space container: retain this operation until the
@@ -536,34 +517,39 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            arkret_wire::EventKind::STRAND_CREATE => {
-                let Some(object) = operation.payload.get("object").and_then(Value::as_object)
+            arkret_wire::EventKind::StrandCreate => {
+                let Ok(payload) =
+                    operation.typed_payload::<arkret_wire::event_spec::StrandCreate>()
                 else {
                     return Ok(());
                 };
-                let child_scope = object
-                    .get("scope_circle_id")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty());
-                let child_realm_id = object
-                    .get("realm_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or(operation.realm_id.as_ref());
-                let child_has_plaintext_metadata =
-                    object.get("metadata").is_some() && object.get("encrypted_metadata").is_none();
+                let child_scope = payload
+                    .object
+                    .scope_circle_id
+                    .as_ref()
+                    .map(ToString::to_string);
+                let child_realm_id = payload.object.realm_id.to_string();
+                let child_has_plaintext_metadata = payload.object.metadata.is_some()
+                    && payload.object.encrypted_metadata.is_none();
+                let Ok(object_value) = serde_json::to_value(&payload.object) else {
+                    return Ok(());
+                };
+                let Some(object) = object_value.as_object() else {
+                    return Ok(());
+                };
                 if let Some((_, list_space_id, _)) =
                     strand_position_from_create_payload(&operation.payload, object)
                 {
                     self.check_space_child_scope_policy(
                         &list_space_id,
-                        child_scope,
-                        child_realm_id,
+                        child_scope.as_deref(),
+                        &child_realm_id,
                         child_has_plaintext_metadata,
                     )?;
                 }
                 Ok(())
             }
-            arkret_wire::EventKind::STRAND_MOVE | arkret_wire::EventKind::STRAND_REORDER => {
+            arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -587,7 +573,7 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_wire::EventKind::SPACE_PARENT => {
+            arkret_wire::EventKind::SpaceParent => {
                 let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -610,8 +596,8 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_wire::EventKind::CONTAINER_MOVE_ITEM
-            | arkret_wire::EventKind::CONTAINER_REBALANCE => {
+            arkret_wire::EventKind::ContainerMoveItem
+            | arkret_wire::EventKind::ContainerRebalance => {
                 let Some(container_space_id) = operation
                     .payload
                     .get("to_container_id")

@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{LazyLock, Mutex as StdMutex};
 
-use arkret_identifiers::Cursor;
+use arkret_identifiers::{Cursor, RealmId};
 use arkret_models_collaboration::http_bodies::{EventsSubscribeFrame, EventsSubscribeFrameKind};
 use arkret_models_collaboration::sync_frames::websocket_binding::{
     WebSocketChannelControlPayload, WebSocketClientFrame, WebSocketClosedReason,
@@ -1738,14 +1738,12 @@ async fn run_events_channel(
                 previous_epoch: _,
                 new_epoch,
             } => {
-                let Ok(frame) = serde_json::from_value(json!({
-                    "kind": "epoch_rotation",
-                    "realm_id": realm_id,
-                    "payload": {
-                        "new_epoch": new_epoch,
-                    },
-                })) else {
-                    continue;
+                let frame = EventsSubscribeFrame {
+                    kind: EventsSubscribeFrameKind::EpochRotation,
+                    realm_id: RealmId::new(realm_id.clone()).ok(),
+                    cursor: None,
+                    payload: Some(BTreeMap::from([("new_epoch".to_owned(), new_epoch)])),
+                    reconnect_after_ms: None,
                 };
                 if !emit_events_control(&sender, &channel_id, frame).await {
                     return WebSocketClosedReason::Error;
@@ -1815,13 +1813,19 @@ async fn emit_events_event(
     cursor: &str,
     envelope: &arkret_wire::Event,
 ) -> bool {
-    let Ok(frame) = serde_json::from_value(json!({
-        "kind": "event",
-        "realm_id": realm_id,
-        "cursor": cursor,
-        "payload": envelope,
-    })) else {
+    let Some(payload) = serde_json::to_value(envelope)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .map(|object| object.into_iter().collect())
+    else {
         return false;
+    };
+    let frame = EventsSubscribeFrame {
+        kind: EventsSubscribeFrameKind::Event,
+        realm_id: RealmId::new(realm_id.to_owned()).ok(),
+        cursor: Cursor::new(cursor.to_owned()).ok(),
+        payload: Some(payload),
+        reconnect_after_ms: None,
     };
     let payload = WebSocketDataPayload::Events(Box::new(frame));
     emit(

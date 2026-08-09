@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 use arkret_wire::ReasonCode;
@@ -112,12 +113,12 @@ pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mut
 }
 
 fn stamp_projection_operation_received_at(
-    operation: &mut arkret_event_draft::Operation,
+    operation: &mut arkret_event_draft::ProjectedEventOperation,
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
     if !matches!(
-        operation.object_kind.as_str(),
-        arkret_wire::EventKind::MEMBER_STATE | arkret_wire::EventKind::CIRCLE_MEMBER_STATE
+        &operation.event_kind,
+        arkret_wire::EventKind::MemberState | arkret_wire::EventKind::CircleMemberState
     ) {
         return;
     }
@@ -137,7 +138,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     let Ok(event) = serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()) else {
         return false;
     };
-    event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE
+    event.kind == arkret_wire::EventKind::RealmCreate
         && event.executed_by.as_ref() != Some(&event.actor_id)
         && arkret_bootstrap::materialize_managed_agent_pcr_control(
             std::slice::from_ref(&event),
@@ -369,7 +370,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
             device_id: "mimi-provider-facade".to_owned(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
@@ -389,7 +390,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::EventKind::ACCOUNT_DATA_SET.to_owned(),
+            kind: arkret_wire::EventKind::AccountDataSet.as_str().to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AccountData {
                 owner: owner.into(),
@@ -409,7 +410,9 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::EventKind::SELF_MODERATION_REPORT.to_owned(),
+            kind: arkret_wire::EventKind::SelfModerationReport
+                .as_str()
+                .to_owned(),
             device_id: "moderation-report-service".to_owned(),
             binding: InternalEventBinding::ModerationReport {
                 reporter: reporter.into(),
@@ -1103,7 +1106,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 || agent.state
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())
-                || accepted_provision.kind != arkret_wire::EventKind::AGENT_PROVISION
+                || accepted_provision.kind != arkret_wire::EventKind::AgentProvision
                 || accepted_provision.canonical_digest != agent_provision_digest.as_str()
             {
                 return Err(SubmitOneError::new(
@@ -1448,7 +1451,7 @@ async fn submit_event_batch_outcome_with_leases(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(arkret_wire::EventKind::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_wire::EventKind::RealmCreate.as_str())
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -1504,8 +1507,8 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     submissions: Vec<arkret_wire::EventInitialSubmission>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     let submit_context = if submissions.len() == 2
-        && submissions[0].event.kind == arkret_wire::EventKind::DEVICE_REANCHOR
-        && submissions[1].event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+        && submissions[0].event.kind == arkret_wire::EventKind::DeviceReanchor
+        && submissions[1].event.kind == arkret_wire::EventKind::DeviceAuthorize
     {
         arkret_wire::EventSubmitContext::AnchorUnit
     } else {
@@ -1557,7 +1560,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
     let create_payload: arkret_models_collaboration::events_payloads::RealmCreatePayload = request
         .genesis_unit
         .create()
-        .payload_as()
+        .typed_payload::<arkret_wire::event_spec::RealmCreate>()
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
@@ -1775,7 +1778,7 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     if event_string_field_from_value(first, "kind").as_deref()
-        != Some(arkret_wire::EventKind::REALM_CREATE)
+        != Some(arkret_wire::EventKind::RealmCreate.as_str())
     {
         return false;
     }
@@ -1797,7 +1800,7 @@ async fn direct_bootstrap_source_is_contact_authority(
     }
     let peer = events.iter().find_map(|event| {
         if event_string_field_from_value(event, "kind").as_deref()
-            != Some(arkret_wire::EventKind::MEMBER_STATE)
+            != Some(arkret_wire::EventKind::MemberState.as_str())
         {
             return None;
         }
@@ -2110,7 +2113,7 @@ pub(crate) async fn submit_federation_events(
         .collect();
     if events
         .first()
-        .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE)
+        .is_some_and(|event| event.kind == arkret_wire::EventKind::RealmCreate)
     {
         let leases = submissions
             .iter()
@@ -2584,7 +2587,7 @@ pub(crate) async fn submit_federation_events(
     if !crate::routing::events::event_log::realm_is_indexed(state, &binding_realm)
         && events.iter().any(|event| {
             event_string_field_from_value(event, "kind").as_deref()
-                != Some(arkret_wire::EventKind::INVITE_CREATE)
+                != Some(arkret_wire::EventKind::InviteCreate.as_str())
         })
     {
         rejected.extend(events.iter().map(|event| {
@@ -2646,7 +2649,7 @@ pub(crate) async fn submit_federation_events(
         }
         let event_kind = event_string_field_from_value(&envelope, "kind");
         if event_string_field_from_value(&envelope, "kind").as_deref()
-            == Some(arkret_wire::EventKind::MLS_WELCOME)
+            == Some(arkret_wire::EventKind::MlsWelcome.as_str())
         {
             let Some(payload) = envelope.get("payload") else {
                 rejected.push(rejected_item(
@@ -3255,7 +3258,7 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
         return Some(realm_id);
     }
     if event_string_field_from_value(value, "kind").as_deref()
-        != Some(arkret_wire::EventKind::REALM_CREATE)
+        != Some(arkret_wire::EventKind::RealmCreate.as_str())
     {
         return None;
     }
@@ -3301,15 +3304,15 @@ pub(in crate::routing) use value::{
 mod received_at_stamp_tests {
     use super::*;
 
-    fn operation_for_kind(kind: &str, suffix: u32) -> Operation {
-        Operation::create(
+    fn operation_for_kind(kind: impl AsRef<str>, suffix: u32) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{suffix:012x}"
             ))
             .unwrap(),
             RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned())
                 .unwrap(),
-            kind,
+            kind.as_ref(),
             json!({ "actor_id": "did:web:alice.example" }),
         )
     }
@@ -3320,9 +3323,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
-        let mut member_state = operation_for_kind(arkret_wire::EventKind::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_wire::EventKind::MemberState, 2);
         let mut circle_member_state =
-            operation_for_kind(arkret_wire::EventKind::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_wire::EventKind::CircleMemberState, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);
@@ -3376,8 +3379,8 @@ mod managed_agent_pcr_batch_tests {
             arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
                 .to_value()
                 .unwrap();
-        let mut event = arkret_wire::Event::new(
-            arkret_wire::EventKind::REALM_CREATE,
+        let mut event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             agent_id,
             0,

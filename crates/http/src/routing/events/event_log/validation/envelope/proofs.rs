@@ -50,7 +50,7 @@ pub(crate) async fn validate_event_proofs(
     // present, and the actor/executed_by DID validity + vm-DID==executed_by
     // checks ran earlier in this function.
     let root_anchored_candidate_key = (object.get("kind").and_then(Value::as_str)
-        == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE)
+        == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
         && object
             .get("payload")
             .and_then(Value::as_object)
@@ -459,7 +459,7 @@ async fn verify_with_active_agent_session(
                 "Agent key authorization payload is unavailable",
             )
         })?;
-    if authorization.kind != arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
+    if authorization.kind != arkret_wire::EventKind::AgentKeyAuthorize.as_str()
         || payload.get("agent_id").and_then(Value::as_str) != Some(signer_id)
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
     {

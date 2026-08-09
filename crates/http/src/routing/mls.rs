@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{Did, Hash, OperationId, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_crypto::{
@@ -131,24 +131,6 @@ impl KeyPackageTrustBinding {
             }
             _ => Err(AppError::new(ErrorCode::FailedPrecondition, message)
                 .with_wire_code("claim_generation_mismatch")),
-        }
-    }
-
-    fn insert_into(&self, value: &mut Value) {
-        let Some(object) = value.as_object_mut() else {
-            return;
-        };
-        if let Some(event_id) = self.device_authorize_event_id.as_deref() {
-            object.insert(
-                "device_authorize_event_id".to_owned(),
-                Value::String(event_id.to_owned()),
-            );
-        }
-        if let Some(event_id) = self.agent_key_authorize_event_id.as_deref() {
-            object.insert(
-                "agent_key_authorize_event_id".to_owned(),
-                Value::String(event_id.to_owned()),
-            );
         }
     }
 
@@ -328,13 +310,6 @@ async fn upload_keypackage(
                 continue;
             }
         };
-        let capabilities_digest = match canonical_capabilities_digest(&capabilities) {
-            Ok(digest) => digest,
-            Err(reason) => {
-                rejected.push(keypackage_failure(&entry, &device_id, reason));
-                continue;
-            }
-        };
         let device_signature =
             match entry_signature(entry.device_signature.as_ref(), &default_device_signature) {
                 Ok(signature) => signature,
@@ -404,30 +379,52 @@ async fn upload_keypackage(
             continue;
         }
 
-        // Run the reducer's projection update first so the in-process
-        // projection carries the same metadata we mirror into the store.
-        let mut publish_payload = json!({
-            "action": "publish",
-            "keypackage_id": keypackage_id.clone(),
-            "keypackage_ref": keypackage_ref.clone(),
-            "keypackage_digest": keypackage_digest,
-            "actor_id": actor_id.clone(),
-            "principal_id": actor_id.clone(),
-            "device_id": device_id.clone(),
-            "capabilities": capabilities,
-            "capabilities_digest": capabilities_digest,
-            "device_signature": device_signature,
-            "last_resort": last_resort,
-            "created_at": created_at,
-            "lifetime": {
-                "not_before": created_at,
-                "not_after": expires_at,
+        // KeyPackage upload is a local HTTP/storage workflow, not an accepted
+        // Event. Keep its reducer input typed instead of manufacturing a
+        // `ProjectedEventOperation` with a synthetic Event identity.
+        let trust_anchor = match (
+            trust_binding.device_authorize_event_id.as_ref(),
+            trust_binding.agent_key_authorize_event_id.as_ref(),
+        ) {
+            (Some(event_id), None) => {
+                soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(
+                    event_id.clone(),
+                )
+            }
+            (None, Some(event_id)) => {
+                soland_domain::reducer::mls::MlsKeyPackagePublishTrustAnchor::AgentKeyAuthorize(
+                    event_id.clone(),
+                )
+            }
+            _ => {
+                rejected.push(keypackage_failure(
+                    &entry,
+                    &device_id,
+                    "claim_generation_mismatch",
+                ));
+                continue;
+            }
+        };
+        let projection = soland_domain::reducer::mls::MlsKeyPackagePublishProjection {
+            keypackage_id: keypackage_id.clone(),
+            keypackage_ref: keypackage_ref.clone(),
+            keypackage_digest,
+            actor_id: actor_id.clone(),
+            device_id: device_id.clone(),
+            lifetime: soland_domain::reducer::KeyPackageLifetime {
+                not_before: created_at,
+                not_after: expires_at,
             },
-            "key_package_bytes_b64": key_package_bytes_b64,
-        });
-        trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(arkret_wire::EventKind::MLS_KEYPACKAGE, publish_payload);
-        let effect = state.projections().apply_mls_keypackage_publish(&op);
+            key_package_bytes,
+            capabilities,
+            device_signature,
+            last_resort,
+            trust_anchor,
+            created_at,
+        };
+        let effect = state
+            .projections()
+            .apply_mls_keypackage_publish(&projection);
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffectView::Rejected { reason } => {
@@ -1303,8 +1300,11 @@ fn build_peer_claim_terminal_receipt(
                 .expect("placeholder signature is base64url"),
         },
     };
-    let signing_input =
-        signed_object_transcript(&receipt, "ak.keypackage.claim-terminal-receipt.v1")?;
+    let signing_input = receipt.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "terminal receipt signing transcript invalid: {error}"
+        ))
+    })?;
     receipt.signature.sig = arkret_wire::Base64UrlString::new(
         URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes()),
     )
@@ -1955,7 +1955,7 @@ async fn validate_recipient_durable_receipt(
         })?;
     let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope.clone())
         .map_err(|error| AppError::internal(format!("stored Welcome invalid: {error}")))?;
-    if event.kind.as_str() != arkret_wire::EventKind::MLS_WELCOME
+    if event.kind != arkret_wire::EventKind::MlsWelcome
         || event.realm_id.as_str() != receipt.realm_id.as_str()
     {
         return Err(AppError::new(
@@ -1984,7 +1984,11 @@ async fn validate_recipient_durable_receipt(
             "recipient durable receipt does not match the accepted Welcome payload",
         ));
     }
-    let signing_input = signed_object_transcript(receipt, "ak.mls.recipient-durable-receipt.v1")?;
+    let signing_input = receipt.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "durable receipt signing transcript invalid: {error}"
+        ))
+    })?;
     verify_session_keypackage_write_signature(
         state,
         session,
@@ -2026,30 +2030,16 @@ fn build_keypackage_consume_receipt(
                 .expect("placeholder signature is base64url"),
         },
     };
-    let signing_input = signed_object_transcript(&receipt, "ak.keypackage.consume-receipt.v1")?;
+    let signing_input = receipt.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "consume receipt signing transcript invalid: {error}"
+        ))
+    })?;
     receipt.signature.sig = arkret_wire::Base64UrlString::new(
         URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes()),
     )
     .map_err(|error| AppError::internal(format!("consume receipt signature invalid: {error}")))?;
     Ok(receipt)
-}
-
-fn signed_object_transcript<T: serde::Serialize>(
-    value: &T,
-    domain: &str,
-) -> Result<Vec<u8>, AppError> {
-    let mut unsigned = serde_json::to_value(value)
-        .map_err(|error| AppError::internal(format!("signed object serialize: {error}")))?;
-    unsigned
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("signed object must be a JSON object"))?
-        .remove("signature");
-    let canonical = arkret_canonical::canonical_json_bytes(&unsigned)
-        .map_err(|error| AppError::internal(format!("signed object canonicalize: {error}")))?;
-    let mut transcript = domain.as_bytes().to_vec();
-    transcript.push(b'\n');
-    transcript.extend(canonical);
-    Ok(transcript)
 }
 
 async fn validate_direct_keypackage_consume(
@@ -2291,7 +2281,7 @@ async fn validate_sidecar_keypackage_consume(
         })?;
     let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
         .map_err(|error| AppError::internal(format!("stored Sidecar Welcome invalid: {error}")))?;
-    if event.kind.as_str() != arkret_wire::EventKind::MLS_WELCOME {
+    if event.kind != arkret_wire::EventKind::MlsWelcome {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "Sidecar consume reference is not a Welcome Event",
@@ -2589,12 +2579,6 @@ fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
                 Ok(bytes)
             }
         })
-}
-
-fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, String> {
-    arkret_canonical::canonical_json_bytes(&capabilities.to_vec())
-        .map(arkret_canonical::sha256_digest)
-        .map_err(|_| "capabilities_digest_failed".to_owned())
 }
 
 fn entry_signature(
@@ -2904,7 +2888,7 @@ async fn current_agent_keypackage_trust_binding(
         .and_then(Value::as_str)
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|expires_at| expires_at.with_timezone(&Utc) <= now());
-    if event.kind.as_str() != arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
+    if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
         || payload.get("agent_id").and_then(Value::as_str) != Some(principal.as_str())
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
         || expired
@@ -3263,19 +3247,6 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
     })
 }
 
-/// Build a minimal in-process `Operation` carrying the MLS payload so
-/// the reducer's `apply_*` helpers run against the same shape they'd
-/// see from a federated envelope. The `operation_id` / `realm_id` are
-/// placeholders — the reducer reads only `payload` + `created_at` for
-/// MLS kinds.
-fn build_op(object_kind: &str, payload: Value) -> Operation {
-    let op_id =
-        OperationId::new("ak:operation:01904100-0000-7000-8000-000000000001").expect("op id");
-    let realm_id =
-        RealmId::new("ak:realm:AZvKsJv4SbKilJ8M35HH6gwhZE4wsi0ZHaNeeTs-d54E").expect("realm id");
-    Operation::create(op_id, realm_id, object_kind, payload)
-}
-
 #[cfg(test)]
 mod trust_binding_tests {
     use super::*;
@@ -3378,8 +3349,8 @@ mod trust_binding_tests {
             "ak:realm:AYKC0LicsGtFBq78orvaQecIZl8Bxv9zAaV4Eg66tdIr".to_owned(),
         )
         .unwrap();
-        let authorize_event = arkret_wire::Event::new(
-            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
+        let authorize_event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             principal.clone(),
             1,
@@ -3409,7 +3380,9 @@ mod trust_binding_tests {
                 actor_id: principal.to_string(),
                 actor_seq: 1,
                 realm_id: Some(authorize_event.realm_id.to_string()),
-                kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                kind: arkret_wire::EventKind::AgentKeyAuthorize
+                    .as_str()
+                    .to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: authorize_canonical_digest,
                 canonical_bytes: authorize_canonical_bytes,
@@ -3462,7 +3435,7 @@ async fn direct_active_generation_group_id(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
-        if event.event_kind != arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE {
+        if event.event_kind != arkret_wire::EventKind::DirectConversationMlsGenerationActivate {
             continue;
         }
         let generation = event

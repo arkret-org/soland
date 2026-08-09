@@ -117,15 +117,15 @@ fn recovery_proof_summary_transcript(
             ))
         }
         "recovery_unlock" => {
-            // Same binding transcript the proof verification covered:
-            // proof_body is the proof object minus signature + unlock_commitment.
-            let mut proof_body = proof.clone();
-            proof_body.remove("signature");
-            proof_body.remove("unlock_commitment");
+            let proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
+                Value::Object(proof.clone()),
+            )
+            .ok()?;
+            let proof_body = proof.signature_independent_proof_body().ok()?;
             Some(generic_recovery_proof_transcript(
                 record,
                 "recovery_unlock",
-                Value::Object(proof_body),
+                serde_json::to_value(proof_body).ok()?,
             ))
         }
         _ => Some(recovery_proof_transcript(record, kind)),
@@ -237,7 +237,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+                    && event.kind == arkret_wire::EventKind::DeviceAuthorize
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)
@@ -246,7 +246,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DEVICE_REVOKE
+                    && event.kind == arkret_wire::EventKind::DeviceRevoke
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)
@@ -967,13 +967,19 @@ pub(super) async fn verify_recovery_unlock_proof(
     }
     let recovery_key = decode_recovery_key_public_key(&entry)?;
 
-    // (b)/(c) Build the binding transcript (proof_body excluding signature +
-    // unlock_commitment) once; both the signature and the commitment cover it.
-    let mut proof_body = proof.clone();
-    proof_body.remove("signature");
-    proof_body.remove("unlock_commitment");
+    // (b)/(c) Build the SDK-owned signature-independent binding transcript
+    // once; both the signature and the commitment cover it.
+    let typed_proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
+        Value::Object(proof.clone()),
+    )
+    .map_err(|error| AppError::invalid_param(format!("invalid recovery_unlock proof: {error}")))?;
+    let proof_body = typed_proof
+        .signature_independent_proof_body()
+        .map_err(|error| {
+            AppError::invalid_param(format!("invalid recovery_unlock proof: {error}"))
+        })?;
     let transcript =
-        generic_recovery_proof_transcript(record, "recovery_unlock", Value::Object(proof_body));
+        generic_recovery_proof_transcript(record, "recovery_unlock", json!(proof_body));
     let transcript_bytes =
         arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))

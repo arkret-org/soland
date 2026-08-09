@@ -108,7 +108,7 @@ pub fn validate_device_authorize_binding(
 }
 
 pub(crate) fn device_authorize_wire_payload(payload: &Value) -> Value {
-    crate::routing::events::operations::projection_context_stripped_payload(payload)
+    payload.clone()
 }
 
 pub(crate) async fn verify_mls_welcome_claim_envelope_signature(

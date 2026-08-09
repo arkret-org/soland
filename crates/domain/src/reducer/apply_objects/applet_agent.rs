@@ -82,12 +82,8 @@ impl ProjectionState {
                 reason: "applet_registration_missing_claimed_profiles".to_owned(),
             };
         };
-        let registration_scope_ref = operation.payload.get("accepted_scope_ref").cloned();
-        if registration_scope_ref.is_none() {
-            return ProjectionEffect::Rejected {
-                reason: "applet_registration_missing_scope_ref".to_owned(),
-            };
-        }
+        let registration_scope_ref =
+            serde_json::to_value(&operation.context.accepted_scope_ref).ok();
         let capabilities = operation
             .payload
             .get("requested_scopes")
@@ -285,7 +281,7 @@ impl ProjectionState {
             );
         }
         ProjectionEffect::AgentPrivateEventAccepted {
-            kind: arkret_wire::EventKind::AGENT_ACTION_REQUEST,
+            kind: arkret_wire::EventKind::AgentActionRequest,
             event_id: operation.operation_id.to_string(),
         }
     }
@@ -387,10 +383,10 @@ impl ProjectionState {
             request.approval = approval;
         }
         let kind = match status {
-            AgentActionRequestStatus::Approved => arkret_wire::EventKind::AGENT_ACTION_APPROVE,
-            AgentActionRequestStatus::Rejected => arkret_wire::EventKind::AGENT_ACTION_REJECT,
+            AgentActionRequestStatus::Approved => arkret_wire::EventKind::AgentActionApprove,
+            AgentActionRequestStatus::Rejected => arkret_wire::EventKind::AgentActionReject,
             AgentActionRequestStatus::Pending | AgentActionRequestStatus::Cancelled => {
-                arkret_wire::EventKind::AGENT_ACTION_REQUEST
+                arkret_wire::EventKind::AgentActionRequest
             }
         };
         ProjectionEffect::AgentPrivateEventAccepted {

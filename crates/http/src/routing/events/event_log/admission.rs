@@ -160,10 +160,10 @@ fn frozen_realm_write_exempt(kind: &str) -> bool {
     arkret_wire::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            arkret_wire::EventKind::REALM_ARCHIVE
-                | arkret_wire::EventKind::REALM_FREEZE
-                | arkret_wire::EventKind::REALM_TOMBSTONE
-                | arkret_wire::EventKind::REALM_DESTROY
+            arkret_wire::event_kind_str::REALM_ARCHIVE
+                | arkret_wire::event_kind_str::REALM_FREEZE
+                | arkret_wire::event_kind_str::REALM_TOMBSTONE
+                | arkret_wire::event_kind_str::REALM_DESTROY
         )
 }
 

@@ -259,7 +259,7 @@ pub fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&
 fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         soland_domain::kinds::canonical_kind_for_operation(operation),
-        Some(arkret_wire::EventKind::REALM_PROFILE)
+        Some(arkret_wire::EventKind::RealmProfile)
     )
 }
 
@@ -280,7 +280,7 @@ pub fn projected_operation_realm_summary(operation: &Operation) -> Option<&str> 
 #[doc(hidden)]
 pub fn projected_operation_realm_discoverability(operation: &Operation) -> Option<&str> {
     (soland_domain::kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_wire::EventKind::REALM_DISCOVERY))
+        == Some(arkret_wire::EventKind::RealmDiscovery))
     .then(|| first_string_field(&operation.payload, &["value"]))
     .flatten()
 }
@@ -292,11 +292,11 @@ mod tests {
 
     use super::*;
 
-    fn operation(kind: &str, payload: Value) -> Operation {
-        Operation::create(
+    fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {
+        arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002").unwrap(),
             RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K").unwrap(),
-            kind,
+            kind.as_ref(),
             payload,
         )
     }
@@ -305,11 +305,11 @@ mod tests {
     fn child_object_metadata_is_not_realm_metadata() {
         for operation in [
             operation(
-                arkret_wire::EventKind::SPACE_CREATE,
+                arkret_wire::EventKind::SpaceCreate,
                 json!({"object": {"title": "List", "summary": "List summary"}}),
             ),
             operation(
-                arkret_wire::EventKind::STRAND_UPDATE,
+                arkret_wire::EventKind::StrandUpdate,
                 json!({
                     "patch": {
                         "title": {"$op": "set", "value": "Thread"},
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn realm_profile_is_projected() {
         let operation = operation(
-            arkret_wire::EventKind::REALM_PROFILE,
+            arkret_wire::EventKind::RealmProfile,
             json!({
                 "schema": "ak.schema.realm_profile.v1",
                 "title": "Realm",

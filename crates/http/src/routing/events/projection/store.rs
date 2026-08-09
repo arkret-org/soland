@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
 use super::*;
@@ -160,60 +160,6 @@ async fn ordered_projected_events_for_realms(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     Ok(events)
-}
-
-pub async fn accept_local_operations(
-    state: &AppState,
-    actor: &str,
-    operations: &[Operation],
-) -> Result<(), &'static str> {
-    accept_local_operations_with_policy_context(
-        state, actor, operations, operations, operations, false,
-    )
-    .await
-}
-
-async fn accept_local_operations_with_policy_context(
-    state: &AppState,
-    actor: &str,
-    operations: &[Operation],
-    policy_operations: &[Operation],
-    projection_operations: &[Operation],
-    persist_before_projection: bool,
-) -> Result<(), &'static str> {
-    let _active_series_guards =
-        crate::routing::events::operations::lock_active_series_operations(operations).await;
-    {
-        let projection = state.projections().snapshot();
-        for operation in operations {
-            projection.check_move_preconditions(operation)?;
-        }
-    }
-    validate_operation_semantics(state, operations)?;
-    validate_content_encryption_floor(state, operations).await?;
-    validate_operation_policy(state, policy_operations).await?;
-    let mut inserted_events = Vec::new();
-    if persist_before_projection {
-        for operation in projection_operations {
-            let event = projection_event_from_operation(operation, Some(actor));
-            if append_projection_event(state, event.clone())
-                .await
-                .map_err(|_| "projection_event_persistence_failed")?
-                == soland_services::events::ProjectedEventAppendResult::Inserted
-            {
-                inserted_events.push(event);
-            }
-        }
-    }
-    project_accepted_operations(state, actor, projection_operations).await;
-    for event in inserted_events {
-        let _ = state.publish_event_notification(crate::state::EventNotification::event(
-            event.realm_id.clone(),
-            event.event_id.clone(),
-            projection_event_json(&event),
-        ));
-    }
-    Ok(())
 }
 
 pub async fn persist_projected_operation(

@@ -1,11 +1,9 @@
 //! Operation envelope + payload validators.
 //!
 //! Surfaces:
-//! - `OperationPayloadSchema` / `PayloadRequirement` — per-kind required / optional / enum field
-//!   schemas.
-//! - `validate_operation_semantics` / `validate_operation_schema` — the entrypoint validators
-//!   called from `event_log::submit_event`, `projection::project_accepted_operations`, and the
-//!   federation ingest path.
+//! - `validate_operation_semantics` — the registry-backed entrypoint validator called from
+//!   `event_log::submit_event`, `projection::project_accepted_operations`, and the federation
+//!   ingest path.
 //! - `validate_operation_policy` — high-level policy gate (plaintext-Space gating + B-09 redact
 //!   constraints).
 //! - `validate_canonical_json_value` (+ `_inner`) — the canonical-JSON shape gate that operation
@@ -29,9 +27,8 @@
 //! - `payload_validators` — the per-kind typed payload validators.
 //! - `policy` / `policy_extra` — the `validate_operation_policy` gate and its helpers.
 //! - `content` — canonical-JSON, content-block, mention, and device-message shape checks.
-//! - `payload_schemas` — the static `PayloadRequirement` tables.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::operation_semantics as kinds;
 
@@ -60,9 +57,9 @@ pub(crate) async fn lock_active_series_operations(
     let mut shards = BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            == Some(arkret_wire::EventKind::KeyBackupActiveSeries)
         {
-            let payload = projection_context_stripped_payload(&operation.payload);
+            let payload = &operation.payload;
             let actor = payload
                 .get("actor_id")
                 .and_then(Value::as_str)
@@ -75,20 +72,15 @@ pub(crate) async fn lock_active_series_operations(
             format!("active-series\0{actor}\0{class}").hash(&mut hasher);
             shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
         }
-        if let Some(preconditions) = operation
-            .payload
-            .get("preconditions")
-            .and_then(Value::as_array)
+        for cell in operation
+            .context
+            .preconditions
+            .iter()
+            .map(|precondition| precondition.cell.as_str())
         {
-            for cell in preconditions
-                .iter()
-                .filter_map(|entry| entry.get("cell"))
-                .filter_map(Value::as_str)
-            {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                format!("cell-cas\0{}\0{cell}", operation.realm_id).hash(&mut hasher);
-                shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
-            }
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            format!("cell-cas\0{}\0{cell}", operation.realm_id).hash(&mut hasher);
+            shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
         }
     }
     let mut guards = Vec::with_capacity(shards.len());
@@ -108,8 +100,6 @@ const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
     "assigned_actors",
 ];
 
-mod payload_schemas;
-pub(crate) use payload_schemas::*;
 mod policy;
 pub(crate) use policy::*;
 mod policy_extra;
@@ -127,15 +117,10 @@ mod mention_tests;
 mod participant_binding_tests;
 #[cfg(test)]
 mod policy_tests;
-#[cfg(test)]
-mod schema_tests;
 
 #[cfg(test)]
 #[path = "operations_minimal_metadata_aad_tests.rs"]
 mod minimal_metadata_aad_tests;
-#[cfg(test)]
-#[path = "operations_strand_tracks_update_tests.rs"]
-mod strand_tracks_update_tests;
 #[cfg(test)]
 #[path = "operations_wire_payload_tests.rs"]
 mod wire_payload_tests;

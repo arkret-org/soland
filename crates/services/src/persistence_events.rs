@@ -56,7 +56,7 @@ fn application_projected_event(
     crate::events::ProjectedEvent {
         event_id: event.event_id,
         realm_id: event.realm_id,
-        event_kind: event.event_kind,
+        event_kind: arkret_wire::EventKind::from_wire(&event.event_kind),
         operation_kind: event.operation_kind,
         operation_id: event.operation_id,
         sender: event.sender,
@@ -72,7 +72,7 @@ fn persistence_projected_event(
     soland_storage::ProjectionEventRecord {
         event_id: event.event_id,
         realm_id: event.realm_id,
-        event_kind: event.event_kind,
+        event_kind: event.event_kind.as_str().to_owned(),
         operation_kind: event.operation_kind,
         operation_id: event.operation_id,
         sender: event.sender,
@@ -454,12 +454,12 @@ impl crate::events::EventReadPort for PersistenceEventReader {
 
     async fn projected_events_for_kind(
         &self,
-        event_kind: &str,
+        event_kind: arkret_wire::EventKind,
     ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
         Ok(self
             .0
             .projection_events()
-            .snapshot_kind(event_kind)
+            .snapshot_kind(event_kind.as_str())
             .await?
             .into_iter()
             .map(application_projected_event)
@@ -672,9 +672,9 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn persist_projected_operation(
         &self,
         origin: &str,
-        operation: &arkret_event_draft::Operation,
+        operation: &arkret_event_draft::ProjectedEventOperation,
     ) -> crate::ServiceResult<()> {
-        let event_type = soland_domain::kinds::canonical_kind_string(operation);
+        let event_type = soland_domain::kinds::canonical_kind(operation);
         let is_membership_or_realm_lifecycle =
             soland_domain::kinds::operation_is_membership(operation)
                 || soland_domain::kinds::operation_is_realm_lifecycle(operation);
@@ -682,7 +682,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
             .persist_projected_operation(
                 origin,
                 operation,
-                &event_type,
+                event_type.as_str(),
                 is_membership_or_realm_lifecycle,
             )
             .await

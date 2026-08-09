@@ -1,5 +1,5 @@
-use arkret_event_draft::Operation;
-use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
+use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_wire::{CORE_REDUCER_PROFILE, EventKind, ProfileId};
 // Standard protocol event kind constants intentionally live in the SDK.
 // Soland code should refer to `arkret_wire::events::kinds::*` directly instead
 // of re-exporting legacy aliases from this module.
@@ -15,7 +15,7 @@ use crate::artifacts;
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
-// constant is exposed as `arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND`.
+// constant is exposed as `arkret_wire::EventKind::RealmSetDefaultStrand`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ak.field.position.move` and `ak.field.position.reorder` were removed in
@@ -232,54 +232,53 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         .map_err(|_| "mls_governance_binding_invalid")
 }
 
-pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
-    let object_kind = operation.object_kind.as_str();
+pub fn canonical_kind_for_operation(operation: &Operation) -> Option<EventKind> {
+    let object_kind = operation.event_kind.as_str();
     if artifacts::active_local_operation_event_kinds().contains(object_kind) {
-        Some(object_kind)
+        Some(EventKind::from(object_kind))
     } else {
         None
     }
 }
 
-pub fn canonical_kind_string(operation: &Operation) -> String {
-    canonical_kind_for_operation(operation)
-        .unwrap_or(operation.object_kind.as_str())
-        .to_owned()
+pub fn canonical_kind(operation: &Operation) -> EventKind {
+    canonical_kind_for_operation(operation).unwrap_or_else(|| operation.event_kind.clone())
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::MessageCreate)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_wire::events::kinds::is_redaction_kind)
+        .is_some_and(|kind| arkret_wire::events::kinds::is_redaction_kind(kind.as_str()))
 }
 
 pub fn operation_is_membership(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_wire::events::kinds::is_membership_kind)
+        .is_some_and(|kind| arkret_wire::events::kinds::is_membership_kind(kind.as_str()))
 }
 
 pub fn operation_is_invite(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation).is_some_and(arkret_wire::events::kinds::is_invite_kind)
+    canonical_kind_for_operation(operation)
+        .is_some_and(|kind| arkret_wire::events::kinds::is_invite_kind(kind.as_str()))
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::InviteCreate)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::InviteClaim)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::InviteThirdParty)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
     canonical_kind_for_operation(operation)
-        .is_some_and(arkret_wire::events::kinds::is_realm_lifecycle_kind)
+        .is_some_and(|kind| arkret_wire::events::kinds::is_realm_lifecycle_kind(kind.as_str()))
 }
 
 // ────────────────────────────────────────────────────────────────────────

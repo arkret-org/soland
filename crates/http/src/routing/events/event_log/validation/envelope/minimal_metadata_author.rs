@@ -135,8 +135,8 @@ async fn validate_accepted_group_state(
         .await
         .map_err(|error| author_credential_invalid(format!("group_state_ref lookup: {error}")))?
         .ok_or_else(|| author_credential_invalid("group_state_ref is not an accepted event"))?;
-    let is_genesis = record.kind == arkret_wire::EventKind::MLS_GENESIS;
-    if !is_genesis && record.kind != arkret_wire::EventKind::MLS_COMMIT {
+    let is_genesis = record.kind == arkret_wire::EventKind::MlsGenesis.as_str();
+    if !is_genesis && record.kind != arkret_wire::EventKind::MlsCommit.as_str() {
         return Err(author_credential_invalid(
             "group_state_ref is not an MLS genesis/commit event",
         ));

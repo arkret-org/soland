@@ -415,14 +415,14 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         let hlc = soland_domain::hlc::ServerHlc::new("lifecycle-test");
         let mut projection = state.test_projection().lock();
         projection.apply(
-            &arkret_event_draft::Operation::create(
+            &arkret_event_draft::test_support::raw_projected_operation(
                 arkret_identifiers::OperationId::new(format!(
                     "ak:operation:{}",
                     uuid::Uuid::now_v7()
                 ))
                 .unwrap(),
                 arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap(),
-                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+                arkret_wire::EventKind::RealmPolicyBundle.as_str(),
                 serde_json::json!({
                     "policy_revision": 1,
                     "content_encryption_floor": "e2ee_required"

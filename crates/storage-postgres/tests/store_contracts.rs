@@ -110,8 +110,8 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     ))
     .unwrap();
     let realm_id = arkret_identifiers::principal_control_realm_id(actor_id.as_str());
-    let event = arkret_wire::Event::new_with_derived_id_at(
-        arkret_wire::EventKind::REALM_CREATE,
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
@@ -148,7 +148,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
                 actor_id: event.actor_id.to_string(),
                 actor_seq: 0,
                 realm_id: Some(realm_id.to_string()),
-                kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
+                kind: arkret_wire::EventKind::RealmCreate.as_str().to_owned(),
                 schema_id: "ak.schema.realm.v1".to_owned(),
                 canonical_digest: proposal_digest.to_string(),
                 canonical_bytes,

@@ -202,25 +202,6 @@ pub(super) fn parse_signed_fields(
     Ok(parsed)
 }
 
-pub(super) fn recovery_signature_transcript(
-    transcript_type: &str,
-    payload: &Value,
-    signed_fields: &[String],
-) -> Value {
-    let mut signed_payload = Map::new();
-    for field in signed_fields {
-        signed_payload.insert(
-            field.clone(),
-            payload.get(field).cloned().unwrap_or(Value::Null),
-        );
-    }
-    json!({
-        "type": transcript_type,
-        "signed_fields": signed_fields,
-        "payload": Value::Object(signed_payload),
-    })
-}
-
 pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::InvalidSignature, message.into())
         .with_status(StatusCode::UNAUTHORIZED)

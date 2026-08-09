@@ -93,13 +93,9 @@ fn verify_key_backup_auth_data_signature(
         "multibase",
     )
     .map_err(|_| key_backup_untrusted_signature())?;
-    let mut unsigned = backup.clone();
-    if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
-        auth_data.remove("signature");
-    }
-    let canonical = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = KeyBackup::signing_payload_bytes_from_wire(backup).map_err(|error| {
         AppError::internal(format!(
-            "key backup envelope canonicalization failed: {error}"
+            "key backup signature transcript is invalid: {error}"
         ))
     })?;
     let raw = URL_SAFE_NO_PAD
@@ -135,17 +131,8 @@ fn key_backup_verification_method_matches_device_key(
 pub(super) fn key_backup_canonical_digest_without_signature(
     backup: &Value,
 ) -> Result<String, AppError> {
-    let mut canonical = backup.clone();
-    if let Some(auth_data) = canonical
-        .get_mut("auth_data")
-        .and_then(Value::as_object_mut)
-    {
-        auth_data.remove("signature");
-    }
-    let bytes = arkret_canonical::canonical_json_bytes(&canonical).map_err(|error| {
-        AppError::internal(format!("key backup canonical digest failed: {error}"))
-    })?;
-    Ok(arkret_canonical::sha256_digest(&bytes))
+    KeyBackup::signature_independent_digest_from_wire(backup)
+        .map_err(|error| AppError::internal(format!("key backup canonical digest failed: {error}")))
 }
 
 pub(super) fn required_proof_string<'a>(
@@ -171,132 +158,34 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     session_device_id: &str,
     backup: &Value,
 ) -> Result<(), AppError> {
-    if required_proof_string(proof, "schema")? != "ak.schema.key_backup_unlock_proof.v1" {
-        return Err(schema_error(
-            "key backup unlock proof schema must be ak.schema.key_backup_unlock_proof.v1",
-        ));
-    }
-    let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
-    if !recovery_session_id.starts_with("ak:recovery_session:") {
-        return Err(schema_error(
-            "key backup unlock proof recovery_session_id must start with ak:recovery_session:",
-        ));
-    }
-    if required_proof_string(proof, "principal_id")? != actor_id {
+    let proof = serde_json::from_value::<KeyBackupUnlockProof>(proof.clone())
+        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
+    proof
+        .validate()
+        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
+    let backup = serde_json::from_value::<KeyBackup>(backup.clone())
+        .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
+    backup
+        .validate()
+        .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
+    if proof.principal_id.as_str() != actor_id {
         return Err(AppError::capability_denied(
             "key backup unlock proof principal_id must match authenticated actor",
         ));
     }
-    if required_proof_string(proof, "requesting_device_id")? != session_device_id {
+    if proof.requesting_device_id.as_str() != session_device_id {
         return Err(AppError::capability_denied(
             "key backup unlock proof requesting_device_id must match authenticated session device",
         ));
     }
-    for (field, expected) in [
-        (
-            "backup_id",
-            backup
-                .get("backup_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-        (
-            "backup_kind",
-            backup
-                .get("backup_kind")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-        (
-            "series_id",
-            backup
-                .get("series_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-        (
-            "ciphertext_digest",
-            backup
-                .get("ciphertext_digest")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-    ] {
-        if required_proof_string(proof, field)? != expected {
-            return Err(AppError::capability_denied(format!(
-                "key backup unlock proof `{field}` does not match backup metadata"
-            )));
-        }
-    }
-    let proof_kind = required_proof_string(proof, "proof_kind")?;
-    if !matches!(
-        proof_kind,
-        "principal_signing"
-            | "recovery_unlock"
-            | "device_quorum"
-            | "trusted_recovery_service"
-            | "threshold_recovery"
-    ) {
-        return Err(schema_error(format!(
-            "key backup unlock proof proof_kind `{proof_kind}` is not supported",
-        )));
-    }
-    if !is_sha_digest(required_proof_string(proof, "proof_digest")?) {
-        return Err(schema_error(
-            "key backup unlock proof proof_digest must be a sha digest",
-        ));
-    }
-    if !required_proof_string(proof, "issued_at")?.ends_with('Z') {
-        return Err(schema_error(
-            "key backup unlock proof issued_at must be UTC RFC3339 ending in Z",
-        ));
-    }
-
-    let auth = proof
-        .get("auth_data")
-        .and_then(Value::as_object)
-        .ok_or_else(|| schema_error("key backup unlock proof auth_data is required"))?;
-    if auth
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
+    if proof.backup_id != backup.backup_id
+        || proof.backup_kind != backup.backup_kind
+        || proof.series_id != backup.series_id
+        || proof.ciphertext_digest.as_str() != backup.ciphertext_digest
     {
-        return Err(schema_error(
-            "key backup unlock proof auth_data.verification_method is required",
+        return Err(AppError::capability_denied(
+            "key backup unlock proof does not match backup metadata",
         ));
-    }
-    if !matches!(
-        auth.get("signature_algorithm").and_then(Value::as_str),
-        Some("Ed25519" | "ES256" | "ML-DSA-65")
-    ) {
-        return Err(schema_error(
-            "key backup unlock proof auth_data.signature_algorithm must be Ed25519, ES256, or ML-DSA-65",
-        ));
-    }
-    let signature = auth
-        .get("signature")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !is_base64url_token(signature) {
-        return Err(schema_error(
-            "key backup unlock proof auth_data.signature must be base64url",
-        ));
-    }
-    let signed_fields = auth
-        .get("signed_fields")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            schema_error("key backup unlock proof auth_data.signed_fields must be an array")
-        })?;
-    for field in KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS {
-        if !signed_fields
-            .iter()
-            .any(|candidate| candidate.as_str() == Some(*field))
-        {
-            return Err(schema_error(format!(
-                "key backup unlock proof auth_data.signed_fields must cover `{field}`"
-            )));
-        }
     }
     Ok(())
 }
@@ -305,42 +194,25 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
     state: &AppState,
     proof: &Value,
 ) -> Result<(), AppError> {
-    let auth = proof
-        .get("auth_data")
-        .and_then(Value::as_object)
-        .ok_or_else(|| schema_error("key backup unlock proof auth_data is required"))?;
-    let verification_method = auth
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let signature_b64 = auth
-        .get("signature")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let proof = serde_json::from_value::<KeyBackupUnlockProof>(proof.clone())
+        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
+    let canonical = proof
+        .signing_payload_bytes()
+        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
+    let verification_method = proof.auth_data.verification_method.as_str();
+    let signature_b64 = proof.auth_data.signature.as_str();
     let raw = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
-        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
         .map_err(|_| {
             AppError::capability_denied("key backup unlock proof signature is not base64url")
         })?;
     let signature = Signature::from_slice(&raw).map_err(|_| {
         AppError::capability_denied("key backup unlock proof signature must be 64 Ed25519 bytes")
     })?;
-    let mut unsigned = proof.clone();
-    if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
-        auth_data.remove("signature");
-    }
-    let canonical = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
-        AppError::internal(format!(
-            "key backup unlock proof canonicalization failed: {error}"
-        ))
-    })?;
-    let proof_kind = required_proof_string(proof, "proof_kind")?;
-    let public_key = if proof_kind == "recovery_unlock" {
-        let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
+    let public_key = if proof.proof_kind == arkret_models_crypto::ProofKind::RecoveryUnlock {
         let record = state
             .recovery_sessions()
-            .session(recovery_session_id)
+            .session(proof.recovery_session_id.as_str())
             .await
             .map_err(|error| {
                 AppError::internal(format!("recovery session lookup failed: {error}"))

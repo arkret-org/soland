@@ -414,7 +414,7 @@ pub(crate) async fn active_series_pointer_is_current(
         return Ok(false);
     };
     if authorize.actor_id != controller_id
-        || authorize.kind != arkret_wire::EventKind::DEVICE_AUTHORIZE
+        || authorize.kind != arkret_wire::EventKind::DeviceAuthorize
     {
         return Ok(false);
     }
@@ -435,18 +435,16 @@ pub(crate) async fn active_series_pointer_is_current(
 
 pub(crate) async fn validate_active_series_operation_authority(
     state: &AppState,
-    operation: &arkret_event_draft::Operation,
+    operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), &'static str> {
     if soland_services::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+        != Some(arkret_wire::EventKind::KeyBackupActiveSeries)
     {
         return Ok(());
     }
     let record = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
-    >(crate::routing::events::projection_context_stripped_payload(
-        &operation.payload,
-    ))
+    >(operation.payload.clone())
     .map_err(|_| "key_backup_active_series_schema_violation")?;
     if arkret_models_identity::did_document::principal_control_realm_id(&record.actor_id)
         != operation.realm_id.as_str()
@@ -470,8 +468,8 @@ pub(crate) async fn validate_active_series_operation_authority(
     if !series_exists {
         return Err("key_backup_active_series_target_missing");
     }
-    arkret_models_collaboration::events_payloads::key_backup_active_series_head(&record)
-        .map_err(|_| "key_backup_active_series_schema_violation")?;
+    arkret_models_collaboration::events_payloads::validate_key_backup_active_series_record(&record)
+        .map_err(|error| error.reason_code())?;
     let pointer = record;
     match active_series_pointer_is_current(state, pointer.actor_id.as_str(), &pointer).await {
         Ok(true) => Ok(()),
@@ -490,7 +488,7 @@ async fn active_series_signature_is_valid(
     {
         return Ok(false);
     }
-    let message = pointer.signature_payload_bytes().map_err(|error| {
+    let message = pointer.signing_payload_bytes().map_err(|error| {
         AppError::internal(format!("active-series canonicalization failed: {error}"))
     })?;
     let signature = URL_SAFE_NO_PAD
@@ -747,16 +745,16 @@ pub(crate) async fn validate_delegated_agent_envelope(
         .unwrap_or_default();
     let kind_is_delegated_control = matches!(
         kind,
-        "ak.realm.create"
-            | "ak.mls.genesis"
-            | "ak.mls.commit"
-            | "ak.profile.create"
-            | "ak.profile.update"
-            | "ak.agent.key.authorize"
-            | "ak.agent.key.revoke"
-            | "ak.self.agent.pause"
-            | "ak.self.agent.resume"
-            | "ak.self.agent.deactivate"
+        arkret_wire::event_kind_str::REALM_CREATE
+            | arkret_wire::event_kind_str::MLS_GENESIS
+            | arkret_wire::event_kind_str::MLS_COMMIT
+            | arkret_wire::event_kind_str::PROFILE_CREATE
+            | arkret_wire::event_kind_str::PROFILE_UPDATE
+            | arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE
+            | arkret_wire::event_kind_str::AGENT_KEY_REVOKE
+            | arkret_wire::event_kind_str::SELF_AGENT_PAUSE
+            | arkret_wire::event_kind_str::SELF_AGENT_RESUME
+            | arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE
     );
     if !kind_is_delegated_control {
         return Err(failed_precondition(
@@ -764,7 +762,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_delegation_scope",
         ));
     }
-    if kind == arkret_wire::EventKind::REALM_CREATE {
+    if kind == arkret_wire::EventKind::RealmCreate {
         let object = envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))
@@ -1277,8 +1275,8 @@ mod tests {
     /// cannot project at all.
     #[test]
     fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
-        let mut event = arkret_wire::Event::new(
-            arkret_wire::EventKind::REALM_CREATE,
+        let mut event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
             Did::new(AGENT).unwrap(),
             0,

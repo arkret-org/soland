@@ -36,4 +36,5 @@ tracing = {workspace = true}
 uuid = {workspace = true}
 
 [dev-dependencies]
+arkret-wire = {workspace = true,features = ["test-support"]}
 soland-domain = {workspace = true}

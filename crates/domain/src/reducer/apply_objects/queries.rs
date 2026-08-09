@@ -410,44 +410,34 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         let kind = crate::kinds::canonical_kind_for_operation(operation);
-        let (member, hard_gates_only) = match kind {
-            Some(arkret_wire::EventKind::MEMBER_STATE)
-                if operation.payload.get("membership").and_then(Value::as_str) == Some("join") =>
-            {
-                let member = operation
-                    .payload
-                    .get("actor_id")
-                    .or_else(|| operation.payload.get("member"))
-                    .or_else(|| operation.payload.get("member_id"))
-                    .or_else(|| operation.payload.get("subject"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty());
-                (member, false)
+        let (member, hard_gates_only) = match &kind {
+            Some(arkret_wire::EventKind::MemberState) => {
+                let payload = operation
+                    .typed_payload::<arkret_wire::event_spec::MemberState>()
+                    .map_err(|_| "gate_check_failed")?;
+                if payload.membership
+                    != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+                {
+                    return Ok(());
+                }
+                (payload.actor_id.map(|actor_id| actor_id.to_string()), false)
             }
-            Some(arkret_wire::EventKind::INVITE_CREATE) => {
-                let member = operation
-                    .payload
-                    .pointer("/invite/invitee")
-                    .or_else(|| operation.payload.get("invitee"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty());
-                (member, true)
+            Some(arkret_wire::EventKind::InviteCreate) => {
+                let payload = operation
+                    .typed_payload::<arkret_wire::event_spec::InviteCreate>()
+                    .map_err(|_| "gate_check_failed")?;
+                (Some(payload.invitee.to_string()), true)
             }
-            Some(arkret_wire::EventKind::INVITE_ACCEPT) => {
-                let member = operation
-                    .payload
-                    .get("sender")
-                    .or_else(|| operation.payload.get("invitee"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty());
-                (member, true)
+            Some(arkret_wire::EventKind::InviteAccept) => {
+                (Some(operation.context.sender.to_string()), true)
             }
             _ => return Ok(()),
         };
+        let member = member.as_deref();
         let Some(member) = member else {
             return Err("gate_check_failed");
         };
-        if kind == Some(arkret_wire::EventKind::MEMBER_STATE)
+        if kind == Some(arkret_wire::EventKind::MemberState)
             && self
                 .member(operation.realm_id.as_str(), member)
                 .is_some_and(|membership| membership.state == "join")
@@ -459,11 +449,7 @@ impl ProjectionState {
         }
         let join_rule =
             (!hard_gates_only).then(|| self.realm_default_join_rule(operation.realm_id.as_str()));
-        let is_self_authored = operation
-            .payload
-            .get("sender")
-            .and_then(Value::as_str)
-            .is_none_or(|sender| sender == member);
+        let is_self_authored = operation.context.sender.as_str() == member;
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
             return Err("gate_check_failed");
         }

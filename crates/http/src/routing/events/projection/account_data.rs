@@ -1,13 +1,14 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
+    ActorPrivateReadCursorUpdate,
+};
 use serde_json::{Value, json};
 use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
 use soland_services::operation_semantics as kinds;
 
-use crate::routing::identity::device_messages::{
-    ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
-    fanout_actor_private_update,
-};
+use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
 
 /// Project a `ak.realm.read_receipt_policy` (post-R1.2; was
@@ -48,20 +49,12 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     state.projections().cache_cell(cell_id, value);
 }
 
-fn account_data_update_type(account_data_key: &str) -> &'static str {
-    if account_data_key == "ak.account.blocklist" {
-        BLOCKLIST_UPDATE_TYPE
-    } else {
-        ACCOUNT_DATA_UPDATE_TYPE
-    }
-}
-
 pub(super) fn actor_private_read_cursor_matches_origin(
     origin: &str,
     source_device_id: &str,
     operation: &Operation,
 ) -> bool {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::READ_CURSOR_ADVANCE
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::ReadCursorAdvance
         || source_device_id.is_empty()
     {
         return true;
@@ -92,7 +85,7 @@ pub(super) async fn read_cursor_reducer_context_operation(
     state: &AppState,
     operation: &Operation,
 ) -> Option<Operation> {
-    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::READ_CURSOR_ADVANCE {
+    if kinds::canonical_kind(operation) != arkret_wire::EventKind::ReadCursorAdvance {
         return None;
     }
     let actor_id = operation.payload.get("actor_id")?.as_str()?;
@@ -236,21 +229,31 @@ pub(super) async fn project_account_data_set(
         }
     };
     if !source_device_id.is_empty() {
-        let operation_name = if tombstone { "delete" } else { "put" };
-        fanout_actor_private_update(
-            state,
-            owner,
-            source_device_id,
-            account_data_update_type(account_data_key),
-            json!({
-                "operation": operation_name,
-                "account_data_key": account_data_key,
-                "revision": applied.revision,
-                "content": (!tombstone).then_some(applied.payload.clone()),
-                "updated_at": applied.updated_at,
-            }),
-        )
-        .await;
+        let content = ActorPrivateAccountDataUpdate {
+            operation: if tombstone {
+                ActorPrivateAccountDataOperation::Delete
+            } else {
+                ActorPrivateAccountDataOperation::Put
+            },
+            account_data_key: account_data_key.to_owned(),
+            revision: applied.revision,
+            content: (!tombstone).then_some(applied.payload.clone()),
+            updated_at: applied.updated_at,
+        };
+        let update = if account_data_key == "ak.account.blocklist" {
+            ActorPrivateDeviceUpdate::Blocklist {
+                sender_device_id: source_device_id.to_owned(),
+                content,
+                created_at: applied.updated_at,
+            }
+        } else {
+            ActorPrivateDeviceUpdate::AccountData {
+                sender_device_id: source_device_id.to_owned(),
+                content,
+                created_at: applied.updated_at,
+            }
+        };
+        fanout_actor_private_update(state, owner, update).await;
     }
 }
 
@@ -271,17 +274,19 @@ pub(super) async fn fanout_projection_effect_private_update(
     fanout_actor_private_update(
         state,
         marker.actor_id.as_str(),
-        origin_device,
-        READ_MARKER_UPDATE_TYPE,
-        json!({
-            "schema": "ak.schema.read_cursor.v1",
-            "actor_id": marker.actor_id.clone(),
-            "device_id": origin_device,
-            "realm_id": marker.realm_id.clone(),
-            "read_scope": marker.read_scope.clone(),
-            "position": marker.position.clone(),
-            "updated_at": marker.updated_at,
-        }),
+        ActorPrivateDeviceUpdate::ReadCursor {
+            sender_device_id: origin_device.to_owned(),
+            content: ActorPrivateReadCursorUpdate {
+                schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
+                actor_id: marker.actor_id.clone(),
+                device_id: marker.device_id.clone(),
+                realm_id: marker.realm_id.clone(),
+                read_scope: marker.read_scope.clone(),
+                position: marker.position.clone(),
+                updated_at: marker.updated_at,
+            },
+            created_at: marker.updated_at,
+        },
     )
     .await;
 }

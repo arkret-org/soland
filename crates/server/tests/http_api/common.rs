@@ -8,7 +8,7 @@ pub(crate) use std::sync::LazyLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_event_draft::Operation;
+pub(crate) use arkret_event_draft::ProjectedEventOperation as Operation;
 pub(crate) use arkret_identifiers::{Did, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -1563,7 +1563,7 @@ pub(crate) async fn seed_realm_genesis_event(
         .await
         .expect("fixture Realm genesis lookup")
         .into_iter()
-        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
         .expect("fixture Realm genesis Event");
     arkret_identifiers::Hash::new(record.canonical_digest)
         .expect("fixture genesis Event digest is a hash")
@@ -2115,7 +2115,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_wire::EventKind::SPACE_ARCHIVE | arkret_wire::EventKind::SPACE_RESTORE => {
+        arkret_wire::event_kind_str::SPACE_ARCHIVE | arkret_wire::event_kind_str::SPACE_RESTORE => {
             serde_json::to_value(
                 arkret_models_collaboration::object_lifecycle::SpaceStateTransitionPayload {
                     space_id: required_space_id(&payload, "space_id"),
@@ -2125,7 +2125,7 @@ fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
             )
             .expect("space lifecycle payload serialization")
         }
-        arkret_wire::EventKind::SPACE_TOMBSTONE => serde_json::to_value(
+        arkret_wire::event_kind_str::SPACE_TOMBSTONE => serde_json::to_value(
             arkret_models_collaboration::object_lifecycle::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
@@ -2305,7 +2305,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_wire::EventKind::MORPH_ARCHIVE => {
+        arkret_wire::event_kind_str::MORPH_ARCHIVE => {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
@@ -2313,7 +2313,7 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             .to_value()
             .expect("morph archive payload serialization")
         }
-        arkret_wire::EventKind::MORPH_RESTORE => {
+        arkret_wire::event_kind_str::MORPH_RESTORE => {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
@@ -2321,7 +2321,7 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             .to_value()
             .expect("morph restore payload serialization")
         }
-        arkret_wire::EventKind::MORPH_UPDATE => {
+        arkret_wire::event_kind_str::MORPH_UPDATE => {
             let morph_id = arkret_identifiers::MorphId::new(required_string(
                 &payload,
                 "target_ref",

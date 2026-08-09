@@ -32,4 +32,5 @@ tracing = {workspace = true}
 url = {workspace = true}
 
 [dev-dependencies]
+arkret-event-draft = { workspace = true, features = ["test-support"] }
 uuid = {workspace = true,features = ["v7"]}

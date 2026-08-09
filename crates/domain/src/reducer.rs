@@ -64,7 +64,7 @@ mod projections;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use apply_capability::derive_authority_audit;
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::{
@@ -79,40 +79,6 @@ use crate::hlc::ServerHlc;
 
 pub const CHILD_ORDER_CELL_FAMILY: &str = "ak.component.child_order.v1";
 pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
-
-/// Envelope and projection metadata added to a signed wire payload while it is
-/// represented as an [`Operation`].
-///
-/// These fields must be removed before deserializing the original wire payload
-/// into a typed SDK model or producing a payload-specific signature transcript.
-pub const PROJECTION_CONTEXT_FIELDS: &[&str] = &[
-    "event_id",
-    "sender",
-    "hlc",
-    "executed_by",
-    "authorization_ref",
-    "seal_ref",
-    "seal_basis",
-    "preconditions",
-    "effects",
-    "accepted_event_id",
-    "accepted_scope_ref",
-    "envelope_causal_refs",
-    "canonical_event_digest",
-    "query_grade",
-    READ_CURSOR_CAUSAL_RELATION_CONTEXT,
-];
-
-/// Return the signed wire payload without projection-only context fields.
-pub fn projection_context_stripped_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        for field in PROJECTION_CONTEXT_FIELDS {
-            object.remove(*field);
-        }
-    }
-    wire_payload
-}
 
 // Public projection record types — kept `pub` so the external
 // `crate::reducer::Xxx` references resolve exactly as before.

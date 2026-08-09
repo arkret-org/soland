@@ -63,7 +63,7 @@ fn circle_history_uses_invite_and_join_boundaries() {
     let invite_at = base + Duration::minutes(10);
     let join_at = base + Duration::minutes(20);
     let mut invite = make_operation(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
@@ -79,7 +79,7 @@ fn circle_history_uses_invite_and_join_boundaries() {
     ));
 
     let mut join = make_operation(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
@@ -109,7 +109,7 @@ fn realm_leave_cascades_to_circle_history_membership() {
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
     let mut join = make_operation(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
@@ -127,7 +127,7 @@ fn realm_leave_cascades_to_circle_history_membership() {
     assert!(state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at));
 
     let mut leave = make_operation(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         REALM,
         serde_json::json!({
             "actor_id": BOB,
@@ -182,7 +182,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
     );
     let leave_at = base + Duration::minutes(30);
     let mut leave = make_operation(
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState,
         REALM,
         serde_json::json!({
             "actor_id": BOB,
@@ -260,7 +260,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
     let mut join = make_operation(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
@@ -277,7 +277,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
     ));
 
     let mut leave = make_operation(
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
@@ -316,7 +316,7 @@ fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
     }
     let tombstone_at = base + Duration::minutes(40);
     let mut tombstone = make_operation(
-        arkret_wire::EventKind::CIRCLE_TOMBSTONE,
+        arkret_wire::EventKind::CircleTombstone,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,

@@ -26,7 +26,7 @@ pub(super) fn event_digest_suite(
     object: &serde_json::Map<String, Value>,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<String, EventValidationError> {
-    let suite = if kind == arkret_wire::EventKind::REALM_CREATE {
+    let suite = if kind == arkret_wire::event_kind_str::REALM_CREATE {
         // Genesis has no materialized Realm cell yet; omission means the
         // protocol baseline suite and is itself covered by the signed Event.
         realm_create_digest_algorithm(object).unwrap_or_else(|| "sha256".to_owned())
@@ -92,7 +92,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
     // solve. Receivers derive it instead, which is also what makes `realm_id`
     // self-certifying against the genesis they were served.
     let is_realm_genesis = event_string_field(object, &["kind"])
-        .is_some_and(|kind| kind == arkret_wire::EventKind::REALM_CREATE);
+        .is_some_and(|kind| kind == arkret_wire::EventKind::RealmCreate);
 
     if is_realm_genesis {
         if object.contains_key("realm_id") {
@@ -218,9 +218,10 @@ mod control_move_seal_basis_tests {
         // MUST accept it as a genesis followup alongside the other realm.*
         // policy moves, else the whole create batch is `status=partial`.
         assert!(is_realm_bootstrap_followup_kind(
-            arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
+            arkret_wire::EventKind::RealmHistorySharingPolicy.as_str()
         ));
-        let obj = control_move_with_effects(arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY);
+        let obj =
+            control_move_with_effects(arkret_wire::EventKind::RealmHistorySharingPolicy.as_str());
         // As a recognized bootstrap followup it passes without seal_basis…
         validate_control_move_seal_basis(&obj, true).unwrap();
         // …but a non-bootstrap effects-bearing Control Move still requires it.

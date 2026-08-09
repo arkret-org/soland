@@ -140,10 +140,10 @@ async fn submit_realm_lifecycle_command(
     state: &AppState,
     session: &SessionRecord,
     realm_id: String,
-    kind: &'static str,
+    kind: arkret_wire::EventKind,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<RealmLifecycleView, AppError> {
-    caller_signed_realm_lifecycle_target(&session.actor, &realm_id, kind, &submission.event)?;
+    caller_signed_realm_lifecycle_target(&session.actor, &realm_id, &kind, &submission.event)?;
     crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
         .await
         .map(|_| ())
@@ -165,10 +165,10 @@ async fn submit_realm_lifecycle_command(
 fn caller_signed_realm_lifecycle_target(
     actor: &str,
     realm_id: &str,
-    kind: &'static str,
+    kind: &arkret_wire::EventKind,
     event: &arkret_wire::Event,
 ) -> Result<(), AppError> {
-    if event.kind.as_str() != kind {
+    if &event.kind != kind {
         return Err(AppError::invalid_param(format!(
             "lifecycle_event.event.kind must be {kind}"
         )));
@@ -201,7 +201,7 @@ async fn archive_realm(
         state,
         &session,
         realm_id.into_inner(),
-        arkret_wire::EventKind::REALM_ARCHIVE,
+        arkret_wire::EventKind::RealmArchive,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -223,7 +223,7 @@ async fn freeze_realm(
         state,
         &session,
         realm_id.into_inner(),
-        arkret_wire::EventKind::REALM_FREEZE,
+        arkret_wire::EventKind::RealmFreeze,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -245,7 +245,7 @@ async fn tombstone_realm(
         state,
         &session,
         realm_id.into_inner(),
-        arkret_wire::EventKind::REALM_TOMBSTONE,
+        arkret_wire::EventKind::RealmTombstone,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -267,7 +267,7 @@ async fn destroy_realm(
         state,
         &session,
         realm_id.into_inner(),
-        arkret_wire::EventKind::REALM_DESTROY,
+        arkret_wire::EventKind::RealmDestroy,
         body.into_inner().lifecycle_event,
     )
     .await
@@ -420,7 +420,7 @@ async fn export_realm(
         .map(|event| RealmExportEvent {
             event_id: event.event_id,
             realm_id: event.realm_id,
-            event_kind: event.event_kind,
+            event_kind: event.event_kind.as_str().to_owned(),
             operation_kind: event.operation_kind,
             operation_id: event.operation_id,
             sender: event.sender,
@@ -437,7 +437,7 @@ async fn export_realm(
                 .map(|operation_id| RealmExportOperation {
                     operation_id: operation_id.clone(),
                     realm_id: event.realm_id.clone(),
-                    object_kind: event.event_kind.clone(),
+                    object_kind: event.event_kind.as_str().to_owned(),
                     operation_kind: event.operation_kind.clone(),
                     payload: event.payload.clone(),
                     created_at: event.created_at,
@@ -949,11 +949,11 @@ pub async fn realm_recovery_recipient_principal(
 /// a `ak.realm_key.share` addressed to that recipient's `principal_id`. Used by
 /// the `events.read` per-event filter to keep the recovery face narrow.
 pub fn realm_recovery_event_visible(
-    event_kind: &str,
+    event_kind: &arkret_wire::EventKind,
     recipient_principal_id: Option<&str>,
     actor: &str,
 ) -> bool {
-    event_kind == arkret_wire::EventKind::REALM_KEY_SHARE && recipient_principal_id == Some(actor)
+    event_kind == &arkret_wire::EventKind::RealmKeyShare && recipient_principal_id == Some(actor)
 }
 
 /// Look up the persisted `history_visibility` for a Realm, defaulting to
@@ -1191,9 +1191,9 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::REALM_ARCHIVE,
+            arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
-                arkret_wire::EventKind::REALM_ARCHIVE,
+                arkret_wire::EventKind::RealmArchive.as_str(),
                 LIFECYCLE_ACTOR,
                 LIFECYCLE_REALM,
             ),
@@ -1204,9 +1204,9 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::REALM_ARCHIVE,
+            arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
-                arkret_wire::EventKind::REALM_DESTROY,
+                arkret_wire::EventKind::RealmDestroy.as_str(),
                 LIFECYCLE_ACTOR,
                 LIFECYCLE_REALM,
             ),
@@ -1218,9 +1218,9 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::REALM_ARCHIVE,
+            arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
-                arkret_wire::EventKind::REALM_ARCHIVE,
+                arkret_wire::EventKind::RealmArchive.as_str(),
                 LIFECYCLE_ACTOR,
                 "ak:realm:AW6ST0TiEb2kdaVDQ-YtsKW8ig0EM-l6_Y5YiT16u7b-",
             ),
@@ -1230,9 +1230,9 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::REALM_ARCHIVE,
+            arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
-                arkret_wire::EventKind::REALM_ARCHIVE,
+                arkret_wire::EventKind::RealmArchive.as_str(),
                 "did:web:someone-else.example",
                 LIFECYCLE_REALM,
             ),

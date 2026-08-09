@@ -299,7 +299,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         declared_admission,
         Some("self_authored_proof" | "service_attested" | "crypto_verifiable")
     ) || (declared_admission == Some("conditional")
-        && kind == arkret_wire::EventKind::SELF_MODERATION_REPORT);
+        && kind == arkret_wire::event_kind_str::SELF_MODERATION_REPORT);
     if !realm_authority_root_authorized && !independently_admitted {
         for cell in derived_cells {
             let covering_grant = effective_by_id

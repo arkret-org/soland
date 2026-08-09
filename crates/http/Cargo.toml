@@ -12,7 +12,11 @@ description = "Soland HTTP transport, middleware, routing, and OpenAPI surface."
 [features]
 default = []
 openmls-keypackage-validation = []
-test-support = ["soland-services/test-support"]
+test-support = [
+    "arkret-event-draft/test-support",
+    "arkret-wire/test-support",
+    "soland-services/test-support",
+]
 
 [dependencies]
 anyhow.workspace = true
@@ -74,6 +78,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+arkret-event-draft = { workspace = true, features = ["test-support"] }
 rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-services = { workspace = true, features = ["test-support"] }

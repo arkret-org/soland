@@ -802,12 +802,13 @@ pub async fn federated_device_signing_key_evidence(
     device_id: &arkret_identifiers::DeviceId,
     verification_method: &str,
 ) -> Result<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence, String> {
+    use std::collections::BTreeMap;
+
     use arkret_wire::event_envelope::{
         FederatedCurrentDeviceProjection, FederatedDeviceGenerationState,
         FederatedDeviceGenerationStatus, FederatedDeviceRecord, FederatedDeviceSigningKeyEvidence,
         FederatedDeviceStatus,
     };
-    use std::collections::BTreeMap;
 
     if verification_method != format!("{actor_id}#{device_id}") {
         return Err("device signing verification method is not actor_id#device_id".to_owned());
@@ -870,7 +871,7 @@ pub async fn federated_device_signing_key_evidence(
     let create = records
         .iter()
         .find(|record| {
-            record.kind == arkret_wire::EventKind::REALM_CREATE
+            record.kind == arkret_wire::event_kind_str::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/purpose")
@@ -886,11 +887,11 @@ pub async fn federated_device_signing_key_evidence(
             record.actor_seq >= create_actor_seq
                 && matches!(
                     record.kind.as_str(),
-                    arkret_wire::EventKind::REALM_CREATE
-                        | arkret_wire::EventKind::DEVICE_AUTHORIZE
-                        | arkret_wire::EventKind::DEVICE_REVOKE
-                        | arkret_wire::EventKind::DEVICE_REANCHOR
-                        | arkret_wire::EventKind::DEVICE_LIST_UPDATE
+                    arkret_wire::event_kind_str::REALM_CREATE
+                        | arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+                        | arkret_wire::event_kind_str::DEVICE_REVOKE
+                        | arkret_wire::event_kind_str::DEVICE_REANCHOR
+                        | arkret_wire::event_kind_str::DEVICE_LIST_UPDATE
                 )
         })
         .map(|record| {
@@ -1023,6 +1024,8 @@ fn federated_range_completeness_evidence(
     realm_id: &arkret_identifiers::RealmId,
     records: &[soland_services::events::CanonicalEventRecord],
 ) -> Result<Vec<arkret_wire::Event>, String> {
+    use std::collections::BTreeMap;
+
     use arkret_models_collaboration::sync_frames::snapshot::{
         RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
         RangeCompletenessAttestationEventRangeFromFrontier,
@@ -1035,7 +1038,6 @@ fn federated_range_completeness_evidence(
         Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, Proof,
         ScopeRef, proof_kind,
     };
-    use std::collections::BTreeMap;
 
     let mut accepted_events = records
         .iter()

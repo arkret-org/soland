@@ -1,7 +1,7 @@
 //! Reducer-level tests for `ak.realm.inheritance_policy` +
 //! `ak.capability.derived` (R3.2).
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_state::lattice::CellState;
 use serde_json::{Value, json};
@@ -11,18 +11,18 @@ use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 const REALM_PARENT: &str = "ak:realm:ATYL-87CDhaLQem29G2JQCXbZ_8zuu7khej2MbrsGLK6";
 const REALM_CHILD: &str = "ak:realm:AS1N4QnbZ6JgVObAF-yTx1GWoK2XnO_vUaZ2qe0WCyQV";
 
-fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
-    Operation::create(
+fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
+    arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        kind,
+        kind.as_ref(),
         payload,
     )
 }
 
 fn link_op(source: &str, target: &str, link_kind: &str) -> Operation {
     op(
-        arkret_wire::EventKind::REALM_LINK,
+        arkret_wire::EventKind::RealmLink,
         source,
         json!({
             "target_realm_id": target,
@@ -34,7 +34,7 @@ fn link_op(source: &str, target: &str, link_kind: &str) -> Operation {
 
 fn inheritance_op(child: &str, parent: &str, bundles: &[&str]) -> Operation {
     op(
-        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::RealmInheritancePolicy,
         child,
         json!({
             "source_realm_id": parent,
@@ -80,7 +80,7 @@ fn inheritance_policy_projects_cell_and_cache() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::RealmInheritancePolicy,
             REALM_CHILD,
             json!({
                 "source_realm_id": REALM_PARENT,
@@ -145,7 +145,7 @@ fn inheritance_policy_rejects_max_depth_above_cap() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::RealmInheritancePolicy,
         REALM_CHILD,
         json!({
             "source_realm_id": REALM_PARENT,
@@ -168,7 +168,7 @@ fn inheritance_policy_rejects_missing_source_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::RealmInheritancePolicy,
         REALM_CHILD,
         json!({
             "allowed_policies": [],
@@ -206,7 +206,7 @@ fn capability_derived_projects_cell_and_cache() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::EventKind::CAPABILITY_DERIVED,
+            arkret_wire::EventKind::CapabilityDerived,
             REALM_CHILD,
             json!({
                 "capability_id": capability_id,
@@ -256,7 +256,7 @@ fn capability_derived_rejects_missing_source_grant() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let bad = op(
-        arkret_wire::EventKind::CAPABILITY_DERIVED,
+        arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
@@ -298,7 +298,7 @@ fn capability_derived_rejects_action_widening() {
     state.apply(&inheritance, &hlc);
 
     let bad = op(
-        arkret_wire::EventKind::CAPABILITY_DERIVED,
+        arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
@@ -338,7 +338,7 @@ fn capability_derived_rejects_non_capability_bearing_link_kind() {
     state.apply(&link_op(REALM_CHILD, REALM_PARENT, "join_gate_from"), &hlc);
 
     let bad = op(
-        arkret_wire::EventKind::CAPABILITY_DERIVED,
+        arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",

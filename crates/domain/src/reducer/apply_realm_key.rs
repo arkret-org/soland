@@ -5,16 +5,15 @@ use super::*;
 impl ProjectionState {
     pub(crate) fn apply_realm_key_share(&mut self, operation: &Operation) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::REALM_KEY_SHARE)
+            != Some(arkret_wire::EventKind::RealmKeyShare)
         {
             return ProjectionEffect::Ignored;
         }
 
-        let share: arkret_models_collaboration::events_payloads::RealmKeySharePayload =
-            match serde_json::from_value(realm_key_share_wire_payload(&operation.payload)) {
-                Ok(share) => share,
-                Err(_) => return rejected("realm_key_share_payload_invalid"),
-            };
+        let share = match operation.typed_payload::<arkret_wire::event_spec::RealmKeyShare>() {
+            Ok(share) => share,
+            Err(_) => return rejected("realm_key_share_payload_invalid"),
+        };
 
         // Exactly-one material is now a wire invariant (schema `oneOf` plus the
         // SDK enum), so only a whitespace-only ciphertext still needs guarding.
@@ -51,24 +50,6 @@ impl ProjectionState {
             },
         }
     }
-}
-
-fn realm_key_share_wire_payload(payload: &Value) -> Value {
-    let mut wire_payload = payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        for field in [
-            "event_id",
-            "sender",
-            "hlc",
-            "executed_by",
-            "authorization_ref",
-            "seal_ref",
-            "seal_basis",
-        ] {
-            object.remove(field);
-        }
-    }
-    wire_payload
 }
 
 fn rejected(reason: &str) -> ProjectionEffect {

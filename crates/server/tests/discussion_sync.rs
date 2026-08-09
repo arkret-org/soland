@@ -620,7 +620,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         ))
         .expect("fixture verification method is a DID URL");
     let scope_ref = derived_scope_ref(state, realm_id, kind, &payload);
-    let mut event = arkret_wire::Event::new_at(
+    let mut event = arkret_wire::test_support::raw_event_at(
         kind,
         scope_ref,
         actor.clone(),

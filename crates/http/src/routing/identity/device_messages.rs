@@ -11,6 +11,11 @@
 
 use std::collections::BTreeMap;
 
+use arkret_models_collaboration::sync_frames::account_sync::ActorPrivateDeviceUpdate;
+#[cfg(test)]
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate,
+};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
@@ -31,9 +36,6 @@ use crate::wire::{
     DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
 };
 
-pub(crate) const ACCOUNT_DATA_UPDATE_TYPE: &str = "ak.account_data.update";
-pub(crate) const BLOCKLIST_UPDATE_TYPE: &str = "ak.account.blocklist.update";
-pub(crate) const READ_MARKER_UPDATE_TYPE: &str = "ak.read_cursor.update";
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 
 struct PreparedDeviceMessageTarget {
@@ -324,10 +326,18 @@ fn device_message_intent_conflict() -> AppError {
 pub(crate) async fn fanout_actor_private_update(
     state: &AppState,
     actor: &str,
-    origin_device_id: &str,
-    event_type: &str,
-    content: Value,
+    update: ActorPrivateDeviceUpdate,
 ) -> usize {
+    let event_type = update.kind();
+    let origin_device_id = update.sender_device_id();
+    let created_at = update.created_at();
+    let envelope = match serde_json::to_value(&update) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            tracing::error!(%error, actor, "failed to serialize actor-private update");
+            return 0;
+        }
+    };
     let devices = state
         .identities()
         .devices_for_actor(actor)
@@ -338,15 +348,8 @@ pub(crate) async fn fanout_actor_private_update(
         if device.revoked_at.is_some() || device.device_id == origin_device_id {
             continue;
         }
-        let created_at = now();
         let position = state.next_to_device_position();
         let idempotency_key = format!("{event_type}:{actor}:{origin_device_id}:{position}");
-        let envelope = json!({
-            "type": event_type,
-            "sender_device_id": origin_device_id,
-            "content": content.clone(),
-            "created_at": created_at,
-        });
         match state
             .deliveries()
             .append_device_message(DeviceMessageState {
@@ -355,7 +358,7 @@ pub(crate) async fn fanout_actor_private_update(
                 recipient: actor.to_owned(),
                 device_id: device.device_id,
                 position,
-                content: envelope,
+                content: envelope.clone(),
                 created_at,
             })
             .await
@@ -738,9 +741,17 @@ mod tests {
         let delivered = fanout_actor_private_update(
             &state,
             controller,
-            origin_device,
-            ACCOUNT_DATA_UPDATE_TYPE,
-            json!({"account_data_key": "ak.account.blocklist", "content": {"private": true}}),
+            ActorPrivateDeviceUpdate::AccountData {
+                sender_device_id: origin_device.to_owned(),
+                content: ActorPrivateAccountDataUpdate {
+                    operation: ActorPrivateAccountDataOperation::Put,
+                    account_data_key: "ak.account.blocklist".to_owned(),
+                    revision: 1,
+                    content: Some(json!({"private": true})),
+                    updated_at: now(),
+                },
+                created_at: now(),
+            },
         )
         .await;
 

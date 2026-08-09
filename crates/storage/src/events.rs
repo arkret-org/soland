@@ -174,10 +174,10 @@ pub fn stage_identity_anchor_events(
                 "event_hash_collision".to_owned(),
             ));
         }
-        if record.kind == arkret_wire::EventKind::REALM_CREATE
+        if record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record.realm_id.is_some()
             && staged.values().any(|existing| {
-                existing.kind == arkret_wire::EventKind::REALM_CREATE
+                existing.kind == arkret_wire::EventKind::RealmCreate
                     && existing.realm_id == record.realm_id
             })
         {
@@ -204,7 +204,7 @@ pub fn paired_replacement_authorize<'a>(
     records: impl IntoIterator<Item = &'a CanonicalEventRecord>,
 ) -> Option<&'a CanonicalEventRecord> {
     records.into_iter().find(|candidate| {
-        candidate.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+        candidate.kind == arkret_wire::EventKind::DeviceAuthorize
             && candidate.actor_id == reanchor.actor_id
             && candidate
                 .envelope
@@ -305,11 +305,11 @@ pub fn peer_page_record_matches(
 #[doc(hidden)]
 pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool {
     matches!(
-        record.kind.as_str(),
-        arkret_wire::EventKind::MEMBER_STATE
-            | arkret_wire::EventKind::CIRCLE_MEMBER_STATE
-            | arkret_wire::EventKind::INVITE_CREATE
-            | arkret_wire::EventKind::INVITE_ACCEPT
+        arkret_wire::EventKind::from_wire(&record.kind),
+        arkret_wire::EventKind::MemberState
+            | arkret_wire::EventKind::CircleMemberState
+            | arkret_wire::EventKind::InviteCreate
+            | arkret_wire::EventKind::InviteAccept
     ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
 }
 #[doc(hidden)]

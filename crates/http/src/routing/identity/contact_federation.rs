@@ -420,19 +420,6 @@ async fn handle_contact_control_request(
     )))
 }
 
-fn unsigned_contact_evidence<T: serde::Serialize>(
-    evidence: &T,
-    field: &str,
-) -> Result<Value, AppError> {
-    let mut value = serde_json::to_value(evidence)
-        .map_err(|error| AppError::internal(format!("{field} serialize failed: {error}")))?;
-    value
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal(format!("{field} must be a JSON object")))?
-        .remove("signature");
-    Ok(value)
-}
-
 fn validate_mirror_receipt_cryptography(
     state: &AppState,
     receipt: &PeerContactMirrorReceipt,
@@ -450,11 +437,14 @@ fn validate_mirror_receipt_cryptography(
             "{field} issuer, recipient, or authoritative disposition is invalid"
         )));
     }
-    super::account::verify_contact_service_signature(
+    let signing_bytes = receipt
+        .canonical_signing_bytes()
+        .map_err(|error| AppError::internal(format!("{field} transcript failed: {error}")))?;
+    super::account::verify_contact_service_signature_bytes(
         state,
         expected_service_id,
         &receipt.signature,
-        &unsigned_contact_evidence(receipt, field)?,
+        &signing_bytes,
         field,
     )
 }
@@ -472,11 +462,14 @@ async fn validate_proof_refresh_evidence(
         state.service_id(),
         "prior_mirror_receipt",
     )?;
-    super::account::verify_contact_service_signature(
+    let signing_bytes = current_proof
+        .canonical_signing_bytes()
+        .map_err(|error| AppError::internal(format!("current_proof transcript failed: {error}")))?;
+    super::account::verify_contact_service_signature_bytes(
         state,
         source_service_id,
         &current_proof.signature,
-        &unsigned_contact_evidence(current_proof, "current_proof")?,
+        &signing_bytes,
         "current_proof",
     )?;
     if current_proof.terminal
@@ -551,11 +544,16 @@ fn validate_glare_finalize_evidence(
             "glare_concurrency_attestation participant coordinates are invalid",
         ));
     }
-    super::account::verify_contact_service_signature(
+    let signing_bytes = attestation.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "glare_concurrency_attestation transcript failed: {error}"
+        ))
+    })?;
+    super::account::verify_contact_service_signature_bytes(
         state,
         source_service_id,
         &attestation.signature,
-        &unsigned_contact_evidence(attestation, "glare_concurrency_attestation")?,
+        &signing_bytes,
         "glare_concurrency_attestation",
     )?;
 
@@ -863,6 +861,13 @@ async fn append_delivered_contact_fact_projection_event(
     payload: &Value,
     contact_event_id: &str,
 ) {
+    let Some(event_kind) = arkret_wire::EventKind::try_new(fact_kind) else {
+        tracing::warn!(
+            fact_kind,
+            "contact fact has no registered EventKind; projection skipped"
+        );
+        return;
+    };
     let mut payload = payload.clone();
     if let Value::Object(object) = &mut payload {
         object
@@ -878,7 +883,7 @@ async fn append_delivered_contact_fact_projection_event(
         ProjectionEventRecord {
             event_id: contact_event_id.to_owned(),
             realm_id: soland_services::identity::principal_control_realm_for_did(issuer),
-            event_kind: fact_kind.to_owned(),
+            event_kind,
             operation_kind: "delivered_contact_fact".to_owned(),
             operation_id: None,
             sender: Some(issuer.to_owned()),

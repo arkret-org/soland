@@ -855,21 +855,21 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         "ak:event:AZRlZE5JthE3KquWLYKHPFK4laz-no_wvbrsG8zcnred",
         1,
         event["event_id"].as_str().unwrap(),
-        arkret_wire::EventKind::REALM_JOIN_RULE,
+        arkret_wire::EventKind::RealmJoinRule,
         serde_json::json!("invite"),
     );
     let history_visibility = facet(
         "ak:event:AQ8G9_7uKyOa6WgCrr2JSwpak-ZXthUPvlEYYfq9ly6J",
         2,
         join_rule["event_id"].as_str().unwrap(),
-        arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
+        arkret_wire::EventKind::RealmHistoryVisibility,
         serde_json::json!("shared"),
     );
     let discovery = facet(
         "ak:event:AWHHtQ_zeyyLrPe4nUr4pXlfcl-e0TUgIWVA9hJ0czYC",
         3,
         history_visibility["event_id"].as_str().unwrap(),
-        arkret_wire::EventKind::REALM_DISCOVERY,
+        arkret_wire::EventKind::RealmDiscovery,
         serde_json::json!("listed"),
     );
 
@@ -1228,7 +1228,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let create_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut create = signed_canonical_event(
         &create_event_id,
-        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::RealmCreate.as_str(),
         &actor,
         device_id,
         &realm_id,
@@ -1303,7 +1303,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let mut envelope = signed_canonical_event(
         &event_id,
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MemberState.as_str(),
         &actor,
         device_id,
         &realm_id,
@@ -1552,8 +1552,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
-    let mut create = arkret_wire::Event::new(
-        arkret_wire::EventKind::REALM_CREATE,
+    let mut create = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::RealmCreate.as_str(),
         // A genesis carries the closed `realm_genesis` scope and no id: the
         // Realm id is derived from the Event (this one is a Principal Control
         // Realm, so the derivation is subject-derived from the Agent DID and
@@ -1827,8 +1827,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // read a producer effect array. `ak.mls.genesis` registers three cell
     // writes keyed on `payload.mls_group_id`, so the successor Seal can only be
     // built over a payload the registered contract can actually evaluate.
-    let mut pending = arkret_wire::Event::new(
-        arkret_wire::EventKind::MLS_GENESIS,
+    let mut pending = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::MlsGenesis.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
         },

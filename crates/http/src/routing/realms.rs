@@ -238,7 +238,7 @@ fn caller_signed_realm_link_edge(
     expected_target: Option<&str>,
     event: &arkret_wire::Event,
 ) -> Result<RealmLinkEdge, AppError> {
-    if event.kind != arkret_wire::EventKind::REALM_LINK {
+    if event.kind != arkret_wire::EventKind::RealmLink {
         return Err(AppError::invalid_param(
             "link_event.event.kind must be ak.realm.link",
         ));
@@ -458,7 +458,7 @@ mod caller_signed_link_tests {
     fn link_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
         serde_json::from_value(json!({
             "event_id": "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV",
-            "kind": arkret_wire::EventKind::REALM_LINK,
+            "kind": arkret_wire::EventKind::RealmLink,
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,

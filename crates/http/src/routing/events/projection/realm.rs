@@ -1,4 +1,4 @@
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{Did, RealmId};
 use serde_json::{Value, json};
 use soland_services::events::RealmMetadata as RealmMetaRecord;
@@ -165,7 +165,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             }
             if record.encryption_profile.is_none()
                 && kinds::canonical_kind_for_operation(operation)
-                    == Some(arkret_wire::EventKind::REALM_CREATE)
+                    == Some(arkret_wire::EventKind::RealmCreate)
                 && let Some(encryption_profile) = operation_realm_encryption_profile(operation)
             {
                 record.encryption_profile = Some(encryption_profile.to_owned());
@@ -235,7 +235,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .payload
         .get("membership")
         .and_then(|value| value.as_str());
-    if kinds::canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::REALM_DESTROY)
+    if kinds::canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::RealmDestroy)
     {
         let service = state.realms();
         if let Ok(Some(mut record)) = service.realm_metadata(operation.realm_id.as_str()).await {
@@ -274,12 +274,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             .into_iter()
             .map(|record| record.id)
             .collect::<Vec<_>>();
-        let membership_frontier = operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| operation.operation_id.as_str().to_owned());
+        let membership_frontier = operation.context.event_id.to_string();
         state
             .projections()
             .snapshot()
@@ -466,7 +461,7 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     let raw_event = json!({
         "event_id": canonical_event_id,
         "operation_id": operation.operation_id.to_string(),
-        "event_kind": arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
+        "event_kind": arkret_wire::EventKind::MemberIdentityUpdate,
         "realm_id": operation.realm_id.as_str(),
         "created_at": operation.created_at,
         "payload": operation.payload.clone(),

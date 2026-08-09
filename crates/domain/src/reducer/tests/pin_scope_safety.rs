@@ -47,7 +47,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     let circle = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CIRCLE_CREATE,
+            arkret_wire::EventKind::CircleCreate,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -69,7 +69,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     let member = state.apply(
         &make_operation(
-            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CircleMemberState,
             REALM_ID,
             serde_json::json!({
                 "circle_id": CIRCLE_ID,
@@ -86,7 +86,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     let strand = state.apply(
         &make_operation(
-            arkret_wire::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::StrandCreate,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -106,7 +106,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     let message = state.apply(
         &make_operation(
-            arkret_wire::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MessageCreate,
             REALM_ID,
             serde_json::json!({
                 "event_id": MESSAGE_EVENT_ID,
@@ -125,7 +125,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
 
 fn pin_add(pin_scope: serde_json::Value) -> Operation {
     make_operation(
-        arkret_wire::EventKind::PIN_ADD,
+        arkret_wire::EventKind::PinAdd,
         REALM_ID,
         serde_json::json!({
             "pin_scope": pin_scope,
@@ -178,7 +178,7 @@ fn pin_rejects_redacted_message_target() {
 
     state.apply(
         &make_operation(
-            arkret_wire::EventKind::REDACTION,
+            arkret_wire::EventKind::Redaction,
             REALM_ID,
             serde_json::json!({
                 "target_event_id": MESSAGE_EVENT_ID,

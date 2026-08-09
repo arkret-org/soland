@@ -15,7 +15,7 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_event_draft::Operation;
+use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::governance::realm_governance::{
     RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
 };
@@ -56,19 +56,18 @@ fn canonical_policy_server_value(payload: &Value) -> Option<Value> {
 /// The frozen basis a `ak.realm.policy_server` Move cites: the `head_eq`
 /// expected value of its policy-server cell precondition, or `None` for an
 /// initial write against the never-written cell.
-fn policy_server_move_basis(payload: &Value) -> Option<Value> {
-    let preconditions = payload.get("preconditions")?.as_array()?;
+fn policy_server_move_basis(preconditions: &[arkret_wire::Precondition]) -> Option<Value> {
     preconditions.iter().find_map(|precondition| {
-        let object = precondition.as_object()?;
-        if object.get("cell").and_then(Value::as_str) != Some(POLICY_SERVER_CELL_ID) {
+        if precondition.cell.as_str() != POLICY_SERVER_CELL_ID {
             return None;
         }
-        let predicate = object.get("predicate")?.as_object()?;
-        if predicate.get("op").and_then(Value::as_str) != Some("head_eq") {
+        if precondition.predicate.op != arkret_wire::cba::PredicateOp::HeadEq {
             return None;
         }
-        predicate
-            .get("value")
+        precondition
+            .predicate
+            .value
+            .as_ref()
             .and_then(canonical_policy_server_value)
     })
 }
@@ -158,8 +157,8 @@ pub fn apply_realm_policy_server(
     operation: &Operation,
 ) -> ProjectionEffect {
     let realm_id = operation.realm_id.to_string();
-    let wire_payload = crate::reducer::projection_context_stripped_payload(&operation.payload);
-    let payload = match serde_json::from_value::<RealmPolicyServerPayload>(wire_payload.clone()) {
+    let wire_payload = operation.payload.clone();
+    let payload = match operation.typed_payload::<arkret_wire::event_spec::RealmPolicyServer>() {
         Ok(payload) => payload,
         Err(_) => {
             return ProjectionEffect::Rejected {
@@ -177,7 +176,7 @@ pub fn apply_realm_policy_server(
     ) {
         return ProjectionEffect::RealmPolicyServerConflicted { realm_id };
     }
-    let move_basis = policy_server_move_basis(&operation.payload);
+    let move_basis = policy_server_move_basis(&operation.context.preconditions);
     let canonical_value = match canonical_policy_server_value(&wire_payload) {
         Some(value) => value,
         None => {
@@ -328,7 +327,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::Operation;
+    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::{Value, json};
 
@@ -338,13 +337,22 @@ mod tests {
     const REALM_CHILD: &str = "ak:realm:Aemw9elq19fDvIg-i7BJI44N3RJHLqzlZ0EYQW_cgutY";
     const REALM_ORG: &str = "ak:realm:AZvKsJv4SbKilJ8M35HH6gwhZE4wsi0ZHaNeeTs-d54E";
 
-    fn op(realm_id: &str, payload: Value) -> Operation {
-        Operation::create(
+    fn op(realm_id: &str, mut payload: Value) -> Operation {
+        let preconditions = payload
+            .as_object_mut()
+            .and_then(|payload| payload.remove("preconditions"))
+            .map(serde_json::from_value)
+            .transpose()
+            .unwrap()
+            .unwrap_or_default();
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
             RealmId::new(realm_id).unwrap(),
-            arkret_wire::EventKind::REALM_POLICY_SERVER,
+            arkret_wire::EventKind::RealmPolicyServer.as_str(),
             payload,
-        )
+        );
+        operation.context.preconditions = preconditions;
+        operation
     }
 
     #[test]
@@ -610,10 +618,11 @@ mod tests {
                 "policy_server_url": "https://second.example/_arkret/self/policy/check",
             }),
         );
-        replacement.payload["preconditions"] = json!([{
+        replacement.context.preconditions = serde_json::from_value(json!([{
             "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
             "predicate": {"op": "head_eq", "value": first_value},
-        }]);
+        }]))
+        .unwrap();
         assert_eq!(state.check_move_preconditions(&replacement), Ok(()));
         apply_realm_policy_server(&mut state, &replacement);
 
