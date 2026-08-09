@@ -422,6 +422,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             },
             self_principal_pcr_bootstrap,
             identity_anchor_candidate_device_key: None,
+            direct_conversation_founding: false,
             authority_root,
         },
         basis,
@@ -469,6 +470,26 @@ fn publication_action(kind: &str) -> (String, RiskTier) {
             (descriptor.action.as_str().to_owned(), risk)
         },
     )
+}
+
+pub(super) fn bootstrap_ingress_authority_set_refs(
+    state: &AppState,
+    events: &[Event],
+) -> Result<Vec<AuthoritySetRef>, String> {
+    let basis = anchor_context(events)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "closed genesis ingress authority requires an AnchorUnit".to_owned())?
+        .basis;
+    let basis_ref = LeaseBasisRef::AnchorUnit(AnchorUnitLeaseBasisRef { anchor_unit: basis });
+    events
+        .iter()
+        .map(|event| {
+            let (action, _) = publication_action(event.kind.as_str());
+            realm_admission_authority(state, event, &basis_ref, &action)
+                .map(|(reference, _)| reference)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
 }
 
 fn realm_admission_authority(

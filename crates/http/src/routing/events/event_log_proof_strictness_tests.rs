@@ -1256,29 +1256,27 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ak.strand.tracks.update",
             &json!({
-                "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
-                "tracks": {
-                    "discussion": {
-                        "enabled": true,
-                        "is_primary": true
-                    }
+                "target_ref": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
+                "patch": {
+                    "tracks.discussion.enabled": {"$op": "set", "value": true},
+                    "tracks.discussion.is_primary": {"$op": "set", "value": true}
                 }
             }),
         )
         .unwrap_or_else(|err| {
-            panic!("ak.strand.tracks.update must accept canonical tracks map payload: {err}");
+            panic!("ak.strand.tracks.update must accept canonical Strand patch payload: {err}");
         });
     assert!(
         catalog
             .validate_payload(
                 "ak.strand.tracks.update",
                 &json!({
-                    "type": "removed_track_update",
                     "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
+                    "tracks": {}
                 }),
             )
             .is_err(),
-        "ak.strand.tracks.update must still reject retired `type` discriminators"
+        "ak.strand.tracks.update must reject retired strand_id/tracks payloads"
     );
 }
 

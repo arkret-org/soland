@@ -304,6 +304,72 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
 }
 
 #[tokio::test]
+async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
+    let state = soland_test_support::app_state(test_config());
+    let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
+    let did = "did:web:bob-pcr-first.example";
+    let authorized_at = chrono::Utc::now();
+    state
+        .test_persistence()
+        .devices()
+        .put(&soland_storage::DeviceInventoryRecord {
+            actor: did.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": device_id,
+                "device_public_key": "did:key:z6MkAuthorizedPcrDeviceKey",
+                "authorized_generation_ref": "1-QmPcrInception",
+                "device_authorize_projected": true,
+            }),
+            created_at: authorized_at,
+            updated_at: authorized_at,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+
+    let registered = TestClient::post("http://server/_arkret/gate/account/register")
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
+        .json(&serde_json::json!({
+            "principal_id": did,
+            "display_name": "bob",
+            "device_id": device_id,
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(registered.status_code.unwrap(), StatusCode::OK);
+
+    let preserved = state
+        .test_persistence()
+        .devices()
+        .get(did, device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.verification_state, "verified");
+    assert_eq!(
+        preserved
+            .payload
+            .get("device_public_key")
+            .and_then(Value::as_str),
+        Some("did:key:z6MkAuthorizedPcrDeviceKey")
+    );
+    assert_eq!(
+        preserved
+            .payload
+            .get("authorized_generation_ref")
+            .and_then(Value::as_str),
+        Some("1-QmPcrInception")
+    );
+}
+
+#[tokio::test]
 async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";

@@ -772,6 +772,7 @@ pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
@@ -2313,6 +2314,7 @@ mod tests {
                     received_at: now,
                 },
                 control_proposal_ack: None,
+                self_principal_pcr_device_authorized: false,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,

@@ -23,7 +23,7 @@ use arkret_identity::DidDocument;
 use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{
     DID_DOCUMENT_HIGH_RISK_TTL_SECS, DidDocumentFreshness, evaluate_did_document_freshness,
@@ -166,6 +166,83 @@ pub async fn verify_did_controlled_jws_async(
     }
     let document = document_for_verification(state, &did, verification_method).await?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
+}
+
+/// Verify the protocol's compact Ed25519 signature carrier (a single
+/// unpadded-base64url signature, not an RFC 7515 detached JWS) against a
+/// DID-controlled method. `ProtocolSignature` uses this representation for
+/// receipts and principal-service binding proofs.
+pub async fn verify_did_controlled_ed25519_signature_async(
+    payload: &[u8],
+    signature_b64url: &str,
+    verification_method: &str,
+    issuer: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if did != issuer_did {
+        return Err("verification method controller does not match issuer".to_owned());
+    }
+    let document = document_for_verification(state, &did, verification_method).await?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(verification_method)
+        .ok_or_else(|| "verification method is absent from DID document".to_owned())?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+        .map_err(|error| format!("verification method key is invalid: {error}"))?;
+    verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
+}
+
+/// Verify a compact Ed25519 signature and require the resolved DID method to
+/// publish the exact multibase key carried by the signed protocol object.
+/// This prevents an object from naming the right method id while embedding a
+/// different attacker-controlled key.
+pub async fn verify_did_controlled_ed25519_signature_with_public_key_async(
+    payload: &[u8],
+    signature_b64url: &str,
+    verification_method: &str,
+    issuer: &str,
+    expected_public_key_multibase: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if did != issuer_did {
+        return Err("verification method controller does not match issuer".to_owned());
+    }
+    let document = document_for_verification(state, &did, verification_method).await?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(verification_method)
+        .ok_or_else(|| "verification method is absent from DID document".to_owned())?;
+    if public_key_multibase != expected_public_key_multibase {
+        return Err("embedded verification key does not match the resolved DID method".to_owned());
+    }
+    let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+        .map_err(|error| format!("verification method key is invalid: {error}"))?;
+    verify_ed25519_signature_with_public_key(payload, signature_b64url, &public_key)
+}
+
+pub fn verify_ed25519_signature_with_public_key(
+    payload: &[u8],
+    signature_b64url: &str,
+    public_key: &[u8; 32],
+) -> Result<(), String> {
+    if payload.is_empty() {
+        return Err("empty signed payload".to_owned());
+    }
+    let signature_bytes = arkret_canonical::base64url_decode(signature_b64url)
+        .map_err(|error| format!("signature is not unpadded base64url: {error}"))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| "Ed25519 signature must be 64 bytes".to_owned())?;
+    let verifying_key = VerifyingKey::from_bytes(public_key)
+        .map_err(|_| "Ed25519 public key is invalid".to_owned())?;
+    verifying_key
+        .verify(payload, &signature)
+        .map_err(|_| "Ed25519 signature verification failed".to_owned())
 }
 
 fn document_for_verification_sync(
@@ -515,6 +592,83 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
                 &document,
             )
             .map_err(PrincipalAuthorizedJwsError::Verification)?;
+            accept_principal_binding(state, &method_did, verification_method, &document);
+            Ok(())
+        }
+    }
+}
+
+/// Verify the compact Ed25519 signature carrier used by protocol receipts and
+/// principal-service bindings with the same principal key resolution policy as
+/// detached JWS proofs. In particular, `{principal}#{device_id}` is resolved
+/// from the accepted PCR device directory rather than from the identity-anchor
+/// DID Document, which intentionally carries no ordinary device keys.
+pub async fn verify_principal_authorized_ed25519_signature_async(
+    payload: &[u8],
+    signature_b64url: &str,
+    verification_method: &str,
+    principal_id: &str,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let (method_did, source) =
+        principal_verification_source(verification_method, principal_id, state).await?;
+    let verify_material = |material: &PublicKeyMaterial| {
+        let key = material
+            .ed25519_bytes()
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+        verify_ed25519_signature_with_public_key(payload, signature_b64url, &key)
+            .map_err(PrincipalAuthorizedJwsError::Verification)
+    };
+    match source {
+        PrincipalVerificationSource::DeviceDirectory(material) => {
+            let outcome = verify_material(&material);
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_DEVICE_DIRECTORY,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::AcceptedBinding(accepted) => {
+            let public_key_multibase = accepted
+                .document()
+                .verification_methods
+                .get(verification_method)
+                .ok_or_else(|| {
+                    PrincipalAuthorizedJwsError::Verification(
+                        "verification method is absent from accepted DID binding".to_owned(),
+                    )
+                })?;
+            let key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+                .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+            let outcome = verify_ed25519_signature_with_public_key(payload, signature_b64url, &key)
+                .map_err(PrincipalAuthorizedJwsError::Verification);
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_ACCEPTED_BINDING,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::Development(material) => {
+            let outcome = verify_material(&material);
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::AuthorityDocument(document) => {
+            let public_key_multibase = document
+                .verification_methods
+                .get(verification_method)
+                .ok_or_else(|| {
+                    PrincipalAuthorizedJwsError::Verification(
+                        "verification method is absent from DID document".to_owned(),
+                    )
+                })?;
+            let key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+                .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+            verify_ed25519_signature_with_public_key(payload, signature_b64url, &key)
+                .map_err(PrincipalAuthorizedJwsError::Verification)?;
             accept_principal_binding(state, &method_did, verification_method, &document);
             Ok(())
         }
@@ -1042,7 +1196,7 @@ fn federated_range_completeness_evidence(
     let mut accepted_events = records
         .iter()
         .map(|record| {
-            crate::routing::events::event_log::sdk_event_for_state(state, record)
+            crate::routing::events::event_log::canonical_event_from_record(record)
                 .map_err(|error| format!("PCR range Event is invalid: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;

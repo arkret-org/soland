@@ -1382,6 +1382,54 @@ mod tests {
         assert_eq!(enriched[0].event_digest().unwrap(), expected_digest);
     }
 
+    #[tokio::test]
+    async fn canonical_event_read_preserves_absent_hlc_and_digest() {
+        let state = test_state();
+        let created_at = DateTime::parse_from_rfc3339("2026-08-09T01:00:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::ContactRequested.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
+            },
+            arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap(),
+            2,
+            arkret_identifiers::Hlc::new("019041000000-0000-a13f9c2e").unwrap(),
+            json!({"contact_id": "ak:contact:no-hlc"}),
+            created_at,
+        )
+        .unwrap();
+        event.hlc = None;
+        event.event_id = event.derive_event_id().unwrap();
+        let expected_digest = event.event_digest().unwrap();
+        let envelope = serde_json::to_value(&event).unwrap();
+        assert!(envelope.get("hlc").is_none());
+        put_durable_event(
+            &state,
+            event.event_id.as_str(),
+            arkret_wire::EventKind::ContactRequested.as_str(),
+            envelope,
+            created_at,
+        )
+        .await;
+
+        let stored = state
+            .event_queries()
+            .canonical_event(event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap();
+        let reconstructed =
+            crate::routing::events::event_log::sdk_event_for_state(&state, &stored).unwrap();
+        assert!(reconstructed.hlc.is_none());
+        assert_eq!(reconstructed.event_digest().unwrap(), expected_digest);
+        assert_eq!(
+            reconstructed.event_digest().unwrap(),
+            stored.canonical_digest
+        );
+    }
+
     fn operation_at(
         operation_id: &str,
         kind: impl AsRef<str>,

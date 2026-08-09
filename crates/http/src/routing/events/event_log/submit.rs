@@ -6,6 +6,7 @@ use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 use arkret_wire::ReasonCode;
+use ed25519_dalek::Signer as _;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -279,6 +280,10 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     /// anchor commits to this payload; the value is staged only for proof
     /// verification before the atomic relationship check completes.
     pub(in crate::routing) identity_anchor_candidate_device_key: Option<String>,
+    /// This batch already passed the closed three-Event Direct Conversation
+    /// founding-plan validator, so its member/Strand follow-ups may be
+    /// admitted before the new Realm has a durable membership projection.
+    pub(in crate::routing) direct_conversation_founding: bool,
     /// The genesis authority-root value this unit's `ak.realm.create` derives.
     ///
     /// Present only for an ordinary Realm genesis unit: it is the staged root
@@ -1207,14 +1212,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             error.to_string(),
         )
     })?;
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &signing_input,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| {
-        SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-    })?;
-    receipt.proof.jws = arkret_wire::Base64UrlString::new(jws).map_err(|error| {
+    let signature =
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes());
+    receipt.proof.jws = arkret_wire::Base64UrlString::new(signature).map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1406,6 +1406,7 @@ async fn submit_event_batch_outcome_with_leases(
             identity_anchor_event_id: None,
             self_principal_pcr_bootstrap: false,
             identity_anchor_candidate_device_key: None,
+            direct_conversation_founding: false,
             authority_root: None,
         });
     }
@@ -1461,6 +1462,7 @@ async fn submit_event_batch_outcome_with_leases(
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
                         identity_anchor_candidate_device_key: None,
+                        direct_conversation_founding: false,
                         authority_root: None,
                     });
                 }
@@ -1685,7 +1687,7 @@ async fn validate_identity_creation_control_proof(
     if proof.issued_at > now
         || proof.expires_at <= now
         || proof.expires_at - proof.issued_at > Duration::minutes(5)
-        || proof.audience != request.account_authority_id
+        || proof.audience.as_str() != state.service_id().as_str()
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1712,60 +1714,56 @@ async fn validate_identity_creation_control_proof(
             "PCR genesis requires the accepted DID inception entry",
         )
     })?;
-    if inception.seq != 0 {
+    if inception.did != request.principal_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "PCR genesis DID history does not begin at entry zero",
+            "PCR genesis DID history belongs to a different principal",
         ));
     }
-    let root_key = inception
-        .operation
-        .pointer("/parameters/updateKeys/0")
-        .or_else(|| inception.operation.pointer("/parameters/update_keys/0"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                "DID inception does not expose one identity root",
-            )
-        })?;
-    if inception.event_digest != proof.operation_digest.as_str()
-        || root_key != proof.verification_key_multibase
+    if inception.seq != 1
+        || !inception
+            .operation
+            .get("versionId")
+            .and_then(Value::as_str)
+            .is_some_and(|version_id| version_id.starts_with("1-"))
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "identity creation control proof does not match the accepted DID inception",
+            "PCR genesis DID history does not begin with a WebVH inception entry",
         ));
     }
-    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            format!("identity creation proof transcript is invalid: {error}"),
-        )
-    })?;
-    let key = crate::routing::identity::device_signing::decode_ed25519_key(root_key, "multibase")
+    let operation = inception
+        .operation
+        .as_object()
+        .cloned()
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "accepted DID inception operation is not an object",
+            )
+        })?
+        .into_iter()
+        .collect();
+    let did_operation = arkret_models_identity::identity::DidOperationSubmitRequestBody {
+        did: request.principal_id.clone(),
+        did_method: "webvh".to_owned(),
+        seq: Some(inception.seq),
+        prev_event_digest: None,
+        operation,
+    };
+    arkret_signatures::webvh::verify_identity_creation_control_proof(&did_operation, proof)
         .map_err(|error| {
-        SubmitOneError::new(
+            SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            format!("identity root key is invalid: {error}"),
-        )
-    })?;
-    if !crate::routing::identity::device_signing::ed25519_verify(
-        &key,
-        &signing_bytes,
-        &proof.signature,
-    ) {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation control signature is invalid",
-        ));
-    }
+                format!(
+                    "identity creation control proof does not match the accepted DID inception: {error}"
+                ),
+            )
+        })?;
     Ok(())
 }
 
@@ -2997,7 +2995,7 @@ async fn submit_direct_conversation_federation(
             return;
         }
     };
-    if let Err(error) = crate::jws_verify::verify_did_controlled_jws_async(
+    if let Err(error) = crate::jws_verify::verify_did_controlled_ed25519_signature_async(
         &signing_input,
         receipt.proof.jws.as_str(),
         receipt.proof.verification_method.as_str(),
@@ -3134,8 +3132,6 @@ async fn verify_accepted_principal_service_binding(
     state: &AppState,
 ) -> Result<(), String> {
     use arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingProofPurpose;
-    use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-
     binding
         .validate_shape()
         .map_err(|error| error.to_string())?;
@@ -3145,26 +3141,26 @@ async fn verify_accepted_principal_service_binding(
             &binding.service_acceptance_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    let service_key = arkret_canonical::decode_ed25519_multibase(
+    crate::jws_verify::verify_did_controlled_ed25519_signature_with_public_key_async(
+        &service_input,
+        binding.service_acceptance_proof.jws.as_str(),
+        binding
+            .service_acceptance_proof
+            .verification_method
+            .as_str(),
+        binding.service_id.as_str(),
         &binding.service_verification_method.public_key_multibase,
+        state,
     )
-    .map_err(|error| format!("service binding key is invalid: {error}"))?;
-    Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            binding.service_acceptance_proof.jws.as_str(),
-            &service_input,
-            &PublicKeyMaterial::Ed25519Raw {
-                bytes: service_key.to_vec(),
-            },
-        )
-        .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
+    .await
+    .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
     let principal_input = binding
         .proof_signing_input_bytes(
             PrincipalServiceBindingProofPurpose::PrincipalAuthorization,
             &binding.principal_authorization_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_did_controlled_jws_async(
+    crate::jws_verify::verify_principal_authorized_ed25519_signature_async(
         &principal_input,
         binding.principal_authorization_proof.jws.as_str(),
         binding
@@ -3175,6 +3171,7 @@ async fn verify_accepted_principal_service_binding(
         state,
     )
     .await
+    .map_err(|error| error.to_string())
 }
 
 async fn verify_principal_service_binding_continuity(
@@ -3196,7 +3193,7 @@ async fn verify_principal_service_binding_continuity(
             (&edge.previous_service_proof, &edge.previous_service_id),
             (&edge.new_service_proof, &edge.new_service_id),
         ] {
-            crate::jws_verify::verify_did_controlled_jws_async(
+            crate::jws_verify::verify_did_controlled_ed25519_signature_async(
                 &input,
                 proof.jws.as_str(),
                 proof.verification_method.as_str(),
@@ -3291,8 +3288,10 @@ pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
 use preflight::*;
-pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
+pub(in crate::routing::events::event_log) use value::{
+    self_principal_pcr_control_authority_rejection, submit_event_value_with_idempotency,
+};
 pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_mimi_event_value, submit_moderation_report_event_value,

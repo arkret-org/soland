@@ -397,22 +397,37 @@ pub(super) async fn mimi_consent_request(
     req: &mut Request,
 ) -> JsonResult<MimiRequestConsentOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = typed_body_value(body.into_inner(), "mimi consent request")?;
-    if let Some(message) = unsupported_mimi_draft(&body) {
+    let body = body.into_inner();
+    let body_value = typed_body_value(body.clone(), "mimi consent request")?;
+    if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let requester = body
-        .get("requester_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("mimi consent request requires requester_id"))?;
-    verify_mimi_consent_write_authority(state, req, aa, requester).await?;
+    let source_service_id =
+        verify_mimi_consent_write_authority(state, req, aa, body.requester_id.as_str()).await?;
     let consent_id = ids::generate("consent");
     let consent_id = arkret_identifiers::ConsentId::new(consent_id)
         .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
+    state
+        .consents()
+        .save_mimi_correlation(MimiConsentCorrelation {
+            consent_id: consent_id.to_string(),
+            requester_id: body.requester_id.to_string(),
+            target_kind: mimi_consent_target_kind(body.target.kind).to_owned(),
+            target_id: body.target.id.to_string(),
+            purpose: mimi_consent_purpose(body.purpose).to_owned(),
+            strand_id: body.strand_id.as_ref().map(ToString::to_string),
+            source_service_id,
+            created_at: now(),
+            expires_at: body.expires_at,
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("persist MIMI consent correlation: {error}"))
+        })?;
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.command.request_consent",
-        &body,
+        &body_value,
         json!({
             "consent_grants_space_capability": false,
             "privacy_state": "holder_private",
@@ -450,7 +465,9 @@ pub(super) async fn mimi_consent_update(
         AppError::invalid_param(format!("MIMI consent Event binding is invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
-    let session = verify_mimi_consent_update_authority(state, req, aa, &body).await?;
+    let (session, source_service_id) =
+        verify_mimi_consent_update_authority(state, req, aa, &body).await?;
+    verify_mimi_consent_correlation(state, &body, source_service_id.as_deref()).await?;
     let event_ref = body.consent_event.event.event_id.clone();
     let updated_at = body.consent_event.event.created_at;
     crate::routing::events::event_log::submit_initial_event_submission(
@@ -481,7 +498,7 @@ pub(super) async fn verify_mimi_consent_write_authority(
     req: &mut Request,
     aa: AuthArgs,
     expected_actor: &str,
-) -> Result<(), AppError> {
+) -> Result<Option<String>, AppError> {
     if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if session.actor != expected_actor {
@@ -489,11 +506,11 @@ pub(super) async fn verify_mimi_consent_write_authority(
                 "MIMI consent user session must match the consent actor",
             ));
         }
-        return Ok(());
+        return Ok(None);
     }
     verify_mimi_write_service_proof(state, req, None)
         .await
-        .map(|_| ())
+        .map(Some)
 }
 
 const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
@@ -503,17 +520,23 @@ async fn verify_mimi_consent_update_authority(
     req: &mut Request,
     aa: AuthArgs,
     body: &MimiUpdateConsentRequestBody,
-) -> Result<soland_services::identity::SessionIdentityState, AppError> {
-    let session = if request_has_bearer_session(req) {
+) -> Result<
+    (
+        soland_services::identity::SessionIdentityState,
+        Option<String>,
+    ),
+    AppError,
+> {
+    let (session, source_service_id) = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if session.actor != body.actor_id.as_str() {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
         }
-        session
+        (session, None)
     } else {
-        verify_mimi_write_service_proof(state, req, None).await?;
+        let source_service_id = verify_mimi_write_service_proof(state, req, None).await?;
         let device_id = body
             .consent_event
             .event
@@ -525,22 +548,119 @@ async fn verify_mimi_consent_update_authority(
                 AppError::invalid_param("MIMI consent Event requires a DID URL proof key")
                     .with_wire_code("invalid_proof")
             })?;
-        soland_services::identity::SessionIdentityState {
-            token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
-            actor: body.actor_id.to_string(),
-            device_id,
-            audience: state.service_id().to_string(),
-            session_public_key: None,
-            agent_session: None,
-            session_grant: None,
-            expires_at: now() + chrono::Duration::minutes(5),
-            created_at: now(),
-            revoked_at: None,
-        }
+        (
+            soland_services::identity::SessionIdentityState {
+                token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
+                actor: body.actor_id.to_string(),
+                device_id,
+                audience: state.service_id().to_string(),
+                session_public_key: None,
+                agent_session: None,
+                session_grant: None,
+                expires_at: now() + chrono::Duration::minutes(5),
+                created_at: now(),
+                revoked_at: None,
+            },
+            Some(source_service_id),
+        )
     };
 
     verify_mimi_consent_actor_proof(state, body).await?;
-    Ok(session)
+    Ok((session, source_service_id))
+}
+
+fn mimi_consent_target_kind(kind: MimiConsentTargetKind) -> &'static str {
+    match kind {
+        MimiConsentTargetKind::Did => "did",
+        MimiConsentTargetKind::MimiUri => "mimi_uri",
+        MimiConsentTargetKind::Handle => "handle",
+        MimiConsentTargetKind::ProviderUser => "provider_user",
+    }
+}
+
+fn mimi_consent_purpose(purpose: MimiConsentPurpose) -> &'static str {
+    match purpose {
+        MimiConsentPurpose::Invite => "invite",
+        MimiConsentPurpose::DirectMessage => "direct_message",
+        MimiConsentPurpose::VoiceCall => "voice_call",
+        MimiConsentPurpose::VideoCall => "video_call",
+        MimiConsentPurpose::Presence => "presence",
+        MimiConsentPurpose::Any => "any",
+    }
+}
+
+fn mimi_consent_correlation_unavailable() -> AppError {
+    AppError::not_found("MIMI consent correlation is unavailable")
+}
+
+async fn verify_mimi_consent_correlation(
+    state: &AppState,
+    body: &MimiUpdateConsentRequestBody,
+    source_service_id: Option<&str>,
+) -> Result<(), AppError> {
+    let correlation = state
+        .consents()
+        .mimi_correlation(body.consent_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("read MIMI consent correlation: {error}")))?
+        .ok_or_else(mimi_consent_correlation_unavailable)?;
+
+    if correlation
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now())
+        || correlation.source_service_id.as_deref() != source_service_id
+        || correlation.target_kind != "did"
+        || correlation.target_id != body.actor_id.as_str()
+    {
+        return Err(mimi_consent_correlation_unavailable());
+    }
+
+    match body.decision {
+        arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept => {
+            let payload = &body.consent_event.event.payload;
+            if payload.get("peer").and_then(Value::as_str)
+                != Some(correlation.requester_id.as_str())
+                || payload.get("consent_scope").and_then(Value::as_str)
+                    != Some(correlation.purpose.as_str())
+            {
+                return Err(mimi_consent_correlation_unavailable());
+            }
+        }
+        arkret_models_collaboration::http_bodies::MimiConsentDecision::Deny
+        | arkret_models_collaboration::http_bodies::MimiConsentDecision::Revoke => {
+            let observed_dots = body
+                .consent_event
+                .event
+                .payload
+                .get("observed_dots")
+                .and_then(Value::as_array)
+                .filter(|dots| !dots.is_empty())
+                .ok_or_else(mimi_consent_correlation_unavailable)?;
+            let cell_id = arkret_state::consent::consent_cell_id(&body.consent_id)
+                .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
+            let cell = state
+                .consents()
+                .holder_cell_by_id(body.actor_id.as_str(), cell_id.as_str())
+                .filter(|cell| {
+                    cell.peer == correlation.requester_id
+                        && cell.scope == correlation.purpose
+                        && observed_dots.iter().all(|observed_dot| {
+                            observed_dot.as_str().is_some_and(|observed_dot| {
+                                cell.grant_dots.get(observed_dot).is_some_and(|dot| {
+                                    !cell.revoked_dots.contains(&dot.dot)
+                                        && dot
+                                            .expires_at
+                                            .is_none_or(|expires_at| expires_at > now())
+                                })
+                            })
+                        })
+                });
+            if cell.is_none() {
+                return Err(mimi_consent_correlation_unavailable());
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn verify_mimi_consent_actor_proof(
@@ -1053,6 +1173,28 @@ mod consent_proof_tests {
         request
     }
 
+    async fn install_correlation(
+        state: &AppState,
+        request: &MimiUpdateConsentRequestBody,
+        target_id: &str,
+    ) {
+        state
+            .consents()
+            .save_mimi_correlation(MimiConsentCorrelation {
+                consent_id: request.consent_id.to_string(),
+                requester_id: "did:web:mimi-peer-test.invalid".to_owned(),
+                target_kind: "did".to_owned(),
+                target_id: target_id.to_owned(),
+                purpose: "direct_message".to_owned(),
+                strand_id: None,
+                source_service_id: None,
+                created_at: now(),
+                expires_at: None,
+            })
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn consent_actor_proof_preflight_is_verified_without_consuming_admission() {
         let state = state();
@@ -1108,5 +1250,49 @@ mod consent_proof_tests {
 
         assert_eq!(error.code, ErrorCode::InvalidParam);
         assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
+    }
+
+    #[tokio::test]
+    async fn consent_correlation_binds_target_peer_and_scope() {
+        let state = state();
+        let request = request(&state);
+        install_correlation(&state, &request, request.actor_id.as_str()).await;
+
+        verify_mimi_consent_correlation(&state, &request, None)
+            .await
+            .expect("matching private correlation");
+
+        let mut mismatched = request.clone();
+        mismatched
+            .consent_event
+            .event
+            .payload
+            .insert("peer".to_owned(), json!("did:web:other-peer-test.invalid"));
+        let error = verify_mimi_consent_correlation(&state, &mismatched, None)
+            .await
+            .expect_err("mismatched private correlation must fail closed");
+        assert_eq!(error.code, ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn unknown_and_invisible_consent_correlations_are_indistinguishable() {
+        let state = state();
+        let request = request(&state);
+        install_correlation(&state, &request, "did:web:another-holder.invalid").await;
+
+        let invisible = verify_mimi_consent_correlation(&state, &request, None)
+            .await
+            .expect_err("another holder's correlation must be unavailable");
+
+        let mut unknown = request.clone();
+        unknown.consent_id =
+            ConsentId::new("ak:consent:01964137-0000-7000-8000-000000000778".to_owned()).unwrap();
+        let unknown = verify_mimi_consent_correlation(&state, &unknown, None)
+            .await
+            .expect_err("unknown correlation must be unavailable");
+
+        assert_eq!(invisible.code, ErrorCode::NotFound);
+        assert_eq!(unknown.code, invisible.code);
+        assert_eq!(unknown.message, invisible.message);
     }
 }

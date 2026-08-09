@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_fsm_startup_gate_is_an_exact_18_family_closure() {
+    fn canonical_fsm_startup_gate_is_an_exact_17_family_closure() {
         let contracts = canonical_fsm_contracts().unwrap();
         validate_canonical_fsm_exact_closure(&contracts).unwrap();
         try_build_validated_sdk_cell_registry().unwrap();

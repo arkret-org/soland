@@ -162,6 +162,7 @@ async fn validate_and_prepare(
             received_at,
         },
         control_proposal_ack: None,
+        self_principal_pcr_device_authorized: false,
         projections: vec![projected_event.clone()],
         idempotency: None,
         deliveries: Vec::new(),

@@ -20,7 +20,33 @@ pub async fn project_accepted_operations_from_device(
     source_device_id: &str,
     operations: &[Operation],
 ) {
-    project_accepted_operations_inner(state, origin, source_device_id, operations).await;
+    project_accepted_operations_inner(state, origin, source_device_id, operations, None).await;
+}
+
+/// Apply the domain/read-model effects of one canonical Event after its
+/// atomic acceptance commit.
+///
+/// The admission path already evaluated the original signed Event into these
+/// cell writes and atomically stored its projection timeline row. Reusing the
+/// writes here preserves optional producer fields such as `hlc: None`, actor
+/// sequence and the exact signed envelope. It also prevents a second
+/// Operation-derived timeline row with the same Event id but a different
+/// `received_at`.
+pub async fn project_accepted_canonical_event_from_device(
+    state: &AppState,
+    origin: &str,
+    source_device_id: &str,
+    operation: &Operation,
+    cell_writes: &[arkret_wire::cba::ProjectedCellWrite],
+) {
+    project_accepted_operations_inner(
+        state,
+        origin,
+        source_device_id,
+        std::slice::from_ref(operation),
+        Some(cell_writes),
+    )
+    .await;
 }
 
 /// The registry-derived cell writes for an accepted projected Event.
@@ -306,7 +332,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
 }
 
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
-    project_accepted_operations_inner(state, origin, "", operations).await;
+    project_accepted_operations_inner(state, origin, "", operations, None).await;
 }
 
 pub async fn mirror_join_authorisation_consumption(
@@ -379,7 +405,9 @@ async fn project_accepted_operations_inner(
     origin: &str,
     source_device_id: &str,
     operations: &[Operation],
+    canonical_cell_writes: Option<&[arkret_wire::cba::ProjectedCellWrite]>,
 ) {
+    debug_assert!(canonical_cell_writes.is_none() || operations.len() == 1);
     for operation in operations {
         tracing::debug!(
             kind = ?soland_services::operation_semantics::canonical_kind_for_operation(operation),
@@ -469,7 +497,9 @@ async fn project_accepted_operations_inner(
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
-                let cell_writes = accepted_operation_cell_writes(state, origin, operation);
+                let cell_writes = canonical_cell_writes
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| accepted_operation_cell_writes(state, origin, operation));
                 Some(state.projections().apply_via_lattice_registry(
                     reducer_operation,
                     &cell_writes,
@@ -557,11 +587,13 @@ async fn project_accepted_operations_inner(
         {
             tracing::warn!(%error, "failed to persist agent participation ceiling");
         }
-        let projected = projection_event_from_operation(operation, Some(origin));
-        // Persist before broadcast so subscribers never observe an event that
-        // cannot participate in cursor replay.
-        if let Err(error) = persist_and_publish_projection_event(state, projected).await {
-            tracing::warn!(%error, "failed to persist projection event before publish");
+        if canonical_cell_writes.is_none() {
+            let projected = projection_event_from_operation(operation, Some(origin));
+            // Operation-only lanes have no canonical Event acceptance
+            // transaction, so they still own projection timeline persistence.
+            if let Err(error) = persist_and_publish_projection_event(state, projected).await {
+                tracing::warn!(%error, "failed to persist projection event before publish");
+            }
         }
         if let Err(error) = persist_projected_operation(state, origin, operation).await {
             tracing::warn!(
@@ -1042,7 +1074,76 @@ mod tests {
     use crate::routing::identity::device_messages::device_message_envelopes_after;
 
     #[tokio::test]
-    async fn realm_key_share_device_projection_uses_signed_payload() {
+    async fn canonical_no_hlc_projection_does_not_restate_or_append_synthetic_timeline() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let actor = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
+        let realm_id = arkret_wire::principal_control_realm_id(actor.as_str());
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-09T02:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::ContactRequested.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor.clone(),
+            8,
+            arkret_identifiers::Hlc::new("019041000000-0000-a13f9c2e").unwrap(),
+            json!({
+                "peer": {"kind": "human", "principal_id": "did:web:bob.example"},
+                "granted_to_peer_scopes": [],
+                "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64))
+            }),
+            created_at,
+        )
+        .unwrap();
+        event.hlc = None;
+        event.event_id = event.derive_event_id().unwrap();
+        let cell_writes = state
+            .projections()
+            .project_accepted_cell_writes(&event)
+            .unwrap();
+        assert_eq!(cell_writes.len(), 1);
+
+        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:019a0000-0000-7000-8000-000000000008".to_owned(),
+            )
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+        )
+        .unwrap();
+        assert!(operation.context.hlc.is_none());
+
+        project_accepted_canonical_event_from_device(
+            &state,
+            actor.as_str(),
+            "ak:device:019a0000-0000-7000-8000-000000000008",
+            &operation,
+            &cell_writes,
+        )
+        .await;
+
+        // The Contact write is still pending until its successor Seal. This
+        // live lane receives the already-validated writes for domain effects;
+        // it must not invent a second Event/timeline record while doing so.
+        assert!(
+            state
+                .event_queries()
+                .projected_events_for_realm(realm_id.as_str())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn realm_key_share_device_projection_accepts_projected_payload_context() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -1082,7 +1183,7 @@ mod tests {
         let operation = arkret_event_draft::test_support::raw_projected_operation(
             operation_id.clone(),
             realm_id,
-            arkret_wire::EventKind::RealmKeyShare.as_str(),
+            arkret_wire::EventKind::RealmKeyShare,
             payload,
         );
 

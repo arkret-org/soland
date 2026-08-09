@@ -14,9 +14,49 @@ use crate::{
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    /// The Event proof itself is the proposal authority because this is an
+    /// authority-authored Control Move in a self-principal PCR. Such a Move
+    /// deliberately carries no independent Control Proposal Ack, but still
+    /// enters the canonical pending-control log for successor-Seal finality.
+    pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,
+}
+
+/// Static persistence-side guard for the one Ack-less Control-Move class.
+///
+/// The HTTP admission layer additionally proves the PCR profile, current
+/// `single_did == principal` authority and active accepted device generation.
+/// Persistence cannot resolve those live projections, but it still refuses an
+/// exemption whose immutable Event shape is not a self-principal PCR device
+/// Move. This keeps the explicit commit flag from becoming a generic Ack
+/// bypass.
+#[must_use]
+pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event) -> bool {
+    if !event.kind.is_reducer_input()
+        || event.seal_ref.is_some()
+        || event.auth_context.is_some()
+        || event.executed_by.is_some()
+        || event
+            .seal_basis
+            .as_ref()
+            .is_none_or(|basis| basis.leaves.is_empty())
+        || event.realm_id != arkret_identifiers::principal_control_realm_id(event.actor_id.as_str())
+        || event.proofs.len() != 1
+    {
+        return false;
+    }
+    let prefix = format!("{}#", event.actor_id);
+    event.proofs[0]
+        .verification_method
+        .as_str()
+        .strip_prefix(&prefix)
+        .is_some_and(|fragment| {
+            fragment
+                .strip_prefix("ak:device:")
+                .is_some_and(|device| !device.is_empty())
+        })
 }
 
 /// Applet projection mutation committed with a closed Event aggregate.

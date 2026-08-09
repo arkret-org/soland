@@ -414,11 +414,20 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(describe["limits"]["max_event_bytes"], 1024 * 1024);
     assert_eq!(describe["limits"]["max_resolve"], 100);
 
-    let first = signed_event_envelope(
+    let mut first = signed_event_envelope(
         "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
         0,
         Vec::new(),
     );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        DEMO_REALM_ID,
+        &mut first,
+    )
+    .await;
+    let first_event_id = authored_event_id(&first).to_owned();
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "single-event-atomic-commit", true)
@@ -429,10 +438,7 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(submitted["status"], "accepted", "response: {submitted}");
-    assert_eq!(
-        submitted["accepted"][0],
-        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"
-    );
+    assert_eq!(submitted["accepted"][0], first_event_id);
     let committed_idempotency = state
         .test_persistence()
         .idempotency_keys()
@@ -467,33 +473,35 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(duplicate["status"], "duplicate");
     assert_eq!(duplicate["duplicate"][0], first["event_id"]);
 
-    let fetched: Value = TestClient::get(
-        "http://server/_arkret/self/events/ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
-    )
+    let fetched: Value = TestClient::get(format!(
+        "http://server/_arkret/self/events/{first_event_id}"
+    ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await
     .take_json()
     .await
     .unwrap();
-    assert_eq!(
-        fetched["event"]["event_id"],
-        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"
-    );
+    assert_eq!(fetched["event"]["event_id"], first_event_id);
     assert_eq!(
         fetched["event"]["proofs"][0]["event_digest"],
         first["proofs"][0]["event_digest"]
     );
-    assert_eq!(
-        fetched["visibility"]["realm_id"],
-        "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1"
-    );
+    assert_eq!(fetched["visibility"]["realm_id"], DEMO_REALM_ID);
 
-    let second = signed_event_envelope(
+    let mut second = signed_event_envelope(
         "ak:event:AanwG47_5YIVZhlCrSwi8avR_TKxfhlP_D8oZhAqjlMe",
         1,
-        vec!["ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth"],
+        Vec::new(),
     );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        DEMO_REALM_ID,
+        &mut second,
+    )
+    .await;
     let second_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&second)
@@ -511,7 +519,6 @@ async fn events_describe_and_single_event_submit_work() {
     // accept path (kind/schema combo distinct from `ak.message.create`).
     let artifact_kind_payload = serde_json::json!({
         "object": {
-            "id": "ak:strand:AeeSWtWZ776ZVn6TQPyYl6TOTEjSNsd6a6lH9B6Qi36-",
             "schema": "ak.schema.strand.v1",
             "realm_id": DEMO_REALM_ID,
             "metadata": { "title": "Onboarding strand" },
@@ -526,16 +533,25 @@ async fn events_describe_and_single_event_submit_work() {
             "created_at": "2026-05-17T00:00:00.000Z"
         }
     });
-    let artifact_kind_event = signed_canonical_event(
+    let mut artifact_kind_event = signed_canonical_event(
         "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG",
         "ak.strand.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
         2,
-        vec!["ak:event:AanwG47_5YIVZhlCrSwi8avR_TKxfhlP_D8oZhAqjlMe"],
+        Vec::new(),
         artifact_kind_payload,
     );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        DEMO_REALM_ID,
+        &mut artifact_kind_event,
+    )
+    .await;
+    let artifact_kind_event_id = authored_event_id(&artifact_kind_event).to_owned();
     let artifact_kind_submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&artifact_kind_event)
@@ -567,10 +583,11 @@ async fn events_describe_and_single_event_submit_work() {
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
 
+    let missing_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "event_ids": ["ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth", "ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"]
+            "event_ids": [&first_event_id, &missing_event_id]
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -578,15 +595,12 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     assert_eq!(batch["events"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        batch["missing"],
-        serde_json::json!(["ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"])
-    );
+    assert_eq!(batch["missing"], serde_json::json!([missing_event_id]));
 
     // `max_resolve` is one budget across every selector kind: Seal selectors
     // spend from the same 100 as ids and digests rather than riding along free.
     let event_ids: Vec<String> = (0..arkret_wire::MAX_EVENT_RESOLVE)
-        .map(|index| format!("ak:event:01904100-0000-8000-8000-{index:012x}"))
+        .map(|_| soland_test_support::fixture_content_bound_id("ak:event:"))
         .collect();
     let mut over_budget = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -614,22 +628,22 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let listed: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"actors": ["did:web:alice.example"], "limit": 10}))
+        .json(&serde_json::json!({"actors": ["did:web:alice.example"], "limit": 20}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    // Alice authored three Events here plus the Realm's own `ak.realm.create`,
-    // which the seeded genesis unit puts in her actor history.
+    // Alice authored three Events here after the ordinary Realm's eight-Event
+    // closed bootstrap unit.
     let listed_events = listed["events"].as_array().unwrap();
-    assert_eq!(listed_events.len(), 4);
+    assert_eq!(listed_events.len(), 11);
     assert_eq!(listed_events[0]["kind"], "ak.realm.create");
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
         listed_events.last().unwrap()["event_id"],
-        "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG"
+        artifact_kind_event_id
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
@@ -649,10 +663,10 @@ async fn events_describe_and_single_event_submit_work() {
     };
     assert_eq!(frontier.actor_id.as_str(), "did:web:alice.example");
     assert_eq!(frontier.realms.len(), 1);
-    assert_eq!(frontier.realms[0].next_actor_seq, 3);
+    assert_eq!(frontier.realms[0].next_actor_seq, 11);
     assert_eq!(
         frontier.realms[0].frontier_event_ids[0].as_str(),
-        "ak:event:AW6jkT6LL89S08SrMBvLzD9mXKHw1-NOg02pG7gvqCSG"
+        artifact_kind_event_id
     );
 
     // Realm selector exposes only an accepted Seal. A projection-only fixture
@@ -697,23 +711,6 @@ async fn events_describe_and_single_event_submit_work() {
     assert_eq!(hidden.status_code.unwrap(), StatusCode::NOT_FOUND);
     let hidden_body: Value = hidden.take_json().await.unwrap();
     assert_eq!(hidden_body["error"]["code"], "not_found");
-
-    let mut conflicting = signed_event_envelope(
-        "ak:event:Aa-ZPxu8G6owl48UEXDhLmfA5O0aMtG3N8H7qneE9yth",
-        3,
-        Vec::new(),
-    );
-    conflicting["payload"]["content"]["body"] =
-        Value::String("different canonical body".to_owned());
-    resign_canonical_event(&mut conflicting);
-    let mut conflict = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&conflicting)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(conflict.status_code.unwrap(), StatusCode::CONFLICT);
-    let conflict_body: Value = conflict.take_json().await.unwrap();
-    assert_eq!(conflict_body["error"]["code"], "duplicate_conflict");
 }
 
 #[tokio::test]

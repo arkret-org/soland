@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
+    let parsed = serde_json::from_value::<SolandEventsSubmitRequestBody>(json!({
+        "unit_kind": "direct_conversation_founding",
+        "idempotency_key": "ak:idempotency_key:019b5c20-0000-7000-8000-000000000001",
+        "events": [],
+        "founder_basis_evidence": {
+            "kind": "human",
+            "basis_evidence_bundle": {},
+            "root_basis_continuity_chain": []
+        }
+    }));
+    assert!(parsed.is_err());
+}
+
 /// v1 deleted the plaintext ephemeral rail outright: none of these kinds is a
 /// registered Event kind any more (`sync/signal.md` section 5 puts device
 /// verification and secret distribution on `DeviceMessageEnvelope` and

@@ -2,6 +2,89 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
 
+/// Resolve governance health with the one Ack-less authority class proven
+/// against current accepted state.
+///
+/// Persistence deliberately records Ack-less Human PCR controls as ordinary
+/// canonical pending rows. The generic projection service cannot resolve
+/// device generations, so the HTTP boundary supplies exact revalidated Event
+/// digests; every other missing-Ack row remains a fail-closed store error.
+async fn frontier_control_governance_health(
+    state: &AppState,
+    realm_id: &RealmId,
+    policy: arkret_wire::ControlProposalDecisionPolicy,
+) -> Result<arkret_models_collaboration::event_sync::ControlGovernanceHealth, AppError> {
+    let limit =
+        arkret_models_collaboration::event_sync::ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1;
+    let pending = state
+        .projections()
+        .pending_control_records(realm_id, limit)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "control governance pending rows unavailable: {error}"
+            ))
+        })?;
+    let sealed = state
+        .projections()
+        .retained_control_proposal_faults(realm_id, limit)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "control governance sealed rows unavailable: {error}"
+            ))
+        })?;
+    let mut ackless_authorized = std::collections::BTreeSet::new();
+    let mut ackless_rejections = Vec::new();
+    for event in pending
+        .iter()
+        .filter(|record| record.control_proposal_ack.is_none())
+        .map(|record| &record.event)
+        .chain(
+            sealed
+                .iter()
+                .filter(|record| record.control_proposal_ack.is_none())
+                .map(|record| &record.event),
+        )
+    {
+        let digest = arkret_state::state::control_event_digest(event).map_err(|error| {
+            AppError::internal(format!("Ack-less Control Move digest invalid: {error}"))
+        })?;
+        let rejection = super::submit::self_principal_pcr_control_authority_rejection(state, event)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "Ack-less Control Move authority unavailable: {error}"
+                ))
+            })?;
+        match rejection {
+            None => {
+                ackless_authorized.insert(digest);
+            }
+            Some(reason) => ackless_rejections.push(format!("{reason} @ {}", event.event_id)),
+        }
+    }
+    state
+        .projections()
+        .control_governance_health_with_ackless_authorities(
+            realm_id,
+            chrono::Utc::now(),
+            policy,
+            &ackless_authorized,
+        )
+        .map_err(|error| {
+            let diagnostic = if ackless_rejections.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; Ack-less authority revalidation failed: {}",
+                    ackless_rejections.join(", ")
+                )
+            };
+            AppError::internal(format!(
+                "control governance health unavailable: {error}{diagnostic}"
+            ))
+        })
+}
+
 pub(in crate::routing::events) fn router() -> Router {
     Router::new()
         .push(
@@ -868,20 +951,15 @@ async fn events_frontier(
                 .map_err(|error| {
                     AppError::internal(format!("control governance policy unavailable: {error}"))
                 })?;
+        let governance_health =
+            frontier_control_governance_health(state, &realm_id, governance_policy).await?;
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
                 realm_id.clone(),
                 seal.id,
                 seal.control_event_set_root,
                 seal.state_root,
-                state
-                    .projections()
-                    .control_governance_health(&realm_id, chrono::Utc::now(), governance_policy)
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "control governance health unavailable: {error}"
-                        ))
-                    })?,
+                governance_health,
                 Some(seal.hlc),
             )),
             receipts: Vec::new(),

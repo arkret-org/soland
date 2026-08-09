@@ -22,6 +22,7 @@ pub struct PgPersistenceStore {
     invite_locators: PgInviteLocatorStore,
     join_applications: PgJoinApplicationStore,
     consent_cells: PgConsentCellStore,
+    mimi_consent_correlations: PgMimiConsentCorrelationStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     device_pairings: PgDevicePairingStore,
@@ -89,6 +90,7 @@ impl PgPersistenceStore {
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             join_applications: PgJoinApplicationStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
+            mimi_consent_correlations: PgMimiConsentCorrelationStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             device_pairings: PgDevicePairingStore { pool: pool.clone() },
@@ -198,6 +200,10 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {
         &self.consent_cells
+    }
+
+    fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore {
+        &self.mimi_consent_correlations
     }
 
     fn realm_meta(&self) -> &dyn RealmMetaStore {

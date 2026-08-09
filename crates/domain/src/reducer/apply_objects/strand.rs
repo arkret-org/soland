@@ -253,7 +253,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(strand_id) = operation
             .payload
-            .get("target_ref")
+            .get("strand_id")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
@@ -308,8 +308,8 @@ impl ProjectionState {
         if !arkret_wire::events::kinds::is_strand_tracks_kind(kind) {
             return Ok(());
         }
-        let Some(strand_id) = operation.payload.get("strand_id").and_then(|v| v.as_str()) else {
-            // Missing strand_id is caught by operation-schema validator
+        let Some(strand_id) = operation.payload.get("target_ref").and_then(|v| v.as_str()) else {
+            // Missing target_ref is caught by operation-schema validator
             // upstream; preflight tolerates absence (responsibilities split).
             return Ok(());
         };
@@ -397,12 +397,12 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(strand_id) = operation
             .payload
-            .get("strand_id")
+            .get("target_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {
             return ProjectionEffect::Rejected {
-                reason: "missing_strand_id".to_owned(),
+                reason: "missing_target_ref".to_owned(),
             };
         };
         let Some(strand) = self.strands.get_mut(&strand_id) else {
@@ -543,35 +543,16 @@ fn apply_strand_tracks_update_to_map(
 > {
     let mut tracks = current.clone();
     let mut changed = false;
-    if let Some(track_updates) = payload
-        .get("tracks")
-        .map(parse_track_update_map)
-        .transpose()?
-    {
-        for (track_id, track) in track_updates {
-            arkret_models_collaboration::objects::profiles::validate_strand_track_name(&track_id)
-                .map_err(|_| "strand_track_name_invalid")?;
-            tracks.insert(track_id, track);
-            changed = true;
-        }
-    }
     if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
-        if let Some(track_updates) = patch
-            .get("tracks")
-            .map(parse_track_update_map)
-            .transpose()?
-        {
-            for (track_id, track) in track_updates {
-                arkret_models_collaboration::objects::profiles::validate_strand_track_name(
-                    &track_id,
-                )
-                .map_err(|_| "strand_track_name_invalid")?;
-                tracks.insert(track_id, track);
-                changed = true;
-            }
-        }
         for (path, patch_value) in patch {
             if path == "tracks" {
+                match parse_patch_operation(patch_value)? {
+                    TrackPatchOperation::Set(value) => {
+                        tracks = parse_track_update_map(value)?;
+                    }
+                    TrackPatchOperation::Remove => tracks.clear(),
+                }
+                changed = true;
                 continue;
             }
             let Some(rest) = path.strip_prefix("tracks.") else {
@@ -592,7 +573,7 @@ fn apply_strand_tracks_update_to_map(
         }
     }
     if !changed {
-        return Err("strand_tracks_update_requires_tracks");
+        return Err("strand_tracks_update_requires_patch");
     }
     validate_strand_tracks(&tracks)?;
     Ok(tracks)

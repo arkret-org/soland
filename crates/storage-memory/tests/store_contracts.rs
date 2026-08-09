@@ -3,7 +3,7 @@ use soland_storage::contract_tests::{
     assert_control_proposal_authority_ack_store_contract,
     assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
-    assert_mls_keypackage_retirement_contract,
+    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, EventProjectionStoreRegistry,
@@ -16,6 +16,16 @@ use soland_storage_memory::SolandMemoryPersistenceStore;
 async fn memory_adapter_satisfies_shared_idempotency_contract() {
     let store = SolandMemoryPersistenceStore::new();
     assert_idempotency_store_contract(store.idempotency_keys(), "memory-contract").await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_mimi_consent_correlation_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_mimi_consent_correlation_store_contract(
+        store.mimi_consent_correlations(),
+        "memory-mimi-consent",
+    )
+    .await;
 }
 
 #[tokio::test]

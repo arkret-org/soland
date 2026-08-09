@@ -879,8 +879,8 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         2,
         "ak.strand.tracks.update",
         serde_json::json!({
-            "strand_id": strand_id,
-            "patch": {"tracks": {"discussion": {"profile": "discussion"}}}
+            "target_ref": strand_id,
+            "patch": {"tracks.discussion.profile": {"$op": "set", "value": "discussion"}}
         }),
         vec!["ak:event:ATpaZ1zjrxoRo57u72V4mEAxUhkLtA_hT1yZrFUmss6m"],
     );
@@ -916,8 +916,8 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         4,
         "ak.strand.tracks.update",
         serde_json::json!({
-            "strand_id": strand_id,
-            "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
+            "target_ref": strand_id,
+            "patch": {"tracks.synthesis.profile": {"$op": "set", "value": "synthesis"}}
         }),
         vec!["ak:event:AYstzDvHBVnvumPzWgZsRG-iI46FnNF1EwpelBrSP10E"],
     );

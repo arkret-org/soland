@@ -37,10 +37,13 @@ fn verify_actor_headers_reject_destination_mismatch() {
 
 const SIG_TEST_DID: &str = "did:web:test.local";
 
-fn signature_input(service_did: &str) -> arkret_signatures::http_signature::SignatureInput {
+fn signature_input(
+    service_did: &str,
+    fragment: &str,
+) -> arkret_signatures::http_signature::SignatureInput {
     let now = chrono::Utc::now().timestamp();
     let header = format!(
-        "sig1=(\"@method\");created={now};expires={};keyid=\"{service_did}#federation-fanout-key\";alg=\"ed25519\"",
+        "sig1=(\"@method\");created={now};expires={};keyid=\"{service_did}#{fragment}\";alg=\"ed25519\"",
         now + 120
     );
     arkret_signatures::http_signature::parse_signature_input(&header).unwrap()
@@ -48,14 +51,28 @@ fn signature_input(service_did: &str) -> arkret_signatures::http_signature::Sign
 
 #[test]
 fn signature_input_accepts_expected_federation_key() {
-    validate_signature_input(&signature_input(SIG_TEST_DID), SIG_TEST_DID, "test")
-        .expect("matching federation key must pass deployment binding");
+    validate_signature_input(
+        &signature_input(SIG_TEST_DID, "federation-fanout-key"),
+        SIG_TEST_DID,
+        "test",
+    )
+    .expect("matching federation key must pass deployment binding");
+}
+
+#[test]
+fn signature_input_accepts_other_controller_owned_service_key() {
+    validate_signature_input(
+        &signature_input(SIG_TEST_DID, "service-key"),
+        SIG_TEST_DID,
+        "test",
+    )
+    .expect("a controller-owned service verification method must be accepted");
 }
 
 #[test]
 fn signature_input_rejects_mismatched_federation_key() {
     let error = validate_signature_input(
-        &signature_input("did:web:other.local"),
+        &signature_input("did:web:other.local", "service-key"),
         SIG_TEST_DID,
         "test",
     )

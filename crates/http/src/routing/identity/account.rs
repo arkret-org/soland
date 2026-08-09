@@ -1132,7 +1132,6 @@ async fn gate_account_register(
             .map_err(localpart_persistence_error)?;
     }
     if let Some(device_id) = body.device_id.as_ref() {
-        let registered_at = now();
         // A device becomes `verified` only through an accepted and projected
         // `ak.device.authorize` carrying its possession proof. Minting a
         // `verified`-without-key row here would carry no
@@ -1142,31 +1141,16 @@ async fn gate_account_register(
         // Create an `unverified`, key-less placeholder so the session / device
         // list works until the real enrollment event lands (mirrors the
         // OAuth-introspection lazy-create path in `auth::ensure_oauth_device`).
-        let device = DeviceIdentity {
-            actor_id: did.clone(),
-            device_id: device_id.as_str().to_owned(),
-            display_name: account.display_name.clone(),
-            verification_state: "unverified".to_owned(),
-            payload: json!({
-                "device_id": device_id.as_str(),
-                "display_name": account.display_name.clone(),
-                "verification": "unverified",
-                "registered_with_account": true,
-            }),
-            created_at: registered_at,
-            updated_at: registered_at,
-            revoked_at: None,
-        };
-        state
-            .identities()
-            .save_device(soland_services::identity::SaveDeviceCommand {
-                actor_id: did.clone(),
-                device_id: device.device_id.clone(),
-                display_name: device.display_name.clone(),
-                device,
-            })
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+        // PCR genesis can precede account projection, so this must be
+        // insert-if-absent: an already verified founding device is canonical
+        // Event state and must never be downgraded by account creation.
+        put_account_device_placeholder(
+            state,
+            &did,
+            account.display_name.clone(),
+            device_id.as_str(),
+        )
+        .await?;
     }
     let audit_handle = (!account.localpart.is_empty()).then(|| account.handle());
     append_account_registration_audit(state, &did, audit_handle.as_deref(), &registration_audit)

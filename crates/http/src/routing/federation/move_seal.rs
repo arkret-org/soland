@@ -348,12 +348,10 @@ fn device_verification_method_matches(
     // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
     // be a DID URL with a `#fragment`; a bare DID never names a concrete
     // verification method.
-    let did_key = device_public_key
-        .strip_prefix("did:key:")
-        .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
-    let fragment = did_key
-        .strip_prefix("did:key:")
-        .unwrap_or(device_public_key);
+    let Some(fragment) = device_public_key.strip_prefix("did:key:") else {
+        return false;
+    };
+    let did_key = device_public_key;
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("{did_key}#{fragment}")
 }
@@ -382,7 +380,10 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
             "B-model device Seal signature payload_digest mismatch",
         ));
     }
-    let key = arkret_canonical::decode_ed25519_multibase(device_public_key).map_err(|error| {
+    let multibase = device_public_key.strip_prefix("did:key:").ok_or_else(|| {
+        device_generation_fenced("B-model device Seal key must be a canonical did:key")
+    })?;
+    let key = arkret_canonical::decode_ed25519_multibase(multibase).map_err(|error| {
         device_generation_fenced(format!("B-model device Seal key is invalid: {error}"))
     })?;
     Ed25519DetachedJwsVerifier::new()
@@ -506,18 +507,57 @@ async fn try_apply_device_generation_event_seal(
     }
     let expected_control_root =
         control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
-    let completeness_events = context
-        .records
-        .iter()
-        .map(|record| {
-            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                seal_admission_error(format!(
-                    "stored B-model Event {} is invalid: {error}",
-                    record.event_id
-                ))
+    let mut completeness_events = Vec::with_capacity(context.records.len());
+    let mut available_digests = BTreeSet::new();
+    for record in &context.records {
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        let parsed_digest = Hash::new(event.event_digest().map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} digest failed: {error}",
+                record.event_id
+            ))
+        })?)
+        .map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} digest is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        if parsed_digest.as_str() != record.canonical_digest {
+            return Err(seal_admission_error(format!(
+                "stored B-model Event {} canonical digest {} differs from parsed digest {}",
+                record.event_id, record.canonical_digest, parsed_digest
+            )));
+        }
+        available_digests.insert(parsed_digest);
+        completeness_events.push(event);
+    }
+    let missing = target
+        .difference(&available_digests)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        let sources = target
+            .difference(&available_digests)
+            .map(|digest| {
+                if seal.delta.contains(digest) {
+                    "delta"
+                } else {
+                    "predecessor"
+                }
             })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
+        return Err(seal_admission_error(format!(
+            "B-model Event Seal coverage contains unresolved {} canonical digests: {}",
+            sources.join(","),
+            missing.join(",")
+        )));
+    }
     let expected_completeness_root =
         arkret_state::control_event_completeness_root(&completeness_events, &target)
             .map_err(app_error_from_seal_reject)?;
@@ -1583,15 +1623,15 @@ mod seal_delta_tests {
     fn first_recovery_seal_binding_rejects_another_current_device() {
         assert!(first_seal_signer_matches(
             "ak:device:recovery",
-            "z6MkRecovery",
+            "did:key:z6MkRecovery",
             "ak:device:recovery",
-            "z6MkRecovery",
+            "did:key:z6MkRecovery",
         ));
         assert!(!first_seal_signer_matches(
             "ak:device:other",
-            "z6MkOther",
+            "did:key:z6MkOther",
             "ak:device:recovery",
-            "z6MkRecovery",
+            "did:key:z6MkRecovery",
         ));
     }
 
@@ -1603,15 +1643,21 @@ mod seal_delta_tests {
             [7u8; 32],
             "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
         );
-        let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            &signer.verifying_key().to_bytes(),
+        let public_key = format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                &signer.verifying_key().to_bytes(),
+            )
         );
         let wrong_signer = Ed25519DetachedJwsSigner::from_seed(
             [8u8; 32],
             "did:webvh:z6mkfixture:alice.example#ak:device:other",
         );
-        let wrong_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            &wrong_signer.verifying_key().to_bytes(),
+        let wrong_public_key = format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                &wrong_signer.verifying_key().to_bytes(),
+            )
         );
         let empty_root = arkret_state::state::compute_state_root(&BTreeMap::new()).unwrap();
         let placeholder_id = SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap();
@@ -1668,13 +1714,17 @@ mod seal_delta_tests {
 
         verify_device_seal_signature(&seal, &public_key).unwrap();
         assert!(verify_device_seal_signature(&seal, &wrong_public_key).is_err());
+        assert!(
+            verify_device_seal_signature(&seal, public_key.strip_prefix("did:key:").unwrap(),)
+                .is_err()
+        );
     }
 
     #[test]
     fn device_verification_method_is_bound_to_device_id_or_key() {
         let principal = "did:webvh:z6mkfixture:alice.example";
         let device = "ak:device:recovery";
-        let key = "z6MkRecovery";
+        let key = "did:key:z6MkRecovery";
         assert!(device_verification_method_matches(
             principal,
             device,
@@ -1685,7 +1735,7 @@ mod seal_delta_tests {
             principal,
             device,
             key,
-            &format!("did:key:{key}#{key}"),
+            "did:key:z6MkRecovery#z6MkRecovery",
         ));
         assert!(!device_verification_method_matches(
             principal,
@@ -1702,13 +1752,10 @@ mod seal_delta_tests {
     fn device_verification_method_rejects_bare_dids() {
         let principal = "did:webvh:z6mkfixture:alice.example";
         let device = "ak:device:recovery";
-        let key = "z6MkRecovery";
+        let key = "did:key:z6MkRecovery";
 
         assert!(!device_verification_method_matches(
-            principal,
-            device,
-            key,
-            &format!("did:key:{key}"),
+            principal, device, key, key,
         ));
         assert!(!device_verification_method_matches(
             principal, device, key, principal

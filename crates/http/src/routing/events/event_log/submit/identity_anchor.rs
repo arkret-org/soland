@@ -126,6 +126,7 @@ pub(super) async fn submit_identity_anchor_batch(
             identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
                 &envelopes[1],
             ),
+            direct_conversation_founding: false,
             authority_root: None,
         })
     };
@@ -144,6 +145,7 @@ pub(super) async fn submit_identity_anchor_batch(
             identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
                 &envelopes[1],
             ),
+            direct_conversation_founding: false,
             authority_root: None,
         });
     if identity_anchor_context.realm_id != first.realm_id
@@ -262,7 +264,65 @@ pub(super) async fn submit_identity_anchor_batch(
                 "PCR genesis forbids pre-issued Control Proposal Acks",
             ));
         }
-        Vec::new()
+        let authority_set_refs = super::super::lease_issue::bootstrap_ingress_authority_set_refs(
+            state,
+            &typed_control_events,
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("PCR genesis ingress authority is unavailable: {error}"),
+            )
+        })?;
+        let policy = crate::control_proposal::control_proposal_policy(
+            state,
+            &typed_control_events[0].realm_id,
+            &typed_control_events,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("PCR genesis proposal policy unavailable: {error}"),
+            )
+        })?;
+        typed_control_events
+            .iter()
+            .zip(authority_set_refs)
+            .map(|(event, authority_set_ref)| {
+                let proposal_digest = Hash::new(event.event_digest().map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("PCR genesis Event digest failed: {error}"),
+                    )
+                })?)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("PCR genesis Event digest is invalid: {error}"),
+                    )
+                })?;
+                crate::control_proposal::mint_control_proposal_ack(
+                    state,
+                    event.realm_id.clone(),
+                    proposal_digest,
+                    authority_set_ref.authority_set_digest,
+                    received_at,
+                    policy,
+                )
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("PCR genesis Control Proposal Ack issuance failed: {error}"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         let submitted = submitted_control_proposal_acks
             .and_then(|acks| acks.iter().cloned().collect::<Option<Vec<_>>>())
@@ -767,6 +827,7 @@ fn validate_self_principal_pcr_bootstrap_context(
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
         identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(&envelopes[1]),
+        direct_conversation_founding: false,
         authority_root: None,
     })
 }

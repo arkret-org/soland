@@ -644,6 +644,26 @@ CREATE TABLE public.consent_cells (
 ALTER TABLE ONLY public.consent_cells
     ADD CONSTRAINT consent_cells_holder_peer_scope_key UNIQUE (holder_id, peer_id, scope);
 
+-- Private service-local MIMI request correlation. These rows are not consent
+-- cells and do not represent accepted protocol state; they only bind the
+-- opaque consent_id returned by request_consent to a later caller-authored
+-- Event submission.
+CREATE TABLE public.mimi_consent_correlations (
+    consent_id text PRIMARY KEY,
+    requester_id text NOT NULL,
+    target_kind text NOT NULL,
+    target_id text NOT NULL,
+    purpose text NOT NULL,
+    strand_id text,
+    source_service_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone
+);
+
+CREATE INDEX mimi_consent_correlations_expiry_idx
+    ON public.mimi_consent_correlations USING btree (expires_at)
+    WHERE expires_at IS NOT NULL;
+
 CREATE TABLE public.contacts (
     id uuid PRIMARY KEY,
     requester_id text NOT NULL,

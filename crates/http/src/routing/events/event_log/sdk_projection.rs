@@ -360,11 +360,24 @@ pub(crate) fn sdk_event_for_state(
     )
 }
 
+pub(crate) fn canonical_event_from_record(
+    record: &CanonicalEventRecord,
+) -> Result<Event, AppError> {
+    let mut envelope = record.envelope.clone();
+    if let Value::Object(object) = &mut envelope {
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    serde_json::from_value(envelope)
+        .map_err(|error| AppError::internal(format!("stored canonical Event is invalid: {error}")))
+}
+
 fn sdk_event_from_record(
     record: &CanonicalEventRecord,
     tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,
     actor_erased: bool,
 ) -> Result<Event, AppError> {
+    let preserves_signed_content = tombstone.is_none() && !actor_erased;
     let object = record
         .envelope
         .as_object()
@@ -385,8 +398,7 @@ fn sdk_event_from_record(
     let hlc = object
         .get("hlc")
         .and_then(Value::as_str)
-        .and_then(|value| Hlc::new(value.to_owned()).ok())
-        .unwrap_or_else(|| synthetic_hlc(record.received_at));
+        .and_then(|value| Hlc::new(value.to_owned()).ok());
     let mut payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
     let mut unsigned: BTreeMap<String, Value> = object
         .get("unsigned")
@@ -435,14 +447,18 @@ fn sdk_event_from_record(
             json!(retention_risk_reason(&tombstone)),
         );
     }
-    Ok(Event {
+    let event = Event {
         event_id,
         kind: record.kind.clone().into(),
         realm_id: realm_id.clone(),
         actor_id,
         actor_seq: record.actor_seq,
         created_at,
-        hlc: Some(hlc),
+        // `hlc` is a producer-signed optional field. A read path must preserve
+        // its absence; synthesizing one from `received_at` changes the Event
+        // digest and makes a client-built successor Seal name a digest the
+        // canonical store has never accepted.
+        hlc,
         prev_refs: event_id_list(object.get("prev_refs"))?,
         scope_ref: sdk_scope_ref(record, &realm_id),
         refs: event_refs(object.get("refs")),
@@ -495,7 +511,21 @@ fn sdk_event_from_record(
             .and_then(|value| serde_json::from_value(value).ok()),
         unsigned,
         proofs: sdk_event_proofs(record, object, created_at)?,
-    })
+    };
+    if preserves_signed_content {
+        let reconstructed_digest = event.event_digest().map_err(|error| {
+            AppError::internal(format!(
+                "stored Event digest reconstruction failed: {error}"
+            ))
+        })?;
+        if reconstructed_digest != record.canonical_digest {
+            return Err(AppError::internal(format!(
+                "stored Event read reconstruction changed canonical digest: expected {}, got {}",
+                record.canonical_digest, reconstructed_digest
+            )));
+        }
+    }
+    Ok(event)
 }
 
 fn event_visibility_metadata(
@@ -593,11 +623,6 @@ fn sdk_scope_ref(record: &CanonicalEventRecord, realm_id: &RealmId) -> arkret_wi
         .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         })
-}
-
-fn synthetic_hlc(received_at: DateTime<Utc>) -> Hlc {
-    let millis = received_at.timestamp_millis().max(0) as u64;
-    Hlc::new(format!("{millis:012x}-0000-00000000")).expect("synthetic HLC is valid")
 }
 
 fn sdk_event_proofs(

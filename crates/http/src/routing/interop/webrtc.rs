@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{CellRef, DeviceId, Did, Hash, RealmId};
+use arkret_identifiers::{CallId, CellRef, DeviceId, Did, Hash, OperationId, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
@@ -1424,6 +1424,24 @@ mod tests {
     }
 
     #[test]
+    fn webrtc_session_id_accepts_sdk_call_id() {
+        assert!(is_valid_webrtc_session_id(
+            "ak:call:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz0"
+        ));
+    }
+
+    #[test]
+    fn webrtc_session_id_rejects_non_call_and_legacy_uuid_ids() {
+        for invalid in [
+            "ak:event:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz0",
+            "ak:call:01904100-0000-7000-8000-000000000001",
+            "ak:call:AWRz9zKjOlGmvDeLp4ws-Eb6jsg4I5jJdj5J8o3cGYz!",
+        ] {
+            assert!(!is_valid_webrtc_session_id(invalid), "accepted {invalid}");
+        }
+    }
+
+    #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
         let epoch = parse_media_service_epoch(
             "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
@@ -1504,15 +1522,9 @@ pub(crate) async fn actor_has_call_capability(
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {
-    // v1 wire ID: `ak:call:<uuidv7-36-char-lowercase-hex>` (RFC 9562 v7,
-    // version=7, variant ∈ {8,9,a,b}) — per
-    // `arkret-spec/v1/artifacts/registry/id-kind-registry.json` the WebRTC
-    // call surface uses `ak:call:`.
-    let Some(rest) = value.strip_prefix("ak:call:") else {
-        return false;
-    };
-    let Ok(parsed) = uuid::Uuid::parse_str(rest) else {
-        return false;
-    };
-    parsed.get_version_num() == 7
+    // Call IDs are derived from Event identity and share the SDK's canonical
+    // 44-character event token. Keep this boundary on the authoritative typed
+    // parser so future identifier migrations cannot drift into a private RTC
+    // regex or the old producer-allocated UUID form.
+    CallId::new(value.to_owned()).is_ok()
 }

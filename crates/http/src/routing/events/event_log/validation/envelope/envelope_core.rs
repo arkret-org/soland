@@ -389,10 +389,14 @@ async fn validate_event_envelope_with_ingress(
         && kind == "ak.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
         && !realm_exists;
-    let is_realm_bootstrap_followup = is_realm_bootstrap_followup_kind(&kind)
-        && realm_bootstrap_contexts
-            .iter()
-            .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
+    let is_direct_conversation_founding = realm_bootstrap_contexts
+        .iter()
+        .any(|context| context.direct_conversation_founding);
+    let is_realm_bootstrap_followup = is_direct_conversation_founding
+        || (is_realm_bootstrap_followup_kind(&kind)
+            && realm_bootstrap_contexts
+                .iter()
+                .any(|context| context.realm_id == realm_id && context.actor_id == actor_id));
     let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
@@ -629,7 +633,9 @@ async fn validate_event_envelope_with_ingress(
         kind == arkret_wire::EventKind::SidecarCreate
             && admission.is_sidecar_ensure(session, object)
     });
-    let cba_context = if bootstrap_unit_member || sidecar_bootstrap {
+    let cba_context = if is_direct_conversation_founding {
+        arkret_schema::EventCellContractContext::DirectConversationFounding
+    } else if bootstrap_unit_member || sidecar_bootstrap {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard

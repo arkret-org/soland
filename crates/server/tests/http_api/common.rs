@@ -31,7 +31,7 @@ pub(crate) use soland_storage::{
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
-pub(crate) const DEMO_REALM_ID: &str = "ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG";
+pub(crate) const DEMO_REALM_ID: &str = "ak:realm:Ae3cHe84Qdq9276TYWiGD-pAkFlCQrwmo6sI-8UeAlEl";
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
@@ -1035,6 +1035,18 @@ pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: V
         prev_refs,
         payload,
     )
+}
+
+/// Return the content-bound id from an Event value that was just authored.
+///
+/// The string passed into the historical fixture builders is only a stable
+/// fixture label now that Event ids are derived from signed content. Chained
+/// fixtures must cite the id the builder actually produced, rather than that
+/// label.
+pub(crate) fn authored_event_id(event: &Value) -> &str {
+    event["event_id"]
+        .as_str()
+        .expect("authored fixture Event has a content-bound event_id")
 }
 
 pub(crate) fn signed_message_event_envelope(
@@ -2104,9 +2116,9 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
         space
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
-        space.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
-        });
+        space
+            .entry("realm_id".to_owned())
+            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
         space
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
@@ -2208,9 +2220,9 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
         strand
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
-        strand.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
-        });
+        strand
+            .entry("realm_id".to_owned())
+            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
         strand
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));
@@ -2234,11 +2246,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     // alias — it has no place on the wire.
     if matches!(
         kind,
-        "ak.strand.archive"
-            | "ak.strand.restore"
-            | "ak.strand.tombstone"
-            | "ak.strand.update"
-            | "ak.strand.tracks.update"
+        "ak.strand.archive" | "ak.strand.restore" | "ak.strand.tombstone" | "ak.strand.update"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {
@@ -2288,9 +2296,9 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
         morph
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
-        morph.entry("realm_id".to_owned()).or_insert_with(|| {
-            Value::String("ak:realm:AZuixS15SHzCJOxTHH5-wcrLh9YjtVXxzvv1WSL81BtG".to_owned())
-        });
+        morph
+            .entry("realm_id".to_owned())
+            .or_insert_with(|| Value::String(DEMO_REALM_ID.to_owned()));
         morph
             .entry("created_at".to_owned())
             .or_insert_with(|| Value::String("2026-05-17T00:00:00.000Z".to_owned()));

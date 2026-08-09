@@ -32,6 +32,7 @@ DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;
 DROP TABLE IF EXISTS state_cell_cache CASCADE;
 DROP TABLE IF EXISTS consent_cells CASCADE;
+DROP TABLE IF EXISTS mimi_consent_correlations CASCADE;
 DROP TABLE IF EXISTS contacts CASCADE;
 DROP TABLE IF EXISTS device_message_ack_tokens CASCADE;
 DROP TABLE IF EXISTS device_message_lost_watermarks CASCADE;
