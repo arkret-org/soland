@@ -487,13 +487,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 
 #[cfg(test)]
 mod tests {
-    use super::stage_control_proposal_ack;
     use chrono::{Duration, Utc};
     use soland_storage::{
         AppletGhostCommit, CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest,
         EventCommitUnitOfWork, IdempotencyRecord, PersistenceError,
     };
 
+    use super::stage_control_proposal_ack;
     use crate::SolandMemoryPersistenceStore;
 
     fn typed_id(prefix: &str) -> String {
