@@ -13,7 +13,8 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
 };
-use arkret_wire::{CbaProofBundle, SignalRelayOutcome, SignalRelayRequest};
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+use arkret_wire::{CbaProofBundle, ServiceKind, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -91,15 +92,9 @@ async fn peer_principal_genesis(
     request
         .validate()
         .map_err(|error| schema_violation(error.to_string()))?;
-    let configured_authority = state
-        .config()
-        .account_authority_service_id
-        .as_deref()
-        .ok_or_else(|| {
-            AppError::capability_denied("Account Authority service identity is not configured")
-        })?;
+    let configured_authority = trusted_account_authority_service_id(state).await?;
     if source_service_id != request.account_authority_id.as_str()
-        || configured_authority != request.account_authority_id.as_str()
+        || configured_authority != request.account_authority_id
     {
         return Err(AppError::capability_denied(
             "PCR genesis relay source is not the configured Account Authority",
@@ -135,6 +130,53 @@ async fn peer_principal_genesis(
                 .with_wire_code(error.code)
         })
         .and_then(json_ok)
+}
+
+async fn trusted_account_authority_service_id(state: &AppState) -> Result<Did, AppError> {
+    if let Some(service_id) = state.config().account_authority_service_id.as_deref() {
+        return Did::new(service_id.to_owned()).map_err(|error| {
+            AppError::internal(format!(
+                "configured Account Authority service identity is invalid: {error}"
+            ))
+        });
+    }
+    let authority_url = state
+        .config()
+        .account_authority_url
+        .as_deref()
+        .ok_or_else(|| AppError::capability_denied("Account Authority is not configured"))?;
+    let registration_key = ServiceRegistrationKey::new(
+        ServiceKind::AuthServer,
+        CanonicalServiceUrl::canonicalize(authority_url).map_err(|error| {
+            AppError::internal(format!(
+                "configured Account Authority URL is invalid: {error}"
+            ))
+        })?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let registration = state
+        .dids()
+        .service_registration(&registration_key)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                soland_http::error::ErrorCode::TemporarilyUnavailable,
+                format!("Account Authority service registration is unavailable: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "Account Authority URL has no accepted service identity registration",
+            )
+        })?;
+    registration
+        .validate_for(&registration_key)
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "Account Authority service identity registration is invalid: {error}"
+            ))
+        })?;
+    Ok(registration.service_id)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]

@@ -228,7 +228,9 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
-    /// Account Authority service DID trusted for S2S account-status evidence.
+    /// Optional fail-closed Account Authority service DID pin. When omitted,
+    /// the accepted AuthServer service-registration mapping for
+    /// `account_authority_url` supplies the runtime identity.
     pub account_authority_service_id: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Auth Server, advertised to browser clients in

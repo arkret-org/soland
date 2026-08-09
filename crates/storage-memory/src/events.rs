@@ -577,9 +577,6 @@ impl EventStore for MemoryEventStore {
         let mut staged_receipts = receipts.clone();
         let mut staged_evidence = evidence.clone();
         let mut staged_outbox = federation_outbox.clone();
-        let pcr_genesis = records.len() == 2
-            && records[0].kind == arkret_wire::EventKind::REALM_CREATE
-            && records[1].kind == arkret_wire::EventKind::DEVICE_AUTHORIZE;
         let reanchor_conflict = reanchor_slot.as_ref().is_some_and(|slot| {
             identity_anchor_slot_conflicts(&staged_events.values().collect::<Vec<_>>(), slot)
         });
@@ -590,16 +587,12 @@ impl EventStore for MemoryEventStore {
                         .to_owned(),
                 ));
             }
-        } else if pcr_genesis && !control_proposal_acks.is_empty() {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: PCR genesis cannot carry Control Proposal Acks".to_owned(),
-            ));
         } else {
             stage_control_proposal_acks(
                 &mut staged_control_proposal_acks,
                 &records,
                 control_proposal_acks,
-                !pcr_genesis,
+                true,
             )?;
         }
         stage_identity_anchor_events(&mut staged_events, records)?;

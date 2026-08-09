@@ -139,7 +139,8 @@ fn verify_inbound_peer_http_signature_inner(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let source_verifying_key = verifying_key_for_service_id(state, &source_service_id)?;
+    let source_verifying_key =
+        verifying_key_for_service_id(state, &source_service_id, &signature_input.key_id)?;
     let mut required_components = vec![
         Component::Method,
         Component::TargetUri,
@@ -181,12 +182,10 @@ fn verify_inbound_peer_http_signature_inner(
         ),
     };
     verification.map_err(|error| federation_verification_error(error, "outer"))?;
-    let source_verification_method =
-        crate::routing::federation::federation_service_signature_key_id(&source_service_id);
     state.install_federation_peer_verifying_key(None, &source_service_id, source_verifying_key);
     state.install_federation_peer_verification_method_key(
         None,
-        &source_verification_method,
+        &signature_input.key_id,
         source_verifying_key,
     );
 
@@ -262,14 +261,20 @@ pub(super) fn validate_signature_input(
     expected_service_id: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let expected_keyid =
-        crate::routing::federation::federation_service_signature_key_id(expected_service_id);
     if signature_input.label != "sig1" {
         return Err(signature_error(format!(
             "{label} Signature-Input must use the sig1 label"
         )));
     }
-    if signature_input.key_id != expected_keyid {
+    let controller =
+        arkret_identity::verification_method_did(&signature_input.key_id).map_err(|_| {
+            signature_error(format!(
+                "{label} Signature-Input keyid is not a DID verification method"
+            ))
+        })?;
+    let expected_controller = arkret_identifiers::Did::new(expected_service_id.to_owned())
+        .map_err(|_| signature_error(format!("{label} source service DID is invalid")))?;
+    if controller != expected_controller {
         return Err(signature_error(format!(
             "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_id"
         )));
@@ -307,39 +312,36 @@ fn federation_verification_error(error: HttpMessageVerificationError, label: &st
 fn verifying_key_for_service_id(
     state: &AppState,
     service_id: &str,
+    verification_method: &str,
 ) -> Result<VerifyingKey, AppError> {
     if service_id == state.service_id() {
+        let expected_method =
+            crate::routing::federation::federation_service_signature_key_id(service_id);
+        if verification_method != expected_method {
+            return Err(signature_error(
+                "local service signature method is not the active federation key",
+            ));
+        }
         return Ok(state.notary_signing_key().verifying_key());
     }
-    if let Some(key) = state.federation_peer_verifying_key(service_id) {
+    if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
         return Ok(key);
     }
-    // did:key is self-resolving and binds its verification key directly in
-    // the identifier. Never replace that authoritative key with the
-    // development deterministic fallback: a peer using a durable notary key
-    // would otherwise sign correctly and still fail verification in dev mode.
-    if service_id.starts_with("did:key:") {
-        let verification_method =
-            crate::routing::federation::federation_service_signature_key_id(service_id);
-        return crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method).map_err(
-            |_| {
-                signature_error(
-                    "source did:key service key unavailable; key_rotation_hint=refresh_origin_service_id",
-                )
-            },
-        );
+    // Resolve the exact keyid named in the signed transcript. This permits a
+    // service to publish a controller-owned method such as `#service-key`
+    // while preventing a service-level cache entry from silently accepting a
+    // different or rotated-away method.
+    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method) {
+        return Ok(key);
     }
-    if state.config().development_mode {
+    let development_method =
+        crate::routing::federation::federation_service_signature_key_id(service_id);
+    if state.config().development_mode && verification_method == development_method {
         tracing::warn!(
             service_id,
             "development_mode accepted deterministic federation service key fallback"
         );
         return Ok(development_service_signing_key(service_id).verifying_key());
-    }
-    let verification_method =
-        crate::routing::federation::federation_service_signature_key_id(service_id);
-    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, &verification_method) {
-        return Ok(key);
     }
     Err(signature_error(
         "source service key unavailable; key_rotation_hint=refresh_origin_service_id",

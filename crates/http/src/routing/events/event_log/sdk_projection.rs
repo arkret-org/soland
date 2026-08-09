@@ -681,6 +681,18 @@ pub(crate) fn sdk_event_for_state(
     )
 }
 
+pub(crate) fn canonical_event_from_record(
+    record: &CanonicalEventRecord,
+) -> Result<Event, AppError> {
+    let mut envelope = record.envelope.clone();
+    if let Value::Object(object) = &mut envelope {
+        object.remove("canonical_digest");
+        object.remove("canonical_hash");
+    }
+    serde_json::from_value(envelope)
+        .map_err(|error| AppError::internal(format!("stored canonical Event is invalid: {error}")))
+}
+
 fn sdk_event_from_record(
     record: &CanonicalEventRecord,
     tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,

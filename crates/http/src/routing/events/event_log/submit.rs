@@ -1684,7 +1684,7 @@ async fn validate_identity_creation_control_proof(
     if proof.issued_at > now
         || proof.expires_at <= now
         || proof.expires_at - proof.issued_at > Duration::minutes(5)
-        || proof.audience != request.account_authority_id
+        || proof.audience.as_str() != state.service_id().as_str()
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1718,31 +1718,47 @@ async fn validate_identity_creation_control_proof(
             "PCR genesis DID history belongs to a different principal",
         ));
     }
-    let inception_operation = inception.operation.as_object().cloned().ok_or_else(|| {
-        SubmitOneError::new(
+    if inception.seq != 1
+        || !inception
+            .operation
+            .get("versionId")
+            .and_then(Value::as_str)
+            .is_some_and(|version_id| version_id.starts_with("1-"))
+    {
+        return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            "accepted DID inception operation is not an object",
-        )
-    })?;
-    // Reconstruct the exact typed submit request whose canonical digest is
-    // committed by the Account Authority and SDK control-proof verifier. The
-    // DID store's `event_digest` intentionally hashes only the native log
-    // entry, so comparing it with this wrapper digest would reject every
-    // otherwise valid inception.
-    let inception_submit = arkret_models_identity::identity::DidOperationSubmitRequestBody {
+            "PCR genesis DID history does not begin with a WebVH inception entry",
+        ));
+    }
+    let operation = inception
+        .operation
+        .as_object()
+        .cloned()
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "accepted DID inception operation is not an object",
+            )
+        })?
+        .into_iter()
+        .collect();
+    let did_operation = arkret_models_identity::identity::DidOperationSubmitRequestBody {
         did: request.principal_id.clone(),
         did_method: "webvh".to_owned(),
         seq: Some(inception.seq),
         prev_event_digest: None,
-        operation: inception_operation.into_iter().collect(),
+        operation,
     };
-    arkret_signatures::webvh::verify_identity_creation_control_proof(&inception_submit, proof)
+    arkret_signatures::webvh::verify_identity_creation_control_proof(&did_operation, proof)
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("identity creation control proof is invalid: {error}"),
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+                format!(
+                    "identity creation control proof does not match the accepted DID inception: {error}"
+                ),
             )
         })?;
     Ok(())
@@ -3122,15 +3138,18 @@ async fn verify_accepted_principal_service_binding(
             &binding.service_acceptance_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    let service_key = arkret_canonical::decode_ed25519_multibase(
-        &binding.service_verification_method.public_key_multibase,
-    )
-    .map_err(|error| format!("service binding key is invalid: {error}"))?;
-    crate::jws_verify::verify_ed25519_signature_with_public_key(
+    crate::jws_verify::verify_did_controlled_ed25519_signature_with_public_key_async(
         &service_input,
         binding.service_acceptance_proof.jws.as_str(),
-        &service_key,
+        binding
+            .service_acceptance_proof
+            .verification_method
+            .as_str(),
+        binding.service_id.as_str(),
+        &binding.service_verification_method.public_key_multibase,
+        state,
     )
+    .await
     .map_err(|error| format!("service binding acceptance proof is invalid: {error}"))?;
     let principal_input = binding
         .proof_signing_input_bytes(
@@ -3138,7 +3157,7 @@ async fn verify_accepted_principal_service_binding(
             &binding.principal_authorization_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_did_controlled_ed25519_signature_async(
+    crate::jws_verify::verify_principal_authorized_ed25519_signature_async(
         &principal_input,
         binding.principal_authorization_proof.jws.as_str(),
         binding
@@ -3149,6 +3168,7 @@ async fn verify_accepted_principal_service_binding(
         state,
     )
     .await
+    .map_err(|error| error.to_string())
 }
 
 async fn verify_principal_service_binding_continuity(

@@ -695,9 +695,8 @@ fn identity_anchor_receipt_cardinality_is_valid(
     record_count: usize,
     control_proposal_ack_count: usize,
     reanchor_conflict: bool,
-    pcr_genesis: bool,
 ) -> bool {
-    if reanchor_conflict || pcr_genesis {
+    if reanchor_conflict {
         control_proposal_ack_count == 0
     } else {
         control_proposal_ack_count == record_count
@@ -1010,9 +1009,6 @@ impl EventStore for PgEventStore {
             }
         }
         let record_count = records.len();
-        let pcr_genesis = records.len() == 2
-            && records[0].kind == arkret_wire::EventKind::REALM_CREATE
-            && records[1].kind == arkret_wire::EventKind::DEVICE_AUTHORIZE;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1073,7 +1069,6 @@ impl EventStore for PgEventStore {
                     record_count,
                     control_proposal_acks_by_digest.len(),
                     reanchor_conflict,
-                    pcr_genesis,
                 ) {
                     return Err(PersistenceError::Conflict(
                         "schema_violation: identity anchor receipt cardinality mismatch".to_owned(),
@@ -1422,38 +1417,16 @@ mod identity_anchor_receipt_tests {
     use super::identity_anchor_receipt_cardinality_is_valid;
 
     #[test]
-    fn accepted_reanchor_units_require_one_control_proposal_ack_per_event() {
-        assert!(!identity_anchor_receipt_cardinality_is_valid(
-            2, 0, false, false
-        ));
-        assert!(identity_anchor_receipt_cardinality_is_valid(
-            2, 2, false, false
-        ));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(
-            2, 1, false, false
-        ));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(
-            2, 3, false, false
-        ));
-    }
-
-    #[test]
-    fn pcr_genesis_forbids_control_proposal_acks() {
-        assert!(identity_anchor_receipt_cardinality_is_valid(
-            2, 0, false, true
-        ));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(
-            2, 2, false, true
-        ));
+    fn accepted_anchor_units_require_one_control_proposal_ack_per_event() {
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 0, false));
+        assert!(identity_anchor_receipt_cardinality_is_valid(2, 2, false));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 1, false));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 3, false));
     }
 
     #[test]
     fn reanchor_conflict_cannot_attach_control_proposal_acks() {
-        assert!(identity_anchor_receipt_cardinality_is_valid(
-            2, 0, true, false
-        ));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(
-            2, 2, true, false
-        ));
+        assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
     }
 }
