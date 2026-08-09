@@ -2567,11 +2567,12 @@ fn pending_device_revoke_exists(
 
 #[cfg(test)]
 mod control_governance_health_tests {
-    use super::*;
     use arkret_state::state::{
         MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
     use arkret_wire::{Did, Hlc, ScopeRef};
+
+    use super::*;
 
     struct UnusedEventSealCommitter;
 

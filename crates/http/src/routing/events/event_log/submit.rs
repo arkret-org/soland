@@ -3265,9 +3265,10 @@ pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
 use preflight::*;
-pub(in crate::routing::events::event_log) use value::self_principal_pcr_control_authority_rejection;
-pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
+pub(in crate::routing::events::event_log) use value::{
+    self_principal_pcr_control_authority_rejection, submit_event_value_with_idempotency,
+};
 pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_mimi_event_value, submit_moderation_report_event_value,
