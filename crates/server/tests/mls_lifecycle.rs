@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
@@ -32,6 +33,7 @@ use soland_http::config::{AppConfig, ObjectStorageConfig};
 use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
+use soland_test_support::signed_event::{CallerSignedEvent, complete_realm_bootstrap_unit};
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -280,6 +282,10 @@ async fn mls_lifecycle_end_to_end() {
         .unwrap();
     alice_device_record.payload["device_public_key"] =
         json!(ed25519_public_multibase(&event_signing_key));
+    let alice_device_authorize_event_id =
+        soland_test_support::fixture_content_bound_id("ak:event:");
+    alice_device_record.payload["device_authorize_event_id"] =
+        json!(alice_device_authorize_event_id.clone());
     alice_device_record.verification_state = "verified".to_owned();
     state
         .test_persistence()
@@ -287,11 +293,27 @@ async fn mls_lifecycle_end_to_end() {
         .put(&alice_device_record)
         .await
         .unwrap();
-    let alice_device_authorize_event_id = alice_device_record.payload["device_authorize_event_id"]
-        .as_str()
-        .expect("Alice dev-login device authorization")
-        .to_owned();
-    let realm_id = "ak:realm:AWDtuhfsBukRRXYAkoACK2sW1KkTZUS7yUJa-rdG5_1F";
+    let realm_genesis = CallerSignedEvent::realm_genesis(
+        alice_did,
+        alice_device,
+        soland_test_support::cba_basis::realm_genesis_payload(
+            alice_did,
+            state.service_id(),
+            "MLS lifecycle",
+            "ak:trust_domain:soland-mls-test.local",
+            Utc::now(),
+        ),
+    )
+    .build();
+    let realm_id_owned = RealmId::from_event_id(&realm_genesis.event_id).to_string();
+    let realm_id = realm_id_owned.as_str();
+    let realm_bootstrap =
+        complete_realm_bootstrap_unit(realm_genesis, alice_did, alice_device, "MLS lifecycle");
+    let bootstrap_frontier_event_id = realm_bootstrap
+        .last()
+        .expect("complete Realm bootstrap")
+        .event_id
+        .to_string();
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create) ──
     let keypackage_id = "ak:mls_keypackage:t-01";
@@ -341,14 +363,19 @@ async fn mls_lifecycle_end_to_end() {
     .unwrap();
     let publish_body = publish_unsigned.into_signed(publish_signature);
     let device_signature = serde_json::to_value(&publish_body.device_signature).unwrap();
-    let publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
+    let mut publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&publish_body)
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(&publish_body)
+                .expect("canonical key-package upload body"),
+        )
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(publish_resp.status_code, Some(StatusCode::OK));
-    let mut publish_resp = publish_resp;
-    let publish_json: Value = publish_resp.take_json().await.unwrap();
+    let publish_status = publish_resp.status_code;
+    let publish_body = publish_resp.take_string().await.unwrap();
+    assert_eq!(publish_status, Some(StatusCode::OK), "{publish_body}");
+    let publish_json: Value = serde_json::from_str(&publish_body).unwrap();
     assert_eq!(publish_json["accepted"], json!(2));
     assert_eq!(
         publish_json["key_package_refs"],
@@ -401,7 +428,8 @@ async fn mls_lifecycle_end_to_end() {
     );
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&initial_claim)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&initial_claim).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     let mut claim_resp = claim_resp;
@@ -437,7 +465,8 @@ async fn mls_lifecycle_end_to_end() {
     );
     let same_group_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&same_group_claim)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&same_group_claim).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(same_group_claim_resp.status_code, Some(StatusCode::OK));
@@ -469,7 +498,8 @@ async fn mls_lifecycle_end_to_end() {
     );
     let rejected_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&rejected_claim)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&rejected_claim).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(rejected_claim_resp.status_code, Some(StatusCode::OK));
@@ -493,6 +523,8 @@ async fn mls_lifecycle_end_to_end() {
         .unwrap();
     bob_device_record.payload["device_public_key"] =
         json!(ed25519_public_multibase(&event_signing_key));
+    bob_device_record.payload["device_authorize_event_id"] =
+        json!(soland_test_support::fixture_content_bound_id("ak:event:"));
     bob_device_record.verification_state = "verified".to_owned();
     state
         .test_persistence()
@@ -543,7 +575,11 @@ async fn mls_lifecycle_end_to_end() {
     let lifecycle_publish_resp =
         TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
-            .json(&lifecycle_publish_body)
+            .add_header("content-type", "application/json", true)
+            .body(
+                arkret_canonical::canonical_json_bytes(&lifecycle_publish_body)
+                    .expect("canonical key-package upload body"),
+            )
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(lifecycle_publish_resp.status_code, Some(StatusCode::OK));
@@ -562,7 +598,8 @@ async fn mls_lifecycle_end_to_end() {
     );
     let mut lifecycle_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&lifecycle_claim_body)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&lifecycle_claim_body).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(lifecycle_claim_resp.status_code, Some(StatusCode::OK));
@@ -615,54 +652,10 @@ async fn mls_lifecycle_end_to_end() {
         "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
-    let realm_create = signed_event(
-        "ak:event:Ab7zeyxLZRV8glEnHDN_537b5q0Yk48kONxcjzMwK-DM",
-        0,
-        alice_did,
-        alice_device,
-        realm_id,
-        "ak.realm.create",
-        json!({
-            "object": {
-                "id": realm_id,
-                "schema": "ak.schema.realm.v1",
-                "title": "MLS lifecycle",
-                "created_by": alice_did,
-                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-                "trust_domain": "ak:trust_domain:soland-mls-test.local",
-                "schema_refs": ["ak.schema.realm.v1"],
-                "default_discoverability": "listed",
-                "default_join_rule": "invite",
-                "history_visibility": "joined",
-                "encryption_profile": "mls_rfc9420",
-                "security_class": "standard",
-                "federation_policy": "restricted",
-                "notary_profile": "single_did",
-                "digest_algorithm": "sha256",
-                // This deployment hosts the Realm, so it is the Realm's
-                // notary: `notary.rs::is_authorized_for_notary_ops` only lets
-                // the service materialize accepted Seals for a `single_did`
-                // Realm whose notary DID is its own `service_id`, and without
-                // an accepted Seal no Control Move of this Realm could ever
-                // resolve a `seal_basis`.
-                "notary": {
-                    "kind": "single_did",
-                    "did": state.service_id(),
-                    "recovery_members": ["did:web:recovery.example"],
-                    "controller_organization": "did:web:organization.primary.example",
-                    "recovery_controller_organizations": ["did:web:organization.recovery.example"]
-                },
-                "created_at": "2026-05-25T00:00:00.000Z"
-            }
-        }),
-        // `event-auth-state-resolution.md` §5 — `ak.realm.create` is the
-        // genesis anchor unit and carries no basis field at all.
-        None,
-    );
-    let realm_create_event_id = realm_create["event_id"].as_str().unwrap().to_owned();
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&json!({"events": [realm_create]}))
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&json!({"events": realm_bootstrap})).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_resp.status_code;
@@ -691,7 +684,7 @@ async fn mls_lifecycle_end_to_end() {
 
     let mut genesis = signed_event(
         "ak:event:AV_PzlO4KFPCRZ8atMU31wQSdrwGcjtOZpgIu9c_gs1o",
-        1,
+        8,
         alice_did,
         alice_device,
         realm_id,
@@ -703,17 +696,21 @@ async fn mls_lifecycle_end_to_end() {
             "creator_principal_id": alice_did,
             "creator_device_id": alice_device,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref": "ak:blob:sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "ratchet_tree_ref": "ak:blob:sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "governance_binding": governance_binding,
             "created_at": "2026-05-25T00:00:01.000Z"
         }),
         Some(realm_seal_basis.clone()),
     );
-    set_event_prev_refs(&mut genesis, &[realm_create_event_id.as_str()]);
+    set_event_prev_refs(&mut genesis, &[bootstrap_frontier_event_id.as_str()]);
+    let mls_genesis_event_id = genesis["event_id"].as_str().unwrap().to_owned();
     let genesis_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&genesis)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&genesis).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     let genesis_status = genesis_resp.status_code;
@@ -735,6 +732,18 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 3b. Welcome is a durable event and mirrors into the pending queue ─
+    let welcome_binding = json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "effective_scope": effective_scope.clone(),
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 1,
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
+    });
     let mut claim_envelope = json!({
         "keypackage_ref": keypackage_ref,
         "keypackage_digest": claimed_keypackage_digest,
@@ -761,7 +770,7 @@ async fn mls_lifecycle_end_to_end() {
 
     let mut welcome = signed_event(
         "ak:event:AcRK-D2fBUTneeX_47VmTFFtdaFb9UNQ7_kQE7bDKypP",
-        2,
+        9,
         alice_did,
         alice_device,
         realm_id,
@@ -786,17 +795,16 @@ async fn mls_lifecycle_end_to_end() {
             "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00.000Z",
             "commit_ref": "ak:event:AV7r9jE8uOCT8ZEtX3vuk67GOqlz6qBab2XgiJdgkfZr",
-            "governance_binding": governance_binding
+            "governance_binding": welcome_binding
         }),
         Some(realm_seal_basis.clone()),
     );
-    set_event_prev_refs(
-        &mut welcome,
-        &["ak:event:AV_PzlO4KFPCRZ8atMU31wQSdrwGcjtOZpgIu9c_gs1o"],
-    );
+    set_event_prev_refs(&mut welcome, &[mls_genesis_event_id.as_str()]);
+    let welcome_event_id = welcome["event_id"].as_str().unwrap().to_owned();
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&welcome)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&welcome).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     let welcome_status = welcome_resp.status_code;
@@ -831,7 +839,7 @@ async fn mls_lifecycle_end_to_end() {
     let commit_bytes = b"opaque-mls-commit";
     let mut commit = signed_event(
         "ak:event:AV7r9jE8uOCT8ZEtX3vuk67GOqlz6qBab2XgiJdgkfZr",
-        3,
+        10,
         alice_did,
         alice_device,
         realm_id,
@@ -839,7 +847,7 @@ async fn mls_lifecycle_end_to_end() {
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
-            "base_epoch_ref": "ak:event:AV_PzlO4KFPCRZ8atMU31wQSdrwGcjtOZpgIu9c_gs1o",
+            "base_epoch_ref": mls_genesis_event_id,
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_bytes_b64": b64(commit_bytes),
@@ -848,13 +856,11 @@ async fn mls_lifecycle_end_to_end() {
         }),
         Some(realm_seal_basis),
     );
-    set_event_prev_refs(
-        &mut commit,
-        &["ak:event:AcRK-D2fBUTneeX_47VmTFFtdaFb9UNQ7_kQE7bDKypP"],
-    );
+    set_event_prev_refs(&mut commit, &[welcome_event_id.as_str()]);
     let mut commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&commit)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&commit).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(
@@ -916,7 +922,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     assert_eq!(
         device_message["content"]["governance_binding"],
-        governance_binding
+        welcome_binding
     );
     assert_eq!(
         device_message["content"]["claim_ref"]["claim_id"],

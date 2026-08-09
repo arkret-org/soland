@@ -89,8 +89,7 @@ async fn did_recovery_backup_rejects_unverified_session_device() {
 async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[122u8; 32]);
-    let (principal_id, vm) = did_webvh_principal(&signing);
-    ingest_pinned_recovery_did_document(&state, &principal_id, &vm, &signing).await;
+    let (principal_id, vm) = seed_pinned_recovery_root_history(&state, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -112,8 +111,7 @@ async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
 async fn key_backup_delete_allows_stale_did_recovery_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[123u8; 32]);
-    let (principal_id, vm) = did_webvh_principal(&signing);
-    ingest_pinned_recovery_did_document(&state, &principal_id, &vm, &signing).await;
+    let (principal_id, vm) = seed_pinned_recovery_root_history(&state, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,

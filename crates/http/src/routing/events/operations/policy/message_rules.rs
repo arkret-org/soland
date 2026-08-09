@@ -20,17 +20,13 @@ pub(super) fn validate_reaction_scope_policy(
     ) {
         return Ok(());
     }
-    let target = operation
-        .payload
-        .get("target_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
+    let target = reaction_target_ref(&kind, operation);
     let Some(target) = target else {
         return Ok(());
     };
     let target_realm = {
         let projection = state.projections().snapshot();
-        projection.message_realm(target)
+        projection.message_realm(&target)
     };
     let Some(target_realm) = target_realm else {
         // Target not yet observed — reducer keeps the reaction pending.
@@ -93,7 +89,8 @@ pub(super) fn operation_target_scope_circle_id(
             .and_then(Value::as_str)
             .and_then(|morph_id| projection.morph_scope_circle_id(morph_id))
     };
-    match kinds::canonical_kind_for_operation(operation)? {
+    let kind = kinds::canonical_kind_for_operation(operation)?;
+    match &kind {
         arkret_wire::EventKind::StrandCreate
         | arkret_wire::EventKind::MorphCreate
         | arkret_wire::EventKind::SpaceCreate => inline_scope("object"),
@@ -120,14 +117,24 @@ pub(super) fn operation_target_scope_circle_id(
             // membership just like authoring there. Unknown target (not yet
             // observed) → None: the reducer keeps the reaction pending and a
             // non-member cannot name a Circle message id it never received.
-            let target = operation
-                .payload
-                .get("target_ref")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())?;
-            let (_, _, thread_id) = projection.message_origin(target)?;
+            let target = reaction_target_ref(&kind, operation)?;
+            let (_, _, thread_id) = projection.message_origin(&target)?;
             projection.strand_scope_circle_id(&thread_id)
         }
+        _ => None,
+    }
+}
+
+fn reaction_target_ref(kind: &arkret_wire::EventKind, operation: &Operation) -> Option<String> {
+    match kind {
+        arkret_wire::EventKind::ReactionAdd => operation
+            .typed_payload::<arkret_wire::event_spec::ReactionAdd>()
+            .ok()
+            .map(|payload| payload.target_ref.as_str().to_owned()),
+        arkret_wire::EventKind::ReactionRemove => operation
+            .typed_payload::<arkret_wire::event_spec::ReactionRemove>()
+            .ok()
+            .map(|payload| payload.target_ref.as_str().to_owned()),
         _ => None,
     }
 }
@@ -260,16 +267,18 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
 ) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind(operation);
     let explicit_agent_control = matches!(
-        kind.as_str(),
-        "ak.agent.key.authorize"
-            | "ak.agent.key.revoke"
-            | "ak.self.agent.pause"
-            | "ak.self.agent.resume"
-            | "ak.self.agent.deactivate"
+        &kind,
+        arkret_wire::EventKind::AgentKeyAuthorize
+            | arkret_wire::EventKind::AgentKeyRevoke
+            | arkret_wire::EventKind::SelfAgentPause
+            | arkret_wire::EventKind::SelfAgentResume
+            | arkret_wire::EventKind::SelfAgentDeactivate
     );
     let possible_agent_profile_or_genesis = matches!(
-        kind.as_str(),
-        "ak.realm.create" | "ak.profile.create" | "ak.profile.update"
+        &kind,
+        arkret_wire::EventKind::RealmCreate
+            | arkret_wire::EventKind::ProfileCreate
+            | arkret_wire::EventKind::ProfileUpdate
     );
     if !explicit_agent_control && !possible_agent_profile_or_genesis {
         return Ok(());
@@ -280,13 +289,11 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
             .get("agent_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-    } else if kind == "ak.realm.create" {
-        operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("created_by"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+    } else if kind == arkret_wire::EventKind::RealmCreate.as_str() {
+        // The canonical Realm genesis object is profile-closed and therefore
+        // carries no duplicated `created_by` field. Its principal is the
+        // accepted Event actor retained by the projection context.
+        Some(operation.context.sender.to_string())
     } else {
         operation
             .payload
@@ -316,17 +323,26 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     if !realm_ids_match(operation.realm_id.as_str(), &expected) {
         return Err("principal_control_realm_mismatch");
     }
-    if kind == "ak.realm.create" {
+    if kind == arkret_wire::EventKind::RealmCreate.as_str() {
         let object = operation
             .payload
             .get("object")
             .ok_or("managed_agent_pcr_genesis_object_missing")?;
+        let controller_id = operation
+            .context
+            .executed_by
+            .as_ref()
+            .ok_or("managed_agent_pcr_genesis_controller_missing")?;
         crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
-            object, &agent_id, &expected,
+            object,
+            &agent_id,
+            controller_id.as_str(),
+            &expected,
+            state.config().trust_domain.as_str(),
         )
         .map_err(|_| "principal_control_realm_profile_mismatch")?;
     }
-    if kind == "ak.agent.key.authorize" {
+    if kind == arkret_wire::EventKind::AgentKeyAuthorize {
         let record = state
             .agent_pairings()
             .agent(&agent_id)

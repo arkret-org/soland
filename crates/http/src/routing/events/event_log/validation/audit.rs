@@ -610,7 +610,7 @@ mod tests {
     fn encrypted_message_franking_is_not_gated_by_audit_applet_policy() {
         let proof = encrypted_message_franking_proof(
             "did:web:soland.example",
-            &parsed(arkret_wire::EventKind::MessageCreate),
+            &parsed(arkret_wire::EventKind::MessageCreate.as_str()),
             &json!({
                 "payload": {
                     "encrypted_content": {
@@ -639,7 +639,7 @@ mod tests {
         assert!(
             encrypted_message_franking_proof(
                 "did:web:soland.example",
-                &parsed(arkret_wire::EventKind::MessageCreate),
+                &parsed(arkret_wire::EventKind::MessageCreate.as_str()),
                 &json!({"payload": {"content": {"body": "hello"}}}),
             )
             .is_none()

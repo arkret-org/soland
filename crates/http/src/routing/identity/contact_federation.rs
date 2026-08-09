@@ -440,7 +440,7 @@ fn validate_mirror_receipt_cryptography(
     let signing_bytes = receipt
         .canonical_signing_bytes()
         .map_err(|error| AppError::internal(format!("{field} transcript failed: {error}")))?;
-    super::account::verify_contact_service_signature_bytes(
+    verify_contact_service_signature_bytes(
         state,
         expected_service_id,
         &receipt.signature,
@@ -465,7 +465,7 @@ async fn validate_proof_refresh_evidence(
     let signing_bytes = current_proof
         .canonical_signing_bytes()
         .map_err(|error| AppError::internal(format!("current_proof transcript failed: {error}")))?;
-    super::account::verify_contact_service_signature_bytes(
+    verify_contact_service_signature_bytes(
         state,
         source_service_id,
         &current_proof.signature,
@@ -549,7 +549,7 @@ fn validate_glare_finalize_evidence(
             "glare_concurrency_attestation transcript failed: {error}"
         ))
     })?;
-    super::account::verify_contact_service_signature_bytes(
+    verify_contact_service_signature_bytes(
         state,
         source_service_id,
         &attestation.signature,
@@ -635,6 +635,27 @@ fn validate_glare_finalize_evidence(
         ));
     }
     Ok(())
+}
+
+fn verify_contact_service_signature_bytes(
+    state: &AppState,
+    expected_service_id: &str,
+    signature: &ProtocolSignature,
+    signing_bytes: &[u8],
+    evidence_field: &str,
+) -> Result<(), AppError> {
+    let signed_value: Value = serde_json::from_slice(signing_bytes).map_err(|error| {
+        AppError::internal(format!(
+            "{evidence_field} canonical signing transcript is invalid JSON: {error}"
+        ))
+    })?;
+    super::account::verify_contact_service_signature(
+        state,
+        expected_service_id,
+        signature,
+        &signed_value,
+        evidence_field,
+    )
 }
 
 fn validate_contact_lineage_carrier(

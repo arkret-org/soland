@@ -1345,8 +1345,8 @@ impl ProjectionState {
 
         // Cells map: synth a CellState::Value per the spec cell family
         // for this canonical kind.
-        match kind.clone() {
-            k if k == arkret_wire::EventKind::RealmCreate => {
+        match &kind {
+            arkret_wire::EventKind::RealmCreate => {
                 self.realm_create_cells.insert(
                     realm_id.clone(),
                     CellState::Value(Value::Array(vec![Value::String(realm_id.clone())])),
@@ -1383,13 +1383,13 @@ impl ProjectionState {
                     );
                 }
             }
-            k if k == arkret_wire::EventKind::RealmProfile => {
+            arkret_wire::EventKind::RealmProfile => {
                 self.realm_profile_cells.insert(
                     realm_id.clone(),
                     CellState::Value(operation.payload.clone()),
                 );
             }
-            k if k == arkret_wire::EventKind::RealmArchive => {
+            arkret_wire::EventKind::RealmArchive => {
                 let mut value = serde_json::Map::new();
                 value.insert(
                     "archived".to_owned(),
@@ -1415,7 +1415,7 @@ impl ProjectionState {
                     CellState::Value(Value::Object(value)),
                 );
             }
-            k if k == arkret_wire::EventKind::RealmFreeze => {
+            arkret_wire::EventKind::RealmFreeze => {
                 let mut value = serde_json::Map::new();
                 value.insert(
                     "frozen".to_owned(),
@@ -1445,7 +1445,7 @@ impl ProjectionState {
                     CellState::Value(Value::Object(value)),
                 );
             }
-            k if k == arkret_wire::EventKind::RealmTombstone => {
+            arkret_wire::EventKind::RealmTombstone => {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
@@ -1468,7 +1468,7 @@ impl ProjectionState {
                 // successor Realm. Spec §2.5 row "tombstone" — no
                 // realm_destroyed_orphan cascade fires here.
             }
-            k if k == arkret_wire::EventKind::RealmDestroy => {
+            arkret_wire::EventKind::RealmDestroy => {
                 // cas-register: terminal {destroyed: true, at: ts}.
                 let value = serde_json::json!({
                     "terminal_kind": "destroyed",

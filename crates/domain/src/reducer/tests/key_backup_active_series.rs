@@ -18,7 +18,7 @@ fn active_series_payload() -> Value {
         "frontier_ref": {
             "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "device_generation_ref": "device-generation-ref-2"
+            "device_generation_ref": "2-device-generation-ref"
         },
         "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {
@@ -36,11 +36,7 @@ fn active_series_payload() -> Value {
                 "issued_at"
             ],
             "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
-        },
-        "event_id": "ak:event:AX-v4iEo3aBBVhcKOJcDv4ck4TmUm1Wazh9WcL5bJkIB",
-        "sender": ACTOR,
-        "hlc": "019641371000-0001-00000001",
-        "accepted_event_id": "ak:event:AX-v4iEo3aBBVhcKOJcDv4ck4TmUm1Wazh9WcL5bJkIB"
+        }
     })
 }
 

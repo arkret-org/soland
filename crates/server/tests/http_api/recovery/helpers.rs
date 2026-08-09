@@ -13,8 +13,8 @@ use arkret_models_crypto::{
 };
 use serde_json::{Map, Value};
 use soland_storage::{
-    CanonicalEventRecord, DeviceInventoryRecord, PersistenceStore, RecoveryPolicyRecord,
-    SessionRecord, WebvhDocumentRecord,
+    DeviceInventoryRecord, PersistenceStore, RecoveryPolicyRecord, SessionRecord,
+    WebvhDocumentRecord, WebvhLogRecord,
 };
 
 use crate::common::*;
@@ -35,6 +35,10 @@ pub(crate) const POLICY_FIELDS: &[&str] = &[
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
 pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+
+fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
 
 fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkret_wire::Seal) {
     let move_id = seal
@@ -67,64 +71,6 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
             &[(arkret_wire::REALM_NOTARY_CELL.parse().unwrap(), op)],
         )
         .unwrap();
-}
-
-async fn seed_realm_create_proposal_policy(
-    state: &AppState,
-    realm_id: &RealmId,
-    principal_id: &str,
-) -> arkret_wire::EventId {
-    if let Some(record) = state
-        .test_persistence()
-        .events()
-        .realm_events_newest_first(realm_id.as_str())
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
-    {
-        return arkret_wire::EventId::new(record.event_id).unwrap();
-    }
-    let event = arkret_wire::test_support::raw_event(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        Did::new(principal_id.to_owned()).unwrap(),
-        0,
-        arkret_identifiers::Hlc::new(format!(
-            "{:012x}-0000-a11ce100",
-            chrono::Utc::now().timestamp_millis()
-        ))
-        .unwrap(),
-        serde_json::json!({
-            "object": {
-                "id": realm_id,
-            }
-        }),
-    )
-    .unwrap();
-    let event_id = event.event_id.clone();
-    let canonical_digest = event.event_digest().unwrap();
-    let envelope = serde_json::to_value(&event).unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put(CanonicalEventRecord {
-            event_id: event_id.to_string(),
-            actor_id: principal_id.to_owned(),
-            actor_seq: 0,
-            realm_id: Some(realm_id.to_string()),
-            kind: arkret_wire::EventKind::RealmCreate.as_str().to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest,
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
-    event_id
 }
 
 /// Build the canonical recovery-proof transcript the server reconstructs, and
@@ -336,7 +282,8 @@ pub(crate) async fn put_key_backup(
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("idempotency-key", format!("fixture:{backup_id}"), true)
-    .json(body)
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(body))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.unwrap();
@@ -397,7 +344,8 @@ pub(crate) async fn delete_key_backup(
         "http://server/_arkret/self/keys/backups/{backup_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&body)
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&body))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.unwrap();
@@ -412,11 +360,13 @@ pub(crate) async fn issue_key_backup_delete_challenge(
     backup_id: &str,
     request_id: arkret_wire::Base64UrlString,
 ) -> KeysBackupsDeleteChallenge {
+    let request = KeysBackupsIssueDeleteChallengeRequestBody { request_id };
     let mut response = TestClient::post(format!(
         "http://server/_arkret/self/keys/backups/{backup_id}/delete-challenge"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&KeysBackupsIssueDeleteChallengeRequestBody { request_id })
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&request))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.unwrap();
@@ -434,7 +384,8 @@ pub(crate) async fn post_recovery(
 ) -> Value {
     let mut response = TestClient::post(format!("http://server{path}"))
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(body)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(body))
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.unwrap();
@@ -460,7 +411,16 @@ pub(crate) async fn get_recovery(
 }
 
 pub(crate) fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
-    soland_test_support::app_state_with_persistence(test_config(), persistence)
+    let mut config = test_config();
+    config.embedded_webvh_provider_enabled = true;
+    if !config
+        .did_resolver_allow_methods
+        .iter()
+        .any(|method| method == "webvh")
+    {
+        config.did_resolver_allow_methods.push("webvh".to_owned());
+    }
+    soland_test_support::app_state_with_persistence(config, persistence)
 }
 
 pub(crate) fn shared_recovery_state_with_config(
@@ -674,6 +634,67 @@ pub(crate) async fn ingest_pinned_recovery_did_document(
         .unwrap();
 }
 
+/// Seed a complete, SDK-authored principal `did:webvh` inception so recovery
+/// proof verification stays on the durable-history path and never reaches an
+/// external resolver.
+pub(crate) async fn seed_pinned_recovery_root_history(
+    state: &AppState,
+    signing: &SigningKey,
+) -> (String, String) {
+    let endpoint = url::Url::parse("https://recovery.example").unwrap();
+    let version_time = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let next_root = SigningKey::from_bytes(&[0x55; 32]);
+    let next_root_public_key_multibase = test_ed25519_multibase_public(&next_root);
+    let root_seed = signing.to_bytes();
+    let inception = arkret_signatures::webvh::prepare_principal_inception(
+        &arkret_signatures::webvh::PrincipalInceptionInput {
+            principal_endpoint: &endpoint,
+            local_id: "recovery",
+            also_known_as: &[],
+            version_time,
+            root_seed: &root_seed,
+            next_root_public_key_multibase: &next_root_public_key_multibase,
+        },
+    )
+    .expect("SDK-authored recovery did:webvh inception");
+    let event_digest = arkret_canonical::canonical_sha256(&inception.log_entry)
+        .expect("recovery did:webvh log digest");
+    let now = chrono::Utc::now();
+    state
+        .test_persistence()
+        .webvh()
+        .append_log_event(WebvhLogRecord {
+            event_digest: event_digest.clone(),
+            did: inception.did.clone(),
+            seq: 1,
+            operation: inception.log_entry.clone(),
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .test_persistence()
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: inception.did.clone(),
+            did_document: inception.log_entry["state"].clone(),
+            key_log_head: Some(event_digest),
+            seq: 1,
+            method_evidence: serde_json::json!({
+                "mode": "test_pinned_history",
+                "version_id": inception.version_id,
+            }),
+            fetched_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    (inception.did, inception.root_verification_method)
+}
+
 pub(crate) fn signed_recovery_policy(
     signing: &SigningKey,
     principal_id: &str,
@@ -781,7 +802,6 @@ pub(crate) async fn post_recovery_policy(
 
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
-    seed_realm_create_proposal_policy(&state, &realm, principal_id).await;
     let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
     soland_test_support::cba_basis::seed_realm_basis(
         &state,
@@ -851,6 +871,11 @@ pub(crate) async fn post_recovery_policy(
     )
     .unwrap();
 
+    let lease_request = arkret_wire::AuthorizationLeaseIssueRequest {
+        events: vec![event.clone()],
+        intents: Vec::new(),
+    };
+    let lease_request_bytes = arkret_canonical::canonical_json_bytes(&lease_request).unwrap();
     let mut lease_response = TestClient::post("http://server/_arkret/self/authorization-leases")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
@@ -858,10 +883,8 @@ pub(crate) async fn post_recovery_policy(
             format!("recovery-policy-lease-{}", event.event_id),
             true,
         )
-        .json(&arkret_wire::AuthorizationLeaseIssueRequest {
-            events: vec![event.clone()],
-            intents: Vec::new(),
-        })
+        .add_header("content-type", "application/json", true)
+        .body(lease_request_bytes)
         .send(&app_from_state(state.clone()))
         .await;
     let lease_status = lease_response.status_code.unwrap();
@@ -877,9 +900,11 @@ pub(crate) async fn post_recovery_policy(
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
         cba_proof_bundles: Vec::new(),
     };
+    let receipt_request_bytes = arkret_canonical::canonical_json_bytes(&receipt_request).unwrap();
     let mut receipt_response = TestClient::post("http://server/_arkret/self/control-proposal-acks")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&receipt_request)
+        .add_header("content-type", "application/json", true)
+        .body(receipt_request_bytes)
         .send(&app_from_state(state.clone()))
         .await;
     let receipt_status = receipt_response.status_code.unwrap();
@@ -911,9 +936,11 @@ pub(crate) async fn post_recovery_policy(
         cba_proof_bundles: Vec::new(),
         control_proposal_ack: Some(control_proposal_ack),
     };
+    let request_bytes = arkret_canonical::canonical_json_bytes(&request).unwrap();
     let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&request)
+        .add_header("content-type", "application/json", true)
+        .body(request_bytes.clone())
         .send(&app_from_state(state.clone()))
         .await;
     let mut status = response.status_code.unwrap();
@@ -973,7 +1000,8 @@ pub(crate) async fn post_recovery_policy(
 
         let mut retry = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&request)
+            .add_header("content-type", "application/json", true)
+            .body(request_bytes)
             .send(&app_from_state(state))
             .await;
         status = retry.status_code.unwrap();

@@ -61,7 +61,7 @@ impl ProjectionState {
             issued_at: record.issued_at,
             auth_data: record.auth_data.clone(),
             extra: record.extra.clone(),
-            event_id: operation.operation_id.to_string(),
+            event_id: operation.context.event_id.to_string(),
         };
         let subject = active_series_subject(&actor_id, &backup_kind);
         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(

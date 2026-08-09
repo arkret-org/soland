@@ -19,6 +19,10 @@ use soland_services::organization_registration::{
 
 use super::common::*;
 
+fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical organization request body")
+}
+
 struct StaticOrganizationResolver {
     state: RwLock<PinnedDidDocumentState>,
 }
@@ -185,11 +189,12 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let mut unsupported_scope =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:prepare")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "local_admin_subject": admin_id,
                 "requested_scopes": ["organization_unregistered_scope"],
-            }))
+            })))
             .send(&app)
             .await;
     let unsupported_scope_body: serde_json::Value = unsupported_scope.take_json().await.unwrap();
@@ -203,11 +208,12 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let challenge: OrganizationRegistrationChallenge =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:prepare")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "local_admin_subject": admin_id,
                 "requested_scopes": ["organization_profile_manage"],
-            }))
+            })))
             .send(&app)
             .await
             .take_json()
@@ -226,7 +232,8 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let outcome: OrganizationRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:ensure")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&ensure)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&ensure))
             .send(&app)
             .await
             .take_json()
@@ -254,11 +261,12 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let refresh_challenge: OrganizationRegistrationChallenge =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:prepare")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
                 "local_admin_subject": "did:web:alice.example",
                 "requested_scopes": ["organization_profile_manage"],
-            }))
+            })))
             .send(&app)
             .await
             .take_json()
@@ -267,13 +275,20 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let refreshed: OrganizationRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:refresh")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&OrganizationRegistrationRefreshRequestBody {
-                organization_id: organization_id.clone(),
-                challenge_id: refresh_challenge.challenge_id.clone(),
-                version_id: pinned.version_id.clone(),
-                log_head_digest: pinned.log_head_digest.clone(),
-                control_proof: signed_control_proof(&refresh_challenge, &pinned, &control_signer),
-            })
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(
+                &OrganizationRegistrationRefreshRequestBody {
+                    organization_id: organization_id.clone(),
+                    challenge_id: refresh_challenge.challenge_id.clone(),
+                    version_id: pinned.version_id.clone(),
+                    log_head_digest: pinned.log_head_digest.clone(),
+                    control_proof: signed_control_proof(
+                        &refresh_challenge,
+                        &pinned,
+                        &control_signer,
+                    ),
+                },
+            ))
             .send(&app)
             .await
             .take_json()
@@ -288,10 +303,11 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let revoked: OrganizationRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:revoke")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
-            .json(&OrganizationRegistrationRevokeRequestBody {
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&OrganizationRegistrationRevokeRequestBody {
                 organization_id: organization_id.clone(),
                 reason_code: None,
-            })
+            }))
             .send(&app)
             .await
             .take_json()

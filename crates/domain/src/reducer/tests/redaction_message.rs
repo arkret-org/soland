@@ -256,8 +256,8 @@ fn reaction_or_set_convergence() {
             arkret_wire::EventKind::ReactionAdd,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "actor": "did:web:alice",
+                "target_ref": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
+                "sender": "did:web:alice",
                 "key": "👍"
             }),
         ),
@@ -275,8 +275,8 @@ fn reaction_or_set_convergence() {
             arkret_wire::EventKind::ReactionRemove,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
-                "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "actor": "did:web:alice",
+                "target_ref": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
+                "sender": "did:web:alice",
                 "key": "👍"
             }),
         ),
@@ -305,32 +305,31 @@ fn membership_join_leave() {
     // additionally require a projected `ak.realm.delivery_binding_policy`
     // cell (`routable` joins are exercised by the delivery-binding
     // suite).
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            realm_id,
-            serde_json::json!({
-                "actor_id": "did:web:bob",
-                "membership": "join",
-                "role": "member",
-                "delivery_status": "unroutable"
-            }),
-        ),
-        &hlc,
-    );
+    let join_payload = serde_json::json!({
+        "realm_id": realm_id,
+        "actor_id": "did:web:bob",
+        "membership": "join",
+        "delivery_status": "unroutable"
+    });
+    let (_, join_writes) =
+        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &join_payload);
+    let mut join = make_operation(arkret_wire::EventKind::MemberState, realm_id, join_payload);
+    join.context.sender = arkret_identifiers::Did::new("did:web:bob").unwrap();
+    state.apply_projected(&join, &join_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            realm_id,
-            serde_json::json!({
-                "actor_id": "did:web:bob",
-                "membership": "leave"
-            }),
-        ),
-        &hlc,
+    let leave_payload = serde_json::json!({
+        "actor_id": "did:web:bob",
+        "membership": "leave"
+    });
+    let (_, leave_writes) = projected_cell_writes(
+        arkret_wire::EventKind::MemberState,
+        realm_id,
+        &leave_payload,
     );
+    let mut leave = make_operation(arkret_wire::EventKind::MemberState, realm_id, leave_payload);
+    leave.context.sender = arkret_identifiers::Did::new("did:web:bob").unwrap();
+    state.apply_projected(&leave, &leave_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }
 
@@ -361,7 +360,7 @@ fn message_revise_creates_chain() {
             "content": {"kind": "ak.content.text", "body": "revised"}
         }),
     );
-    let revision_id = revise.operation_id.to_string();
+    let revision_id = revise.context.event_id.to_string();
     state.apply(&revise, &hlc);
 
     let msgs = state.messages_for_realm("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb");

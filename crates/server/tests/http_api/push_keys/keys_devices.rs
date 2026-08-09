@@ -286,7 +286,8 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "x-arkret-attachment-envelope",
             serde_json::json!({
                 "scheme": "ak.blob.whole_file_aead.v1",
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
+                "encryption_algorithm":
+                    arkret_models_crypto::WholeFileEncryptionAlgorithm::MlsExporterAeadXchacha20poly1305,
                 "nonce": "nonce0123456789ab",
                 "key_ref": {
                     "algorithm": "MLS",
@@ -330,8 +331,10 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .as_ref()
         .expect("encrypted attachment metadata is persisted");
     assert_eq!(
-        encrypted_attachment["alg"],
-        "mls_exporter_aead_xchacha20poly1305"
+        encrypted_attachment["encryption_algorithm"],
+        serde_json::json!(
+            arkret_models_crypto::WholeFileEncryptionAlgorithm::MlsExporterAeadXchacha20poly1305
+        )
     );
     assert_eq!(encrypted_attachment["ciphertext_digest"], ciphertext_digest);
     let anonymous_blob = TestClient::get(format!(
@@ -838,7 +841,6 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     // Exercise accepted device authorization projection directly.
     let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
-    let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
     let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(control_realm).unwrap(),
@@ -861,6 +863,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             "device_signature": "c2ln"
         }),
     );
+    let expected_authorize_event_id = operation.context.event_id.to_string();
     soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
 
     let device = state
@@ -951,7 +954,6 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let multibase = test_ed25519_multibase_public(&device_key);
     let control_realm = soland_test_support::principal_control_realm_for_did(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
-    let expected_authorize_event_id = operation_id.replacen("ak:operation:", "ak:event:", 1);
     let operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(operation_id).unwrap(),
         RealmId::new(control_realm).unwrap(),
@@ -973,6 +975,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
             "device_signature": "c2ln"
         }),
     );
+    let expected_authorize_event_id = operation.context.event_id.to_string();
     soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
 
     let token = dev_token_for_device(

@@ -23,6 +23,23 @@ const CAROL_DEVICE: &str = "ak:device:01904100-0000-7000-8000-ca0010000001";
 const DAVE: &str = "did:web:dave.example";
 const DAVE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-da0010000001";
 
+fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
+
+async fn post_canonical_signal(
+    state: AppState,
+    token: &str,
+    envelope: &arkret_wire::SignalEnvelope,
+) -> salvo::http::Response {
+    TestClient::post("http://server/_arkret/self/signal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(envelope))
+        .send(&app_from_state(state))
+        .await
+}
+
 async fn set_demo_realm_visibility(
     state: &AppState,
     discoverability: &str,
@@ -359,13 +376,11 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     set_read_receipt_policy(state.clone(), &alice_token, "private", false).await;
 
     // (1) §2.1 — the legacy plaintext ephemeral receipt is refused outright.
+    let legacy_body = legacy_plaintext_read_receipt_envelope(BOB, BOB_DEVICE, &target_event_id);
     let mut legacy = TestClient::post("http://server/_arkret/self/signal")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&legacy_plaintext_read_receipt_envelope(
-            BOB,
-            BOB_DEVICE,
-            &target_event_id,
-        ))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&legacy_body))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(legacy.status_code, Some(StatusCode::BAD_REQUEST));
@@ -399,8 +414,12 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
         &plaintext,
         &bob_key,
     );
-    let mut submit = post_signal(state.clone(), &bob_token, &receipt).await;
-    assert_eq!(submit.status_code, Some(StatusCode::OK));
+    let mut submit = post_canonical_signal(state.clone(), &bob_token, &receipt).await;
+    if submit.status_code != Some(StatusCode::OK) {
+        let status = submit.status_code;
+        let body: Value = submit.take_json().await.unwrap();
+        panic!("receipt submit failed with {status:?}: {body}");
+    }
     let outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
         submit.take_json().await.unwrap();
     assert!(outcome.accepted);
@@ -483,7 +502,8 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
         &read_receipt_plaintext(BOB, &target_event_id, 1),
         &bob_key,
     );
-    let mut members_submit = post_signal(state.clone(), &bob_token, &members_receipt).await;
+    let mut members_submit =
+        post_canonical_signal(state.clone(), &bob_token, &members_receipt).await;
     assert_eq!(members_submit.status_code, Some(StatusCode::OK));
     let members_outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
         members_submit.take_json().await.unwrap();
@@ -517,7 +537,7 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
         &bob_key,
     );
     assert_eq!(
-        post_signal(state.clone(), &bob_token, &public_receipt)
+        post_canonical_signal(state.clone(), &bob_token, &public_receipt)
             .await
             .status_code,
         Some(StatusCode::OK)
@@ -565,7 +585,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
 
     // §2 — one second past the `session` ceiling fails closed at the ingress.
     let over_ceiling_at = chrono::Utc::now();
-    let mut over_ceiling = post_signal(
+    let mut over_ceiling = post_canonical_signal(
         state.clone(),
         &bob_token,
         &bob_receipt_signal(
@@ -598,7 +618,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
         &plaintext(expired_at),
         &bob_key,
     );
-    let mut expired_response = post_signal(state.clone(), &bob_token, &expired).await;
+    let mut expired_response = post_canonical_signal(state.clone(), &bob_token, &expired).await;
     let expired_status = expired_response.status_code;
     let expired_body: Value = expired_response.take_json().await.unwrap();
     assert_eq!(
@@ -617,7 +637,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
         &bob_key,
     );
     assert_eq!(
-        post_signal(state.clone(), &bob_token, &live)
+        post_canonical_signal(state.clone(), &bob_token, &live)
             .await
             .status_code,
         Some(StatusCode::OK)

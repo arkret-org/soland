@@ -754,7 +754,7 @@ impl ProjectionState {
         self.effective_moderation_verdict(target_ref) != "none"
     }
 
-    pub(crate) fn apply_read_cursor(
+    pub fn apply_read_cursor(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,

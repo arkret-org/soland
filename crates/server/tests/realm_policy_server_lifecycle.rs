@@ -33,7 +33,8 @@ use soland_storage::PersistenceStore;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 use soland_test_support::AppStateTestExt as _;
 use soland_test_support::signed_event::{
-    CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED, head_eq_precondition,
+    CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED, complete_realm_bootstrap_unit,
+    head_eq_precondition,
 };
 
 const ALICE: &str = "did:web:alice.example";
@@ -122,9 +123,10 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     )
     .build();
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
+    let bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"events": [genesis]}))
+        .json(&json!({"events": bootstrap}))
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_resp.status_code;
@@ -184,11 +186,15 @@ fn policy_server_move(
     realm_id: &str,
     payload: Value,
     seal: &SealId,
+    actor_seq: u64,
+    prev_refs: Vec<&str>,
 ) -> arkret_wire::EventInitialSubmission {
     let preconditions = settled_policy_server_value(state, realm_id)
         .map(|settled| vec![head_eq_precondition(POLICY_CELL, settled)])
         .unwrap_or_default();
     unguarded_policy_server_move(realm_id, payload, seal)
+        .with_actor_seq(actor_seq)
+        .with_prev_refs(prev_refs)
         .with_preconditions(preconditions)
         .build_submission()
 }
@@ -229,8 +235,16 @@ async fn put_policy_server(
     body: &Value,
 ) -> (StatusCode, Value) {
     let seal = accepted_seal_id(state, token, realm_id).await;
+    let (actor_seq, prev_refs) = actor_frontier(state, token, realm_id).await;
     let request = RealmPolicyServerReplaceRequestBody {
-        policy_server_event: policy_server_move(state, realm_id, body.clone(), &seal),
+        policy_server_event: policy_server_move(
+            state,
+            realm_id,
+            body.clone(),
+            &seal,
+            actor_seq,
+            prev_refs.iter().map(String::as_str).collect(),
+        ),
     };
     send_put_policy_server(state, token, realm_id, &request).await
 }
@@ -274,8 +288,16 @@ async fn delete_policy_server(
     // The removal is a signed Event, so this DELETE carries a body the way
     // `ak.self.keys.backups.resource.delete` already does.
     let seal = accepted_seal_id(state, token, realm_id).await;
+    let (actor_seq, prev_refs) = actor_frontier(state, token, realm_id).await;
     let request = RealmPolicyServerDeleteRequestBody {
-        policy_server_event: policy_server_move(state, realm_id, json!({"tombstone": true}), &seal),
+        policy_server_event: policy_server_move(
+            state,
+            realm_id,
+            json!({"tombstone": true}),
+            &seal,
+            actor_seq,
+            prev_refs.iter().map(String::as_str).collect(),
+        ),
     };
     let mut response = TestClient::delete(format!(
         "http://server/_arkret/self/realms/{realm_id}/policy-server"
@@ -353,8 +375,35 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
     unreachable!("bounded Realm Seal frontier retry returns or panics")
 }
 
+async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": ALICE, "realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .expect("typed actor Realm frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
+        panic!("combined Realm+actor selector returned the wrong frontier variant");
+    };
+    frontier.validate().expect("valid actor Realm frontier");
+    (
+        frontier.next_actor_seq,
+        frontier
+            .frontier_event_ids
+            .into_iter()
+            .map(|event_id| event_id.to_string())
+            .collect(),
+    )
+}
+
 async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target: &str) {
     let seal = accepted_seal_id(state, token, realm_id).await;
+    let (actor_seq, prev_refs) = actor_frontier(state, token, realm_id).await;
     let request = RealmLinkCreateRequestBody {
         link_event: CallerSignedEvent::new(
             arkret_wire::EventKind::RealmLink.as_str(),
@@ -367,6 +416,8 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
                 "status": "active",
             }),
         )
+        .with_actor_seq(actor_seq)
+        .with_prev_refs(prev_refs.iter().map(String::as_str).collect())
         .with_accepted_seal_basis(seal)
         .build_submission(),
     };
@@ -623,18 +674,21 @@ async fn policy_server_same_basis_sibling_fails_closed() {
             })
             .expect("settled declaration")
     };
-    let sibling_move = |mut payload: Value| {
-        payload["preconditions"] = json!([{
+    let sibling_move = |payload: Value| {
+        let preconditions = serde_json::from_value(json!([{
             "cell": POLICY_CELL,
             "predicate": {"op": "head_eq", "value": settled_basis.clone()},
-        }]);
-        arkret_event_draft::test_support::raw_projected_operation(
+        }]))
+        .expect("typed policy-server precondition");
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             arkret_identifiers::RealmId::new(child_realm).unwrap(),
             arkret_wire::EventKind::RealmPolicyServer.as_str(),
             payload,
-        )
+        );
+        operation.context.preconditions = preconditions;
+        operation
     };
     {
         let mut projection = state.test_projection().lock();
@@ -703,12 +757,15 @@ async fn policy_server_replace_without_head_eq_is_refused() {
     assert_eq!(status, StatusCode::OK, "first PUT: {view}");
 
     let seal = accepted_seal_id(&state, &token, realm).await;
+    let (actor_seq, prev_refs) = actor_frontier(&state, &token, realm).await;
     let unguarded = RealmPolicyServerReplaceRequestBody {
         policy_server_event: unguarded_policy_server_move(
             realm,
             declaration_body("second.example"),
             &seal,
         )
+        .with_actor_seq(actor_seq)
+        .with_prev_refs(prev_refs.iter().map(String::as_str).collect())
         .build_submission(),
     };
     let (status, body) = send_put_policy_server(&state, &token, realm, &unguarded).await;
@@ -759,16 +816,21 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
         .event_id()
         .expect("bootstrapped collaboration Realm retypes its genesis Event id");
 
-    let resolved: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+    let resolved: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"event_ids": [create_event_id.to_string()]}))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(
+            &json!({"event_ids": [create_event_id.to_string()]}),
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
 
-    let events = resolved["events"].as_array().expect("events array");
+    let events = resolved["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("events array: {resolved}"));
     assert_eq!(events.len(), 1, "resolve response: {resolved}");
     let create_digest = events[0]["proofs"][0]["event_digest"]
         .as_str()
@@ -800,9 +862,12 @@ async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
 
     // An Event id that does not exist stays in `missing[]` and contributes no
     // Seal: the derived set never invents coverage for an unresolved selector.
-    let unknown: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+    let unknown: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"event_ids": ["ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"]}))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&json!({
+            "event_ids": ["ak:event:Ac7-1lLzCCcEO_GkBXRnpMT7IfFyRdjN8kL8i9-ztQcg"]
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

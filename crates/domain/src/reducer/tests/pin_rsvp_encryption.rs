@@ -138,12 +138,24 @@ fn rsvp_payload_for(status: &str, occurrence: Value, _unused: Value) -> Value {
         "event_ref": STRAND_ID,
         "occurrence": occurrence,
         "sender": "did:web:alice.example",
-        "causal_refs": [BASIS_A],
         "entry": {
             "schedule_basis_refs": [BASIS_A],
             "response": {"status": status}
         }
     })
+}
+
+fn set_causal_refs(operation: &mut arkret_event_draft::ProjectedEventOperation, refs: &[&str]) {
+    operation.context.envelope_causal_refs = refs
+        .iter()
+        .map(|value| arkret_identifiers::Hash::new(*value).expect("causal ref parses"))
+        .collect();
+}
+
+fn rsvp_operation(payload: Value) -> arkret_event_draft::ProjectedEventOperation {
+    let mut operation = make_operation(arkret_wire::EventKind::RsvpSet, REALM_ID, payload);
+    set_causal_refs(&mut operation, &[BASIS_A]);
+    operation
 }
 
 #[test]
@@ -254,12 +266,8 @@ fn rsvp_entry_without_causal_basis_is_rejected() {
     // Shape admission: a basis the envelope does not causally carry is
     // refused without resolving anything, so an e2ee deployment reaches the
     // same verdict as a plaintext one.
-    let mut operation = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload(Value::Null),
-    );
-    operation.payload["causal_refs"] = serde_json::json!([]);
+    let mut operation = rsvp_operation(rsvp_payload(Value::Null));
+    operation.context.envelope_causal_refs.clear();
 
     let effect = state.apply(&operation, &hlc);
     assert!(matches!(
@@ -274,11 +282,7 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let operation = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload(Value::Null),
-    );
+    let operation = rsvp_operation(rsvp_payload(Value::Null));
 
     state
         .strands
@@ -311,14 +315,7 @@ fn rsvp_projects_the_complete_entry_as_one_head() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
 
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RsvpSet,
-            REALM_ID,
-            rsvp_payload(Value::Null),
-        ),
-        &hlc,
-    );
+    let effect = state.apply(&rsvp_operation(rsvp_payload(Value::Null)), &hlc);
     assert!(matches!(
         effect,
         ProjectionEffect::RsvpProjected { head_count: 1, .. }
@@ -340,15 +337,11 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
     // A UTC instant is not a canonical instance key. The cell subject derives
     // from the signed value, so the receiver rejects instead of repairing it.
     let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RsvpSet,
-            REALM_ID,
-            rsvp_payload_for(
-                "accepted",
-                serde_json::json!("2026-06-22T16:00:00.000Z"),
-                Value::Null,
-            ),
-        ),
+        &rsvp_operation(rsvp_payload_for(
+            "accepted",
+            serde_json::json!("2026-06-22T16:00:00.000Z"),
+            Value::Null,
+        )),
         &hlc,
     );
     assert!(matches!(
@@ -357,15 +350,11 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
     ));
 
     let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RsvpSet,
-            REALM_ID,
-            rsvp_payload_for(
-                "accepted",
-                serde_json::json!("2026-06-22T09:00:00[America/Los_Angeles]"),
-                Value::Null,
-            ),
-        ),
+        &rsvp_operation(rsvp_payload_for(
+            "accepted",
+            serde_json::json!("2026-06-22T09:00:00[America/Los_Angeles]"),
+            Value::Null,
+        )),
         &hlc,
     );
     assert!(matches!(effect, ProjectionEffect::RsvpProjected { .. }));
@@ -386,11 +375,7 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
 
-    let mut first = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload_for("accepted", Value::Null, Value::Null),
-    );
+    let mut first = rsvp_operation(rsvp_payload_for("accepted", Value::Null, Value::Null));
     first.context.canonical_event_digest = arkret_identifiers::Hash::new(
         "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     )
@@ -399,11 +384,7 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
 
     // Concurrent: this response did not observe the first, so both heads stay
     // exposed. Nothing here may pick a winner by HLC or arrival order.
-    let mut concurrent = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload_for("declined", Value::Null, Value::Null),
-    );
+    let mut concurrent = rsvp_operation(rsvp_payload_for("declined", Value::Null, Value::Null));
     concurrent.context.canonical_event_digest = arkret_identifiers::Hash::new(
         "sha256:2222222222222222222222222222222222222222222222222222222222222222",
     )
@@ -418,16 +399,15 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
 
     // Causal successor: it names both heads, so it dominates them and the
     // responder is back to a single answer.
-    let mut resolving = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload_for("tentative", Value::Null, Value::Null),
+    let mut resolving = rsvp_operation(rsvp_payload_for("tentative", Value::Null, Value::Null));
+    set_causal_refs(
+        &mut resolving,
+        &[
+            BASIS_A,
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        ],
     );
-    resolving.payload["causal_refs"] = serde_json::json!([
-        BASIS_A,
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    ]);
     resolving.context.canonical_event_digest = arkret_identifiers::Hash::new(
         "sha256:3333333333333333333333333333333333333333333333333333333333333333",
     )
@@ -448,11 +428,7 @@ fn byte_identical_rsvp_entry_is_a_value_level_noop() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
 
-    let operation = make_operation(
-        arkret_wire::EventKind::RsvpSet,
-        REALM_ID,
-        rsvp_payload(Value::Null),
-    );
+    let operation = rsvp_operation(rsvp_payload(Value::Null));
     state.apply(&operation, &hlc);
     let effect = state.apply(&operation, &hlc);
     assert!(matches!(effect, ProjectionEffect::Ignored));
@@ -519,7 +495,7 @@ fn schedule_revision_frontier_tracks_only_calendar_changes() {
             }
         }),
     );
-    schedule_edit.payload["causal_refs"] = serde_json::json!([first_head]);
+    set_causal_refs(&mut schedule_edit, &[&first_head]);
     let second_head =
         "sha256:8888888888888888888888888888888888888888888888888888888888888888".to_owned();
     schedule_edit.context.canonical_event_digest =
@@ -544,7 +520,6 @@ fn concurrent_schedule_updates_retain_both_frontier_heads() {
         serde_json::json!({
             "target_ref": STRAND_ID,
             "sender": "did:web:alice.example",
-            "causal_refs": [first_head],
             "patch": {
                 "metadata.fields.calendar": {
                     "$op": "set",
@@ -566,6 +541,7 @@ fn concurrent_schedule_updates_retain_both_frontier_heads() {
         REALM_ID,
         schedule_patch("2026-06-22T11:00:00", "2026-06-22T12:00:00"),
     );
+    set_causal_refs(&mut left, &[&first_head]);
     left.context.canonical_event_digest = arkret_identifiers::Hash::new(
         "sha256:9999999999999999999999999999999999999999999999999999999999999999",
     )
@@ -575,6 +551,7 @@ fn concurrent_schedule_updates_retain_both_frontier_heads() {
         REALM_ID,
         schedule_patch("2026-06-22T13:00:00", "2026-06-22T14:00:00"),
     );
+    set_causal_refs(&mut right, &[&first_head]);
     right.context.canonical_event_digest = arkret_identifiers::Hash::new(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )

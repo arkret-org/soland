@@ -5,10 +5,10 @@
 //! to siblings via `super::common::*` from the `main.rs` integration-test root.
 
 pub(crate) use std::sync::LazyLock;
+use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_event_draft::ProjectedEventOperation as Operation;
 pub(crate) use arkret_identifiers::{Did, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -31,13 +31,14 @@ pub(crate) use soland_storage::{
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 
-pub(crate) const DEMO_REALM_ID: &str = "ak:realm:Ae3cHe84Qdq9276TYWiGD-pAkFlCQrwmo6sI-8UeAlEl";
+pub(crate) const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
 /// Fixed REST-style TURN shared secret installed by `test_config()` so the
 /// derived TURN credential is deterministic in assertions. Mirrors
 /// `SOLAND_TURN_SHARED_SECRET`.
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
+static DEMO_REALM_ACTOR_FRONTIER_EVENT_ID: OnceLock<String> = OnceLock::new();
 static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
     let key = SigningKey::from_bytes(&[21_u8; 32]);
     format!(
@@ -83,24 +84,47 @@ pub(crate) fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
 }
 
-/// Prepare standard (non-anchor) Event submissions through the same authority
-/// flow used by real clients: HTTP authorization leases plus a local current
-/// proposal-authority signer.
+/// Prepare the closed authority-authored self-principal PCR submission path.
 ///
-/// Keeping this in the HTTP integration layer prevents authoring-only draft
-/// Events from being serialized directly into command bodies.
-pub(crate) async fn prepare_standard_initial_submissions(
+/// These Control Moves still carry the HTTP-issued authorization lease, but
+/// the PCR authority is already the actor's live authority. Attaching a second
+/// Control Proposal Ack would create an invalid circular approval surface.
+pub(crate) async fn prepare_self_principal_pcr_initial_submissions(
     state: &AppState,
     token: &str,
     events: Vec<arkret_wire::Event>,
-    proposal_authority: &(impl arkret_wire::PayloadSigner + ?Sized),
 ) -> Vec<arkret_wire::EventInitialSubmission> {
+    let authorization_leases = issue_authorization_leases(state, token, &events).await;
+    events
+        .into_iter()
+        .zip(authorization_leases)
+        .map(|(event, authorization_lease)| {
+            let submission = arkret_wire::EventInitialSubmission {
+                event,
+                authorization_lease: Some(authorization_lease),
+                cba_proof_bundles: Vec::new(),
+                control_proposal_ack: None,
+                membership_compensation_evidence: None,
+            };
+            submission
+                .validate_structural_in_context(arkret_wire::EventSubmitContext::Standard)
+                .expect("authority-authored self-principal PCR initial submission");
+            submission
+        })
+        .collect()
+}
+
+async fn issue_authorization_leases(
+    state: &AppState,
+    token: &str,
+    events: &[arkret_wire::Event],
+) -> Vec<arkret_wire::AuthorizationLease> {
     assert!(
         !events.is_empty() && events.iter().all(|event| event.seal_basis.is_some()),
         "standard initial submissions require non-empty sealed Events"
     );
     let lease_request = arkret_wire::AuthorizationLeaseIssueRequest {
-        events: events.clone(),
+        events: events.to_vec(),
         intents: Vec::new(),
     };
     let lease_request_body = arkret_canonical::canonical_json_bytes(&lease_request)
@@ -131,43 +155,7 @@ pub(crate) async fn prepare_standard_initial_submissions(
         "authorization lease cardinality"
     );
 
-    let mut submissions = Vec::with_capacity(events.len());
-    for (event, authorization_lease) in events.into_iter().zip(lease_outcome.authorization_leases) {
-        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-        let proposal_digest =
-            arkret_wire::Hash::new(event.event_digest().expect("Event digest")).unwrap();
-        let authority_set_ref = arkret_wire::Hash::new(
-            arkret_canonical::canonical_sha256(&arkret_wire::notary::NotaryValue::single_did(
-                event.actor_id.clone(),
-            ))
-            .expect("single-DID proposal authority digest"),
-        )
-        .unwrap();
-        let authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
-            event.realm_id.clone(),
-            proposal_digest,
-            authority_set_ref,
-            chrono::Utc::now(),
-            policy,
-            proposal_authority,
-        )
-        .expect("local Control Proposal authority Ack");
-        let control_proposal_ack =
-            arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy)
-                .expect("canonical Control Proposal Ack");
-        let submission = arkret_wire::EventInitialSubmission {
-            event,
-            authorization_lease: Some(authorization_lease),
-            cba_proof_bundles: Vec::new(),
-            control_proposal_ack: Some(control_proposal_ack),
-            membership_compensation_evidence: None,
-        };
-        submission
-            .validate_structural_in_context(arkret_wire::EventSubmitContext::Standard)
-            .expect("standard initial submission");
-        submissions.push(submission);
-    }
-    submissions
+    lease_outcome.authorization_leases
 }
 
 /// Persist one accepted bootstrap Seal together with the exact direct cell
@@ -610,7 +598,9 @@ pub(crate) async fn seed_test_realm(
     plaintext_visible_services: &[&str],
     invitees: &[&str],
 ) -> Value {
-    let realm_id = soland_test_support::fixture_content_bound_id("ak:realm:");
+    let realm_id =
+        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
+            .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
@@ -913,6 +903,30 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&arkret_wire::event_digest_preimage(event).expect("event envelope is an object"))
 }
 
+pub(crate) fn authored_space_id(event: &Value) -> arkret_identifiers::SpaceId {
+    let event_id = arkret_identifiers::EventId::new(authored_event_id(event).to_owned())
+        .expect("authored fixture Event has canonical event_id");
+    arkret_identifiers::SpaceId::from_event_id(&event_id)
+}
+
+pub(crate) fn authored_strand_id(event: &Value) -> arkret_identifiers::StrandId {
+    let event_id = arkret_identifiers::EventId::new(authored_event_id(event).to_owned())
+        .expect("authored fixture Event has canonical event_id");
+    arkret_identifiers::StrandId::from_event_id(&event_id)
+}
+
+pub(crate) fn authored_morph_id(event: &Value) -> arkret_identifiers::MorphId {
+    let event_id = arkret_identifiers::EventId::new(authored_event_id(event).to_owned())
+        .expect("authored fixture Event has canonical event_id");
+    arkret_identifiers::MorphId::from_event_id(&event_id)
+}
+
+pub(crate) fn authored_relation_id(event: &Value) -> arkret_identifiers::RelationId {
+    let event_id = arkret_identifiers::EventId::new(authored_event_id(event).to_owned())
+        .expect("authored fixture Event has canonical event_id");
+    arkret_identifiers::RelationId::from_event_id(&event_id)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the fixture mirrors the complete canonical event envelope"
@@ -991,25 +1005,6 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
     *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
 }
 
-/// Turn a fixture Event into a member of a `event-auth-state-resolution.md` §5
-/// anchor unit and re-sign it.
-///
-/// The ordinary Realm genesis transaction has no accepted Seal to point at, so
-/// every member of its closed unit — the `ak.realm.create` head and the
-/// whitelisted initial facets — MUST carry no CBA basis field at
-/// all, and no `preconditions` either: the receiver runs the registry plane
-/// check under `EventCellContractContext::OrdinaryRealmBootstrap`, where a
-/// half-filled basis is a `plane_cross_write`.
-pub(crate) fn make_realm_bootstrap_unit_member(event: &mut Value) {
-    if let Some(object) = event.as_object_mut() {
-        object.remove("seal_ref");
-        object.remove("auth_context");
-        object.remove("seal_basis");
-        object.remove("preconditions");
-    }
-    resign_canonical_event(event);
-}
-
 // `attach_invite_create_effects` is gone with the producer `effects[]` array:
 // the v1 `Event` envelope has no such member (it is `deny_unknown_fields`), and
 // the `ak.invite.create` writes are receiver-projected from the registered
@@ -1047,6 +1042,33 @@ pub(crate) fn authored_event_id(event: &Value) -> &str {
     event["event_id"]
         .as_str()
         .expect("authored fixture Event has a content-bound event_id")
+}
+
+/// Author the complete closed ordinary-Realm bootstrap transaction and derive
+/// its Realm identity from the signed genesis Event.
+pub(crate) fn authored_ordinary_realm_bootstrap_unit(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    title: &str,
+) -> (String, Vec<arkret_wire::Event>) {
+    let created_at = chrono::Utc::now();
+    let payload = soland_test_support::cba_basis::realm_genesis_payload(
+        actor,
+        state.service_id(),
+        title,
+        "ak:trust_domain:soland.local",
+        created_at,
+    );
+    let genesis = soland_test_support::signed_event::CallerSignedEvent::realm_genesis(
+        actor, device_id, payload,
+    )
+    .build();
+    let realm_id = arkret_wire::RealmId::from_event_id(&genesis.event_id).to_string();
+    let unit = soland_test_support::signed_event::complete_realm_bootstrap_unit(
+        genesis, actor, device_id, title,
+    );
+    (realm_id, unit)
 }
 
 pub(crate) fn signed_message_event_envelope(
@@ -1708,7 +1730,16 @@ pub(crate) async fn seed_test_realm_basis_seal(
             state.upsert_projected_grant_for_test(grant);
         }
     }
-    seed_realm_genesis_event(state, realm_id, subject).await;
+    // The demo Realm identity is derived from its one canonical genesis
+    // fixture, whose creator is fixed independently of whichever subject a
+    // test grants capabilities to. Reusing `subject` here silently authored a
+    // different genesis Event whenever a server or Bob grant was requested.
+    let genesis_subject = if realm_id == DEMO_REALM_ID {
+        "did:web:alice.example"
+    } else {
+        subject
+    };
+    seed_realm_genesis_event(state, realm_id, genesis_subject).await;
     basis.seal.id
 }
 
@@ -1722,7 +1753,27 @@ pub(crate) async fn seed_test_realm_basis_seal(
 /// materialize the demo Realm's first canonical Seal must not call this — see
 /// [`test_realm_uncovered_basis_seal`].
 pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
-    seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example").await
+    let seal_id = seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example").await;
+    let frontier_event_id = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(DEMO_REALM_ID)
+        .await
+        .expect("demo Realm bootstrap frontier")
+        .into_iter()
+        .filter(|record| record.actor_id == "did:web:alice.example")
+        .max_by_key(|record| record.actor_seq)
+        .expect("demo Realm bootstrap has an Alice frontier Event")
+        .event_id;
+    if let Some(existing) = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.get() {
+        assert_eq!(
+            existing, &frontier_event_id,
+            "demo bootstrap frontier is stable"
+        );
+    } else {
+        let _ = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.set(frontier_event_id);
+    }
+    seal_id
 }
 
 /// Put an accepted Seal in `realm_id` so a Signal can name it as its Seal basis.
@@ -2092,6 +2143,7 @@ pub(crate) fn signed_space_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    let prev_refs = fixture_prev_refs(prev_refs);
     normalize_space_container_payload(kind, &mut payload);
     payload = typed_space_container_payload(kind, payload);
     signed_canonical_event(
@@ -2113,6 +2165,7 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
     if kind == "ak.space.create"
         && let Some(space) = object.get_mut("object").and_then(Value::as_object_mut)
     {
+        space.remove("id");
         space
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.space.v1".to_owned()));
@@ -2197,6 +2250,7 @@ pub(crate) fn signed_strand_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    let prev_refs = fixture_prev_refs(prev_refs);
     normalize_strand_payload(kind, &mut payload);
     signed_canonical_event(
         event_id,
@@ -2217,6 +2271,7 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
     if kind == "ak.strand.create"
         && let Some(strand) = object.get_mut("object").and_then(Value::as_object_mut)
     {
+        strand.remove("id");
         strand
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.strand.v1".to_owned()));
@@ -2272,6 +2327,7 @@ pub(crate) fn signed_morph_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    let prev_refs = fixture_prev_refs(prev_refs);
     normalize_morph_payload(kind, &mut payload);
     payload = typed_morph_payload(kind, payload);
     signed_canonical_event(
@@ -2293,6 +2349,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
     if kind == "ak.morph.create"
         && let Some(morph) = object.get_mut("object").and_then(Value::as_object_mut)
     {
+        morph.remove("id");
         morph
             .entry("schema".to_owned())
             .or_insert_with(|| Value::String("ak.schema.morph.v1".to_owned()));
@@ -2370,6 +2427,7 @@ pub(crate) fn signed_relation_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    let prev_refs = fixture_prev_refs(prev_refs);
     payload["relation_id"] = Value::String(event_id.replacen("ak:event:", "ak:relation:", 1));
     payload = typed_relation_create_payload(payload);
     signed_canonical_event(
@@ -2442,6 +2500,7 @@ pub(crate) fn signed_redaction_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    let prev_refs = fixture_prev_refs(prev_refs);
     if let Some(object) = payload.as_object_mut()
         && !object.contains_key("target_ref")
         && let Some(object_ref) = object.get("object_ref").cloned()
@@ -2468,8 +2527,21 @@ pub(crate) fn signed_redaction_event(
 /// while the wire actor chain starts at sequence zero.
 fn fixture_actor_seq(authoring_step: u64) -> u64 {
     authoring_step
-        .checked_sub(1)
-        .expect("HTTP fixture authoring steps start at one")
+        .checked_add(7)
+        .expect("HTTP fixture authoring sequence")
+}
+
+fn fixture_prev_refs<'a>(prev_refs: Vec<&'a str>) -> Vec<&'a str> {
+    if prev_refs.is_empty() {
+        vec![
+            DEMO_REALM_ACTOR_FRONTIER_EVENT_ID
+                .get()
+                .expect("seed_demo_realm_basis must run before authoring demo Realm Events")
+                .as_str(),
+        ]
+    } else {
+        prev_refs
+    }
 }
 
 // The following comment blocks are descriptive notes for tests that have
@@ -2504,25 +2576,8 @@ pub(crate) async fn persist_test_message_with_actor_seq(
     body: &str,
     actor_seq: u64,
 ) -> MessageRecord {
-    let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
-    let record = MessageRecord {
-        event_id: event_id.clone(),
-        message_id: event_id.replacen("ak:event:", "ak:message:", 1),
-        realm_id: realm_id.to_owned(),
-        sender: sender.to_owned(),
-        thread_id: format!("ak:strand:test-{}", event_id),
-        content: serde_json::json!({"body": body}),
-        encrypted: false,
-        created_at: chrono::Utc::now(),
-    };
-    state
-        .test_persistence()
-        .messages()
-        .put(&record)
-        .await
-        .unwrap();
     let envelope = signed_canonical_event(
-        &record.event_id,
+        "persist-test-message",
         "ak.message.create",
         sender,
         "01904100-0000-7000-8000-a11ce0000001",
@@ -2539,25 +2594,33 @@ pub(crate) async fn persist_test_message_with_actor_seq(
             }
         }),
     );
-    let canonical_digest = envelope["proofs"][0]["event_digest"]
-        .as_str()
-        .expect("signed fixture digest")
-        .to_owned();
+    let event_id = authored_event_id(&envelope).to_owned();
+    let record = MessageRecord {
+        event_id: event_id.clone(),
+        message_id: event_id.replacen("ak:event:", "ak:message:", 1),
+        realm_id: realm_id.to_owned(),
+        sender: sender.to_owned(),
+        thread_id: format!("ak:strand:test-{}", event_id),
+        content: serde_json::json!({"body": body}),
+        encrypted: false,
+        created_at: chrono::Utc::now(),
+    };
+    state
+        .test_persistence()
+        .messages()
+        .put(&record)
+        .await
+        .unwrap();
+    let event: arkret_wire::Event =
+        serde_json::from_value(envelope).expect("persisted fixture is a typed Event");
     state
         .test_persistence()
         .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: record.event_id.clone(),
-            actor_id: sender.to_owned(),
-            actor_seq: envelope["actor_seq"].as_u64().unwrap(),
-            realm_id: Some(realm_id.to_owned()),
-            kind: "ak.message.create".to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest,
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
-            envelope,
-            received_at: record.created_at,
-        })
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &event,
+            Some(realm_id),
+            record.created_at,
+        ))
         .await
         .unwrap();
     record

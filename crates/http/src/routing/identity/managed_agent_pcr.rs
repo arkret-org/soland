@@ -722,27 +722,25 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_root_anchor_forbidden",
         ));
     }
-    let agent_id = envelope
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("delegated Agent Event actor_id is missing"))?;
+    // Realm-create wire envelopes intentionally omit `realm_id`; the receiver
+    // derives a PCR id from the typed Event actor. Decode once here so the
+    // delegation gate compares that canonical derived id instead of probing a
+    // field which must not exist on the wire.
+    let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
+        .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
+    let agent_id = event.actor_id.as_str();
     let record = managed_agent_record(state, agent_id).await?;
     if record.controller_id != controller_id
-        || envelope.get("executed_by").and_then(Value::as_str) != Some(controller_id)
-        || envelope.get("realm_id").and_then(Value::as_str)
-            != Some(record.principal_control_realm_id.as_str())
-        || envelope.get("authorization_ref").and_then(Value::as_str)
-            != Some(record.controller_authorization_ref.as_str())
+        || event.executed_by.as_ref().map(Did::as_str) != Some(controller_id)
+        || event.realm_id.as_str() != record.principal_control_realm_id
+        || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
     {
         return Err(failed_precondition(
             "delegated Agent Event does not match the controller/PCR binding",
             "managed_agent_delegation_mismatch",
         ));
     }
-    let kind = envelope
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let kind = event.kind.as_str();
     let kind_is_delegated_control = matches!(
         kind,
         arkret_wire::event_kind_str::REALM_CREATE
@@ -763,14 +761,16 @@ pub(crate) async fn validate_delegated_agent_envelope(
         ));
     }
     if kind == arkret_wire::EventKind::RealmCreate.as_str() {
-        let object = envelope
-            .get("payload")
-            .and_then(|payload| payload.get("object"))
+        let object = event
+            .payload
+            .get("object")
             .ok_or_else(|| schema_error("managed Agent PCR genesis object is missing"))?;
         validate_agent_pcr_genesis_object(
             object,
             agent_id,
+            controller_id,
             record.principal_control_realm_id.as_str(),
+            state.config().trust_domain.as_str(),
         )?;
         let realm_id =
             RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
@@ -880,50 +880,43 @@ fn validate_agent_pcr_genesis_effect(
 pub(crate) fn validate_agent_pcr_genesis_object(
     object: &Value,
     agent_id: &str,
+    controller_id: &str,
     expected_realm_id: &str,
+    trust_domain: &str,
 ) -> Result<(), AppError> {
-    let schema_refs = object
-        .get("schema_refs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<BTreeSet<_>>();
-    let notary_matches = object
-        .get("notary")
-        .and_then(Value::as_str)
-        .is_some_and(|notary| notary == agent_id)
-        || object
-            .get("notary")
-            .and_then(Value::as_object)
-            .and_then(|notary| notary.get("did"))
-            .and_then(Value::as_str)
-            .is_some_and(|notary| notary == agent_id);
-    if object.get("id").and_then(Value::as_str) != Some(expected_realm_id)
-        || object.get("created_by").and_then(Value::as_str) != Some(agent_id)
-        || object
-            .get("fields")
-            .and_then(Value::as_object)
-            .and_then(|fields| fields.get("purpose"))
-            .and_then(Value::as_str)
-            != Some("managed_agent_control")
-        || !schema_refs.contains("ak.profile.principal_control_realm.v1")
-        || object.get("history_visibility").and_then(Value::as_str) != Some("restricted")
-        || object.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
-        || object
-            .get("content_encryption_floor")
-            .and_then(Value::as_str)
-            != Some("e2ee_required")
-        || object
-            .get("metadata_encryption_floor")
-            .and_then(Value::as_str)
-            != Some("e2ee_required")
-        || object.get("notary_profile").and_then(Value::as_str) != Some("single_did")
-        || !notary_matches
-        || object.get("security_class").and_then(Value::as_str) != Some("high_assurance")
-    {
+    let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
+        arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+            agent_id: Did::new(agent_id.to_owned())
+                .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?,
+            controller_id: Did::new(controller_id.to_owned()).map_err(|error| {
+                schema_error(format!("managed Agent controller DID is invalid: {error}"))
+            })?,
+            realm_id: RealmId::new(expected_realm_id.to_owned()).map_err(|error| {
+                schema_error(format!("managed Agent PCR Realm id is invalid: {error}"))
+            })?,
+            trust_domain: arkret_wire::TypedTrustDomainId::new(trust_domain.to_owned()).map_err(
+                |error| schema_error(format!("configured trust domain is invalid: {error}")),
+            )?,
+            capability_action_registry_digest:
+                arkret_policy::current_capability_action_registry_digest().map_err(|error| {
+                    AppError::internal(format!("capability action registry digest failed: {error}"))
+                })?,
+            created_at: Utc::now(),
+        },
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "canonical managed Agent PCR genesis construction failed: {error}"
+        ))
+    })?;
+    let expected = serde_json::to_value(expected.object).map_err(|error| {
+        AppError::internal(format!(
+            "canonical managed Agent PCR genesis encoding failed: {error}"
+        ))
+    })?;
+    if object != &expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis is missing mandatory control-Realm/E2EE markers",
+            "managed Agent PCR genesis does not match the canonical profile-closed payload",
             "principal_control_realm_profile_mismatch",
         ));
     }
@@ -1186,6 +1179,7 @@ mod tests {
     const AGENT: &str = "did:web:agent.example";
     const CONTROLLER: &str = "did:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
+    const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
 
     fn requested_scope() -> Value {
         json!({
@@ -1202,37 +1196,19 @@ mod tests {
     }
 
     fn pcr_genesis() -> Value {
-        let realm_id = RealmId::new(PCR).unwrap();
-        let agent_id = Did::new(AGENT).unwrap();
-        let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
-            realm_id,
-            "Managed Agent principal control",
-            agent_id.clone(),
-            arkret_identifiers::TypedTrustDomainId::new(
-                "ak:trust_domain:managed-agent-pcr".to_owned(),
-            )
-            .unwrap(),
-            arkret_wire::CORE_REDUCER_PROFILE,
-            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(agent_id),
-            arkret_policy::current_capability_action_registry_digest().unwrap(),
-        );
-        realm.fields.insert(
-            "purpose".to_owned(),
-            Value::String("managed_agent_control".to_owned()),
-        );
-        realm.schema_refs = vec![
-            "ak.schema.realm.v1".to_owned(),
-            "ak.profile.principal_control_realm.v1".to_owned(),
-        ];
-        realm.history_visibility = arkret_wire::HistoryVisibility::Restricted;
-        realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
-        realm.content_encryption_floor =
-            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
-        realm.metadata_encryption_floor =
-            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
-        realm.security_class = Some(arkret_wire::SecurityClass::HighAssurance);
-        serde_json::to_value(realm).unwrap()
+        let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
+            arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+                agent_id: Did::new(AGENT).unwrap(),
+                controller_id: Did::new(CONTROLLER).unwrap(),
+                realm_id: RealmId::new(PCR).unwrap(),
+                trust_domain: arkret_wire::TypedTrustDomainId::new(TRUST_DOMAIN).unwrap(),
+                capability_action_registry_digest:
+                    arkret_policy::current_capability_action_registry_digest().unwrap(),
+                created_at: Utc::now(),
+            },
+        )
+        .unwrap();
+        serde_json::to_value(payload.object).unwrap()
     }
 
     #[test]
@@ -1258,13 +1234,22 @@ mod tests {
 
     #[test]
     fn agent_pcr_genesis_requires_restricted_mls_e2ee_profile() {
-        validate_agent_pcr_genesis_object(&pcr_genesis(), AGENT, PCR)
+        validate_agent_pcr_genesis_object(&pcr_genesis(), AGENT, CONTROLLER, PCR, TRUST_DOMAIN)
             .expect("strict Agent PCR genesis must pass");
 
         let mut ordinary_realm = pcr_genesis();
         ordinary_realm["history_visibility"] = json!("shared");
         ordinary_realm["encryption_profile"] = json!("none");
-        assert!(validate_agent_pcr_genesis_object(&ordinary_realm, AGENT, PCR).is_err());
+        assert!(
+            validate_agent_pcr_genesis_object(
+                &ordinary_realm,
+                AGENT,
+                CONTROLLER,
+                PCR,
+                TRUST_DOMAIN,
+            )
+            .is_err()
+        );
     }
 
     /// The genesis gate is the registered contract, not a producer array: a

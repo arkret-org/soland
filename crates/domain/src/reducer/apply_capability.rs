@@ -583,12 +583,8 @@ fn grant_body(payload: &Value) -> &Value {
         .unwrap_or(payload)
 }
 
-fn genesis_grant_id(payload: &Value) -> Option<String> {
-    payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::EventId::new(value.to_owned()).ok())
-        .map(|event_id| arkret_identifiers::GrantId::from_event_id(&event_id).to_string())
+fn genesis_grant_id(operation: &Operation) -> String {
+    arkret_identifiers::GrantId::from_event_id(&operation.context.event_id).to_string()
 }
 
 /// Extract the issuer DID from a capability grant payload (top-level or
@@ -1476,11 +1472,7 @@ impl ProjectionState {
                 reason: "capability_grant_id_must_be_event_derived".to_owned(),
             };
         }
-        let Some(grant_id) = genesis_grant_id(&operation.payload) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_grant_event_id_missing".to_owned(),
-            };
-        };
+        let grant_id = genesis_grant_id(operation);
         // Structural acceptance: a grant MUST name its issuer (capabilities.md
         // §3 — the grant is held by the issuer; the issuer MUST hold the
         // action). Missing issuer ⇒ fail closed.
@@ -1751,9 +1743,7 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let Some(grant_id) = genesis_grant_id(&operation.payload) else {
-            return Ok(());
-        };
+        let grant_id = genesis_grant_id(operation);
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
         visited.insert(grant_id.clone());
         let mut pending = grant_authority_grant_refs(&operation.payload);

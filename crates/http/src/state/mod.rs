@@ -9,7 +9,8 @@ mod member_identity;
 mod notification;
 
 pub use app_state::{
-    AppState, AppStateRuntime, ConnectionDrain, build_realm_directory, getrandom_seed,
+    AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_REALM_ID, build_realm_directory,
+    getrandom_seed,
 };
 pub(crate) use member_identity::{
     HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,

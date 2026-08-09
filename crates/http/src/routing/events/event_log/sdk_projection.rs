@@ -338,7 +338,7 @@ pub(crate) async fn event_view_for_state(
             AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
         })?;
     json_ok(EventView {
-        event: sdk_event_for_state(state, record)?,
+        event: sdk_event_for_state(state, record)?.into(),
         visibility: Some(event_visibility_metadata(state, record)),
         receipts,
     })

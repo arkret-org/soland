@@ -370,7 +370,7 @@ async fn validate_event_envelope_with_ingress(
             "realm already exists",
         ));
     }
-    let is_realm_create_bootstrap = kind == "ak.realm.create"
+    let is_realm_create_bootstrap = kind == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_create_actor_is_creator(object, &actor_id)
         && (actor_id == session.actor || managed_agent_delegation)
         && (!realm_exists || historical_realm_create);
@@ -390,7 +390,7 @@ async fn validate_event_envelope_with_ingress(
     // bypasses only the local shared-Realm membership lookup: it never commits
     // the Event or advances a reducer/frontier on the recipient service.
     let is_private_invite_delivery = private_invite_delivery
-        && kind == "ak.invite.create"
+        && kind == arkret_wire::EventKind::InviteCreate.as_str()
         && invite_create_actor_is_inviter(object, &session.actor)
         && !realm_exists;
     let is_direct_conversation_founding = realm_bootstrap_contexts
@@ -532,7 +532,7 @@ async fn validate_event_envelope_with_ingress(
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }
-    if kind == "ak.device.authorize" {
+    if kind == arkret_wire::EventKind::DeviceAuthorize.as_str() {
         validate_device_authorization_binding(state, object, &actor_id, realm_bootstrap_contexts)
             .await?;
     }
@@ -545,7 +545,7 @@ async fn validate_event_envelope_with_ingress(
     // profile set comes from the submitted policy-components payload;
     // cross-policy bindings come from the materialized Realm metadata /
     // MLS cells, with the current payload used only for same-event writes.
-    if kind == "ak.realm.policy_bundle" {
+    if kind == arkret_wire::EventKind::RealmPolicyBundle.as_str() {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
         let policy_bundle = policy_bundle_value_from_state_payload(&payload);
         // Best-effort: collect active profiles from the payload's own

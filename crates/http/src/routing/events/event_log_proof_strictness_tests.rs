@@ -587,7 +587,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             arkret_wire::EventKind::ReactionAdd.as_str(),
-            json!({"sender": sender, "target_event_id": event_id, "key": "👍"}),
+            json!({"sender": sender, "target_ref": event_id, "key": "👍"}),
         )
     };
 
@@ -1140,8 +1140,8 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
 #[test]
 fn event_payload_validator_catalog_covers_active_standard_durable_events() {
     const SIBLING_SCHEMA_EVENT_KINDS: &[&str] = &[
-        arkret_wire::EventKind::ModerationFrankingProof,
-        arkret_wire::EventKind::RelationTombstone,
+        arkret_wire::EventKind::ModerationFrankingProof.as_str(),
+        arkret_wire::EventKind::RelationTombstone.as_str(),
     ];
     let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
     let event_kinds = soland_services::protocol_artifacts::active_durable_event_kinds()

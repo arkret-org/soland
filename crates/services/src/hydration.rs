@@ -999,13 +999,31 @@ pub async fn hydrate_realms_from_canonical_events(
     persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
 ) {
-    let Ok(events) = persistence.events().snapshot_all().await else {
+    let Ok(mut events) = persistence.events().snapshot_all().await else {
         return;
     };
-    for record in events {
-        if record.kind == "ak.realm.create" {
-            hydrate_realm_create_event(persistence, realms, &record).await;
-        } else if record.kind == "ak.member.state" {
+    events.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    // Directory entries are the replay roots for every subsequent Realm
+    // facet. Hydrate all accepted genesis Events first so bootstrap Events
+    // that share one transaction timestamp never depend on storage iteration
+    // order.
+    for record in events
+        .iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+    {
+        hydrate_realm_create_event(persistence, realms, record).await;
+    }
+
+    for record in &events {
+        if record.kind == arkret_wire::EventKind::RealmProfile.as_str() {
+            hydrate_realm_profile_event(realms, record);
+        } else if record.kind == arkret_wire::EventKind::MemberState.as_str() {
             // Membership transitions MUST be replayed too, or every joined
             // member except the realm creator (who is seeded by
             // `hydrate_realm_create_event`) vanishes from `realm_entry.members`
@@ -1014,17 +1032,41 @@ pub async fn hydrate_realms_from_canonical_events(
             // false, and a newly-joined invitee is never claimed/Welcomed —
             // stuck "waiting for a Welcome" forever. Mirrors the live
             // projection in `routing/events/projection/realm.rs`.
-            hydrate_realm_member_state_event(realms, &record);
+            hydrate_realm_member_state_event(realms, record);
         } else if matches!(
-            record.kind.as_str(),
-            "ak.realm.history_visibility"
-                | "ak.realm.history_sharing_policy"
-                | "ak.realm.preview_policy"
-                | "ak.realm.asset_privacy_policy"
+            arkret_wire::EventKind::from_wire(&record.kind),
+            arkret_wire::EventKind::RealmHistoryVisibility
+                | arkret_wire::EventKind::RealmHistorySharingPolicy
+                | arkret_wire::EventKind::RealmPreviewPolicy
+                | arkret_wire::EventKind::RealmAssetPrivacyPolicy
         ) {
-            hydrate_realm_policy_event(persistence, &record).await;
+            hydrate_realm_policy_event(persistence, record).await;
         }
     }
+}
+
+/// Replay the canonical Realm profile singleton into the restart directory.
+///
+/// The directory is an index, so its display fields must be reconstructed from
+/// the accepted typed Event rather than from a weaker projection-event mirror.
+pub fn hydrate_realm_profile_event(
+    realms: &mut RealmDirectoryIndex,
+    record: &CanonicalEventRecord,
+) {
+    let Ok(event) = serde_json::from_value::<Event>(record.envelope.clone()) else {
+        return;
+    };
+    if event.kind != arkret_wire::EventKind::RealmProfile {
+        return;
+    }
+    let Ok(profile) = event.typed_payload::<arkret_wire::event_spec::RealmProfile>() else {
+        return;
+    };
+    let Some(entry) = realms.get_mut(&event.realm_id) else {
+        return;
+    };
+    entry.title = profile.title;
+    entry.description = profile.summary;
 }
 
 /// Replay one persisted `ak.member.state` event into the rebuilt realm

@@ -1331,13 +1331,28 @@ fn spawn_producer(
     parameters: WebSocketOpenParameters,
     producer_exit_tx: mpsc::UnboundedSender<ProducerExit>,
 ) -> tokio::task::JoinHandle<()> {
+    // Install the live receiver before the `opened` acknowledgement can be
+    // written. Otherwise a notification published immediately after that
+    // acknowledgement can race the newly spawned Events task and be lost.
+    let event_notifications = match &parameters {
+        WebSocketOpenParameters::Events(_) => Some(state.subscribe_event_notifications()),
+        WebSocketOpenParameters::Account(_) | WebSocketOpenParameters::Signal => None,
+    };
     tokio::spawn(async move {
         let reason = match parameters {
             WebSocketOpenParameters::Account(parameters) => {
                 run_account_channel(state, session, sender, channel_id.clone(), parameters).await
             }
             WebSocketOpenParameters::Events(parameters) => {
-                run_events_channel(state, session, sender, channel_id.clone(), parameters).await
+                run_events_channel(
+                    state,
+                    session,
+                    sender,
+                    channel_id.clone(),
+                    parameters,
+                    event_notifications.expect("Events producer has a live receiver"),
+                )
+                .await
             }
             WebSocketOpenParameters::Signal => {
                 run_signal_channel(state, session, sender, channel_id.clone()).await
@@ -1531,6 +1546,7 @@ async fn run_events_channel(
     channel_id: String,
     parameters:
         arkret_models_collaboration::sync_frames::websocket_binding::WebSocketEventsOpenParameters,
+    mut notifications: tokio::sync::broadcast::Receiver<crate::state::EventNotification>,
 ) -> WebSocketClosedReason {
     let actor_filter = parameters
         .actors
@@ -1564,10 +1580,10 @@ async fn run_events_channel(
     let realm_filter: BTreeSet<String> = accessible.iter().cloned().collect();
     let filter_digest = websocket_events_filter_digest(&accessible, &actor_filter);
 
-    // The live receiver is installed BEFORE replay so nothing can land in the
-    // history-vs-live window; ids seen during replay are then discarded from
-    // the queued notifications, producing one replay-to-live boundary.
-    let mut notifications = state.subscribe_event_notifications();
+    // The live receiver is installed before the `opened` acknowledgement and
+    // before replay, so nothing can land in either admission-to-producer or
+    // history-to-live windows. Replayed ids are discarded from the queued
+    // notifications below, producing one replay-to-live boundary.
 
     let after_token = parameters
         .after

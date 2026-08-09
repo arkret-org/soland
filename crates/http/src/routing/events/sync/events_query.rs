@@ -866,10 +866,9 @@ async fn events_query_impl(
     let limit = parts.limit;
 
     // Single-Realm fast path: paginate + apply visibility over the projection
-    // store, then enrich the final page to full Event envelopes
-    // (`full_events_from_projection_json`) so the response is the spec
-    // `EventsQueryOutcome { events: Vec<Event> }` shape, uniform with the
-    // actor-scoped durable reader (SOL-05-003).
+    // store, then enrich the final page to typed EventReadRow values. Ordinary
+    // rows carry their complete canonical Event; redacted slots carry only the
+    // closed projection view and its durable digest commitment.
     if accessible_realms.len() == 1 {
         let realm_id = &accessible_realms[0];
         let recovery_only = recovery_only_realms.contains(realm_id);
@@ -1242,40 +1241,80 @@ async fn events_query_event_visible(
     projection_record_visible_to_session(state, event, session).await
 }
 
-/// Enrich visible projection rows to full spec `Event` envelopes by fetching
-/// each event's canonical record from the durable Event store, so the
-/// Realm-scoped `ak.self.events.read` path returns the spec
-/// `EventsQueryOutcome { events: Vec<Event> }` shape uniformly with the
-/// actor-scoped durable reader (SOL-05-003). Rows whose canonical record is
-/// absent (e.g. fully redacted / tombstoned) are dropped. Visibility and
+/// Enrich visible projection rows to the spec's closed `EventReadRow` union.
+/// Canonical rows return the complete signed Event. Redacted Message rows keep
+/// their timeline slot as a `RedactedEventView`, binding the durable Event id
+/// and digest without mutating or masquerading as the signed Event envelope.
+/// Rows whose canonical record is absent are dropped. Visibility and
 /// pagination are already applied to `projection_rows` by the caller.
 async fn full_events_from_projection_json(
     state: &AppState,
     projection_rows: &[Value],
-) -> Vec<arkret_wire::Event> {
+) -> Vec<arkret_models_collaboration::http_bodies::EventReadRow> {
     let mut events = Vec::with_capacity(projection_rows.len());
     for row in projection_rows {
-        if let Some(event) = full_event_from_projection_json(state, row).await {
+        if let Some(event) = event_read_row_from_projection_json(state, row).await {
             events.push(event);
         }
     }
     events
 }
 
+async fn event_read_row_from_projection_json(
+    state: &AppState,
+    row: &Value,
+) -> Option<arkret_models_collaboration::http_bodies::EventReadRow> {
+    use arkret_models_collaboration::http_bodies::{
+        EventReadRow, EventRedactionReason, HiddenEventField, HiddenEventFields, RedactedEventView,
+        RedactedEventViewKind, ReducerInputFalse,
+    };
+
+    let event_id = row.get("event_id").and_then(Value::as_str)?;
+    let record = state
+        .event_queries()
+        .canonical_event(event_id)
+        .await
+        .ok()??;
+    let event = super::super::event_log::sdk_event_for_state(state, &record).ok()?;
+    if !projection_row_is_redacted_message_tombstone(row) {
+        return Some(event.into());
+    }
+    let hidden_fields = HiddenEventFields::new(
+        ["payload", "proofs", "unsigned"]
+            .into_iter()
+            .map(|field| HiddenEventField::new(field).expect("static hidden Event field"))
+            .collect(),
+    )
+    .expect("static hidden Event fields are unique");
+    Some(EventReadRow::Redacted(RedactedEventView {
+        view_kind: RedactedEventViewKind::RedactedEventView,
+        event_id: event.event_id,
+        kind: event.kind,
+        realm_id: event.realm_id,
+        created_at: Some(event.created_at),
+        event_digest: arkret_identifiers::Hash::new(record.canonical_digest).ok()?,
+        payload_digest: None,
+        redaction_reason: EventRedactionReason::Redacted,
+        hidden_fields,
+        inclusion_proof: None,
+        reducer_input: ReducerInputFalse,
+    }))
+}
+
 /// Materialize the full Event envelope required by an `event` subscribe
 /// frame. Projection rows are useful for visibility filtering and pagination,
 /// but are not wire Event envelopes (`event_kind` vs `kind`, no actor_seq,
-/// prev_refs, proofs, ...). Reuse the query path's canonical lookup and its
-/// fail-closed redaction filter so stream and scan expose the same typed
-/// envelope contract without synthesizing an Event from projection data.
+/// prev_refs, proofs, ...). A redacted projection has no valid full Event
+/// representation, so it is omitted from this Event-only stream rather than
+/// mutating its canonical payload while retaining stale proofs and Event id.
 pub(crate) async fn full_event_from_projection_json(
     state: &AppState,
     row: &Value,
 ) -> Option<arkret_wire::Event> {
-    let event_id = row.get("event_id").and_then(Value::as_str)?;
     if projection_row_is_redacted_message_tombstone(row) {
         return None;
     }
+    let event_id = row.get("event_id").and_then(Value::as_str)?;
     if let Ok(Some(record)) = state.event_queries().canonical_event(event_id).await
         && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
     {
@@ -1382,10 +1421,11 @@ mod tests {
         let enriched =
             full_events_from_projection_json(&state, &[projection_event_json(&row)]).await;
         assert_eq!(enriched.len(), 1);
-        assert_eq!(enriched[0].event_id, event.event_id);
-        assert_eq!(enriched[0].scope_ref, event.scope_ref);
-        assert_eq!(enriched[0].payload, event.payload);
-        assert_eq!(enriched[0].event_digest().unwrap(), expected_digest);
+        let enriched = enriched[0].event().expect("complete Event read row");
+        assert_eq!(enriched.event_id, event.event_id);
+        assert_eq!(enriched.scope_ref, event.scope_ref);
+        assert_eq!(enriched.payload, event.payload);
+        assert_eq!(enriched.event_digest().unwrap(), expected_digest);
     }
 
     #[tokio::test]
@@ -1497,7 +1537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn events_query_omits_redacted_canonical_plaintext() {
+    async fn events_query_returns_closed_redacted_views_without_canonical_plaintext() {
         let state = test_state();
         let created_at = DateTime::parse_from_rfc3339("2026-07-06T10:00:00.000Z")
             .unwrap()
@@ -1650,20 +1690,46 @@ mod tests {
         assert_eq!(revise_row["payload"]["redacted"], json!(true));
 
         let events = full_events_from_projection_json(&state, &rows).await;
+        let redacted = events
+            .iter()
+            .filter_map(|row| match row {
+                arkret_models_collaboration::http_bodies::EventReadRow::Redacted(view) => {
+                    Some(view)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let message = redacted
+            .iter()
+            .find(|view| view.event_id.as_str() == message_event_id)
+            .expect("message Event slot retained as a closed redacted view");
+        assert_eq!(
+            message.redaction_reason,
+            arkret_models_collaboration::http_bodies::EventRedactionReason::Redacted
+        );
+        assert_eq!(
+            message.event_digest.as_str(),
+            message_event.event_digest().unwrap()
+        );
         assert!(
-            events
-                .iter()
-                .all(|event| event.event_id.as_str() != message_event_id)
+            !serde_json::to_string(message)
+                .unwrap()
+                .contains("secret that must not leak")
+        );
+        let revise = redacted
+            .iter()
+            .find(|view| view.event_id.as_str() == revise_event_id)
+            .expect("revision Event slot retained as a closed redacted view");
+        assert!(
+            !serde_json::to_string(revise)
+                .unwrap()
+                .contains("revised secret")
         );
         assert!(
             events
                 .iter()
-                .all(|event| event.event_id.as_str() != revise_event_id)
-        );
-        assert!(
-            events
-                .iter()
-                .any(|event| event.event_id.as_str() == redaction_event_id)
+                .filter_map(|row| row.event())
+                .all(|event| event.event_id.as_str() != redaction_event_id)
         );
     }
 }
@@ -1741,6 +1807,7 @@ async fn durable_events_query_from_parts(
     let events = page
         .iter()
         .filter_map(|record| super::super::event_log::sdk_event_for_state(state, record).ok())
+        .map(Into::into)
         .collect();
     EventsQueryOutcome {
         events,

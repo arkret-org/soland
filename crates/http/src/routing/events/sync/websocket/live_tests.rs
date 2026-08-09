@@ -24,7 +24,7 @@ use crate::config::AppConfig;
 use crate::state::{AppState, EventNotification};
 
 const ORIGIN: &str = "https://client.example";
-const REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+const REALM_ID: &str = crate::state::DEVELOPMENT_DEMO_REALM_ID;
 const ALICE_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000001";
 const BOB_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-000000000002";
 const INITIAL_GRANT: &str = "ak.session.grant.live-test.initial";
@@ -252,7 +252,7 @@ async fn next_server_frame(socket: &mut ClientSocket, stage: &str) -> WebSocketS
                 .send(Message::Pong(bytes))
                 .await
                 .expect("answer physical ping"),
-            Message::Close(frame) => panic!("server closed early: {frame:?}"),
+            Message::Close(frame) => panic!("server closed early during {stage}: {frame:?}"),
             _ => {}
         }
     }

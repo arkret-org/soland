@@ -203,15 +203,16 @@ pub fn terminal_realm_check(
 }
 
 fn frozen_realm_write_exempt(kind: &str) -> bool {
-    kind.parse::<arkret_wire::EventKind>()
-        .is_ok_and(|kind| arkret_wire::events::kinds::is_audit_kind(&kind))
-        || matches!(
-            kind,
-            arkret_wire::event_kind_str::REALM_ARCHIVE
-                | arkret_wire::event_kind_str::REALM_FREEZE
-                | arkret_wire::event_kind_str::REALM_TOMBSTONE
-                | arkret_wire::event_kind_str::REALM_DESTROY
-        )
+    kind.parse::<arkret_wire::EventKind>().is_ok_and(|kind| {
+        arkret_wire::events::kinds::is_audit_kind(&kind)
+            || matches!(
+                kind,
+                arkret_wire::EventKind::RealmArchive
+                    | arkret_wire::EventKind::RealmFreeze
+                    | arkret_wire::EventKind::RealmTombstone
+                    | arkret_wire::EventKind::RealmDestroy
+            )
+    })
 }
 
 /// Reject ordinary writes on a Realm with the reversible `ak.realm.freeze`

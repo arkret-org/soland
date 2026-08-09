@@ -1,14 +1,13 @@
 use super::*;
 
-pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
-    kind.parse::<arkret_wire::EventKind>()
-        .is_ok_and(|kind| arkret_wire::events::kinds::is_audit_kind(&kind))
+pub(super) fn realm_frozen_operation_exempt(kind: &arkret_wire::EventKind) -> bool {
+    arkret_wire::events::kinds::is_audit_kind(kind)
         || matches!(
             kind,
-            arkret_wire::event_kind_str::REALM_ARCHIVE
-                | arkret_wire::event_kind_str::REALM_FREEZE
-                | arkret_wire::event_kind_str::REALM_TOMBSTONE
-                | arkret_wire::event_kind_str::REALM_DESTROY
+            arkret_wire::EventKind::RealmArchive
+                | arkret_wire::EventKind::RealmFreeze
+                | arkret_wire::EventKind::RealmTombstone
+                | arkret_wire::EventKind::RealmDestroy
         )
 }
 
@@ -25,7 +24,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
         return Err("realm_terminal_state");
     }
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
-        && !realm_frozen_operation_exempt(kind.as_str())
+        && !realm_frozen_operation_exempt(&kind)
     {
         return Err(arkret_wire::ErrorCode::REALM_FROZEN);
     }

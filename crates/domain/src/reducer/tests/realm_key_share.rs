@@ -74,8 +74,6 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     let mut payload = realm_key_share_payload(realm_scope(REALM));
     payload["event_id"] = json!("ak:event:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF");
     payload["sender"] = json!("did:web:alice.example");
-    payload["hlc"] = json!("2026-07-05T00:00:00.000Z/node/1");
-
     let effect = state.apply(
         &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,

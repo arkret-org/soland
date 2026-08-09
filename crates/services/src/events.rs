@@ -1009,14 +1009,13 @@ fn active_agent_accountability(
     events: &[CanonicalEventRecord],
     query: &ActiveAgentAccountabilityQuery,
 ) -> bool {
-    let original_payload = original_event
-        .envelope
-        .get("payload")
-        .unwrap_or(&original_event.envelope);
     if arkret_wire::EventKind::AgentProvision == original_event.kind {
-        let Ok(provision) =
-            serde_json::from_value::<AgentProvisionPayload>(original_payload.clone())
+        let Ok(event) =
+            serde_json::from_value::<arkret_wire::Event>(original_event.envelope.clone())
         else {
+            return false;
+        };
+        let Ok(provision) = AgentProvisionPayload::try_from(&event) else {
             return false;
         };
         return provision.validate().is_ok()
@@ -1029,6 +1028,10 @@ fn active_agent_accountability(
                 AgentProvisionAccountabilityScope::AgentOperator
             );
     }
+    let original_payload = original_event
+        .envelope
+        .get("payload")
+        .unwrap_or(&original_event.envelope);
     let Ok(original_grant) =
         serde_json::from_value::<AccountabilityGrantPayload>(original_payload.clone())
     else {

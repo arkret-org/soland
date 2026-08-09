@@ -1191,7 +1191,7 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::RealmArchive,
+            &arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
                 arkret_wire::EventKind::RealmArchive.as_str(),
                 LIFECYCLE_ACTOR,
@@ -1204,7 +1204,7 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::RealmArchive,
+            &arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
                 arkret_wire::EventKind::RealmDestroy.as_str(),
                 LIFECYCLE_ACTOR,
@@ -1218,7 +1218,7 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::RealmArchive,
+            &arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
                 arkret_wire::EventKind::RealmArchive.as_str(),
                 LIFECYCLE_ACTOR,
@@ -1230,7 +1230,7 @@ mod tests {
         caller_signed_realm_lifecycle_target(
             LIFECYCLE_ACTOR,
             LIFECYCLE_REALM,
-            arkret_wire::EventKind::RealmArchive,
+            &arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
                 arkret_wire::EventKind::RealmArchive.as_str(),
                 "did:web:someone-else.example",

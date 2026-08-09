@@ -53,8 +53,12 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         ).unwrap())
         .unwrap(),
     );
-    realm_create.payload["event_id"] =
-        json!(realm_id.as_str().replacen("ak:realm:", "ak:event:", 1));
+    let realm_create_event_id =
+        arkret_identifiers::EventId::new(realm_id.as_str().replacen("ak:realm:", "ak:event:", 1))
+            .unwrap();
+    realm_create.context.sender = alice.clone();
+    realm_create.context.event_id = realm_create_event_id.clone();
+    realm_create.context.accepted_event_id = realm_create_event_id;
     let mut peer_join = op(
         realm_id.clone(),
         "000000000692",
@@ -67,8 +71,12 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         .to_value()
         .unwrap(),
     );
-    peer_join.payload["sender"] = json!("did:web:alice.example");
-    peer_join.payload["event_id"] = json!("ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5");
+    peer_join.context.sender = alice.clone();
+    let peer_join_event_id =
+        arkret_identifiers::EventId::new("ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5")
+            .unwrap();
+    peer_join.context.event_id = peer_join_event_id.clone();
+    peer_join.context.accepted_event_id = peer_join_event_id;
     let mut strand_create = op(
         realm_id.clone(),
         "000000000693",
@@ -84,8 +92,11 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     // `ak.strand.create` derives the Strand id from the Event
     // (`retype(event_id)`); an Operation without `event_id` is rejected with
     // `strand_create_missing_event_id` and the Strand never materializes.
-    strand_create.payload["event_id"] =
-        json!("ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D");
+    let strand_create_event_id =
+        arkret_identifiers::EventId::new("ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D")
+            .unwrap();
+    strand_create.context.event_id = strand_create_event_id.clone();
+    strand_create.context.accepted_event_id = strand_create_event_id;
     {
         let mut projection = state.test_projection().lock();
         apply_with_registered_cell_writes(&mut projection, &realm_create, 0, state.hlc());
@@ -119,8 +130,8 @@ fn apply_with_registered_cell_writes(
     server_hlc: &soland_domain::hlc::ServerHlc,
 ) {
     let actor = operation.context.sender.as_str();
-    let event = arkret_wire::test_support::raw_event_at(
-        operation.event_kind,
+    let mut event = arkret_wire::test_support::raw_event_at(
+        operation.event_kind.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: operation.realm_id.clone(),
         },
@@ -131,12 +142,20 @@ fn apply_with_registered_cell_writes(
         operation.created_at,
     )
     .unwrap();
+    event.event_id = operation.context.event_id.clone();
+    let projected = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        operation.operation_id.clone(),
+        operation.operation_kind.clone(),
+        operation.object_id.clone(),
+        &event,
+    )
+    .unwrap();
     let writes = arkret_schema::project_registered_cell_writes(
         &event,
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
-    let effect = projection.apply_projected(operation, &writes, server_hlc);
+    let effect = projection.apply_projected(&projected, &writes, server_hlc);
     assert!(
         !matches!(
             effect,
@@ -302,7 +321,7 @@ fn shared_view_events_never_carry_a_private_view() {
             }),
         ),
     ] {
-        let operation = op(realm_id.clone(), seed, kind, payload);
+        let operation = op(realm_id.clone(), seed, kind.clone(), payload);
         assert_eq!(
             validate_view_payload(&operation),
             Err("private_view_requires_account_data"),
@@ -1343,7 +1362,7 @@ async fn direct_conversation_realm_refuses_tombstone_and_destroy() {
         let terminal = op(
             realm_id.clone(),
             seed,
-            kind,
+            kind.clone(),
             json!({ "sender": "did:web:alice.example" }),
         );
         assert_eq!(
@@ -2560,7 +2579,6 @@ async fn call_recording_start_defaults_to_record_capability() {
             "mode": "audio_video",
             "visible_notice": true,
             "result": {
-                "recording_start_event_id": "ak:event:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
                 "retention": {"consent_confirmed": true}
             }
         }),
@@ -2597,7 +2615,6 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
             "mode": "audio",
             "visible_notice": true,
             "result": {
-                "transcript_start_event_id": "ak:event:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
                 "retention": {"consent_confirmed": true}
             }
         }),
@@ -2644,7 +2661,6 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
             "mode": "audio",
             "visible_notice": true,
             "result": {
-                "transcript_start_event_id": "ak:event:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
                 "retention": {"consent_confirmed": true}
             }
         }),

@@ -1754,6 +1754,16 @@ impl ProjectionService {
             .into()
     }
 
+    /// Apply actor-private read-cursor state outside the durable-event reducer
+    /// registry. The event-kind registry deliberately marks these events as
+    /// `reducer_input=false` because they do not advance the Realm frontier.
+    pub fn apply_read_cursor(&self, operation: &Operation) -> ProjectionEffectView {
+        self.state
+            .lock()
+            .apply_read_cursor(operation, operation.created_at)
+            .into()
+    }
+
     pub fn apply_sidecar_ensure_atomic(
         &self,
         operations: &[(&Operation, &[ProjectedCellWrite])],

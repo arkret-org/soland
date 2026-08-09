@@ -203,10 +203,8 @@ async fn invite_create_event_surfaces_via_authz_invites() {
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
     // Submit Alice's canonical directed invite.
-    let invite_id = "ak:invite:ATipYRHOSjaTuZ9GYpK1SdHDgGqfTf4B-TcVYsJqRzJJ";
     let event_id = "ak:event:ARdpHJI61pXl2eDxXq5o-JwwZDx5_mx7XTPBZMba03_p";
     let payload = serde_json::json!({
-        "invite_id": invite_id,
         "invitee": bob_did,
         "invite_delivery_target": {
             "recipient_service_id": state.service_id(),
@@ -228,6 +226,8 @@ async fn invite_create_event_surfaces_via_authz_invites() {
     move_event_to_actor_realm_frontier(&state, &alice, alice_did, &realm_id, &mut event).await;
     event["seal_basis"] = created_realm["seal_basis"].clone();
     resign_canonical_event(&mut event);
+    let invite_event_id = arkret_wire::EventId::new(authored_event_id(&event).to_owned()).unwrap();
+    let invite_id = arkret_identifiers::InviteId::from_event_id(&invite_event_id).to_string();
 
     let mut submit = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -254,7 +254,7 @@ async fn invite_create_event_surfaces_via_authz_invites() {
         invites.iter().any(|invite| {
             // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
-                && invite["id"].as_str() == Some(invite_id)
+                && invite["id"].as_str() == Some(invite_id.as_str())
                 && invite["invitee"].as_str() == Some(bob_did)
                 && invite["state"].as_str() == Some("pending")
         }),

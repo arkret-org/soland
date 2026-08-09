@@ -163,6 +163,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
             "reviewer": "did:web:reviewer.example",
             "verdict": "uphold",
             "reason_text_ref": "appeal denied",
+            "decided_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -309,6 +310,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
             "reviewer": "did:web:reviewer.example",
             "verdict": "overturn",
             "reason_text_ref": "appeal upheld",
+            "decided_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(

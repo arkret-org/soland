@@ -483,10 +483,7 @@ async fn operation_agent_write_context(
 ) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
     let actor_id = Some(operation.context.sender.to_string());
     let executed_by = operation_executed_by(operation);
-    let authorization_ref = operation
-        .payload
-        .get("authorization_ref")
-        .and_then(Value::as_str);
+    let authorization_ref = operation.context.authorization_ref.as_deref();
     if let (Some(actor_id), Some(executed_by), Some(authorization_ref)) =
         (actor_id.as_deref(), executed_by, authorization_ref)
     {

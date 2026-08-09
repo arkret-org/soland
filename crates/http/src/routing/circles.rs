@@ -1076,7 +1076,7 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CircleArchive,
+            &arkret_wire::EventKind::CircleArchive,
             &lifecycle_event(
                 arkret_wire::EventKind::CircleArchive.as_str(),
                 ACTOR,
@@ -1089,7 +1089,7 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CircleArchive,
+            &arkret_wire::EventKind::CircleArchive,
             &lifecycle_event(
                 arkret_wire::EventKind::CircleTombstone.as_str(),
                 ACTOR,
@@ -1103,7 +1103,7 @@ mod tests {
         caller_signed_circle_lifecycle_target(
             ACTOR,
             CIRCLE,
-            arkret_wire::EventKind::CircleArchive,
+            &arkret_wire::EventKind::CircleArchive,
             &lifecycle_event(
                 arkret_wire::EventKind::CircleArchive.as_str(),
                 ACTOR,

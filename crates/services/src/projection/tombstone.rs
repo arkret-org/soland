@@ -63,6 +63,9 @@ pub fn redaction_target_event_ids_from_events(
 }
 
 pub fn event_is_visible(event: &ProjectionEventRecord, _redacted: &HashSet<String>) -> bool {
+    // A redaction Event is durable audit history, but the projected timeline
+    // exposes its target slots after applying tombstones rather than adding a
+    // second visible timeline row for the reducer command itself.
     !arkret_wire::events::kinds::is_redaction_kind(&event.event_kind)
 }
 

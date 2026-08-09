@@ -9,6 +9,10 @@ use crate::common::*;
 const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
+fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
+
 /// A `session`-class Realm-scoped Signal from Alice's seeded device.
 ///
 /// `profiles-presence.md` §3.4/§3.5 put presence and typing on exactly this
@@ -234,10 +238,11 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign() 
 
     let file_transfer_presign = TestClient::post("http://server/_arkret/self/blob/presign")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "blob_ref": file_transfer_blob["blob_ref"].as_str().unwrap(),
             "purpose": "file_transfer"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(file_transfer_presign.status_code.unwrap().as_u16(), 403);
@@ -315,7 +320,12 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
     let unauthenticated = TestClient::post("http://server/_arkret/self/signal")
-        .json(&alice_signal(&seal_ref, "presence", &signing_key))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&alice_signal(
+            &seal_ref,
+            "presence",
+            &signing_key,
+        )))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
@@ -325,13 +335,14 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
     // and it MUST fail closed under the registered reason code.
     let mut plaintext = TestClient::post("http://server/_arkret/self/signal")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "kind": "ak.presence",
             "realm_id": DEMO_REALM_ID,
             "actor_id": ALICE,
             "device_id": ALICE_DEVICE,
             "payload": {"state": "dnd", "status_message": "In a meeting"}
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(plaintext.status_code, Some(StatusCode::BAD_REQUEST));
@@ -394,13 +405,14 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let push: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
             "app_id": "inkson"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -459,14 +471,15 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let notify_after_rejected_rule: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "notification": {
                     "push_target_id": push_target,
                     "wakeup_kind": "message",
                     "timing_profile_hint": "default",
                     "devices": [{"device_id": ALICE_DEVICE}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
                 }
-            }))
+            })))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -489,7 +502,8 @@ async fn push_profile_and_moderation_contracts_work() {
 
     let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             // content-moderation.md §3.1.1: target_ref must resolve to its
             // actual Realm/effective_scope. The demo Realm is a real visible
@@ -497,7 +511,7 @@ async fn push_profile_and_moderation_contracts_work() {
             "target_ref": DEMO_REALM_ID,
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -528,12 +542,13 @@ async fn push_profile_and_moderation_contracts_work() {
     );
 
     let unauthenticated_report = TestClient::post("http://server/_arkret/self/moderation/report")
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "target_ref": "ak:event:AVBEDgK8PBa2Re0BFMUv_vNsZ5PfPzJOBnuPK1nMUgx7",
             "report_reason_code": "spam",
             "reporter": "did:web:alice.example"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated_report.status_code.unwrap().as_u16(), 401);
@@ -559,12 +574,13 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
     let plaintext_policy =
         TestClient::put("http://server/_arkret/self/account_data/ak.presence.visibility")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "expected_revision": 0,
                 "content": {
                     "presence_visibility": "nobody"
                 }
-            }))
+            })))
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 400);
@@ -1190,13 +1206,14 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
     let register = |push_key: &str| {
         TestClient::post("http://server/_arkret/edge/push/register-device")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "device_id": device_id,
                 "push_gateway": "https://push.example/_arkret/edge/push/notify",
                 "push_key": push_key,
                 "platform": "desktop",
                 "app_id": "inkson"
-            }))
+            })))
     };
 
     let first: Value = register("opaque-token-old")
@@ -1261,7 +1278,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let stale_import: Value = TestClient::post(
         "http://server/_soland/edge/push/outbound/bridge/cache/import",
     )
-    .json(&serde_json::json!({
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&serde_json::json!({
         "replace_existing": true,
         "entries": [{
             "push_gateway_url": push_gateway,
@@ -1280,7 +1298,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "freshness_at": stale_at,
             "etag": "stale"
         }]
-    }))
+    })))
     .send(&service)
     .await
     .take_json()
@@ -1290,13 +1308,14 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "device_id": device_id,
             "push_gateway": push_gateway,
             "push_key": "opaque-token",
             "platform": "desktop",
             "app_id": "inkson"
-        }))
+        })))
         .send(&service)
         .await
         .take_json()
@@ -1309,14 +1328,15 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let stale_notify: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
                     "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
-            }))
+            })))
             .send(&service)
             .await
             .take_json()
@@ -1334,7 +1354,8 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     let fresh_import: Value = TestClient::post(
         "http://server/_soland/edge/push/outbound/bridge/cache/import",
     )
-    .json(&serde_json::json!({
+    .add_header("content-type", "application/json", true)
+    .body(canonical_body(&serde_json::json!({
         "replace_existing": true,
         "entries": [{
             "push_gateway_url": push_gateway,
@@ -1353,7 +1374,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
             "freshness_at": now,
             "etag": "fresh"
         }]
-    }))
+    })))
     .send(&service)
     .await
     .take_json()
@@ -1363,14 +1384,15 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let fresh_notify: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
                     "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
-            }))
+            })))
             .send(&service)
             .await
             .take_json()
@@ -1385,11 +1407,12 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let unregistered: Value = TestClient::post("http://server/_arkret/edge/push/unregister-device")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(&serde_json::json!({
             "device_id": device_id,
             "push_key": "opaque-token",
             "app_id": "inkson"
-        }))
+        })))
         .send(&service)
         .await
         .take_json()
@@ -1399,14 +1422,15 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
 
     let after_unregister: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_body(&serde_json::json!({
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
                     "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
-            }))
+            })))
             .send(&service)
             .await
             .take_json()

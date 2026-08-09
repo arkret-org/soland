@@ -7,6 +7,58 @@ use arkret_state::lattice::CellState;
 
 use super::common::*;
 
+fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
+
+async fn post_authenticated_canonical<T: serde::Serialize>(
+    state: AppState,
+    token: &str,
+    uri: &str,
+    body: &T,
+) -> salvo::http::Response {
+    TestClient::post(uri)
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(body))
+        .send(&app_from_state(state))
+        .await
+}
+
+async fn post_canonical_signal(
+    state: AppState,
+    token: &str,
+    envelope: &arkret_wire::SignalEnvelope,
+) -> salvo::http::Response {
+    post_authenticated_canonical(state, token, "http://server/_arkret/self/signal", envelope).await
+}
+
+fn authored_call_id() -> String {
+    static NEXT_ACTOR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10_000);
+    let actor_seq = NEXT_ACTOR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let event = signed_canonical_event(
+        "call-create-fixture-label",
+        arkret_wire::EventKind::CallCreate.as_str(),
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        DEMO_REALM_ID,
+        actor_seq,
+        vec![],
+        serde_json::json!({
+            "initial_state": "ringing",
+            "focus": {"mode": "sfu", "session_focus": "fixture"}
+        }),
+    );
+    let event_id = arkret_identifiers::EventId::new(
+        event["event_id"]
+            .as_str()
+            .expect("authored call create Event has event_id")
+            .to_owned(),
+    )
+    .expect("authored call create Event has canonical event_id");
+    arkret_identifiers::CallId::from_event_id(&event_id).to_string()
+}
+
 fn device_message_target(kind: &str, content: Value) -> Value {
     serde_json::json!({
         "message_id": new_prefixed_uuid7("ak:device_message:"),
@@ -80,7 +132,8 @@ async fn post_account_device_pair(
     }
     let mut response = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&body)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&body))
         .send(&app_from_state(state))
         .await;
     let status = response.status_code.expect("device-pair status");
@@ -93,14 +146,11 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
-    let sibling_device_public_key =
-        arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
-            pair_device_signing_key(sibling).verifying_key().as_bytes(),
-        );
     let sibling_pair_body = account_device_pair_body(sibling);
 
     let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
-        .json(&sibling_pair_body)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&sibling_pair_body))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
@@ -108,52 +158,25 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let mut sibling_pair_body = sibling_pair_body;
     sibling_pair_body["display_name"] = Value::String("Paired Phone".to_owned());
     sibling_pair_body["device_metadata"] = serde_json::json!({"platform": "ios"});
-    let paired: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&sibling_pair_body)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(paired["device_id"], sibling);
+    let mut unsupported = post_authenticated_canonical(
+        state.clone(),
+        &token,
+        "http://server/_arkret/gate/account/device-pair",
+        &sibling_pair_body,
+    )
+    .await;
+    assert_eq!(unsupported.status_code, Some(StatusCode::NOT_IMPLEMENTED));
+    let body: Value = unsupported.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
     assert!(
-        paired["authorized_event_ref"]
-            .as_str()
+        state
+            .test_persistence()
+            .devices()
+            .get("did:web:alice.example", sibling)
+            .await
             .unwrap()
-            .starts_with("ak:event:")
-    );
-    // The durable device inventory is the authorization truth. The gate may
-    // omit the optional capability-grant snapshot when no separate grant is
-    // minted for same-principal pairing.
-    assert!(paired.get("device_grant").is_none_or(Value::is_null));
-
-    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(viewer["devices"].as_array().unwrap().iter().any(|device| {
-        device["device_id"] == sibling
-            && device["status"] == "active"
-            && device["display_name"] == "Paired Phone"
-    }));
-    let stored = state
-        .test_persistence()
-        .devices()
-        .get("did:web:alice.example", sibling)
-        .await
-        .unwrap()
-        .expect("paired device inventory record");
-    assert_eq!(
-        stored.payload["device_public_key"],
-        sibling_device_public_key
-    );
-    assert_eq!(
-        stored.payload["authorization"]["device_public_key"],
-        sibling_device_public_key
+            .is_none(),
+        "fail-closed pairing must not create a device inventory record"
     );
     assert!(
         state
@@ -163,11 +186,8 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
             .await
             .unwrap()
             .iter()
-            .any(|event| {
-                event["action"] == "account.device_pair"
-                    && event["outcome"] == "accepted"
-                    && event["payload"]["new_device_id"] == sibling
-            })
+            .all(|event| event["action"] != "account.device_pair"),
+        "fail-closed pairing must not append an accepted audit record"
     );
 }
 
@@ -179,7 +199,6 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     let unverified_device = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let first_new_device = "ak:device:01904100-0000-7000-8000-9b04e0000009";
     let second_new_device = "ak:device:01904100-0000-7000-8000-9b04e000000a";
-    let third_new_device = "ak:device:01904100-0000-7000-8000-9b04e000000b";
 
     let trusted_token =
         dev_token_for_device(state.clone(), actor, trusted_device, "Alice Desktop").await;
@@ -204,54 +223,20 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
         "{body}"
     );
 
-    let (status, paired) =
-        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
-    assert_eq!(status, StatusCode::OK, "{paired}");
-    assert_eq!(paired["device_id"], first_new_device);
-
     let (status, body) =
         post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"]["code"], "device_already_authorized", "{body}");
-
-    let mut revoked_target = state
-        .test_persistence()
-        .devices()
-        .get(actor, first_new_device)
-        .await
-        .unwrap()
-        .expect("paired device record");
-    revoked_target.revoked_at = Some(chrono::Utc::now());
-    state
-        .test_persistence()
-        .devices()
-        .put(&revoked_target)
-        .await
-        .unwrap();
-    let (status, body) =
-        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"]["code"], "device_revoked", "{body}");
-
-    let mut revoked = state
-        .test_persistence()
-        .devices()
-        .get(actor, trusted_device)
-        .await
-        .unwrap()
-        .expect("trusted device record");
-    revoked.revoked_at = Some(chrono::Utc::now());
-    state
-        .test_persistence()
-        .devices()
-        .put(&revoked)
-        .await
-        .unwrap();
-
-    let (status, body) =
-        post_account_device_pair(state.clone(), &trusted_token, third_new_device, "c2ln").await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
+    assert!(
+        state
+            .test_persistence()
+            .devices()
+            .get(actor, first_new_device)
+            .await
+            .unwrap()
+            .is_none(),
+        "a valid proof must still fail closed before device persistence"
+    );
 
     let audit = state
         .test_persistence()
@@ -266,7 +251,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
                 |event| event["action"] == "account.device_pair" && event["outcome"] == "accepted"
             )
             .count(),
-        1
+        0
     );
 }
 
@@ -308,12 +293,12 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     );
     let mut actor_targets = serde_json::Map::new();
     actor_targets.insert(actor.to_owned(), Value::Object(device_targets));
+    let message_batch = serde_json::json!({"messages": actor_targets});
     let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {new_token}"), true)
         .add_header("Idempotency-Key", "device-pair-request-1", true)
-        .json(&serde_json::json!({
-            "messages": actor_targets
-        }))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&message_batch))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -361,32 +346,33 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let mut approved_body = pair_body;
     approved_body["display_name"] = Value::String("Alice Browser".to_owned());
     approved_body["device_metadata"] = request_content["device_metadata"].clone();
-    let approved: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
-        .add_header("authorization", format!("Bearer {existing_token}"), true)
-        .json(&approved_body)
-        .send(&app_from_state(state.clone()))
+    let before = state
+        .test_persistence()
+        .devices()
+        .get(actor, new_device)
         .await
-        .take_json()
+        .unwrap()
+        .expect("unverified device fixture");
+    let mut unsupported = post_authenticated_canonical(
+        state.clone(),
+        &existing_token,
+        "http://server/_arkret/gate/account/device-pair",
+        &approved_body,
+    )
+    .await;
+    assert_eq!(unsupported.status_code, Some(StatusCode::NOT_IMPLEMENTED));
+    let body: Value = unsupported.take_json().await.unwrap();
+    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
+    let after = state
+        .test_persistence()
+        .devices()
+        .get(actor, new_device)
         .await
-        .unwrap();
-    assert_eq!(approved["device_id"], new_device);
-    assert!(
-        approved.get("device_grant").is_none(),
-        "the optional grant is omitted when pairing does not mint one: {approved}"
-    );
-
-    let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
-        .add_header("authorization", format!("Bearer {existing_token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(viewer["devices"].as_array().unwrap().iter().any(|device| {
-        device["device_id"] == new_device
-            && device["status"] == "active"
-            && device["display_name"] == "Alice Browser"
-    }));
+        .unwrap()
+        .expect("unverified device fixture remains");
+    assert_eq!(after.verification_state, before.verification_state);
+    assert_eq!(after.payload, before.payload);
+    assert_eq!(after.updated_at, before.updated_at);
 }
 
 #[tokio::test]
@@ -416,9 +402,10 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
         let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
             .add_header("Idempotency-Key", format!("capacity-{seq}"), true)
-            .json(&serde_json::json!({
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&serde_json::json!({
                 "messages": actor_targets
-            }))
+            })))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -461,7 +448,8 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
 
     let create = TestClient::post("http://server/_arkret/gate/account/device-pairing-requests")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "pairing_code": "7H2K9M4Q",
             "new_device_pubkey": {
                 "kid": "ak:device:01904100-0000-7000-8000-9b04e0000007",
@@ -469,7 +457,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
                 "public_key": "emtleQ"
             },
             "challenge_signature": "c2ln"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(create.status_code, Some(StatusCode::NOT_FOUND));
@@ -488,18 +476,20 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
 
     let soland_challenge = TestClient::post("http://server/_soland/self/devices/pairing-challenge")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-9b04e0000007"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(soland_challenge.status_code, Some(StatusCode::NOT_FOUND));
 
     let soland_authorize = TestClient::post("http://server/_soland/self/devices/authorize-pairing")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-9b04e0000007"
-        }))
+        })))
         .send(&app_from_state(state))
         .await;
     assert_eq!(soland_authorize.status_code, Some(StatusCode::NOT_FOUND));
@@ -514,7 +504,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     // media token before writing its first `ak.call.state` event). With no
     // committed `session_focus`, the issuer admits the requested focus as long
     // as it is a legal focus within the realm media_service epoch.
-    let session_id = new_prefixed_uuid7("ak:call:");
+    let session_id = authored_call_id();
 
     // `media-service-binding.md` §6 — token exchange requires `ak.call.join`;
     // realm membership alone is insufficient.
@@ -522,19 +512,20 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ak.call.join",
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
 
     let issued_before = chrono::Utc::now();
     let token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -650,13 +641,14 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 
     let second_token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
-        }))
+        })))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -686,18 +678,19 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     add_test_realm_member(&state, DEMO_REALM_ID, actor);
     let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
     // A fresh call id with no durable call cell and no ephemeral session.
-    let call_id = new_prefixed_uuid7("ak:call:");
+    let call_id = authored_call_id();
 
     // Without ak.call.join, even a realm member is denied (§6).
     let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
             "actor_id": actor,
             "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
@@ -708,16 +701,22 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
 
     // Grant ak.call.join → the token is issued against the brand-new call even
     // though no signaling session or durable call cell exists.
-    grant_call_capability(&state, DEMO_REALM_ID, actor, "ak.call.join");
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        actor,
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
+    );
     let issued: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
             "actor_id": actor,
             "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -746,14 +745,14 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ak:call:");
+    let session_id = authored_call_id();
     // §6 — grant ak.call.join so the join gate passes and the focus/issuer
     // mismatch errors (not capability_denied) are what surfaces.
     grant_call_capability(
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ak.call.join",
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
 
     // Commit `session_focus = mediasoup:blue` into the durable focus cell
@@ -763,13 +762,14 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
 
     let mut focus_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await;
     let focus_mismatch_body: Value = focus_mismatch.take_json().await.unwrap();
@@ -790,13 +790,14 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
     );
     let mut issuer_mismatch = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
-        }))
+        })))
         .send(&app_from_state(state))
         .await;
     let issuer_mismatch_body: Value = issuer_mismatch.take_json().await.unwrap();
@@ -811,7 +812,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let _token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ak:call:");
+    let session_id = authored_call_id();
     let bob_token = dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
@@ -822,13 +823,14 @@ async fn rtc_media_token_rejects_non_member_actor() {
 
     let mut response = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:bob.example",
             "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state))
         .await;
     assert_eq!(response.status_code, Some(StatusCode::FORBIDDEN));
@@ -865,7 +867,8 @@ async fn rtc_media_token_requires_call_join_capability() {
     // No ak.call.join → capability_denied even though bob is a member+participant.
     let mut denied = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&exchange_body)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&exchange_body))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
@@ -874,10 +877,16 @@ async fn rtc_media_token_requires_call_join_capability() {
 
     // After granting ak.call.join, the exchange is admitted (focus matches the
     // oldest-membership default).
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        bob,
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
+    );
     let granted: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&exchange_body)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&exchange_body))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -944,13 +953,13 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    let session_id = new_prefixed_uuid7("ak:call:");
+    let session_id = authored_call_id();
     // §6 — token exchange requires ak.call.join.
     grant_call_capability(
         &state,
         DEMO_REALM_ID,
         "did:web:alice.example",
-        "ak.call.join",
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
     );
 
     // No committed session_focus: the request directly names the livekit focus,
@@ -958,14 +967,15 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
     let issued_before = chrono::Utc::now();
     let token_response: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": "did:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:livekit:green",
             "desired_media": {"audio": true, "video": true, "screen": false}
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1074,21 +1084,27 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
-    let session_id = new_prefixed_uuid7("ak:call:");
+    let session_id = authored_call_id();
     // §6 — bob needs ak.call.join to exchange a token before the ban.
-    grant_call_capability(&state, DEMO_REALM_ID, bob, "ak.call.join");
+    grant_call_capability(
+        &state,
+        DEMO_REALM_ID,
+        bob,
+        arkret_wire::CapabilityActionId::CallJoin.as_str(),
+    );
 
     // Before the ban, bob can exchange a media token (no committed focus, so
     // the requested epoch-legal focus is admitted).
     let pre_ban: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": bob,
             "device_id": bob_device,
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1114,13 +1130,14 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     // `call_participant_removed` (webrtc-signaling.md §3a).
     let mut post_ban = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&serde_json::json!({
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
             "actor_id": bob,
             "device_id": bob_device,
             "focus_id": "ak:focus:livekit:green"
-        }))
+        })))
         .send(&app_from_state(state))
         .await;
     assert_eq!(post_ban.status_code, Some(StatusCode::FORBIDDEN));
@@ -1154,7 +1171,7 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// redeems a media token before writing its first `ak.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     add_test_realm_member(state, DEMO_REALM_ID, member);
-    new_prefixed_uuid7("ak:call:")
+    authored_call_id()
 }
 
 /// Seed the independent durable focus and moderation cells the media token
@@ -1329,7 +1346,7 @@ async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
         "invite",
         &alice_key,
     );
-    let mut submit = post_signal(state.clone(), &alice_token, &invite).await;
+    let mut submit = post_canonical_signal(state.clone(), &alice_token, &invite).await;
     assert_eq!(submit.status_code, Some(StatusCode::OK));
     let outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
         submit.take_json().await.unwrap();
@@ -1382,7 +1399,7 @@ async fn call_signal_reaches_same_actor_other_device() {
         &key_a,
     );
     assert_eq!(
-        post_signal(state.clone(), &token_a, &invite)
+        post_canonical_signal(state.clone(), &token_a, &invite)
             .await
             .status_code,
         Some(StatusCode::OK)
@@ -1428,7 +1445,7 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
         &alice_key,
     );
     assert_eq!(
-        post_signal(state.clone(), &alice_token, &invite)
+        post_canonical_signal(state.clone(), &alice_token, &invite)
             .await
             .status_code,
         Some(StatusCode::OK)
@@ -1488,7 +1505,7 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
     // valid and is admitted. Expiry bites at delivery, which is the assertion
     // above. A lifetime that exceeds the class ceiling is the case that fails
     // closed at admission.
-    let mut over_ceiling = post_signal(
+    let mut over_ceiling = post_canonical_signal(
         state.clone(),
         &alice_token,
         &call_signal_at(
@@ -1531,7 +1548,7 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
         seed_signal_sender_device(&state, WEBRTC_BOB, outsider_device, "Bob Phone").await;
     let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_BOB).await;
 
-    let denied = post_signal(
+    let denied = post_canonical_signal(
         state.clone(),
         &token,
         &call_signal(
@@ -1585,7 +1602,7 @@ async fn call_signal_resubscribe_does_not_redeliver() {
         &alice_key,
     );
     assert_eq!(
-        post_signal(state.clone(), &alice_token, &invite)
+        post_canonical_signal(state.clone(), &alice_token, &invite)
             .await
             .status_code,
         Some(StatusCode::OK)
@@ -1609,7 +1626,7 @@ async fn call_signal_resubscribe_does_not_redeliver() {
         &alice_key,
     );
     assert_eq!(
-        post_signal(state.clone(), &alice_token, &answer)
+        post_canonical_signal(state.clone(), &alice_token, &answer)
             .await
             .status_code,
         Some(StatusCode::OK)

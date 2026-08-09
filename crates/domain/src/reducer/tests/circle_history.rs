@@ -191,7 +191,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
         }),
     );
     leave.created_at = leave_at;
-    let expected_frontier = leave.operation_id.as_str().to_owned();
+    let expected_frontier = leave.context.event_id.as_str().to_owned();
 
     assert!(matches!(
         state.apply(&leave, &hlc),

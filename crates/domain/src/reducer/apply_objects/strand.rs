@@ -253,7 +253,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let Some(strand_id) = operation
             .payload
-            .get("strand_id")
+            .get("target_ref")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned)
         else {

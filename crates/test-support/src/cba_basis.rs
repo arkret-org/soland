@@ -486,23 +486,11 @@ async fn project_fixture_genesis_event(
         state
             .test_persistence()
             .events()
-            .put(soland_storage::CanonicalEventRecord {
-                event_id: event.event_id.to_string(),
-                actor_id: event.actor_id.to_string(),
-                actor_seq: event.actor_seq,
-                realm_id: Some(realm_id.to_owned()),
-                kind: event.kind.to_string(),
-                schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: event.event_digest().expect("fixture PCR Event digest"),
-                canonical_bytes: arkret_canonical::canonical_json_bytes(
-                    &event
-                        .digest_payload()
-                        .expect("fixture PCR Event digest payload"),
-                )
-                .expect("fixture PCR Event canonical bytes"),
-                envelope: serde_json::to_value(&event).expect("fixture PCR envelope"),
-                received_at: chrono::Utc::now(),
-            })
+            .put(crate::signed_event::canonical_event_record(
+                &event,
+                Some(realm_id),
+                chrono::Utc::now(),
+            ))
             .await
             .expect("fixture PCR genesis Event");
     }
@@ -615,7 +603,7 @@ async fn persist_and_project_realm_genesis_event(
         ),
         (
             arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            serde_json::json!({"allow_unroutable_members": false}),
+            serde_json::json!({"unroutable_membership_allowed": false}),
         ),
         (
             arkret_wire::EventKind::MemberState,
@@ -661,26 +649,11 @@ async fn persist_and_project_realm_genesis_event(
         state
             .test_persistence()
             .events()
-            .put(soland_storage::CanonicalEventRecord {
-                event_id: bootstrap_event.event_id.to_string(),
-                actor_id: bootstrap_event.actor_id.to_string(),
-                actor_seq: bootstrap_event.actor_seq,
-                realm_id: Some(realm_id.to_owned()),
-                kind: bootstrap_event.kind.to_string(),
-                schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: bootstrap_event
-                    .event_digest()
-                    .expect("fixture bootstrap Event digest"),
-                canonical_bytes: arkret_canonical::canonical_json_bytes(
-                    &bootstrap_event
-                        .digest_payload()
-                        .expect("fixture bootstrap Event digest payload"),
-                )
-                .expect("fixture bootstrap Event canonical bytes"),
-                envelope: serde_json::to_value(bootstrap_event)
-                    .expect("fixture bootstrap envelope"),
-                received_at: chrono::Utc::now(),
-            })
+            .put(crate::signed_event::canonical_event_record(
+                bootstrap_event,
+                Some(realm_id),
+                chrono::Utc::now(),
+            ))
             .await
             .expect("fixture Realm bootstrap Event");
     }

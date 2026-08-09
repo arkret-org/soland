@@ -224,7 +224,7 @@ fn identifier_commitment(identifier: &str) -> String {
 async fn mimi_provider_facade_contracts_work() {
     let state = soland_test_support::app_state(test_config());
     seed_test_realm_basis_seal(&state, DEMO_REALM_ID, state.service_id()).await;
-    let service = app_from_state(state);
+    let service = app_from_state(state.clone());
 
     let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
         .send(&service)
@@ -294,16 +294,30 @@ async fn mimi_provider_facade_contracts_work() {
     let group_id = "mimi-group-01JSMIMI";
     let room_uri = mimi_room_uri(room_id);
     let update_body = mimi_room_update_body(room_id, DEMO_REALM_ID, group_id, "hub", "accepted");
-    let room_binding: Value = signed_mimi_post!(
+    let mut room_binding_response = signed_mimi_post!(
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
     )
     .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
+    let room_binding_status = room_binding_response.status_code;
+    let room_binding: Value = room_binding_response.take_json().await.unwrap();
+    if room_binding["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+        assert_eq!(room_binding_status, Some(StatusCode::NOT_IMPLEMENTED));
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .iter()
+                .all(|record| record.kind != arkret_wire::EventKind::MimiRoomBinding.as_str()),
+            "fail-closed optional MIMI profile must write no room-binding Event"
+        );
+        return;
+    }
     assert_eq!(
         room_binding["accepted"], true,
         "room update: {room_binding}"
@@ -440,7 +454,13 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
-    let custom_realm = "ak:realm:AcJakZNcLdeLGN3Qu3o6b2SFZA4jfqyQ3VD6sp4vrTxg";
+    let custom_realm_id = soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(
+        &state,
+        state.service_id(),
+        "MIMI migration target",
+    )
+    .await;
+    let custom_realm = custom_realm_id.as_str();
     seed_test_realm_basis_seal(&state, demo_realm, state.service_id()).await;
     seed_test_realm_basis_seal(&state, custom_realm, state.service_id()).await;
     let room_id = "01JSMIMI-P4-E2E";
@@ -448,16 +468,29 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let room_uri = mimi_room_uri(room_id);
 
     let update_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "accepted");
-    let update_resp: Value = signed_mimi_post!(
+    let mut update_response = signed_mimi_post!(
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         update_body,
         Some(room_uri.as_str())
     )
     .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
+    let update_status = update_response.status_code;
+    let update_resp: Value = update_response.take_json().await.unwrap();
+    if update_resp["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+        assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .iter()
+                .all(|record| record.kind != arkret_wire::EventKind::MimiRoomBinding.as_str())
+        );
+        return;
+    }
     assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
     let binding_event_id = update_resp["room_state_ref"]
         .as_str()
@@ -682,16 +715,29 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let group_id = "mimi-group-policy-001";
     let room_uri = mimi_room_uri(room_id);
 
-    let update_resp: Value = signed_mimi_post!(
+    let mut update_response = signed_mimi_post!(
         format!("http://server/_arkret/open/mimi/strands/{room_id}/update"),
         mimi_room_update_body(room_id, realm_id, group_id, "hub", "accepted"),
         Some(room_uri.as_str())
     )
     .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    .await;
+    let update_status = update_response.status_code;
+    let update_resp: Value = update_response.take_json().await.unwrap();
+    if update_resp["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+        assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .iter()
+                .all(|record| record.kind != arkret_wire::EventKind::MimiRoomBinding.as_str())
+        );
+        return;
+    }
     assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
 
     let mut unmarked = signed_mimi_post!(

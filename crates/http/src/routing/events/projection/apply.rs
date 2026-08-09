@@ -107,6 +107,25 @@ fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation 
     contextual
 }
 
+/// Keep receiver time as reducer context without contaminating the closed
+/// producer payload consumed by the typed membership gate.
+fn accepted_member_state_reducer_operation(operation: &Operation) -> Operation {
+    let mut contextual = operation.clone();
+    let received_at = contextual
+        .payload
+        .get("event_received_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc));
+    if let Some(payload) = contextual.payload.as_object_mut() {
+        payload.remove("event_received_at");
+    }
+    if let Some(received_at) = received_at {
+        contextual.created_at = received_at;
+    }
+    contextual
+}
+
 pub(crate) async fn mirror_mls_effect_to_persistence(
     state: &AppState,
     origin: &str,
@@ -488,6 +507,9 @@ async fn project_accepted_operations_inner(
             Some(contextual)
         } else {
             match kinds::canonical_kind_for_operation(operation) {
+                Some(arkret_wire::EventKind::MemberState) => {
+                    Some(accepted_member_state_reducer_operation(operation))
+                }
                 Some(arkret_wire::EventKind::CircleMemberState) => {
                     Some(accepted_circle_member_reducer_operation(operation))
                 }
@@ -500,11 +522,15 @@ async fn project_accepted_operations_inner(
                 let cell_writes = canonical_cell_writes
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| accepted_operation_cell_writes(state, origin, operation));
-                Some(state.projections().apply_via_lattice_registry(
-                    reducer_operation,
-                    &cell_writes,
-                    state.hlc(),
-                ))
+                if kinds::canonical_kind(operation) == arkret_wire::EventKind::ReadCursorAdvance {
+                    Some(state.projections().apply_read_cursor(reducer_operation))
+                } else {
+                    Some(state.projections().apply_via_lattice_registry(
+                        reducer_operation,
+                        &cell_writes,
+                        state.hlc(),
+                    ))
+                }
             } else {
                 None
             };
@@ -1203,7 +1229,7 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(
             queued[0].content["kind"],
-            arkret_wire::EventKind::RealmKeyShare
+            arkret_wire::EventKind::RealmKeyShare.as_str()
         );
         assert_eq!(
             queued[0].content["content"]["payload"]["ciphertext"],
@@ -1231,7 +1257,8 @@ mod tests {
                 "sig": "signature"
             },
             "key_scope": {
-                "effective_scope": {"realm_id": realm_id},
+                "effective_scope": {"kind": "realm", "realm_id": realm_id},
+                "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "from_epoch": 0,
                 "to_epoch": 0
             },
@@ -1266,7 +1293,10 @@ mod tests {
 
         let delivered = device_message_envelopes_after(&[record]);
         assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].kind, arkret_wire::EventKind::RealmKeyShare);
+        assert_eq!(
+            delivered[0].kind.as_str(),
+            arkret_wire::EventKind::RealmKeyShare.as_str()
+        );
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
         assert_eq!(delivered[0].content["payload"], payload);
@@ -1302,5 +1332,41 @@ mod tests {
         );
         assert!(contextual.payload.get("sender").is_none());
         assert_eq!(contextual.payload["manage_capability_verified"], true);
+    }
+
+    #[test]
+    fn accepted_member_state_context_preserves_received_at_outside_typed_payload() {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:0196419b-1000-7000-8000-000000000203".to_owned(),
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p".to_owned(),
+            )
+            .unwrap(),
+            arkret_wire::EventKind::MemberState.as_str(),
+            json!({
+                "realm_id": "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p",
+                "actor_id": "did:web:member.example",
+                "membership": "join",
+                "delivery_status": "unroutable",
+                "event_received_at": "2026-07-07T05:20:58.398Z"
+            }),
+        );
+        let authored_at = operation.created_at;
+
+        let contextual = accepted_member_state_reducer_operation(&operation);
+
+        assert!(operation.payload.get("event_received_at").is_some());
+        assert!(contextual.payload.get("event_received_at").is_none());
+        assert_ne!(contextual.created_at, authored_at);
+        assert_eq!(
+            arkret_canonical::format_timestamp_canonical(contextual.created_at),
+            "2026-07-07T05:20:58.398Z"
+        );
+        contextual
+            .typed_payload::<arkret_wire::event_spec::MemberState>()
+            .expect("closed typed membership payload");
     }
 }

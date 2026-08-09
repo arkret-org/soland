@@ -63,8 +63,11 @@ impl ProjectionState {
                     .and_then(|relation| relation.get("id"))
             })
             .and_then(|v| v.as_str())
-            .unwrap_or(operation.operation_id.as_str())
-            .to_owned();
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                arkret_identifiers::RelationId::from_event_id(&operation.context.event_id)
+                    .to_string()
+            });
         let relation_kind = operation
             .payload
             .get("relation_kind")

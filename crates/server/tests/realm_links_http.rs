@@ -26,7 +26,9 @@ use soland_http::config::AppConfig;
 use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
-use soland_test_support::signed_event::{CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED};
+use soland_test_support::signed_event::{
+    CallerSignedEvent, FIXTURE_EVENT_SIGNING_SEED, complete_realm_bootstrap_unit,
+};
 
 const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -115,9 +117,10 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     )
     .build();
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
+    let bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
     let mut created = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"events": [genesis]}))
+        .json(&json!({"events": bootstrap}))
         .send(&app_from_state(state))
         .await;
     if created.status_code != Some(StatusCode::OK) {
@@ -176,6 +179,33 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
     unreachable!("bounded Realm Seal frontier retry returns or panics")
 }
 
+/// The next position on the caller's Realm-scoped actor chain.
+async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::query("http://server/_arkret/self/events/frontier")
+            .json(&serde_json::json!({"actor_id": ALICE, "realm_id": realm_id}))
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .send(&app_from_state(state))
+            .await
+            .take_json()
+            .await
+            .expect("typed actor Realm frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
+        panic!("combined Realm+actor selector returned the wrong frontier variant");
+    };
+    frontier.validate().expect("valid actor Realm frontier");
+    (
+        frontier.next_actor_seq,
+        frontier
+            .frontier_event_ids
+            .into_iter()
+            .map(|event_id| event_id.to_string())
+            .collect(),
+    )
+}
+
 /// The caller-signed `ak.realm.link` Move naming one edge.
 async fn link_move(
     state: &AppState,
@@ -185,6 +215,7 @@ async fn link_move(
     status: &str,
 ) -> arkret_wire::EventInitialSubmission {
     let seal = accepted_seal_id(state, token, realm_id).await;
+    let (actor_seq, prev_refs) = actor_frontier(state, token, realm_id).await;
     CallerSignedEvent::new(
         arkret_wire::EventKind::RealmLink.as_str(),
         ALICE,
@@ -196,6 +227,8 @@ async fn link_move(
             "status": status,
         }),
     )
+    .with_actor_seq(actor_seq)
+    .with_prev_refs(prev_refs.iter().map(String::as_str).collect())
     .with_accepted_seal_basis(seal)
     .build_submission()
 }

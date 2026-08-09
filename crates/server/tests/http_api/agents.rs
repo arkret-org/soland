@@ -258,32 +258,19 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         &[&bootstrap, &authorize],
         &genesis_projector,
     );
-    for (event, kind, actor_seq) in [
-        (bootstrap, "ak.realm.create", 0),
-        (authorize, "ak.device.authorize", 1),
-    ] {
-        let event_id = event.event_id.to_string();
-        let canonical_digest = event.event_digest().unwrap();
-        let envelope = serde_json::to_value(&event).unwrap();
-        let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    for event in [bootstrap, authorize] {
         state
             .test_persistence()
             .events()
-            .put(soland_storage::CanonicalEventRecord {
-                event_id,
-                actor_id: controller.to_owned(),
-                actor_seq,
-                realm_id: Some(realm_id.clone()),
-                kind: kind.to_owned(),
-                schema_id: "ak.schema.event_envelope.v1".to_owned(),
-                canonical_digest,
-                canonical_bytes,
-                envelope,
-                received_at: now,
-            })
+            .put(soland_test_support::signed_event::canonical_event_record(
+                &event,
+                Some(&realm_id),
+                now,
+            ))
             .await
             .unwrap();
     }
+    soland_test_support::cba_basis::seed_realm_genesis_event(state, &realm_id, controller).await;
 
     state
         .test_persistence()
@@ -587,7 +574,7 @@ async fn provision_agent_sdk_commit_attempt(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
-    let provision_event = prepare_standard_initial_submissions(state, token, vec![event], &signer)
+    let provision_event = prepare_self_principal_pcr_initial_submissions(state, token, vec![event])
         .await
         .into_iter()
         .next()
@@ -1031,7 +1018,11 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
             .map(arkret_wire::OpaqueLocalId::as_str),
         created_body["pairing_request_id"].as_str()
     );
-    assert_eq!(key_state.pairing_code, None);
+    assert_eq!(
+        key_state.pairing_code.as_deref(),
+        created_body["pairing_code"].as_str(),
+        "authorized lifecycle service must receive the still-open pairing code"
+    );
 
     let denied_service_view =
         TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))

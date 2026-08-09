@@ -12,9 +12,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
-    let container_space_id = "ak:space:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC";
-
+    let realm_id = DEMO_REALM_ID;
     // ── auth required ──────────────────────────────────────────────────
     let unauth = TestClient::get(format!(
         "http://server/_arkret/self/realms/{realm_id}/spaces"
@@ -30,7 +28,6 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         "ak.space.create",
         serde_json::json!({
             "object": {
-                "id": container_space_id,
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Hydration target",
@@ -39,6 +36,8 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
+    let container_space_id = authored_space_id(&create_event).to_string();
+    let create_event_id = authored_event_id(&create_event).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
@@ -57,8 +56,9 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         2,
         "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:AUdcg_tWaOx2mq2N-8743W9xEP8Q35yxM87nNC95OxlN"],
+        vec![create_event_id.as_str()],
     );
+    let archive_event_id = authored_event_id(&archive_event).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_event)
@@ -97,7 +97,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
         3,
         "ak.space.restore",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:AelSfWbyB8v5LgV4tW6Voo4vol9OLm5vk2JL25-09qH5"],
+        vec![archive_event_id.as_str()],
     );
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -139,7 +139,6 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
     let realm_id = DEMO_REALM_ID;
-    let strand_id = "ak:strand:AcN8uv4yB_wPHVJb-tJ6pbtygm-nNhPC31AT-K8qT_3w";
     let board_space_id = "ak:space:AVGlCsZA7qED4Oetfq2bCHssiEOshSrFXp7N2ozFnGNE";
     let list_space_id = "ak:space:ARLoPxFc4GPO50Iyec6Jgmc44pLU7zoS5J_ON1ilo5TL";
 
@@ -149,7 +148,6 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "id": strand_id,
                 "realm_id": realm_id,
                 "metadata": {
                     "title": "Hydration strand",
@@ -164,6 +162,8 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
+    let strand_id = authored_strand_id(&create_event).to_string();
+    let create_event_id = authored_event_id(&create_event).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
@@ -179,7 +179,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
         2,
         "ak.strand.archive",
         serde_json::json!({ "strand_id": strand_id }),
-        vec!["ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW"],
+        vec![create_event_id.as_str()],
     );
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -221,15 +221,12 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
     let realm_id = DEMO_REALM_ID;
-    let morph_id = "ak:morph:AXIXBPIKsUs-k3L12QmyzWKisKOYvsdlfvo146RtCV8I";
-
     let create_event = signed_morph_event(
         "ak:event:AbLufeiJbhmgUZnOn6cv9IGg8IV6Ad_Z4jl-DO49vFNw",
         1,
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "id": morph_id,
                 "realm_id": realm_id,
                 "morph_kind": "task",
                 "metadata": { "title": "Hydration morph" },
@@ -238,6 +235,8 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         }),
         Vec::new(),
     );
+    let morph_id = authored_morph_id(&create_event).to_string();
+    let create_event_id = authored_event_id(&create_event).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
@@ -273,7 +272,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         2,
         "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
-        vec!["ak:event:AbLufeiJbhmgUZnOn6cv9IGg8IV6Ad_Z4jl-DO49vFNw"],
+        vec![create_event_id.as_str()],
     );
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -431,10 +430,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
     let realm_id = DEMO_REALM_ID;
-    let morph_id = "ak:morph:AfIQGrkh-1S-NsVJFH0zu5KxmGOx-wwIwvvkJOsXJgK9";
     let relation_event_id = "ak:event:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
-    let relation_id = relation_event_id.replacen("ak:event:", "ak:relation:", 1);
-    let incident_ref = "ak:strand:AUl-L5KtO-lbM8_A1CzztWHktnKEujUV0S59AcdX16Ao";
 
     let initial_body = serde_json::json!({
         "schema_version": 1,
@@ -450,7 +446,6 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "id": morph_id,
                 "realm_id": realm_id,
                 "morph_kind": "document",
                 "metadata": { "title": "Postmortem draft" },
@@ -466,6 +461,8 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         }),
         Vec::new(),
     );
+    let morph_id = authored_morph_id(&create_event).to_string();
+    let create_event_id = authored_event_id(&create_event).to_string();
     let create_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_event)
@@ -484,14 +481,15 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "id": incident_ref,
                 "realm_id": realm_id,
                 "metadata": { "title": "Incident target" },
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:AU43XAN9qvYmiLq0Zndni0ZUowntoof4TrNoT4sOTDFO"],
+        vec![create_event_id.as_str()],
     );
+    let incident_ref = authored_strand_id(&incident_event).to_string();
+    let incident_event_id = authored_event_id(&incident_event).to_string();
     let incident_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&incident_event)
@@ -513,11 +511,9 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
             "from_ref": morph_id,
             "to_ref": incident_ref,
         }),
-        vec![
-            "ak:event:AU43XAN9qvYmiLq0Zndni0ZUowntoof4TrNoT4sOTDFO",
-            "ak:event:AbO9-oAaWlgrGpmyvBa0nCCezz3tKAulGGURXg8FNx1L",
-        ],
+        vec![create_event_id.as_str(), incident_event_id.as_str()],
     );
+    let relation_id = authored_relation_id(&relation_event).to_string();
     let relation_response: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&relation_event)
@@ -536,7 +532,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
         &token,
         "did:web:alice.example",
         realm_id,
-        morph_id,
+        &morph_id,
         serde_json::json!({
             "kind": "ak.content.text",
             "morph_id": morph_id,
@@ -577,7 +573,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
                 }
             }
         }),
-        vec!["ak:event:AU43XAN9qvYmiLq0Zndni0ZUowntoof4TrNoT4sOTDFO"],
+        vec![create_event_id.as_str()],
     );
     move_event_to_actor_realm_frontier(
         &state,
@@ -609,7 +605,10 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     .take_json()
     .await
     .unwrap();
-    assert_eq!(body["document"]["morph_id"], morph_id);
+    assert_eq!(
+        body["document"]["morph_id"], morph_id,
+        "document projection response: {body}"
+    );
     assert_eq!(body["document"]["realm_id"], realm_id);
     assert_eq!(body["document"]["morph_kind"], "document");
     assert_eq!(body["document"]["body"], updated_body);
@@ -851,10 +850,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
-    let container_space_id = "ak:space:AfZeK214HQLdq2Lp2Zs-aQG5DpmeeXLHPMENlpOfmb9M";
-    let strand_id = "ak:strand:AZjx_zy6m1TzY0faLUTGXhAJkw9EjSOMGPpjEPonW8yt";
-
+    let realm_id = DEMO_REALM_ID;
     // Create + tombstone a Space container.
     let create_space = signed_space_event(
         "ak:event:AVwC-xute0mcjLNt1it-wqD5SraAbhf7KsUjT_Tv9grH",
@@ -862,7 +858,6 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         "ak.space.create",
         serde_json::json!({
             "object": {
-                "id": container_space_id,
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Doomed Space",
@@ -871,6 +866,8 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         }),
         Vec::new(),
     );
+    let container_space_id = authored_space_id(&create_space).to_string();
+    let create_space_event_id = authored_event_id(&create_space).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_space)
@@ -886,8 +883,9 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         2,
         "ak.space.tombstone",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:AVwC-xute0mcjLNt1it-wqD5SraAbhf7KsUjT_Tv9grH"],
+        vec![create_space_event_id.as_str()],
     );
+    let tombstone_space_event_id = authored_event_id(&tombstone_space).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&tombstone_space)
@@ -942,14 +940,15 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "id": strand_id,
                 "realm_id": realm_id,
                 "metadata": { "title": "Doomed Strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:AfJ4izKSeLkHMvYwpbNP_Yno6umiglzFWWUkUafcBw5N"],
+        vec![tombstone_space_event_id.as_str()],
     );
+    let strand_id = authored_strand_id(&create_strand).to_string();
+    let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
@@ -964,10 +963,10 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
         "ak:event:ASbsF6NRXo3Daa7ewI4CDLCLWwaSq3z9if2gB1drYnFu",
         4,
         serde_json::json!({
-            "target_event_id": "ak:event:AR5VsTJWq7zLZRRth7JFR3vqEy7fASYv2N-naDM4sXBm",
+            "target_event_id": create_strand_event_id,
             "object_ref": strand_id,
         }),
-        vec!["ak:event:AR5VsTJWq7zLZRRth7JFR3vqEy7fASYv2N-naDM4sXBm"],
+        vec![create_strand_event_id.as_str()],
     );
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1025,10 +1024,6 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
-    let container_space_id = "ak:space:AS8g4vPxFfxjz5pXibJ9FieMfWmHLePsYHx8_PZq_pjD";
-    let strand_id = "ak:strand:AdFuh5rg_ZRBO0TiqnC2By4haCwCMZ_FrYXO7llzefqr";
-    let morph_id = "ak:morph:AeTb7z8zUQ4e59PMFI4op6wRmd532BPCq9t_tWTSnRci";
-
     // Space container: create + archive → persistence has state=archived.
     let create_space = signed_space_event(
         "ak:event:AVC_FSWCcLty3gxBqBei6I5k-lvJYjaoGgLXNgVHazO-",
@@ -1036,8 +1031,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.space.create",
         serde_json::json!({
             "object": {
-                "id": container_space_id,
-                "realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
+                "realm_id": DEMO_REALM_ID,
                 "kind": "list",
                 "title": "Persistent Space",
                 "created_by": "did:web:alice.example",
@@ -1045,6 +1039,8 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         }),
         Vec::new(),
     );
+    let container_space_id = authored_space_id(&create_space).to_string();
+    let create_space_event_id = authored_event_id(&create_space).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_space)
@@ -1060,8 +1056,9 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         2,
         "ak.space.archive",
         serde_json::json!({ "space_id": container_space_id }),
-        vec!["ak:event:AVC_FSWCcLty3gxBqBei6I5k-lvJYjaoGgLXNgVHazO-"],
+        vec![create_space_event_id.as_str()],
     );
+    let archive_space_event_id = authored_event_id(&archive_space).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&archive_space)
@@ -1075,7 +1072,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let space_row = state
         .test_persistence()
         .space_container_projections()
-        .get(container_space_id)
+        .get(&container_space_id)
         .await
         .unwrap()
         .expect("space projection MUST be mirrored to persistence after create+archive");
@@ -1114,14 +1111,15 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.strand.create",
         serde_json::json!({
             "object": {
-                "id": strand_id,
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Persistent Strand" },
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:AUuP-624T75y-LdWRnnY7YldZTBllvuImOiLA22BDCLH"],
+        vec![archive_space_event_id.as_str()],
     );
+    let strand_id = authored_strand_id(&create_strand).to_string();
+    let create_strand_event_id = authored_event_id(&create_strand).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_strand)
@@ -1134,7 +1132,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let strand_row = state
         .test_persistence()
         .strand_projections()
-        .get(strand_id)
+        .get(&strand_id)
         .await
         .unwrap()
         .expect("strand projection MUST be mirrored to persistence after create");
@@ -1145,11 +1143,12 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak:event:ASJ1A-Nm-TdJt8UpH49Yoyt1AbJZDV088rk_6hKn2Ica",
         4,
         serde_json::json!({
-            "target_event_id": "ak:event:AS7tV8pSS7nJTsUlSWtwFVnfbB0Y7qjZbKVumXBBPwap",
+            "target_event_id": create_strand_event_id,
             "object_ref": strand_id,
         }),
-        vec!["ak:event:AS7tV8pSS7nJTsUlSWtwFVnfbB0Y7qjZbKVumXBBPwap"],
+        vec![create_strand_event_id.as_str()],
     );
+    let redact_strand_event_id = authored_event_id(&redact_strand).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&redact_strand)
@@ -1162,7 +1161,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let strand_row = state
         .test_persistence()
         .strand_projections()
-        .get(strand_id)
+        .get(&strand_id)
         .await
         .unwrap()
         .expect("strand projection MUST still exist after redaction");
@@ -1178,15 +1177,16 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         "ak.morph.create",
         serde_json::json!({
             "object": {
-                "id": morph_id,
                 "realm_id": DEMO_REALM_ID,
                 "morph_kind": "task",
                 "metadata": { "title": "Persistent Morph" },
                 "created_by": "did:web:alice.example",
             }
         }),
-        vec!["ak:event:ASJ1A-Nm-TdJt8UpH49Yoyt1AbJZDV088rk_6hKn2Ica"],
+        vec![redact_strand_event_id.as_str()],
     );
+    let morph_id = authored_morph_id(&create_morph).to_string();
+    let create_morph_event_id = authored_event_id(&create_morph).to_string();
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&create_morph)
@@ -1202,7 +1202,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         6,
         "ak.morph.archive",
         serde_json::json!({ "target_ref": morph_id }),
-        vec!["ak:event:Af08fVvN-6nEKxePh4mvCpBxYyn3ddLOvXny4eJivcIL"],
+        vec![create_morph_event_id.as_str()],
     );
     let r: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1216,7 +1216,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let morph_row = state
         .test_persistence()
         .morph_projections()
-        .get(morph_id)
+        .get(&morph_id)
         .await
         .unwrap()
         .expect("morph projection MUST be mirrored to persistence");

@@ -1390,7 +1390,12 @@ mod tests {
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
         );
-        operation.payload["event_id"] = json!(invite_id.replacen("ak:invite:", "ak:event:", 1));
+        let event_id =
+            arkret_identifiers::EventId::new(invite_id.replacen("ak:invite:", "ak:event:", 1))
+                .unwrap();
+        operation.context.event_id = event_id.clone();
+        operation.context.accepted_event_id = event_id;
+        operation.context.sender = arkret_identifiers::Did::new(inviter).unwrap();
         operation.created_at = created_at;
 
         project_invite_create_operation(&state, inviter, &operation).await;

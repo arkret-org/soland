@@ -33,8 +33,8 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = "ak:realm:Ae3cHe84Qdq9276TYWiGD-pAkFlCQrwmo6sI-8UeAlEl";
-const SEEDED_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
+const SEEDED_DEMO_REALM_ID: &str = DEMO_REALM_ID;
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 
 fn test_config() -> AppConfig {
@@ -707,11 +707,11 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .collect::<Vec<_>>();
     assert_eq!(install_events.len(), accepted_event_refs.len());
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::EventKind::AppletRegistration
+        event.kind == arkret_wire::EventKind::AppletRegistration.as_str()
             && event.envelope["payload"]["applet_id"] == json!(applet_id)
     }));
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::EventKind::CapabilityGrant
+        event.kind == arkret_wire::EventKind::CapabilityGrant.as_str()
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_kind"]
                 == json!("authority_control")
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_subkind"]

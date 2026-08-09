@@ -160,7 +160,7 @@ fn message_revision_pending_replays_after_original_event() {
             "content": { "kind": "ak.content.text", "body": "revised" }
         }),
     );
-    let revision_id = revise.operation_id.to_string();
+    let revision_id = revise.context.event_id.to_string();
 
     assert!(matches!(
         state.apply(&revise, &hlc),

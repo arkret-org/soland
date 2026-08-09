@@ -34,7 +34,7 @@ async fn sync_and_directory_share_demo_realm() {
         sync["realms"]
             .as_object()
             .unwrap()
-            .contains_key("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1")
+            .contains_key(DEMO_REALM_ID)
     );
 
     let directory: Value = TestClient::post("http://server/_arkret/find/directory/search-realms")
@@ -672,7 +672,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let backfill: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({
-            "realms": ["ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1"]
+            "realms": [DEMO_REALM_ID]
         }))
         .send(&app())
         .await

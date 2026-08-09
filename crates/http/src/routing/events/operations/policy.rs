@@ -279,12 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn policy_sender_uses_object_created_by_for_full_object_create_payload() {
-        let actor = "did:web:example.com:users:alice";
+    fn policy_sender_uses_typed_envelope_sender_for_full_object_create_payload() {
         let op = circle_create_with_payload(serde_json::json!({
-            "object": { "created_by": actor },
+            "object": { "created_by": "did:web:example.com:users:alice" },
         }));
-        assert_eq!(policy_operation_sender(&op), Some(actor));
+        assert_eq!(
+            policy_operation_sender(&op),
+            Some("did:web:fixture.example")
+        );
     }
 
     #[tokio::test]

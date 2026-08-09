@@ -4,6 +4,10 @@
 
 use super::common::*;
 
+fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
+
 #[tokio::test]
 async fn account_data_accepts_fresh_principal_control_realm() {
     const FRESH_DID: &str = "did:web:fresh-avatar.example";
@@ -34,7 +38,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         FRESH_DID,
         FRESH_DEVICE,
         &principal_realm,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": "ak.client.ui_state",
             "expected_revision": 0,
@@ -62,7 +66,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "did:web:bob.example",
         BOB_DEVICE,
         &principal_realm,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": "ak.client.ui_state",
             "expected_revision": 0,
@@ -81,7 +85,8 @@ async fn account_data_accepts_fresh_principal_control_realm() {
     resign_canonical_event(&mut denied_event);
     let denied: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&denied_event)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&denied_event))
         .send(&app_from_state(state))
         .await
         .take_json()
@@ -107,7 +112,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         verified_dev_token_for_device(state.clone(), "did:web:bob.example", BOB_DEVICE, "Bob")
             .await;
 
-    let realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+    let realm_id = DEMO_REALM_ID;
     let key = format!("ak.contacts.realm.{realm_id}");
     let remark = account_data_encrypted_value(
         "did:web:alice.example",
@@ -122,7 +127,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
             "expected_revision": 0,
@@ -159,7 +164,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
             "expected_revision": 1,
@@ -207,7 +212,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key.as_str(),
             "expected_revision": 2,
@@ -263,7 +268,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
             "expected_revision": 0,
@@ -293,7 +298,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
             "expected_revision": 1,
@@ -319,17 +324,45 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "content_type": "application/vnd.arkret.account-data+json",
         "ciphertext": "opaque-client-envelope"
     });
-    let response = TestClient::put(format!(
+    let principal_realm =
+        soland_test_support::principal_control_realm_for_did("did:web:alice.example");
+    let mut event = signed_actor_private_event_envelope(
+        "did:web:alice.example",
+        ALICE_DEVICE,
+        &principal_realm,
+        arkret_wire::EventKind::AccountDataSet.as_str(),
+        serde_json::json!({
+            "key": marker_key,
+            "expected_revision": 0,
+            "owner": "did:web:alice.example",
+            "body": marker,
+            "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
+        }),
+    );
+    move_event_to_actor_realm_frontier(
+        &state,
+        &alice,
+        "did:web:alice.example",
+        &principal_realm,
+        &mut event,
+    )
+    .await;
+    let request = arkret_models_identity::account::AccountDataReplaceRequestBody {
+        set_event: arkret_wire::EventInitialSubmission::online(
+            serde_json::from_value(event).expect("signed account_data Event"),
+        ),
+    };
+    let mut response = TestClient::put(format!(
         "http://server/_arkret/self/account_data/{marker_key}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
-    .json(&serde_json::json!({
-        "expected_revision": 0,
-        "content": marker.clone()
-    }))
+    .add_header("content-type", "application/json", true)
+    .body(canonical_request_body(&request))
     .send(&app_from_state(state.clone()))
     .await;
-    assert_eq!(response.status_code.unwrap().as_u16(), 400);
+    let status = response.status_code.unwrap();
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status.as_u16(), 400, "body: {body}");
 }
 
 #[tokio::test]
@@ -352,7 +385,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
         "did:web:alice.example",
         ALICE_DEVICE,
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
             "key": key,
             "expected_revision": 0,
@@ -378,9 +411,9 @@ async fn account_data_requires_auth() {
         "did:web:alice.example",
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
         DEMO_REALM_ID,
-        "ak.account_data.set",
+        arkret_wire::EventKind::AccountDataSet.as_str(),
         serde_json::json!({
-            "key": "ak.contacts.realm.ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
+            "key": format!("ak.contacts.realm.{DEMO_REALM_ID}"),
             "expected_revision": 0,
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
@@ -388,7 +421,8 @@ async fn account_data_requires_auth() {
         }),
     );
     let resp = TestClient::post("http://server/_arkret/self/events")
-        .json(&event)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&event))
         .send(&app())
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 401);

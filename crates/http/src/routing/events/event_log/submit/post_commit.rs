@@ -1208,16 +1208,22 @@ mod tests {
             }
         });
         assert_eq!(
-            routable_member_delivery_service(arkret_wire::EventKind::MemberState, &envelope,),
+            routable_member_delivery_service(
+                arkret_wire::EventKind::MemberState.as_str(),
+                &envelope,
+            ),
             Some("did:web:soland-beta.example")
         );
         assert_eq!(
-            routable_member_delivery_service(arkret_wire::EventKind::RealmCreate, &envelope,),
+            routable_member_delivery_service(
+                arkret_wire::EventKind::RealmCreate.as_str(),
+                &envelope,
+            ),
             None
         );
         assert_eq!(
             routable_member_delivery_service(
-                arkret_wire::EventKind::MemberState,
+                arkret_wire::EventKind::MemberState.as_str(),
                 &json!({
                     "payload": {
                         "membership": "join",

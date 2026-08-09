@@ -4,6 +4,189 @@
 
 use super::common::*;
 
+fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical account workflow body")
+}
+
+fn contact_operation_id() -> arkret_wire::ProtocolOperationId {
+    arkret_wire::ProtocolOperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7().simple()))
+        .unwrap()
+}
+
+fn contact_idempotency_key() -> arkret_wire::IdempotencyKey {
+    arkret_wire::IdempotencyKey::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()
+}
+
+fn sign_contact_draft(
+    draft: &arkret_models_collaboration::contact_operations::ContactPreparedEventDraft,
+    actor: &str,
+    device_id: &str,
+    signing_key: SigningKey,
+) -> arkret_wire::Event {
+    use arkret_wire::PayloadSigner as _;
+
+    let actor = Did::new(actor).unwrap();
+    let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}")).unwrap();
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        signing_key,
+        actor,
+        verification_method.clone(),
+    );
+    let mut event = draft.unsigned_event().expect("prepared Contact Event");
+    let created_at = event.created_at;
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .expect("sign prepared Contact Event");
+    event
+}
+
+async fn post_contact_body<T: serde::Serialize>(
+    state: &AppState,
+    token: &str,
+    path: &str,
+    body: &T,
+) -> (
+    StatusCode,
+    arkret_models_collaboration::contact_operations::ContactOperationOutcome,
+) {
+    let mut response = TestClient::post(format!("http://server{path}"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(body))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let status = response.status_code.expect("Contact operation status");
+    let outcome = response
+        .take_json()
+        .await
+        .expect("typed Contact operation outcome");
+    (status, outcome)
+}
+
+async fn create_contact_request(
+    state: &AppState,
+    token: &str,
+) -> (
+    arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt,
+    arkret_models_collaboration::contact_operations::ContactCommitRequestBody,
+) {
+    use arkret_models_collaboration::contact_operations::*;
+
+    let operation_id = contact_operation_id();
+    let idempotency_key = contact_idempotency_key();
+    let prepare = ContactOperationRequestBody::Prepare(ContactPrepareRequestBody {
+        phase: ContactPreparePhase::Prepare,
+        operation_id: operation_id.clone(),
+        idempotency_key: idempotency_key.clone(),
+        peer: ContactPeer::Human {
+            principal_id: Did::new("did:web:bob.example").unwrap(),
+        },
+        granted_to_peer_scopes: vec![ContactScope::DirectMessage],
+        introduction_evidence:
+            arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SamePrincipalServer,
+        previous_terminal_basis_id: None,
+        message: None,
+    });
+    let (status, prepared) =
+        post_contact_body(state, token, "/_arkret/self/contacts/request", &prepare).await;
+    assert_eq!(status, StatusCode::OK);
+    let ContactOperationOutcome::Prepared {
+        outcome:
+            ContactPreparedOutcome::Request {
+                reservation_handle,
+                event_draft,
+                ..
+            },
+    } = prepared
+    else {
+        panic!("Contact request must return a prepared Event")
+    };
+    let commit = ContactCommitRequestBody {
+        phase: ContactCommitPhase::Commit,
+        operation_id,
+        idempotency_key,
+        reservation_handle,
+        signed_event: sign_contact_draft(
+            &event_draft,
+            "did:web:alice.example",
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            SigningKey::from_bytes(&[21_u8; 32]),
+        ),
+        control_proposal_ack: None,
+    };
+    let request = ContactOperationRequestBody::Commit(commit.clone());
+    let (status, accepted) =
+        post_contact_body(state, token, "/_arkret/self/contacts/request", &request).await;
+    assert_eq!(status, StatusCode::OK);
+    let ContactOperationOutcome::Accepted {
+        outcome:
+            ContactAcceptedOutcome::Request {
+                request_acceptance_receipt,
+                ..
+            },
+    } = accepted
+    else {
+        panic!("Contact request commit must be accepted")
+    };
+    (request_acceptance_receipt, commit)
+}
+
+async fn accept_contact_request(
+    state: &AppState,
+    token: &str,
+    receipt: arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt,
+    signing_key: SigningKey,
+    device_id: &str,
+) -> arkret_models_collaboration::contact_operations::ContactOperationOutcome {
+    use arkret_models_collaboration::contact_operations::*;
+
+    let operation_id = contact_operation_id();
+    let idempotency_key = contact_idempotency_key();
+    let prepare = ContactAcceptRequestBody::Prepare(ContactAcceptPrepareRequestBody {
+        phase: ContactPreparePhase::Prepare,
+        operation_id: operation_id.clone(),
+        idempotency_key: idempotency_key.clone(),
+        request_receipt: receipt,
+        action: ContactAcceptAction::Accept,
+        granted_to_peer_scopes: vec![ContactScope::DirectMessage],
+    });
+    let (status, prepared) =
+        post_contact_body(state, token, "/_arkret/self/contacts/respond", &prepare).await;
+    assert_eq!(status, StatusCode::OK);
+    let ContactOperationOutcome::Prepared {
+        outcome:
+            ContactPreparedOutcome::Response {
+                reservation_handle,
+                event_draft,
+                ..
+            },
+    } = prepared
+    else {
+        panic!("Contact response must return a prepared Event")
+    };
+    let commit = ContactAcceptRequestBody::Commit(ContactCommitRequestBody {
+        phase: ContactCommitPhase::Commit,
+        operation_id,
+        idempotency_key,
+        reservation_handle,
+        signed_event: sign_contact_draft(
+            &event_draft,
+            "did:web:bob.example",
+            device_id,
+            signing_key,
+        ),
+        control_proposal_ack: None,
+    });
+    let (status, accepted) =
+        post_contact_body(state, token, "/_arkret/self/contacts/respond", &commit).await;
+    assert_eq!(status, StatusCode::OK);
+    accepted
+}
+
 #[tokio::test]
 async fn account_viewer_returns_device_summaries() {
     let state = soland_test_support::app_state(test_config());
@@ -35,15 +218,22 @@ async fn account_erasure_projects_erasure_pending_state() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
-    let erased: Value = TestClient::post("http://server/_soland/self/account/erase")
+    let mut erased_response = TestClient::post("http://server/_soland/self/account/erase")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+        .await;
+    let erased_status = erased_response.status_code.expect("account erase status");
+    let erased: Value = erased_response.take_json().await.unwrap();
+    assert_eq!(
+        erased_status,
+        StatusCode::OK,
+        "account erase response: {erased}"
+    );
 
-    assert_eq!(erased["state"], "erasure_pending");
+    assert_eq!(
+        erased["state"], "erasure_pending",
+        "account erase response: {erased}"
+    );
     assert_eq!(
         state.account_lifecycle_state("did:web:alice.example"),
         "erasure_pending"
@@ -451,11 +641,14 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
-    let bob = register_account(
-        state.clone(),
+    let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
+    let bob = register_account(state.clone(), "did:web:bob.example", "@bob", bob_device_id).await;
+    let bob_signing_key = test_ephemeral_device_signing_key("did:web:bob.example", bob_device_id);
+    seed_verified_device_with_public_key(
+        &state,
         "did:web:bob.example",
-        "@bob",
-        "ak:device:01904100-0000-7000-8000-b0b0b0000002",
+        bob_device_id,
+        &test_ed25519_multibase_public(&bob_signing_key),
     )
     .await;
 
@@ -487,66 +680,57 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .unwrap();
     assert_eq!(me["did"], "did:web:bob.example");
 
-    let contact_request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"target": "did:web:bob.example"}))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(contact_request["state"], "pending_outgoing");
-    let contact_request_id = contact_request["request_event_ref"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let (request_receipt, request_commit) = create_contact_request(&state, &alice).await;
+    let duplicate_request =
+        arkret_models_collaboration::contact_operations::ContactOperationRequestBody::Commit(
+            request_commit,
+        );
+    let (duplicate_status, duplicate_outcome) = post_contact_body(
+        &state,
+        &alice,
+        "/_arkret/self/contacts/request",
+        &duplicate_request,
+    )
+    .await;
+    assert_eq!(duplicate_status, StatusCode::OK);
+    assert!(matches!(
+        duplicate_outcome,
+        arkret_models_collaboration::contact_operations::ContactOperationOutcome::Accepted {
+            outcome:
+                arkret_models_collaboration::contact_operations::ContactAcceptedOutcome::Request { .. }
+        }
+    ));
 
-    let duplicate_contact_request: Value =
-        TestClient::post("http://server/_arkret/self/contacts/request")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"target": "did:web:bob.example"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(duplicate_contact_request["state"], "pending_outgoing");
+    let accepted = accept_contact_request(
+        &state,
+        &bob,
+        request_receipt.clone(),
+        bob_signing_key,
+        bob_device_id,
+    )
+    .await;
+    assert!(matches!(
+        accepted,
+        arkret_models_collaboration::contact_operations::ContactOperationOutcome::Accepted {
+            outcome:
+                arkret_models_collaboration::contact_operations::ContactAcceptedOutcome::Response { .. }
+        }
+    ));
 
-    let accepted: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
+    let reject_after_accept = TestClient::post("http://server/_arkret/self/contacts/reject")
         .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "request_id": contact_request_id,
-            "requester": "did:web:alice.example",
-            "action": "accept"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(accepted["state"], "accepted");
-
-    let accepted_again: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "request_id": contact_request["request_event_ref"],
-            "requester": "did:web:alice.example",
-            "action": "accept"
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(accepted_again["state"], "accepted");
-
-    let reject_after_accept = TestClient::post("http://server/_arkret/self/contacts/respond")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "request_id": contact_request["request_event_ref"],
-            "requester": "did:web:alice.example",
-            "action": "reject"
-        }))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_body(
+            &arkret_models_collaboration::contact_operations::ContactRejectRequestBody::Prepare(
+                arkret_models_collaboration::contact_operations::ContactRejectPrepareRequestBody {
+                    phase: arkret_models_collaboration::contact_operations::ContactPreparePhase::Prepare,
+                    operation_id: contact_operation_id(),
+                    idempotency_key: contact_idempotency_key(),
+                    request_receipt,
+                    action: arkret_models_collaboration::contact_operations::ContactRejectAction::Reject,
+                },
+            ),
+        ))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(reject_after_accept.status_code.unwrap().as_u16(), 409);

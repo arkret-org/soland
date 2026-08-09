@@ -11,211 +11,134 @@ const BOB_PAIRWISE_DID: &str = "did:peer:2.ezbobpairwise";
 const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
 const ALICE_SIGNING_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
-async fn submit_direct_materialization_without_mls(
-    state: AppState,
-    token: &str,
-    draft: &Value,
-) -> Value {
-    let mut bootstrap_drafts = vec![&draft["realm_event"]];
-    if !draft["creator_member_event"].is_null() {
-        bootstrap_drafts.push(&draft["creator_member_event"]);
-    }
-    bootstrap_drafts.push(&draft["peer_member_event"]);
-    submit_direct_event_drafts_batch(state.clone(), token, &bootstrap_drafts).await;
-    submit_direct_event_draft(state, token, &draft["binding_event"], false).await
+fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
-async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: &[&Value]) {
-    let actor = drafts[0]["actor_id"].as_str().expect("draft actor");
-    let signing_key = test_ephemeral_device_signing_key(actor, ALICE_SIGNING_DEVICE);
+async fn post_authenticated_canonical<T: serde::Serialize>(
+    state: AppState,
+    token: &str,
+    uri: &str,
+    body: &T,
+) -> salvo::http::Response {
+    TestClient::post(uri)
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(body))
+        .send(&app_from_state(state))
+        .await
+}
+
+fn human_direct_resolve_request(
+    peer: &str,
+) -> arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
+    arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
+        peer: arkret_models_collaboration::contact_operations::ContactPeer::Human {
+            principal_id: arkret_wire::Did::new(peer).expect("valid human contact DID"),
+        },
+    }
+}
+
+async fn seed_accepted_direct_message_contact(
+    state: &AppState,
+    target: &str,
+    target_device: &str,
+    peer_service_id: Option<&str>,
+) {
+    let request = signed_canonical_event(
+        "contact-request-fixture-label",
+        arkret_wire::EventKind::ContactRequested.as_str(),
+        "did:web:alice.example",
+        ALICE_SIGNING_DEVICE,
+        DEMO_REALM_ID,
+        9_001,
+        vec![],
+        serde_json::json!({"peer": target}),
+    );
+    let response = signed_canonical_event(
+        "contact-response-fixture-label",
+        arkret_wire::EventKind::ContactAccepted.as_str(),
+        target,
+        target_device,
+        DEMO_REALM_ID,
+        9_002,
+        vec![request["event_id"].as_str().unwrap()],
+        serde_json::json!({"peer": "did:web:alice.example"}),
+    );
+    let request_event_ref =
+        arkret_identifiers::EventId::new(request["event_id"].as_str().unwrap().to_owned())
+            .unwrap()
+            .to_string();
+    let response_event_ref =
+        arkret_identifiers::EventId::new(response["event_id"].as_str().unwrap().to_owned())
+            .unwrap()
+            .to_string();
     let now = chrono::Utc::now();
     state
         .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
-            device_id: ALICE_SIGNING_DEVICE.to_owned(),
-            display_name: Some("Direct Materialization Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": ALICE_SIGNING_DEVICE,
-                "verification": "verified",
-                "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
-            }),
+        .contacts()
+        .put(&soland_domain::identity::ContactRecord {
+            requester: "did:web:alice.example".to_owned(),
+            target: target.to_owned(),
+            basis_id: Some(
+                arkret_canonical::canonical_sha256(&serde_json::json!({
+                    "request_event_ref": request_event_ref,
+                    "response_event_ref": response_event_ref,
+                }))
+                .unwrap(),
+            ),
+            version: Some(1),
+            granted_to_target_scopes: vec!["direct_message".to_owned()],
+            granted_to_requester_scopes: vec!["direct_message".to_owned()],
+            status: "accepted".to_owned(),
+            request_event_ref: Some(request_event_ref),
+            response_event_ref: Some(response_event_ref),
+            tombstone_event_ref: None,
+            message: None,
+            peer_service_id: peer_service_id.map(str::to_owned),
             created_at: now,
             updated_at: now,
-            revoked_at: None,
         })
         .await
         .unwrap();
-    let realm_id = drafts[0]["realm_id"].as_str().expect("draft Realm");
-    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let (mut actor_seq, mut previous_event_ids) = if frontier_response.status_code
-        == Some(StatusCode::OK)
-    {
-        let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-            frontier_response.take_json().await.unwrap();
-        let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
-            frontier.frontier
-        else {
-            panic!("combined Realm+actor selector returned the wrong frontier variant");
-        };
-        (frontier.next_actor_seq, frontier.frontier_event_ids)
-    } else {
-        assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
-        assert_eq!(drafts[0]["kind"], arkret_wire::EventKind::RealmCreate);
-        (0, Vec::new())
-    };
-    let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{ALICE_SIGNING_DEVICE}"))
-        .expect("fixture verification method is a DID URL");
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        signing_key,
-        arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
-        verification_method.clone(),
-    );
-    let mut events = Vec::with_capacity(drafts.len());
-    for draft in drafts {
-        let mut event: arkret_wire::Event = serde_json::from_value((*draft).clone()).unwrap();
-        event.actor_seq = actor_seq;
-        event.prev_refs = previous_event_ids;
-        event.proofs.clear();
-        arkret_signatures::sign_event(
-            &mut event,
-            &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(now),
-        )
-        .unwrap();
-        previous_event_ids = vec![event.event_id.clone()];
-        actor_seq += 1;
-        events.push(event);
-    }
-    let mut response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"events": events}))
-        .send(&app_from_state(state))
-        .await;
-    let status = response.status_code;
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, Some(StatusCode::OK), "body: {body}");
-    assert_eq!(body["status"], "accepted", "body: {body}");
 }
 
-async fn submit_direct_event_draft(
-    state: AppState,
-    token: &str,
-    draft: &Value,
-    expect_accepted: bool,
-) -> Value {
-    let actor = draft["actor_id"].as_str().expect("binding actor");
-    let signing_key = test_ephemeral_device_signing_key(actor, ALICE_SIGNING_DEVICE);
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
-            device_id: ALICE_SIGNING_DEVICE.to_owned(),
-            display_name: Some("Direct Binding Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": ALICE_SIGNING_DEVICE,
-                "verification": "verified",
-                "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
-            }),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
-        .await
-        .unwrap();
-    let realm_id = draft["realm_id"].as_str().expect("binding Realm");
-    let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        frontier_response.take_json().await.unwrap();
-    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
-        frontier.frontier
-    else {
-        panic!("combined Realm+actor selector returned the wrong frontier variant");
-    };
-    let mut event: arkret_wire::Event = serde_json::from_value(draft.clone()).unwrap();
-    event.actor_seq = frontier.next_actor_seq;
-    event.prev_refs = frontier.frontier_event_ids;
-    event.proofs.clear();
-    // `contact-and-direct-conversation.md` §6 submits the PCR binding fact only
-    // after the Realm bootstrap batch is canonical, so it is an ordinary
-    // Control Move outside the §5 basis-exempt anchor unit and MUST carry
-    // `seal_basis` (`event-auth-state-resolution.md` §5). The resolver hands
-    // back an unsigned draft without one; the producer fills it from the
-    // Realm's accepted Seal frontier, which the fixture has to seed first.
-    if event.seal_basis.is_none()
-        && event.seal_ref.is_none()
-        && event.kind.descriptor().is_some_and(|descriptor| {
-            descriptor.reducer_input && descriptor.plane == Some("control")
-        })
-    {
-        let basis_seal = test_realm_uncovered_basis_seal(realm_id);
-        state.test_put_seal(&basis_seal).unwrap();
-        event.seal_basis = Some(basis_seal.seal_basis());
-    }
-    let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{ALICE_SIGNING_DEVICE}"))
-        .expect("fixture verification method is a DID URL");
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        signing_key,
-        arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
-        verification_method.clone(),
+async fn project_authorized_device(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> String {
+    let control_realm = soland_test_support::principal_control_realm_for_did(actor);
+    let authorize = arkret_event_draft::test_support::raw_projected_operation(
+        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:operation:",
+        ))
+        .unwrap(),
+        arkret_identifiers::RealmId::new(control_realm).unwrap(),
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        serde_json::json!({
+            "sender": actor,
+            "principal_id": actor,
+            "device_id": device_id,
+            "device_public_key": test_ed25519_multibase_public(signing_key),
+            "hpke_key": "z6LSDirectConversationFixtureHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": actor,
+            "not_before": "2026-05-25T00:00:00.000Z",
+            "authorization_binding_kind": "root_anchored",
+            "device_signature": "c2ln"
+        }),
     );
-    arkret_signatures::sign_event(
-        &mut event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(now),
-    )
-    .unwrap();
-    let mut response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&event)
-        .send(&app_from_state(state))
-        .await;
-    let status = response.status_code;
-    let body: Value = response.take_json().await.unwrap();
-    if expect_accepted {
-        assert_eq!(status, Some(StatusCode::OK), "body: {body}");
-    } else {
-        assert_ne!(status, Some(StatusCode::OK), "body: {body}");
-    }
-    body
+    let authorize_event_id = authorize.context.event_id.to_string();
+    soland_test_support::project_accepted_operations(state, actor, &[authorize]).await;
+    authorize_event_id
 }
 
 async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
     let signing_key = test_ephemeral_device_signing_key(BOB_DID, BOB_DEVICE);
-    let mut device = state
-        .test_persistence()
-        .devices()
-        .get(BOB_DID, BOB_DEVICE)
-        .await
-        .unwrap()
-        .expect("Bob dev-login device");
-    device.verification_state = "verified".to_owned();
-    device.payload["device_public_key"] =
-        serde_json::json!(test_ed25519_multibase_public(&signing_key));
-    state
-        .test_persistence()
-        .devices()
-        .put(&device)
-        .await
-        .unwrap();
+    let _authorize_event_id =
+        project_authorized_device(&state, BOB_DID, BOB_DEVICE, &signing_key).await;
     let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
@@ -244,67 +167,45 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
         &signing_key.to_bytes(),
     )
     .unwrap();
-    let response = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .json(&unsigned.into_signed(signature))
-        .send(&app_from_state(state))
-        .await;
-    assert_eq!(response.status_code, Some(StatusCode::OK));
+    let mut response = post_authenticated_canonical(
+        state,
+        bob_token,
+        "http://server/_arkret/self/keys/keypackages/upload",
+        &unsigned.into_signed(signature),
+    )
+    .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "body: {body}");
 }
 
 async fn seed_remote_claim_prerequisites(
     state: &AppState,
     source_service_id: &str,
-) -> ed25519_dalek::SigningKey {
+) -> (ed25519_dalek::SigningKey, String) {
     let alice = "did:web:alice.example";
     let signing_key = test_ephemeral_device_signing_key(alice, ALICE_SIGNING_DEVICE);
+    let authorize_event_id =
+        project_authorized_device(state, alice, ALICE_SIGNING_DEVICE, &signing_key).await;
+    seed_accepted_direct_message_contact(state, BOB_DID, BOB_DEVICE, Some(source_service_id)).await;
     let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: alice.to_owned(),
-            device_id: ALICE_SIGNING_DEVICE.to_owned(),
-            display_name: Some("Peer Claim Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": ALICE_SIGNING_DEVICE,
-                "verification": "verified",
-                "device_public_key": test_ed25519_multibase_public(&signing_key),
-                "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC"
-            }),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
-        .await
-        .unwrap();
-    state
-        .test_persistence()
-        .contacts()
-        .put(&soland_domain::identity::ContactRecord {
-            requester: alice.to_owned(),
-            target: BOB_DID.to_owned(),
-            basis_id: Some(format!("sha256:{}", "1".repeat(64))),
-            version: Some(1),
-            granted_to_target_scopes: vec!["direct_message".to_owned()],
-            granted_to_requester_scopes: vec!["direct_message".to_owned()],
-            status: "accepted".to_owned(),
-            request_event_ref: Some(
-                "ak:event:Acx9CftNTe6TisGGTTxdWJzyq6sC2aepjyTE3zEUUu1n".to_owned(),
-            ),
-            response_event_ref: Some(
-                "ak:event:ASdFSPzJydPdkguSGl82Dm7-NKaEqHRAYWB7JneUkafN".to_owned(),
-            ),
-            tombstone_event_ref: None,
-            message: None,
-            peer_service_id: Some(source_service_id.to_owned()),
-            created_at: now,
-            updated_at: now,
-        })
-        .await
-        .unwrap();
-    let grant_dot = "ak:event:AaXcajxvV0xyRb1hS3GYF0wVyBZfAsmiYqTl3Zs1FYF2".to_owned();
+    let consent_grant = signed_canonical_event(
+        "direct-peer-claim-consent-grant",
+        arkret_wire::EventKind::ConsentGrant.as_str(),
+        BOB_DID,
+        BOB_DEVICE,
+        DEMO_REALM_ID,
+        9_003,
+        vec![],
+        serde_json::json!({
+            "peer": alice,
+            "scope": "direct_message"
+        }),
+    );
+    let grant_dot =
+        arkret_identifiers::EventId::new(consent_grant["event_id"].as_str().unwrap().to_owned())
+            .unwrap()
+            .to_string();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_DID.to_owned(),
         peer: alice.to_owned(),
@@ -323,7 +224,7 @@ async fn seed_remote_claim_prerequisites(
         revoked_at: None,
         updated_at: now,
     });
-    signing_key
+    (signing_key, authorize_event_id)
 }
 
 #[tokio::test]
@@ -334,7 +235,8 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     upload_bob_direct_keypackage(state.clone(), &bob, "peer-http").await;
     let source_service_id = "did:web:peer-claim-source.example".to_owned();
     let destination_service_id = state.service_id().to_owned();
-    let signing_key = seed_remote_claim_prerequisites(&state, &source_service_id).await;
+    let (signing_key, authorize_event_id) =
+        seed_remote_claim_prerequisites(&state, &source_service_id).await;
     let trust_domain =
         arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap();
     let requester = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
@@ -380,7 +282,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         serde_json::from_value(serde_json::json!({
             "verification_method": verification_method,
             "requester_device_id": ALICE_SIGNING_DEVICE,
-            "device_authorize_event_id": "ak:event:AZ4fN3i9MjCJRGkr-CPOauTFILlhOsQA3JvO7u-DFWdC",
+            "device_authorize_event_id": authorize_event_id,
             "signed_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
             "signature": {"kid": verification_method, "signature_algorithm": "Ed25519", "sig": "AA"}
         }))
@@ -433,7 +335,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         &request_value,
         request.claim_request_id.as_str(),
     );
-    let mut builder = TestClient::post(target_uri).json(&request_value);
+    let mut builder = TestClient::post(target_uri)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&request_value));
     for (name, value) in headers {
         builder = builder.add_header(name, value, true);
     }
@@ -463,7 +367,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         &request_value,
         request.claim_request_id.as_str(),
     );
-    let mut replay = TestClient::post(target_uri).json(&request_value);
+    let mut replay = TestClient::post(target_uri)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&request_value));
     for (name, value) in replay_headers {
         replay = replay.add_header(name, value, true);
     }
@@ -485,7 +391,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         &conflicting_value,
         request.claim_request_id.as_str(),
     );
-    let mut conflict = TestClient::post(target_uri).json(&conflicting_value);
+    let mut conflict = TestClient::post(target_uri)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&conflicting_value));
     for (name, value) in conflict_headers {
         conflict = conflict.add_header(name, value, true);
     }
@@ -507,7 +415,9 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         query_uri,
         &query,
     );
-    let mut builder = TestClient::post(query_uri).json(&query);
+    let mut builder = TestClient::post(query_uri)
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&query));
     for (name, value) in query_headers {
         builder = builder.add_header(name, value, true);
     }
@@ -532,14 +442,17 @@ async fn direct_resolve_fails_closed_without_accepted_contact() {
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await;
 
-    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status.as_u16(), 412, "body: {body}");
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
     assert_eq!(
         body["error"]["details"]["reason_detail"],
@@ -555,11 +468,13 @@ async fn direct_resolve_private_detail_stays_redacted_in_production() {
     let token = "production-direct-resolve-session";
     super::agents::seed_controller_session(&state, token, "did:web:alice.example").await;
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-        .send(&app_from_state(state))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state,
+        token,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await;
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
@@ -568,83 +483,49 @@ async fn direct_resolve_private_detail_stays_redacted_in_production() {
 }
 
 #[tokio::test]
-async fn direct_resolve_fails_closed_when_consent_missing() {
+async fn direct_resolve_uses_accepted_contact_scope_without_legacy_consent_overlay() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .contacts()
-        .put(&soland_domain::identity::ContactRecord {
-            requester: "did:web:alice.example".to_owned(),
-            target: BOB_DID.to_owned(),
-            basis_id: Some(format!("sha256:{}", "2".repeat(64))),
-            version: Some(1),
-            granted_to_target_scopes: vec!["direct_message".to_owned()],
-            granted_to_requester_scopes: vec!["direct_message".to_owned()],
-            status: "accepted".to_owned(),
-            request_event_ref: Some(
-                "ak:event:AQLZVNTH5h1dTCPA0JWySwKhBZr6gmEHML4mgJjAHRsO".to_owned(),
-            ),
-            response_event_ref: Some(
-                "ak:event:AaxCEPQfxM5yVi7J4LmJ60h6X-ueyXUdVZJDZDgav4zj".to_owned(),
-            ),
-            tombstone_event_ref: None,
-            message: None,
-            peer_service_id: None,
-            created_at: now,
-            updated_at: now,
-        })
-        .await
-        .unwrap();
+    seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await;
 
-    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    assert_eq!(response.status_code.unwrap().as_u16(), 200);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert_eq!(
-        body["error"]["details"]["reason_detail"],
-        "peer has no active direct_message or any consent for requester: requester=did:web:alice.example, peer=did:web:bob.example"
-    );
+    assert_eq!(body["state"], "awaiting_founder", "body: {body}");
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
 #[tokio::test]
 async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
+    seed_accepted_direct_message_contact(&state, BOB_PAIRWISE_DID, BOB_DEVICE, None).await;
     let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .contacts()
-        .put(&soland_domain::identity::ContactRecord {
-            requester: "did:web:alice.example".to_owned(),
-            target: BOB_PAIRWISE_DID.to_owned(),
-            basis_id: Some(format!("sha256:{}", "3".repeat(64))),
-            version: Some(1),
-            granted_to_target_scopes: vec!["direct_message".to_owned()],
-            granted_to_requester_scopes: vec!["direct_message".to_owned()],
-            status: "accepted".to_owned(),
-            request_event_ref: Some(
-                "ak:event:ASxnqCNm9hNL8G1DsBz0eGfgY6FE2TDOGPCasXBVLUHM".to_owned(),
-            ),
-            response_event_ref: Some(
-                "ak:event:AdzkozRCpEE_UGhxpg9VTRUcovwPAC4VX9Qtpuh6Tsu0".to_owned(),
-            ),
-            tombstone_event_ref: None,
-            message: None,
-            peer_service_id: None,
-            created_at: now,
-            updated_at: now,
-        })
-        .await
-        .unwrap();
-    let grant_dot = "ak:event:AVUB4Yqo-11Y3zJafc0FR3wa5VHL8lvouMS6wvai55e2".to_owned();
+    let consent_grant = signed_canonical_event(
+        "pairwise-direct-consent-grant",
+        arkret_wire::EventKind::ConsentGrant.as_str(),
+        BOB_PAIRWISE_DID,
+        BOB_DEVICE,
+        DEMO_REALM_ID,
+        9_004,
+        vec![],
+        serde_json::json!({
+            "peer": "did:web:alice.example",
+            "scope": "direct_message"
+        }),
+    );
+    let grant_dot =
+        arkret_identifiers::EventId::new(consent_grant["event_id"].as_str().unwrap().to_owned())
+            .unwrap()
+            .to_string();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_PAIRWISE_DID.to_owned(),
         peer: "did:web:alice.example".to_owned(),
@@ -664,11 +545,13 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         updated_at: now,
     });
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"peer": BOB_PAIRWISE_DID, "create": true}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_PAIRWISE_DID),
+    )
+    .await;
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
@@ -704,11 +587,13 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
         .await
         .unwrap();
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await;
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
@@ -716,57 +601,25 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
 }
 
 #[tokio::test]
-async fn direct_resolve_create_requires_claimable_keypackage() {
+async fn direct_resolve_reports_founder_status_without_materializing() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
-    let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
+    let _bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "target": BOB_DID,
-            "requested_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
-    TestClient::post("http://server/_arkret/self/contacts/respond")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "request_id": request_id,
-            "requester": "did:web:alice.example",
-            "action": "accept",
-            "granted_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
 
-    let mut response = TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await;
 
-    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    let reason_detail = body["error"]["details"]["reason_detail"]
-        .as_str()
-        .expect("reason_detail is a string");
-    assert!(
-        reason_detail.starts_with("local KeyPackage claim returned no usable claim"),
-        "unexpected reason_detail: {reason_detail}"
-    );
-    // The empty local pool must be reported with its underlying claim reason so
-    // the peer-runtime-not-ready case is diagnosable, not collapsed to an opaque
-    // detail.
-    assert!(
-        reason_detail.contains("reason="),
-        "reason_detail should carry the claim reason: {reason_detail}"
-    );
+    assert_eq!(status.as_u16(), 200, "body: {body}");
+    assert_eq!(body["state"], "awaiting_founder", "body: {body}");
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
@@ -776,34 +629,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "target": BOB_DID,
-            "requested_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(request["state"], "pending_outgoing");
-    let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
-
-    let accepted: Value = TestClient::post("http://server/_arkret/self/contacts/respond")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-                "request_id": request_id,
-                "requester": "did:web:alice.example",
-                "action": "accept",
-                "granted_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(accepted["state"], "accepted");
+    seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
     upload_bob_direct_keypackage(state.clone(), &bob, "idempotent").await;
 
     let contacts: Value = TestClient::get("http://server/_arkret/self/contacts")
@@ -814,216 +640,102 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .await
         .unwrap();
     let row = &contacts["contacts"][0];
-    assert_eq!(row["peer"], BOB_DID);
+    assert_eq!(row["peer"]["kind"], "human");
+    assert_eq!(row["peer"]["principal_id"], BOB_DID);
     assert_eq!(row["state"], "accepted");
-    assert_eq!(row["granted_by_me"][0], "direct_message");
-    assert_eq!(row["granted_to_me"][0], "direct_message");
+    assert_eq!(row["granted_to_peer_scopes"][0], "direct_message");
+    assert_eq!(row["granted_by_peer_scopes"][0], "direct_message");
     assert_eq!(row["bidirectional_scopes"][0], "direct_message");
 
-    let not_found: Value =
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"peer": BOB_DID, "create": false}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(not_found["state"], "not_found", "body: {not_found}");
-    assert!(not_found.get("reason_code").is_none(), "body: {not_found}");
-    assert!(not_found.get("canonical").is_none(), "body: {not_found}");
+    let first: Value = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(first["state"], "awaiting_founder", "body: {first}");
 
-    let created: Value =
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(created["state"], "authoring_required", "body: {created}");
-    assert_eq!(created["created"], false);
-    assert_eq!(
-        created["authoring_kind"],
-        "direct_conversation_materialization"
-    );
-    assert!(
-        created["materialization_draft"].is_object(),
-        "body: {created}"
-    );
-    assert!(created.get("canonical").is_none(), "body: {created}");
-    assert!(created.get("reason_code").is_none(), "body: {created}");
-    assert!(
-        created["realm_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ak:realm:")
-    );
-    assert!(
-        created["main_strand_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ak:strand:")
-    );
+    let repeated: Value = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
+    )
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(repeated, first);
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
+
     let keypackages = state
         .test_persistence()
         .mls_key_packages()
         .snapshot_all()
         .await
         .unwrap();
-    let claimed = keypackages
+    let available = keypackages
         .iter()
-        .find(|row| row.actor_id == BOB_DID && row.claimed_by_mls_group_id.is_some())
-        .expect("Bob KeyPackage should be claimed for the direct MLS group");
-    let mls_group_id = claimed.claimed_by_mls_group_id.clone().unwrap();
-    assert_eq!(
-        mls_group_id,
-        created["materialization_draft"]["mls_group_id"]
-    );
-    let welcomes = state
-        .test_persistence()
-        .mls_welcomes()
-        .snapshot_all()
-        .await
-        .unwrap();
-    assert!(
-        welcomes.is_empty(),
-        "resolver must not synthesize participant MLS Welcome material"
-    );
-
-    let rejected = submit_direct_materialization_without_mls(
-        state.clone(),
-        &alice,
-        &created["materialization_draft"],
-    )
-    .await;
-    assert_eq!(
-        rejected["error"]["code"], "failed_precondition",
-        "{rejected}"
-    );
-    assert_eq!(
-        rejected["error"]["reason"], "direct_conversation_binding_invalid",
-        "{rejected}"
-    );
-
-    let still_authoring: Value =
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(still_authoring["state"], "authoring_required");
-    assert_eq!(still_authoring["realm_id"], created["realm_id"]);
-    assert_eq!(
-        still_authoring["materialization_draft"],
-        created["materialization_draft"]
-    );
+        .find(|row| row.actor_id == BOB_DID)
+        .expect("Bob KeyPackage remains available");
+    assert!(available.claimed_by_mls_group_id.is_none());
 }
 
 #[tokio::test]
-async fn concurrent_direct_resolve_create_converges_to_one_binding() {
+async fn concurrent_direct_resolve_queries_are_side_effect_free() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let bob = register_account(state.clone(), BOB_DID, "@bob", BOB_DEVICE).await;
 
-    let request: Value = TestClient::post("http://server/_arkret/self/contacts/request")
-        .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "target": BOB_DID,
-            "requested_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let request_id = request["request_event_ref"].as_str().unwrap().to_owned();
-    TestClient::post("http://server/_arkret/self/contacts/respond")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "request_id": request_id,
-            "requester": "did:web:alice.example",
-            "action": "accept",
-            "granted_scopes": ["direct_message"]
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
+    seed_accepted_direct_message_contact(&state, BOB_DID, BOB_DEVICE, None).await;
     upload_bob_direct_keypackage(state.clone(), &bob, "concurrent").await;
 
     let state_a = state.clone();
     let state_b = state.clone();
     let alice_a = alice.clone();
     let alice_b = alice.clone();
-    let create_a = async move {
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice_a}"), true)
-            .json(&serde_json::json!({
-                "peer": BOB_DID,
-                "create": true,
-                "idempotency_key": "direct-concurrent-a"
-            }))
-            .send(&app_from_state(state_a))
-            .await
-            .take_json()
-            .await
-            .unwrap()
+    let resolve_a = async move {
+        post_authenticated_canonical(
+            state_a,
+            &alice_a,
+            "http://server/_arkret/self/direct-conversations/resolve",
+            &human_direct_resolve_request(BOB_DID),
+        )
+        .await
+        .take_json()
+        .await
+        .unwrap()
     };
-    let create_b = async move {
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice_b}"), true)
-            .json(&serde_json::json!({
-                "peer": BOB_DID,
-                "create": true,
-                "idempotency_key": "direct-concurrent-b"
-            }))
-            .send(&app_from_state(state_b))
-            .await
-            .take_json()
-            .await
-            .unwrap()
+    let resolve_b = async move {
+        post_authenticated_canonical(
+            state_b,
+            &alice_b,
+            "http://server/_arkret/self/direct-conversations/resolve",
+            &human_direct_resolve_request(BOB_DID),
+        )
+        .await
+        .take_json()
+        .await
+        .unwrap()
     };
 
-    let (first, second): (Value, Value) = tokio::join!(create_a, create_b);
-    let authoring = &first;
-    assert_eq!(authoring["state"], "authoring_required", "{first} {second}");
-    assert_eq!(authoring["created"], false);
-    assert_eq!(second["state"], "authoring_required", "{first} {second}");
-    assert_eq!(
-        second["materialization_draft"], authoring["materialization_draft"],
-        "concurrent creates must converge on one immutable draft"
-    );
-    let rejected = submit_direct_materialization_without_mls(
+    let (first, second): (Value, Value) = tokio::join!(resolve_a, resolve_b);
+    assert_eq!(first["state"], "awaiting_founder", "{first} {second}");
+    assert_eq!(second, first);
+    let retried: Value = post_authenticated_canonical(
         state.clone(),
         &alice,
-        &authoring["materialization_draft"],
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &human_direct_resolve_request(BOB_DID),
     )
-    .await;
-    assert_eq!(
-        rejected["error"]["code"], "failed_precondition",
-        "{rejected}"
-    );
-    assert_eq!(
-        rejected["error"]["reason"], "direct_conversation_binding_invalid",
-        "{rejected}"
-    );
-    let retried: Value =
-        TestClient::post("http://server/_arkret/self/direct-conversations/resolve")
-            .add_header("authorization", format!("Bearer {alice}"), true)
-            .json(&serde_json::json!({"peer": BOB_DID, "create": true}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(retried["state"], "authoring_required", "body: {retried}");
-    assert_eq!(retried["realm_id"], authoring["realm_id"]);
-    assert_eq!(
-        retried["materialization_draft"],
-        authoring["materialization_draft"]
-    );
-    assert_eq!(state.test_direct_conversation_binding_count(), 1);
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(retried, first);
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }

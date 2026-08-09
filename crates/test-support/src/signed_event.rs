@@ -25,6 +25,101 @@ use crate::cba_basis::{FixtureBasis, apply_registered_cba_plane, apply_registere
 /// check.
 pub const FIXTURE_EVENT_SIGNING_SEED: [u8; 32] = [21_u8; 32];
 
+/// Convert an authored SDK Event into the storage representation used by
+/// integration fixtures.
+///
+/// `canonical_bytes` are the Event digest payload, not the serialized signed
+/// envelope. Keeping that distinction here prevents fixture records whose
+/// content-bound `event_id` cannot be revalidated by the persistence layer.
+#[must_use]
+pub fn canonical_event_record(
+    event: &Event,
+    realm_id: Option<&str>,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> soland_storage::CanonicalEventRecord {
+    soland_storage::CanonicalEventRecord {
+        event_id: event.event_id.to_string(),
+        actor_id: event.actor_id.to_string(),
+        actor_seq: event.actor_seq,
+        realm_id: realm_id.map(str::to_owned),
+        kind: event.kind.to_string(),
+        schema_id: "ak.schema.event.v1".to_owned(),
+        canonical_digest: event.event_digest().expect("fixture Event digest"),
+        canonical_bytes: arkret_canonical::canonical_json_bytes(
+            &event
+                .digest_payload()
+                .expect("fixture Event digest payload"),
+        )
+        .expect("fixture Event canonical digest bytes"),
+        envelope: serde_json::to_value(event).expect("fixture Event envelope"),
+        received_at,
+    }
+}
+
+/// Complete an ordinary Realm genesis with the required closed bootstrap
+/// facets, preserving one signed actor chain across the whole transaction.
+#[must_use]
+pub fn complete_realm_bootstrap_unit(
+    genesis: Event,
+    actor_id: &str,
+    device_id: &str,
+    profile_title: &str,
+) -> Vec<Event> {
+    let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
+    let followups = [
+        (
+            arkret_wire::EventKind::RealmProfile,
+            serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": profile_title}),
+        ),
+        (
+            arkret_wire::EventKind::RealmPolicyBundle,
+            serde_json::json!({"policy_revision": 1, "content_scheme": "mls_exporter_aead_v1"}),
+        ),
+        (
+            arkret_wire::EventKind::RealmJoinRule,
+            serde_json::json!({"value": "invite"}),
+        ),
+        (
+            arkret_wire::EventKind::RealmHistoryVisibility,
+            serde_json::json!({"value": "joined"}),
+        ),
+        (
+            arkret_wire::EventKind::RealmDiscovery,
+            serde_json::json!({"value": "invite_only"}),
+        ),
+        (
+            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
+            serde_json::json!({"unroutable_membership_allowed": false}),
+        ),
+        (
+            arkret_wire::EventKind::MemberState,
+            serde_json::json!({
+                "realm_id": realm_id,
+                "actor_id": actor_id,
+                "membership": "join",
+                "delivery_status": "unroutable"
+            }),
+        ),
+    ];
+    let mut events = vec![genesis];
+    for (offset, (kind, payload)) in followups.into_iter().enumerate() {
+        let previous_event_id = events
+            .last()
+            .expect("genesis precedes bootstrap facets")
+            .event_id
+            .to_string();
+        let event = CallerSignedEvent::new(kind.as_str(), actor_id, device_id, &realm_id, payload)
+            .with_actor_seq(u64::try_from(offset + 1).expect("bootstrap actor sequence"))
+            .with_prev_refs(vec![previous_event_id.as_str()])
+            .with_basis(CallerSignedBasis::AnchorUnit)
+            .build();
+        events.push(event);
+    }
+    arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
+        .expect("fixture ordinary Realm bootstrap unit");
+    events
+}
+
 /// Where a fixture Event's CBA basis comes from.
 #[derive(Clone, Debug)]
 pub enum CallerSignedBasis<'a> {

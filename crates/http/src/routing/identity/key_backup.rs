@@ -115,6 +115,11 @@ mod tests {
     }
 
     fn key_backup_body(backup_kind: &str, item_kind: &str, encryption: Value) -> Value {
+        let recipient_method = encryption["recipient_method"].clone();
+        let recipient_key_ref = encryption
+            .get("recipient_key_ref")
+            .cloned()
+            .unwrap_or(Value::Null);
         let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
@@ -130,7 +135,7 @@ mod tests {
                 "secret_id": "test-secret"
             }],
             "ciphertext": "AAAA",
-            "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "ciphertext_digest": "sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
             "domain_separation": {
                 "hkdf_info": format!("arkret-key-backup/{backup_kind}/test/v1"),
                 "subdomain": "test",
@@ -141,7 +146,9 @@ mod tests {
                     "backup_kind": backup_kind,
                     "backup_version": "kb_1",
                     "created_at": "2026-05-30T00:00:00.000Z",
-                    "item_kinds": [item_kind]
+                    "item_kinds": [item_kind],
+                    "recipient_method": recipient_method,
+                    "recipient_key_ref": recipient_key_ref
                 }
             },
             "auth_data": {
@@ -188,7 +195,7 @@ mod tests {
                 "name": "xchacha20_poly1305",
                 "aead_profile": "ak.aead.xchacha20_poly1305.v1",
                 "nonce": "nonce",
-                "nonce_salt": "bm9uY2VzYWx0"
+                "nonce_salt": "bm9uY2Vfc2FsdF9maXh0dXJl"
             }
         })
     }
@@ -735,11 +742,15 @@ mod tests {
 
     #[test]
     fn list_metadata_redacts_ciphertext_and_kdf_material() {
-        let metadata = key_backup_metadata_for_list(key_backup_body(
-            "secret_storage",
-            "recovery_secret",
-            passphrase_encryption(),
-        ));
+        let metadata = serde_json::to_value(
+            key_backup_summary_for_list(key_backup_body(
+                "secret_storage",
+                "private_account_state",
+                passphrase_encryption(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
 
         assert!(metadata.get("ciphertext").is_none());
         assert!(metadata.pointer("/encryption/key_commitment").is_none());

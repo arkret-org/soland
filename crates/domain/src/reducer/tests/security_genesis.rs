@@ -39,7 +39,7 @@ fn audit_binding_keeps_immutable_config_separate_from_lifecycle() {
         "release_mode": "disclosed_policy"
     });
     let (create_event, create, writes) = input(
-        arkret_wire::EventKind::AuditAppletBindingCreate,
+        arkret_wire::EventKind::AuditAppletBindingCreate.as_str(),
         realm,
         create_payload.clone(),
     );
@@ -76,7 +76,7 @@ fn audit_binding_keeps_immutable_config_separate_from_lifecycle() {
         "to": "suspended"
     });
     let (_, transition, writes) = input(
-        arkret_wire::EventKind::AuditAppletBindingState,
+        arkret_wire::EventKind::AuditAppletBindingState.as_str(),
         realm,
         state_payload,
     );

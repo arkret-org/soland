@@ -367,27 +367,9 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         return;
     }
     // SPEC-CR-010 / SOL-05-008 — the effective-set / replaces / R3.2 digest id
-    // space is the typed `ak:event:` id (event-payload.schema.json
-    // `event_ref`, client-sync.md R3.2 `effective_events[].event_id`), NOT the
-    // `ak:operation:` id. `projection_operation_from_event` already threads the
-    // canonical Event id through `payload.event_id`, so prefer it; fall back to
-    // deriving `ak:event:<uuid>` from the operation id's UUID suffix (same
-    // suffix as the matching `ak:operation:<uuid>`) so projection never stores
-    // an operation id that a spec-compliant client's `replaces[].event_id`
-    // (which is `ak:event:`) can never match.
-    let canonical_event_id = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ak:event:"))
-        .map(str::to_owned)
-        .or_else(|| {
-            operation
-                .operation_id
-                .as_str()
-                .strip_prefix("ak:operation:")
-                .map(|suffix| format!("ak:event:{suffix}"))
-        })
-        .unwrap_or_else(|| operation.operation_id.to_string());
+    // space is the accepted Event id from the typed envelope context. It is
+    // never inferred from payload aliases or from the unrelated Operation id.
+    let canonical_event_id = operation.context.event_id.to_string();
 
     // MID-2/MID-5: canonical digest over the full `identity_payload`
     // carrier object as received. soland MUST NOT rewrite the envelope —

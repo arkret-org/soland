@@ -1088,12 +1088,50 @@ impl ProjectionState {
         }
     }
 
+    /// Apply accepted Events that intentionally sit outside the shared Realm
+    /// reducer registry. These projections are local/private read models and
+    /// therefore must not make a `reducer_input=false` kind advance the Realm
+    /// frontier merely to keep the local cache alive.
+    fn apply_non_reducer_event(
+        &mut self,
+        kind: arkret_wire::EventKind,
+        operation: &Operation,
+    ) -> ProjectionEffect {
+        match kind {
+            arkret_wire::EventKind::ReadCursorAdvance => {
+                self.apply_read_cursor(operation, operation.created_at)
+            }
+            arkret_wire::EventKind::DevicePushRoute => self.apply_device_push_route(operation),
+            arkret_wire::EventKind::AgentActionRequest => {
+                self.apply_agent_action_request(operation)
+            }
+            arkret_wire::EventKind::AgentActionApprove => {
+                self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Approved)
+            }
+            arkret_wire::EventKind::AgentActionReject => {
+                self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Rejected)
+            }
+            arkret_wire::EventKind::AuditErasureReceipt => {
+                self.apply_audit_erasure_receipt(operation, operation.created_at)
+            }
+            _ => ProjectionEffect::Ignored,
+        }
+    }
+
     /// Reduce one Operation whose Event contract declares no cell write.
     ///
     /// Kinds that do declare writes reject with `reducer_projection_failed`
     /// here; the caller must use [`Self::apply_projected`] with the registry
     /// projection of the signed Event.
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
+        let Some(kind) = crate::kinds::canonical_kind_for_operation(operation) else {
+            return ProjectionEffect::Rejected {
+                reason: "unknown_event_kind".to_owned(),
+            };
+        };
+        if !kind.is_reducer_input() {
+            return self.apply_non_reducer_event(kind, operation);
+        }
         self.apply_projected(operation, &[], hlc)
     }
 

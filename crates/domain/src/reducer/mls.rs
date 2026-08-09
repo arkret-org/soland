@@ -535,12 +535,7 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
         Ok(scope) => scope,
         Err(reason) => return reject(reason),
     };
-    let proposal_ref = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| op.operation_id.as_str())
-        .to_owned();
+    let proposal_ref = op.context.event_id.to_string();
     let target_device_id = payload
         .get("target_device_id")
         .and_then(Value::as_str)
@@ -595,11 +590,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     else {
         return reject("mls_genesis_creator_device_missing");
     };
-    let genesis_event_ref = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| op.operation_id.as_str())
-        .to_owned();
+    let genesis_event_ref = op.context.event_id.to_string();
     let Some(governance_binding) = payload
         .get("governance_binding")
         .or_else(|| payload.get("mls_governance_binding"))
@@ -795,11 +786,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
 
     let new_epoch = current.saturating_add(1);
     let committed_at = op.created_at.timestamp();
-    let accepted_commit_ref = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| op.operation_id.as_str())
-        .to_owned();
+    let accepted_commit_ref = op.context.event_id.to_string();
     state.mls_commit_epochs.insert(
         epoch_key,
         MlsCommitEpoch {

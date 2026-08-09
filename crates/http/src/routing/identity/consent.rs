@@ -54,9 +54,13 @@ pub(super) fn router() -> Router {
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
     let kind = soland_services::operation_semantics::canonical_kind(operation);
-    let projected = match kind.as_str() {
-        "ak.consent.grant" => project_consent_grant_operation(state, operation).await,
-        "ak.consent.revoke" => project_consent_revoke_operation(state, operation).await,
+    let projected = match kind {
+        arkret_wire::EventKind::ConsentGrant => {
+            project_consent_grant_operation(state, operation).await
+        }
+        arkret_wire::EventKind::ConsentRevoke => {
+            project_consent_revoke_operation(state, operation).await
+        }
         _ => return,
     };
     if let Err(error) = projected {
@@ -1344,7 +1348,7 @@ mod tests {
             HOLDER,
             HOLDER,
             &event,
-            arkret_wire::EventKind::ConsentGrant,
+            arkret_wire::EventKind::ConsentGrant.as_str(),
         )
         .unwrap();
 
@@ -1366,8 +1370,13 @@ mod tests {
             "did:web:attacker.example",
             grant_payload(),
         );
-        caller_signed_consent_target(HOLDER, HOLDER, &event, arkret_wire::EventKind::ConsentGrant)
-            .expect_err("only the holder may author a write to the holder's consent cell");
+        caller_signed_consent_target(
+            HOLDER,
+            HOLDER,
+            &event,
+            arkret_wire::EventKind::ConsentGrant.as_str(),
+        )
+        .expect_err("only the holder may author a write to the holder's consent cell");
     }
 
     #[test]
@@ -1381,7 +1390,7 @@ mod tests {
             HOLDER,
             HOLDER,
             &event,
-            arkret_wire::EventKind::ConsentRevoke,
+            arkret_wire::EventKind::ConsentRevoke.as_str(),
         )
         .expect_err("the revoke surface must not accept a grant Event");
     }

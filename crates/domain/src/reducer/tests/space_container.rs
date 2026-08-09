@@ -666,7 +666,6 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         ),
         &hlc,
     );
-
     state.apply(
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
@@ -895,8 +894,9 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
         arkret_wire::EventKind::StrandCreate,
         realm_id,
         serde_json::json!({
+            "event_id": public_strand_id.replacen("ak:strand:", "ak:event:", 1),
             "object": {
-                "id": public_strand_id,
+                "schema": "ak.schema.strand.v1",
                 "realm_id": realm_id,
                 "metadata": {
                     "title": "Public task",
@@ -906,14 +906,27 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "rank": "r001"
                     }
                 },
-                "created_by": "did:web:alice.example"
+                "stage": "draft",
+                "tracks": {
+                    "discussion": {
+                        "is_primary": true,
+                        "profile": "discussion"
+                    }
+                },
+                "created_by": "did:web:alice.example",
+                "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
     );
-    assert!(matches!(
-        state.apply(&public_create, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == arkret_wire::ErrorCode::POLICY_VIOLATION
-    ));
+    let public_effect = state.apply(&public_create, &hlc);
+    assert!(
+        matches!(
+            public_effect,
+            ProjectionEffect::Rejected { ref reason }
+                if reason == arkret_wire::ErrorCode::POLICY_VIOLATION
+        ),
+        "public strand fixture unexpectedly applied: {public_effect:?}"
+    );
     assert_eq!(
         state.check_child_scope_policy_transition(&public_create),
         Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
@@ -924,8 +937,9 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
         arkret_wire::EventKind::StrandCreate,
         realm_id,
         serde_json::json!({
+            "event_id": scoped_strand_id.replacen("ak:strand:", "ak:event:", 1),
             "object": {
-                "id": scoped_strand_id,
+                "schema": "ak.schema.strand.v1",
                 "realm_id": realm_id,
                 "scope_circle_id": circle_id,
                 "metadata": {
@@ -936,7 +950,15 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "rank": "r002"
                     }
                 },
-                "created_by": "did:web:alice.example"
+                "stage": "draft",
+                "tracks": {
+                    "discussion": {
+                        "is_primary": true,
+                        "profile": "discussion"
+                    }
+                },
+                "created_by": "did:web:alice.example",
+                "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
     );

@@ -587,7 +587,15 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
 }
 
 fn insert_projected_membership(state: &AppState, actor: &str, membership: &str) {
-    let updated_at = now();
+    insert_projected_membership_at(state, actor, membership, now());
+}
+
+fn insert_projected_membership_at(
+    state: &AppState,
+    actor: &str,
+    membership: &str,
+    updated_at: DateTime<Utc>,
+) {
     state.test_projection().lock().members.insert(
         (ROSTER_REALM.to_owned(), actor.to_owned()),
         soland_domain::reducer::SolandMembershipState {
@@ -647,24 +655,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         )
         .await
         .expect("realm meta stored");
-    let mut member_join = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000ef",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "realm_id": ROSTER_REALM,
-            "actor_id": ROSTER_CALLER,
-            "membership": "join",
-            "delivery_status": "unroutable",
-            "sender": ROSTER_ACTOR,
-            "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
-        }),
-        created_at,
-    );
-    member_join.created_at = created_at;
-    state
-        .test_projection()
-        .lock()
-        .apply(&member_join, state.hlc());
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", joined_at);
 
     let event_at = |event_id: &str, received_at| ProjectionEventRecord {
         event_id: event_id.to_owned(),
@@ -880,24 +871,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .await
         .expect("realm meta stored");
 
-    let mut member_join = sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000002ef",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "realm_id": ROSTER_REALM,
-            "actor_id": ROSTER_CALLER,
-            "membership": "join",
-            "delivery_status": "unroutable",
-            "sender": ROSTER_ACTOR,
-            "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
-        }),
-        created_at,
-    );
-    member_join.created_at = created_at;
-    state
-        .test_projection()
-        .lock()
-        .apply(&member_join, state.hlc());
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", joined_at);
 
     let pre_join_record = canonical_event_record_received_at(
         1,
@@ -1094,7 +1068,7 @@ fn canonical_value_digest(value: &Value) -> String {
 }
 
 // SPEC-CR-010 / SOL-05-008 — `project_member_identity_update` MUST store the
-// canonical `ak:event:` id (threaded through `payload.event_id`) so the
+// canonical `ak:event:` id (threaded through `ProjectionContext`) so the
 // effective-set / replaces / R3.2 digests live in the same id space as a
 // spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
 #[test]
@@ -1120,8 +1094,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
         arkret_canonical::canonical_json_bytes(&first_identity).unwrap(),
     );
 
-    // First update. Operation carries the canonical `ak:event:` id in
-    // `payload.event_id`, exactly as `projection_operation_from_event` threads it.
+    // First update. The canonical `ak:event:` id is envelope metadata in the
+    // typed projection context and never part of the signed payload.
     let first_op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
         RealmId::new(realm.to_owned()).unwrap(),
@@ -1853,10 +1827,10 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         .as_array()
         .expect("state events array");
     assert!(
-        state_events
-            .iter()
-            .any(|event| event["kind"] == arkret_wire::EventKind::PinAdd
-                && event["payload"]["target_ref"] == message_id),
+        state_events.iter().any(
+            |event| event["kind"] == arkret_wire::EventKind::PinAdd.as_str()
+                && event["payload"]["target_ref"] == message_id
+        ),
         "joined members must receive shared pin state events through account sync"
     );
 }

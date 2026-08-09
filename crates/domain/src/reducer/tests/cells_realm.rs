@@ -121,26 +121,25 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // `unroutable` keeps the projection focused on the FSM cell +
     // structured cache write paths without requiring a projected
     // realm delivery-binding policy.
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            realm_id,
-            serde_json::json!({
-                "actor_id": "did:web:alice",
-                "membership": "join",
-                "role": "admin",
-                "delivery_status": "unroutable"
-            }),
-        ),
-        &hlc,
-    );
+    let payload = serde_json::json!({
+        "realm_id": realm_id,
+        "actor_id": "did:web:alice",
+        "membership": "join",
+        "delivery_status": "unroutable"
+    });
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
+    let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
+    operation.context.sender = arkret_identifiers::Did::new("did:web:alice").unwrap();
+    state.apply_projected(&operation, &writes, &hlc);
 
-    // Structured cache populated with state="join" + role="admin".
+    // Structured cache populated with state="join" and the default member
+    // role; role assignment is not part of the closed membership payload.
     let m = state
         .member(realm_id, "did:web:alice")
         .expect("member entry should exist after join");
     assert_eq!(m.state, "join");
-    assert_eq!(m.role, "admin");
+    assert_eq!(m.role, "member");
 
     // FSM cell populated.
     assert_eq!(
@@ -157,6 +156,7 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let actor = "did:web:reducer-test.example";
     let payload = serde_json::json!({
+        "realm_id": realm_id,
         "actor_id": actor,
         "membership": "join",
         "delivery_status": "unroutable"
@@ -164,7 +164,7 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.payload["sender"] = Value::String(actor.to_owned());
+    operation.context.sender = arkret_identifiers::Did::new(actor).unwrap();
 
     let mut ordinary = ProjectionState::new();
     ordinary
@@ -193,7 +193,7 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     );
 
     let mut mismatched = operation;
-    mismatched.payload["sender"] = Value::String("did:web:mallory.example".to_owned());
+    mismatched.context.sender = arkret_identifiers::Did::new("did:web:mallory.example").unwrap();
     assert!(matches!(
         ProjectionState::new()
             .apply_validated_realm_bootstrap_membership(&mismatched, &writes),
@@ -312,46 +312,47 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
     state
         .realm_join_rules
         .insert(REALM_A.to_owned(), "public".to_owned());
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            REALM_A,
-            serde_json::json!({
-                "actor_id": ACTOR,
-                "membership": "join",
-                "delivery_status": "unroutable"
-            }),
-        ),
-        &hlc,
-    );
+    let payload = serde_json::json!({
+        "realm_id": REALM_A,
+        "actor_id": ACTOR,
+        "membership": "join",
+        "delivery_status": "unroutable"
+    });
+    let (_, writes) = projected_cell_writes(arkret_wire::EventKind::MemberState, REALM_A, &payload);
+    let mut operation = make_operation(arkret_wire::EventKind::MemberState, REALM_A, payload);
+    operation.context.sender = arkret_identifiers::Did::new(ACTOR).unwrap();
+    state.apply_projected(&operation, &writes, &hlc);
 
     let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
-    let invite_in_new_realm = make_operation(
+    let mut invite_in_new_realm = make_operation(
         arkret_wire::EventKind::MemberState,
         REALM_B,
         serde_json::json!({
             "actor_id": ACTOR,
-            "membership": "invite",
-            "preconditions": [{
-                "cell": member_cell,
-                "predicate": { "op": "head_eq", "value": null }
-            }]
+            "membership": "invite"
         }),
     );
+    invite_in_new_realm.context.preconditions = serde_json::from_value(serde_json::json!([{
+        "cell": member_cell,
+        "predicate": { "op": "head_eq", "value": null }
+    }]))
+    .unwrap();
     assert_eq!(state.check_move_preconditions(&invite_in_new_realm), Ok(()));
 
-    let duplicate_genesis_in_same_realm = make_operation(
+    let mut duplicate_genesis_in_same_realm = make_operation(
         arkret_wire::EventKind::MemberState,
         REALM_A,
         serde_json::json!({
             "actor_id": ACTOR,
-            "membership": "invite",
-            "preconditions": [{
-                "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
-                "predicate": { "op": "head_eq", "value": null }
-            }]
+            "membership": "invite"
         }),
     );
+    duplicate_genesis_in_same_realm.context.preconditions =
+        serde_json::from_value(serde_json::json!([{
+            "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
+            "predicate": { "op": "head_eq", "value": null }
+        }]))
+        .unwrap();
     assert_eq!(
         state.check_move_preconditions(&duplicate_genesis_in_same_realm),
         Err("failed_precondition")

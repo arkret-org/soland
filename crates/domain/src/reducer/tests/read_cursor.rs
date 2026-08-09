@@ -46,13 +46,16 @@ fn stored_event_suffix(state: &ProjectionState) -> String {
         .to_string()
 }
 
+fn apply_cursor(state: &mut ProjectionState, operation: &Operation) -> ProjectionEffect {
+    state.apply_read_cursor(operation, operation.created_at)
+}
+
 #[test]
 fn causal_dominance_overrides_higher_hlc() {
     let mut state = ProjectionState::new();
-    let server_hlc = ServerHlc::new("test");
     let current = cursor_operation(1, 1, "01970e589d21-0002-a13f9c2e", None);
     assert!(matches!(
-        state.apply(&current, &server_hlc),
+        apply_cursor(&mut state, &current),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
 
@@ -63,7 +66,7 @@ fn causal_dominance_overrides_higher_hlc() {
         Some("candidate_dominates_current"),
     );
     assert!(matches!(
-        state.apply(&candidate, &server_hlc),
+        apply_cursor(&mut state, &candidate),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
     assert_eq!(stored_event_suffix(&state), fixture_event_id(2));
@@ -72,11 +75,8 @@ fn causal_dominance_overrides_higher_hlc() {
 #[test]
 fn current_causal_dominance_rejects_higher_candidate_hlc() {
     let mut state = ProjectionState::new();
-    let server_hlc = ServerHlc::new("test");
-    state.apply(
-        &cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None),
-        &server_hlc,
-    );
+    let current = cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None);
+    apply_cursor(&mut state, &current);
 
     let candidate = cursor_operation(
         2,
@@ -85,7 +85,7 @@ fn current_causal_dominance_rejects_higher_candidate_hlc() {
         Some("current_dominates_candidate"),
     );
     assert!(matches!(
-        state.apply(&candidate, &server_hlc),
+        apply_cursor(&mut state, &candidate),
         ProjectionEffect::Ignored
     ));
     assert_eq!(stored_event_suffix(&state), fixture_event_id(1));
@@ -94,24 +94,21 @@ fn current_causal_dominance_rejects_higher_candidate_hlc() {
 #[test]
 fn only_concurrent_positions_use_hlc_then_device_id() {
     let mut state = ProjectionState::new();
-    let server_hlc = ServerHlc::new("test");
-    state.apply(
-        &cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None),
-        &server_hlc,
-    );
+    let current = cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None);
+    apply_cursor(&mut state, &current);
     assert!(matches!(
-        state.apply(
+        apply_cursor(
+            &mut state,
             &cursor_operation(2, 2, "01970e589d21-0002-a13f9c2e", Some("concurrent"),),
-            &server_hlc,
         ),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
     assert_eq!(stored_event_suffix(&state), fixture_event_id(2));
 
     assert!(matches!(
-        state.apply(
+        apply_cursor(
+            &mut state,
             &cursor_operation(3, 3, "01970e589d21-0002-a13f9c2e", Some("concurrent"),),
-            &server_hlc,
         ),
         ProjectionEffect::ReadMarkerUpdated(_)
     ));
@@ -121,17 +118,14 @@ fn only_concurrent_positions_use_hlc_then_device_id() {
 #[test]
 fn absent_or_undecidable_closure_preserves_current() {
     let mut state = ProjectionState::new();
-    let server_hlc = ServerHlc::new("test");
-    state.apply(
-        &cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None),
-        &server_hlc,
-    );
+    let current = cursor_operation(1, 1, "01970e589d21-0001-a13f9c2e", None);
+    apply_cursor(&mut state, &current);
 
     for relation in [None, Some("undecidable")] {
         assert!(matches!(
-            state.apply(
+            apply_cursor(
+                &mut state,
                 &cursor_operation(2, 2, "01970e589d21-0002-a13f9c2e", relation),
-                &server_hlc,
             ),
             ProjectionEffect::Ignored
         ));

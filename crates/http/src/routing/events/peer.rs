@@ -1484,6 +1484,7 @@ async fn peer_events_query_response(
     let events = visible
         .iter()
         .map(|record| super::event_log::sdk_event_for_state(state, record))
+        .map(|event| event.map(Into::into))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(EventsQueryOutcome {
         events,

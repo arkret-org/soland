@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
-use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
+use soland_storage::RealmMetaRecord;
 
 use super::common::*;
 
@@ -53,10 +53,33 @@ async fn seed_peer_delivery_binding(state: &AppState) {
         },
     );
 }
+
+async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_label: &str) -> Value {
+    let actor_records = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(TEST_REALM_ID)
+        .await
+        .expect("demo Realm actor frontier")
+        .into_iter()
+        .filter(|record| record.actor_id == "did:web:alice.example")
+        .collect::<Vec<_>>();
+    let actor_seq = actor_records
+        .iter()
+        .map(|record| record.actor_seq)
+        .max()
+        .expect("demo Realm has an Alice bootstrap frontier");
+    let frontier_event_ids = actor_records
+        .iter()
+        .filter(|record| record.actor_seq == actor_seq)
+        .map(|record| record.event_id.as_str())
+        .collect();
+    signed_event_envelope(fixture_label, actor_seq + 1, frontier_event_ids)
+}
 const SERVICE_ID: &str =
     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
 const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
-const TEST_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+const TEST_REALM_ID: &str = DEMO_REALM_ID;
 const TEST_CIRCLE_ID: &str = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
 
 fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
@@ -134,6 +157,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     event["created_at"] =
         serde_json::json!(arkret_canonical::format_timestamp_canonical(created_at));
     resign_canonical_event(&mut event);
+    let expected_event_id = authored_event_id(&event).to_owned();
     put_event_record(&state, event, created_at).await;
 
     let read_body = serde_json::json!({
@@ -170,7 +194,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         .or_else(|| page["events"][0]["event"]["event_id"].as_str());
     assert_eq!(
         returned_event_id,
-        Some("ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD"),
+        Some(expected_event_id.as_str()),
         "{page:?}"
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
@@ -187,19 +211,21 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     ) {
         frontier = frontier.add_header(name, value, true);
     }
-    let frontier: Value = frontier
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(frontier["realm_id"], TEST_REALM_ID);
+    let mut frontier_response = frontier.send(&app_from_state(state)).await;
+    let frontier_status = frontier_response.status_code;
+    let frontier: Value = frontier_response.take_json().await.unwrap();
+    assert_eq!(
+        frontier_status,
+        Some(StatusCode::OK),
+        "peer frontier response: {frontier}"
+    );
+    assert_eq!(frontier["realm_id"], TEST_REALM_ID, "{frontier}");
     assert!(
         frontier["heads"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|head| head == "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD")
+            .any(|head| head == expected_event_id.as_str())
     );
     assert!(
         frontier["frontier_root"]
@@ -220,24 +246,25 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
     let now = Utc::now();
-    let predecessor_id = "ak:event:AXx4wC556lXwN4bfK5rMlo6C9Jkdc_q-uTB7ttoKni5M";
-    put_event_record(
-        &state,
-        signed_event_envelope(predecessor_id, 40, Vec::new()),
-        now - ChronoDuration::seconds(1),
-    )
-    .await;
+    let predecessor = signed_event_envelope(
+        "ak:event:AXx4wC556lXwN4bfK5rMlo6C9Jkdc_q-uTB7ttoKni5M",
+        40,
+        Vec::new(),
+    );
+    let predecessor_id = authored_event_id(&predecessor).to_owned();
+    put_event_record(&state, predecessor, now - ChronoDuration::seconds(1)).await;
     for idx in 0..16 {
         let event_id = format!("ak:event:01904100-0000-8000-8000-fede000001{idx:02x}");
-        let event = signed_event_envelope(&event_id, 41, vec![predecessor_id]);
+        let event = signed_event_envelope(&event_id, 41, vec![predecessor_id.as_str()]);
         put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
     }
 
     let overflow = signed_event_envelope(
         "ak:event:AYdYa0NMjToIRBeXdzUM2JL5LmKocV8srALm6U4sos5w",
         41,
-        vec![predecessor_id],
+        vec![predecessor_id.as_str()],
     );
+    let overflow_id = authored_event_id(&overflow).to_owned();
     let body = peer_submit_body(&overflow);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -259,7 +286,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
     assert_eq!(
         outcome["quarantine"],
-        serde_json::json!(["ak:event:AYdYa0NMjToIRBeXdzUM2JL5LmKocV8srALm6U4sos5w"]),
+        serde_json::json!([overflow_id]),
         "{outcome:?}"
     );
     assert!(outcome["rejected"].as_array().is_none_or(Vec::is_empty));
@@ -267,7 +294,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
         state
             .test_persistence()
             .events()
-            .get("ak:event:AYdYa0NMjToIRBeXdzUM2JL5LmKocV8srALm6U4sos5w")
+            .get(&overflow_id)
             .await
             .unwrap()
             .is_none(),
@@ -279,11 +306,11 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
 async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
-    let event = signed_event_envelope(
+    let event = signed_event_after_current_alice_frontier(
+        &state,
         "ak:event:AaFr4C2IJ5G05kC7Vl1e-d6hWLhI-zf6AZe1lQFN4cvc",
-        0,
-        Vec::new(),
-    );
+    )
+    .await;
     let mut body = peer_submit_body(&event);
     body["events"][0]["event"]["unsigned"] = serde_json::json!({});
 
@@ -320,11 +347,11 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
 async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_delivery_binding(&state).await;
-    let event = signed_event_envelope(
+    let event = signed_event_after_current_alice_frontier(
+        &state,
         "ak:event:AUUkvj_F0wukYtvsEeUOQ7O3tCgjDXllP-2iVm3-4JpR",
-        0,
-        Vec::new(),
-    );
+    )
+    .await;
     let mut body = peer_submit_body(&event);
     body["events"][0]
         .as_object_mut()
@@ -359,6 +386,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
     let now = Utc::now();
+    let mut expected_heads = Vec::new();
     for (idx, event_id) in [
         "ak:event:AZTNb6kCXn_8MiH9ew5d3ugUByYbTtI5RHFLWIvmeYK0",
         "ak:event:AXGDvPdO4b3s6WgtLTBVjuLATST_xdBnM02TPZ_YJfhf",
@@ -367,6 +395,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
     .enumerate()
     {
         let event = signed_event_envelope(event_id, 42, Vec::new());
+        expected_heads.push(authored_event_id(&event).to_owned());
         put_event_record(&state, event, now + ChronoDuration::seconds(idx as i64)).await;
     }
 
@@ -389,18 +418,12 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
         .await
         .unwrap();
     let heads = frontier["heads"].as_array().unwrap();
-    assert!(
-        heads
-            .iter()
-            .any(|head| head == "ak:event:AZTNb6kCXn_8MiH9ew5d3ugUByYbTtI5RHFLWIvmeYK0"),
-        "{frontier:?}"
-    );
-    assert!(
-        heads
-            .iter()
-            .any(|head| head == "ak:event:AXGDvPdO4b3s6WgtLTBVjuLATST_xdBnM02TPZ_YJfhf"),
-        "{frontier:?}"
-    );
+    for expected_head in expected_heads {
+        assert!(
+            heads.iter().any(|head| head == expected_head.as_str()),
+            "{frontier:?}"
+        );
+    }
     assert_eq!(
         frontier["actor_seq_upper_bounds"]["did:web:alice.example"],
         42
@@ -465,34 +488,15 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
     // Realm must explicitly authorize the receiving service to see it. This
     // keeps the assertion focused on foreign-domain member relay acceptance.
-    let mut realm_meta = state
-        .test_persistence()
-        .realm_meta()
-        .get(TEST_REALM_ID)
-        .await
-        .unwrap()
-        .unwrap();
-    realm_meta
-        .plaintext_visible_services
-        .insert(SERVICE_ID.to_owned());
-    realm_meta.plaintext_visible_service_classes.insert(
-        SERVICE_ID.to_owned(),
-        BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
-    );
-    state
-        .test_persistence()
-        .realm_meta()
-        .put(TEST_REALM_ID, &realm_meta)
-        .await
-        .unwrap();
+    authorize_test_plaintext_message_service(&state, "did:web:alice.example", TEST_REALM_ID).await;
     // `did:web:alice.example` is seeded into the demo Realm's membership
     // index; the source domain is `remote.example` (mismatched home), so
     // acceptance exercises the membership-index path.
-    let event = signed_event_envelope(
+    let event = signed_event_after_current_alice_frontier(
+        &state,
         "ak:event:ASkcnN1egiqz3y15yuMqvitL8ME5emS4-XyB0b7zzseO",
-        0,
-        Vec::new(),
-    );
+    )
+    .await;
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -521,7 +525,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     let welcome_event_id = "ak:event:AeKCyaUbw70FHlzkWyBOZi9ZQYsRpG1NIAp9Yjv7Tofa";
     let welcome_event = event_envelope(
         welcome_event_id,
-        "ak.mls.welcome",
+        arkret_wire::EventKind::MlsWelcome.as_str(),
         "did:web:alice.example",
         1,
         mls_welcome_payload("claim-peer-01", "opaque-peer-welcome"),
@@ -531,7 +535,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
     let rejected = outcome["rejected"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
-    assert_eq!(rejected[0]["id"], welcome_event_id);
+    assert_eq!(rejected[0]["id"], authored_event_id(&welcome_event));
     assert_eq!(rejected[0]["reason_code"], "profile_unsupported");
     assert!(
         rejected[0]["detail"]
@@ -1010,20 +1014,18 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
 
 fn realm_sync_endpoint_event(event_id: &str, source_service_id: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
-        "object": {
-            "sync_endpoints": [{
-                "did": source_service_id,
-                "endpoint": "https://remote.example",
-                "role": "federation_peer",
-                "service_kind": "principal_server",
-                "plaintext_visible": true,
-                "visibility_scope": "plaintext_events"
-            }]
-        }
+        "sync_endpoints": [{
+            "did": source_service_id,
+            "endpoint": "https://remote.example",
+            "role": "federation_peer",
+            "service_kind": "principal_server",
+            "plaintext_visible": true,
+            "visibility_scope": "plaintext_events"
+        }]
     });
     event_envelope(
         event_id,
-        "ak.realm.create",
+        arkret_wire::EventKind::RealmPolicyBundle.as_str(),
         "did:web:admin.example",
         seq,
         payload,
@@ -1153,34 +1155,22 @@ fn event_envelope(
 }
 
 async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<Utc>) {
-    let event_id = event["event_id"].as_str().unwrap().to_owned();
-    let actor_id = event["actor_id"].as_str().unwrap().to_owned();
-    let actor_seq = event["actor_seq"].as_u64().unwrap();
     // Realm genesis omits `realm_id` on the wire because the resolved Realm id
     // is event-derived; the persistence fixture still needs that resolved key.
     let realm_id = event["realm_id"]
         .as_str()
         .unwrap_or(TEST_REALM_ID)
         .to_owned();
-    let kind = event["kind"].as_str().unwrap().to_owned();
-    let schema_id = "ak.schema.event_envelope.v1".to_owned();
-    let canonical_digest = event_canonical_digest(&event);
-    let canonical_bytes = arkret_canonical::canonical_json_bytes(&event).unwrap();
+    let event: arkret_wire::Event =
+        serde_json::from_value(event).expect("federation fixture is a typed Event");
     state
         .test_persistence()
         .events()
-        .put(CanonicalEventRecord {
-            event_id,
-            actor_id,
-            actor_seq,
-            realm_id: Some(realm_id),
-            kind,
-            schema_id,
-            canonical_digest,
-            canonical_bytes,
-            envelope: event,
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &event,
+            Some(&realm_id),
             received_at,
-        })
+        ))
         .await
         .unwrap();
 }

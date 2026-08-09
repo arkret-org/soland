@@ -4,6 +4,10 @@
 
 use super::common::*;
 
+fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
     let state = soland_test_support::app_state(test_config());
@@ -216,7 +220,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
 
     let unauthorized =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
-            .json(&request)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&request))
             .send(&app_from_state(state.clone()))
             .await;
     assert_eq!(unauthorized.status_code.unwrap(), StatusCode::UNAUTHORIZED);
@@ -224,7 +229,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     let mut created_response =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)
-            .json(&request)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&request))
             .send(&app_from_state(state.clone()))
             .await;
     let created_status = created_response.status_code.unwrap();
@@ -243,7 +249,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     let existing: arkret_models_identity::service_identity::ServiceRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)
-            .json(&request)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&request))
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -290,7 +297,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     let mut fork_response =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)
-            .json(&fork_request)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&fork_request))
             .send(&app_from_state(state))
             .await;
     assert_eq!(fork_response.status_code.unwrap(), StatusCode::CONFLICT);

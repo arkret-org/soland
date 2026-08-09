@@ -160,7 +160,7 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
     })
 }
 
-fn initialize_genesis(state: &mut ProjectionState) {
+fn initialize_genesis(state: &mut ProjectionState) -> String {
     let genesis = op_at(
         499,
         "ak.mls.genesis",
@@ -171,6 +171,7 @@ fn initialize_genesis(state: &mut ProjectionState) {
         effect,
         ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
     ));
+    genesis.context.event_id.to_string()
 }
 
 fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
@@ -731,7 +732,7 @@ fn welcome_enqueue_rejects_missing_claim_envelope() {
 #[test]
 fn commit_epoch_in_order_succeeds() {
     let mut state = ProjectionState::default();
-    initialize_genesis(&mut state);
+    let genesis_event_ref = initialize_genesis(&mut state);
 
     // First commit after genesis — expected_prev_epoch=0 → epoch=1.
     let c1 = op_at(
@@ -788,13 +789,11 @@ fn commit_epoch_in_order_succeeds() {
             epoch: 2,
             leader_actor_id: "did:web:alice.example".to_owned(),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
-            genesis_event_ref: "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
+            genesis_event_ref,
             committed_at: 501,
             governance_binding: governance_binding(1),
             accepted_commit_digest: Some(b64(b"opaque-commit-2")),
-            accepted_commit_ref: Some(
-                "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
-            ),
+            accepted_commit_ref: Some(c2.context.event_id.to_string()),
             accepted_from_epoch: Some(1),
             frontier_contested: false,
         }

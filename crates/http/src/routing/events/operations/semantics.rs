@@ -106,11 +106,17 @@ pub(crate) fn validate_reaction_target_kind(
     ) {
         return Ok(());
     }
-    let target = operation
-        .payload
-        .get("target_ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
+    let target = match kind {
+        arkret_wire::EventKind::ReactionAdd => operation
+            .typed_payload::<arkret_wire::event_spec::ReactionAdd>()
+            .ok()
+            .map(|payload| payload.target_ref.as_str().to_owned()),
+        arkret_wire::EventKind::ReactionRemove => operation
+            .typed_payload::<arkret_wire::event_spec::ReactionRemove>()
+            .ok()
+            .map(|payload| payload.target_ref.as_str().to_owned()),
+        _ => None,
+    };
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
@@ -212,6 +218,24 @@ fn validate_typed_payload_shapes(
             validate_consent_revoke_payload(&wire_payload)
                 .map(|_| ())
                 .map_err(|_| "ak.consent.revoke payload violates its canonical typed shape")
+        }
+        // ak.audit.accessed — when `access_kind=e2ee_late_recovery`
+        // the payload MUST carry `late_recovery_original_event_id`.
+        arkret_wire::EventKind::AuditAccessed => {
+            if let Some(access_kind) = operation
+                .payload
+                .get("access_kind")
+                .and_then(|v| v.as_str())
+                && access_kind == "e2ee_late_recovery"
+                && operation
+                    .payload
+                    .get("late_recovery_original_event_id")
+                    .is_none()
+            {
+                return Err("ak.audit.accessed access_kind=e2ee_late_recovery requires \
+                     late_recovery_original_event_id (round-4 wire break)");
+            }
+            Ok(())
         }
         arkret_wire::EventKind::RealmMediaService => {
             if operation.payload.get("sfu_endpoint").is_some() {
@@ -372,7 +396,7 @@ mod tests {
             }),
         );
         assert_eq!(
-            validate_typed_payload_shapes(arkret_wire::EventKind::ContainerMoveItem, &legacy,),
+            validate_typed_payload_shapes(&arkret_wire::EventKind::ContainerMoveItem, &legacy,),
             Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
     }
@@ -387,7 +411,7 @@ mod tests {
             }),
         );
         assert_eq!(
-            validate_typed_payload_shapes(arkret_wire::EventKind::RealmNotary, &wrong_realm,),
+            validate_typed_payload_shapes(&arkret_wire::EventKind::RealmNotary, &wrong_realm,),
             Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );
 
@@ -402,7 +426,7 @@ mod tests {
         );
         assert_eq!(
             validate_typed_payload_shapes(
-                arkret_wire::EventKind::RealmDigestSuiteTransition,
+                &arkret_wire::EventKind::RealmDigestSuiteTransition,
                 &noop,
             ),
             Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
