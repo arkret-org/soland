@@ -1491,7 +1491,10 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: Did::new(agent_id.clone()).unwrap(),
             controller_id: Did::new(controller_id).unwrap(),
-            realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            genesis_salt: arkret_wire::GenesisSalt::new(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .unwrap(),
             trust_domain: arkret_wire::TypedTrustDomainId::new("ak:trust_domain:soland.local")
                 .unwrap(),
             capability_action_registry_digest:
@@ -1503,9 +1506,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let mut create = arkret_wire::test_support::raw_event(
         arkret_wire::EventKind::RealmCreate.as_str(),
         // A genesis carries the closed `realm_genesis` scope and no id: the
-        // Realm id is derived from the Event (this one is a Principal Control
-        // Realm, so the derivation is subject-derived from the Agent DID and
-        // lands back on `realm_id`).
+        // Realm id is derived from the exact create Event.
         arkret_wire::ScopeRef::RealmGenesis,
         Did::new(agent_id.clone()).unwrap(),
         0,

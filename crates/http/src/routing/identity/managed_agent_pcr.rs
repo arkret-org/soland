@@ -883,6 +883,12 @@ pub(crate) fn validate_agent_pcr_genesis_object(
     expected_realm_id: &str,
     trust_domain: &str,
 ) -> Result<(), AppError> {
+    RealmId::new(expected_realm_id.to_owned())
+        .map_err(|error| schema_error(format!("managed Agent PCR Realm id is invalid: {error}")))?;
+    let genesis_salt = object
+        .get("genesis_salt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| schema_error("managed Agent PCR genesis_salt is missing"))?;
     let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: Did::new(agent_id.to_owned())
@@ -890,9 +896,13 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             controller_id: Did::new(controller_id.to_owned()).map_err(|error| {
                 schema_error(format!("managed Agent controller DID is invalid: {error}"))
             })?,
-            realm_id: RealmId::new(expected_realm_id.to_owned()).map_err(|error| {
-                schema_error(format!("managed Agent PCR Realm id is invalid: {error}"))
-            })?,
+            genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
+                |error| {
+                    schema_error(format!(
+                        "managed Agent PCR genesis_salt is invalid: {error}"
+                    ))
+                },
+            )?,
             trust_domain: arkret_wire::TypedTrustDomainId::new(trust_domain.to_owned()).map_err(
                 |error| schema_error(format!("configured trust domain is invalid: {error}")),
             )?,
@@ -1199,7 +1209,10 @@ mod tests {
             arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
                 agent_id: Did::new(AGENT).unwrap(),
                 controller_id: Did::new(CONTROLLER).unwrap(),
-                realm_id: RealmId::new(PCR).unwrap(),
+                genesis_salt: arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                )
+                .unwrap(),
                 trust_domain: arkret_wire::TypedTrustDomainId::new(TRUST_DOMAIN).unwrap(),
                 capability_action_registry_digest:
                     arkret_policy::current_capability_action_registry_digest().unwrap(),

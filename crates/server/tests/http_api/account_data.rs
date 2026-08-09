@@ -325,7 +325,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "ciphertext": "opaque-client-envelope"
     });
     let principal_realm =
-        soland_test_support::principal_control_realm_for_did("did:web:alice.example");
+        soland_test_support::fixture_principal_control_realm("did:web:alice.example");
     let mut event = signed_actor_private_event_envelope(
         "did:web:alice.example",
         ALICE_DEVICE,

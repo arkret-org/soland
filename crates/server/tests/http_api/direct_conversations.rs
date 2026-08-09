@@ -92,6 +92,10 @@ async fn seed_accepted_direct_message_contact(
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
             request_event_ref: Some(request_event_ref),
+            request_receipts: Vec::new(),
+            request_mirror_receipts: Vec::new(),
+            basis_evidence: None,
+            control_outcomes: Vec::new(),
             response_event_ref: Some(response_event_ref),
             tombstone_event_ref: None,
             message: None,
@@ -109,7 +113,7 @@ async fn project_authorized_device(
     device_id: &str,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> String {
-    let control_realm = soland_test_support::principal_control_realm_for_did(actor);
+    let control_realm = soland_test_support::fixture_principal_control_realm(actor);
     let authorize = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
             "ak:operation:",
@@ -577,6 +581,10 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
             request_event_ref: None,
+            request_receipts: Vec::new(),
+            request_mirror_receipts: Vec::new(),
+            basis_evidence: None,
+            control_outcomes: Vec::new(),
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
