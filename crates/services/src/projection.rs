@@ -547,6 +547,28 @@ impl ProjectionService {
         observed_at: DateTime<Utc>,
         policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<ControlGovernanceHealth> {
+        self.control_governance_health_with_ackless_authorities(
+            realm_id,
+            observed_at,
+            policy,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Build governance health while excluding Ack-less Moves whose proposal
+    /// authority was independently revalidated by the HTTP admission layer.
+    ///
+    /// The service layer cannot resolve accepted device generations. Callers
+    /// must therefore supply exact digests, never a Realm-wide boolean. An
+    /// empty set preserves the fail-closed behavior used by ordinary Realms,
+    /// managed Agent PCRs and reanchor control.
+    pub fn control_governance_health_with_ackless_authorities(
+        &self,
+        realm_id: &RealmId,
+        observed_at: DateTime<Utc>,
+        policy: ControlProposalDecisionPolicy,
+        ackless_authorized: &BTreeSet<Hash>,
+    ) -> StoreResult<ControlGovernanceHealth> {
         let records = self.pending_control_records(
             realm_id,
             ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
@@ -564,11 +586,7 @@ impl ProjectionService {
                 // outside the external proposal/Ack bounded-decision rail.
                 // They remain pending until successor-Seal finality, but are
                 // not governance-health proposals and have no decision clock.
-                if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
-                    && self
-                        .snapshot()
-                        .realm_is_principal_control(record.event.realm_id.as_str())
-                {
+                if ackless_authorized.contains(&digest) {
                     continue;
                 }
                 return Err(arkret_state::state::StoreError::Conflict(format!(
@@ -625,19 +643,15 @@ impl ProjectionService {
         )?;
         let mut retained_faults = Vec::new();
         for record in sealed {
+            let digest = arkret_state::state::control_event_digest(&record.event)?;
             let Some(ack) = record.control_proposal_ack else {
                 // The same Ack-less PCR class has no proposal deadline to
                 // retain as a governance fault after its Seal is accepted.
-                if soland_storage::has_self_principal_pcr_device_authorized_shape(&record.event)
-                    && self
-                        .snapshot()
-                        .realm_is_principal_control(record.event.realm_id.as_str())
-                {
+                if ackless_authorized.contains(&digest) {
                     continue;
                 }
                 return Err(arkret_state::state::StoreError::Conflict(format!(
-                    "sealed Control Move {} is missing its Control Proposal Ack",
-                    arkret_state::state::control_event_digest(&record.event)?
+                    "sealed Control Move {digest} is missing its Control Proposal Ack"
                 )));
             };
             if record
@@ -2549,6 +2563,107 @@ fn pending_device_revoke_exists(
                 .iter()
                 .any(|event_id| event_id == revoke_event_id)
     })
+}
+
+#[cfg(test)]
+mod control_governance_health_tests {
+    use super::*;
+    use arkret_state::state::{
+        MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
+    };
+    use arkret_wire::{Did, Hlc, ScopeRef};
+
+    struct UnusedEventSealCommitter;
+
+    impl EventSealCommitPort for UnusedEventSealCommitter {
+        fn commit_if_frontier(
+            &self,
+            _seal: &Seal,
+            _expected_store_frontier: &[SealId],
+            _new_ops: &[(CellRef, IssuedOp)],
+            _covered: &BTreeSet<Hash>,
+        ) -> StoreResult<bool> {
+            panic!("governance health must not commit a Seal")
+        }
+    }
+
+    fn service() -> ProjectionService {
+        ProjectionService::new(
+            Arc::new(MemoryControlEventStore::default()),
+            Arc::new(MemorySealStore::default()),
+            Arc::new(MemoryCellStore::default()),
+            Arc::new(MemoryCellRegistry::default()),
+            Arc::new(UnusedEventSealCommitter),
+            "governance-health-test",
+        )
+    }
+
+    fn ackless_event(seed: &str) -> Event {
+        let realm_id =
+            RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
+                .unwrap();
+        Event::new_with_derived_id_at(
+            "ak.test.control",
+            ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            Did::new("did:web:alice.example".to_owned()).unwrap(),
+            0,
+            Hlc::new("019f00000000-0000-00000001").unwrap(),
+            serde_json::json!({"seed": seed}),
+            Utc::now(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ackless_governance_exemption_is_exact_digest_and_default_fail_closed() {
+        let service = service();
+        let event = ackless_event("authorized");
+        service.put_pending_control_event(&event, None).unwrap();
+        let realm_id = event.realm_id.clone();
+
+        let default_error = service
+            .control_governance_health(
+                &realm_id,
+                Utc::now(),
+                ControlProposalDecisionPolicy::default(),
+            )
+            .unwrap_err();
+        assert!(
+            default_error
+                .to_string()
+                .contains("missing its Control Proposal Ack")
+        );
+
+        let unrelated = ackless_event("unrelated");
+        let unrelated_digest = arkret_state::state::control_event_digest(&unrelated).unwrap();
+        let unrelated_error = service
+            .control_governance_health_with_ackless_authorities(
+                &realm_id,
+                Utc::now(),
+                ControlProposalDecisionPolicy::default(),
+                &BTreeSet::from([unrelated_digest]),
+            )
+            .unwrap_err();
+        assert!(
+            unrelated_error
+                .to_string()
+                .contains("missing its Control Proposal Ack")
+        );
+
+        let digest = arkret_state::state::control_event_digest(&event).unwrap();
+        let health = service
+            .control_governance_health_with_ackless_authorities(
+                &realm_id,
+                Utc::now(),
+                ControlProposalDecisionPolicy::default(),
+                &BTreeSet::from([digest]),
+            )
+            .unwrap();
+        assert!(health.pending_proposals.is_empty());
+        assert!(health.retained_faults.is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use super::*;
 struct PreparedGhostEvent {
     command: soland_services::events::CommitAcceptedEventCommand,
     operation: Option<arkret_event_draft::Operation>,
+    projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
     projected_event: Option<soland_services::events::ProjectedEvent>,
     actor_id: String,
     device_id: String,
@@ -310,6 +311,7 @@ async fn prepare_ghost_event(
     Ok(PreparedGhostEvent {
         command,
         operation,
+        projected_cell_writes,
         projected_event,
         actor_id: parsed.actor_id,
         device_id: parsed.device_id,
@@ -453,12 +455,13 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
             )
         })?;
     for event in prepared.drain(..) {
-        if let Some(operation) = event.operation {
-            crate::routing::events::projection::project_accepted_operations_from_device(
+        if let Some(operation) = event.operation.as_ref() {
+            crate::routing::events::projection::project_accepted_canonical_event_from_device(
                 state,
                 &event.actor_id,
                 &event.device_id,
-                &[operation],
+                operation,
+                &event.projected_cell_writes,
             )
             .await;
         }

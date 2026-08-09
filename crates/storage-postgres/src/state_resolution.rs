@@ -58,12 +58,14 @@ pub fn build_state_resolution_stores(
 
     let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
     let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
+    let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
     StateResolutionStores {
-        control_event_store: Arc::new(arkret_state::state::MemoryControlEventStore::default()),
+        control_event_store: control_event_store.clone(),
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
+            control_event_store,
             seal_store,
             cell_store,
             cell_registry: cell_registry.clone(),
@@ -91,6 +93,7 @@ struct PgEventSealCommitStore {
 
 struct MemoryEventSealCommitStore {
     lock: parking_lot::Mutex<()>,
+    control_event_store: Arc<arkret_state::state::MemoryControlEventStore>,
     seal_store: Arc<arkret_state::state::MemorySealStore>,
     cell_store: Arc<arkret_state::state::MemoryCellStore>,
     cell_registry: Arc<dyn CellRegistry>,
@@ -1519,7 +1522,17 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .seal_store
             .put_if_frontier(seal, expected_store_frontier)
         {
-            Ok(true) => Ok(true),
+            Ok(true) => {
+                // Match the PostgreSQL transaction: accepted delta Events
+                // leave the pending queue at the same acceptance boundary as
+                // their Seal and cell effects. In particular, the basis-free
+                // Human PCR create+authorize pair becomes final when its
+                // rooted bootstrap Seal is accepted.
+                for digest in &seal.delta {
+                    self.control_event_store.mark_sealed(digest, seal)?;
+                }
+                Ok(true)
+            }
             Ok(false) => {
                 self.cell_store.rollback_seal(&seal.realm_id, &seal.id)?;
                 Ok(false)
@@ -1891,9 +1904,10 @@ mod event_seal_commit_tests {
     use serde_json::json;
 
     use super::{
-        BTreeSet, CellRef, CellRegistry, CellStore, EventSealCommitStore, Hash, LatticeOp,
-        MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp, build_state_resolution_stores,
-        compute_state_root, effective_state_with_new_ops, sealed_op_from_value, sealed_op_to_value,
+        BTreeSet, CellRef, CellRegistry, CellStore, ControlEventStore, EventSealCommitStore, Hash,
+        LatticeOp, MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp,
+        build_state_resolution_stores, compute_state_root, effective_state_with_new_ops,
+        sealed_op_from_value, sealed_op_to_value,
     };
 
     #[test]
@@ -1934,8 +1948,25 @@ mod event_seal_commit_tests {
         realm: &RealmId,
         marker: char,
         increment: i64,
-    ) -> (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<Hash>) {
-        let move_id = Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap();
+    ) -> (
+        Seal,
+        Vec<(CellRef, super::IssuedOp)>,
+        BTreeSet<Hash>,
+        arkret_wire::Event,
+    ) {
+        let event = arkret_wire::Event::new_with_derived_id_at(
+            "ak.test.control",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            increment as u64,
+            arkret_wire::Hlc::new(format!("0189c4d2af00-0000-aabbccd{increment}")).unwrap(),
+            json!({"marker": marker.to_string()}),
+            Utc::now(),
+        )
+        .unwrap();
+        let move_id = arkret_state::state::control_event_digest(&event).unwrap();
         let cell = CellRef::new(
             "ak:cell:ak.component.agent.selector_claim.v1:ak.selector.seal_admission".to_owned(),
         )
@@ -1990,7 +2021,7 @@ mod event_seal_commit_tests {
             kind: SealKind::Normal,
         };
         seal.id = seal.derive_id().unwrap();
-        (seal, ops, covered)
+        (seal, ops, covered, event)
     }
 
     #[test]
@@ -2039,11 +2070,13 @@ mod event_seal_commit_tests {
     fn memory_composite_commit_never_exposes_loser_effects() {
         let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
         let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
+        let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
         let registry: Arc<dyn CellRegistry> = Arc::new(
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
         );
         let committer = Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
+            control_event_store: control_event_store.clone(),
             seal_store: seal_store.clone(),
             cell_store: cell_store.clone(),
             cell_registry: registry.clone(),
@@ -2053,8 +2086,19 @@ mod event_seal_commit_tests {
                 .unwrap();
         let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
         let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
+        control_event_store
+            .put_pending_with_ack(&left.3, None)
+            .unwrap();
+        control_event_store
+            .put_pending_with_ack(&right.3, None)
+            .unwrap();
         let barrier = Arc::new(Barrier::new(3));
-        let spawn = |candidate: (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<Hash>)| {
+        let spawn = |candidate: (
+            Seal,
+            Vec<(CellRef, super::IssuedOp)>,
+            BTreeSet<Hash>,
+            arkret_wire::Event,
+        )| {
             let committer = committer.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
@@ -2084,5 +2128,27 @@ mod event_seal_commit_tests {
         );
         assert!(seal_store.get(&winner.0.id).unwrap().is_some());
         assert!(seal_store.get(&loser.0.id).unwrap().is_none());
+        assert_eq!(
+            control_event_store
+                .sealed_by(&winner.1[0].1.op.move_id)
+                .unwrap(),
+            Some(winner.0.id.clone())
+        );
+        assert!(
+            control_event_store
+                .sealed_by(&loser.1[0].1.op.move_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            control_event_store
+                .list_pending_records(&realm, 8)
+                .unwrap()
+                .iter()
+                .all(|record| {
+                    arkret_state::state::control_event_digest(&record.event).unwrap()
+                        == loser.1[0].1.op.move_id
+                })
+        );
     }
 }

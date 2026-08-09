@@ -557,7 +557,7 @@ mod tests {
 
     fn self_principal_pcr_control_request() -> EventCommitRequest {
         let actor_id = "did:web:alice.example";
-        let realm_id = arkret_identifiers::principal_control_realm_id(actor_id).to_string();
+        let realm_id = arkret_wire::principal_control_realm_id(actor_id).to_string();
         let created_at = Utc::now();
         let mut event = arkret_wire::Event::new_with_derived_id_at(
             arkret_wire::EventKind::CONTACT_REQUESTED,

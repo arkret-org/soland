@@ -507,18 +507,57 @@ async fn try_apply_device_generation_event_seal(
     }
     let expected_control_root =
         control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
-    let completeness_events = context
-        .records
-        .iter()
-        .map(|record| {
-            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                seal_admission_error(format!(
-                    "stored B-model Event {} is invalid: {error}",
-                    record.event_id
-                ))
+    let mut completeness_events = Vec::with_capacity(context.records.len());
+    let mut available_digests = BTreeSet::new();
+    for record in &context.records {
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        let parsed_digest = Hash::new(event.event_digest().map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} digest failed: {error}",
+                record.event_id
+            ))
+        })?)
+        .map_err(|error| {
+            seal_admission_error(format!(
+                "stored B-model Event {} digest is invalid: {error}",
+                record.event_id
+            ))
+        })?;
+        if parsed_digest.as_str() != record.canonical_digest {
+            return Err(seal_admission_error(format!(
+                "stored B-model Event {} canonical digest {} differs from parsed digest {}",
+                record.event_id, record.canonical_digest, parsed_digest
+            )));
+        }
+        available_digests.insert(parsed_digest);
+        completeness_events.push(event);
+    }
+    let missing = target
+        .difference(&available_digests)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        let sources = target
+            .difference(&available_digests)
+            .map(|digest| {
+                if seal.delta.contains(digest) {
+                    "delta"
+                } else {
+                    "predecessor"
+                }
             })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
+        return Err(seal_admission_error(format!(
+            "B-model Event Seal coverage contains unresolved {} canonical digests: {}",
+            sources.join(","),
+            missing.join(",")
+        )));
+    }
     let expected_completeness_root =
         arkret_state::control_event_completeness_root(&completeness_events, &target)
             .map_err(app_error_from_seal_reject)?;

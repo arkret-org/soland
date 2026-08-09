@@ -589,20 +589,67 @@ async fn stored_control_proposal_ack(
 /// it still enters the pending-control store and requires an accepted
 /// successor Seal for finality. Every condition is checked against accepted
 /// state; managed Agents and ordinary Realms therefore remain on the Ack rail.
-pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
+fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static str> {
+    if !event.kind.is_reducer_input() {
+        return Some("event kind is not a reducer input");
+    }
+    if event.seal_ref.is_some() {
+        return Some("event carries seal_ref");
+    }
+    if event.auth_context.is_some() {
+        return Some("event carries delegated auth_context");
+    }
+    if event.executed_by.is_some() {
+        return Some("event carries executed_by");
+    }
+    if event
+        .seal_basis
+        .as_ref()
+        .is_none_or(|basis| basis.leaves.is_empty())
+    {
+        return Some("event has no non-empty Seal basis");
+    }
+    if event.realm_id != arkret_identifiers::principal_control_realm_id(event.actor_id.as_str()) {
+        return Some("event Realm is not the actor's deterministic PCR");
+    }
+    if event.proofs.len() != 1 {
+        return Some("event does not carry exactly one proof");
+    }
+    let prefix = format!("{}#ak:device:", event.actor_id);
+    if !event.proofs[0]
+        .verification_method
+        .as_str()
+        .strip_prefix(&prefix)
+        .is_some_and(|device| !device.is_empty())
+    {
+        return Some("event proof is not actor#ak:device:<id>");
+    }
+    None
+}
+
+/// Return the first failed authority condition for an Ack-less self-PCR Move.
+/// `None` is the only authorized result. The stable reasons make revalidation
+/// drift observable without weakening any admission condition.
+pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_authority_rejection(
     state: &AppState,
     event: &Event,
-) -> Result<bool, String> {
-    let is_control_move =
-        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
-    if !is_control_move
-        || !soland_storage::has_self_principal_pcr_device_authorized_shape(event)
-        || !state
-            .projections()
-            .snapshot()
-            .realm_is_principal_control(event.realm_id.as_str())
-    {
-        return Ok(false);
+) -> Result<Option<&'static str>, String> {
+    if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
+        return Ok(Some(reason));
+    }
+    debug_assert!(soland_storage::has_self_principal_pcr_device_authorized_shape(event));
+    let principal_control_profile_declared = state
+        .projections()
+        .snapshot()
+        .realm_schema_refs(event.realm_id.as_str())
+        .iter()
+        .any(|profile| profile == arkret_wire::ProfileId::PRINCIPAL_CONTROL_REALM_V1);
+    // PCR identity is create-locked in the Realm-genesis cell. The mutable
+    // Realm summary may be absent while a canonical stored Event is
+    // revalidated for frontier/federation reads, so it is not an authority
+    // source for this security decision.
+    if !principal_control_profile_declared {
+        return Ok(Some("Realm genesis does not declare the Human PCR profile"));
     }
 
     let realm_id = RealmId::new(event.realm_id.to_string())
@@ -614,14 +661,14 @@ pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
         .current_notary_profile_for_events(state, &realm_id, &[])
         .map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
     else {
-        return Ok(false);
+        return Ok(Some("Realm has no current accepted notary"));
     };
     if !matches!(
         notary,
         arkret_wire::notary::NotaryValue::SingleDid { ref did, .. }
             if did == &event.actor_id
     ) {
-        return Ok(false);
+        return Ok(Some("current notary is not single_did == principal"));
     }
 
     let proof = &event.proofs[0];
@@ -634,7 +681,7 @@ pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
         .filter(|fragment| fragment.len() > "ak:device:".len())
         .map(ToOwned::to_owned)
     else {
-        return Ok(false);
+        return Ok(Some("event proof device id is malformed"));
     };
     let Some(device) = state
         .identities()
@@ -645,10 +692,13 @@ pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
         .await
         .map_err(|error| format!("self-principal PCR device lookup failed: {error}"))?
     else {
-        return Ok(false);
+        return Ok(Some("event proof device has no accepted device row"));
     };
-    if device.verification_state != "verified" || device.revoked_at.is_some() {
-        return Ok(false);
+    if device.verification_state != "verified" {
+        return Ok(Some("event proof device is not verified"));
+    }
+    if device.revoked_at.is_some() {
+        return Ok(Some("event proof device is revoked"));
     }
     let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
         state,
@@ -657,17 +707,22 @@ pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
     .await
     .map_err(|error| format!("self-principal PCR device generation is unavailable: {error}"))?
     else {
-        return Ok(false);
+        return Ok(Some("principal has no current device generation"));
     };
     if generation.status
         != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-        || device
-            .payload
-            .get("authorized_generation_ref")
-            .and_then(Value::as_str)
-            != Some(generation.current_ref.as_str())
     {
-        return Ok(false);
+        return Ok(Some("current device generation is not active"));
+    }
+    if device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_str)
+        != Some(generation.current_ref.as_str())
+    {
+        return Ok(Some(
+            "event proof device is not bound to the current device generation",
+        ));
     }
 
     let basis = event
@@ -681,10 +736,19 @@ pub(super) async fn is_authority_authored_self_principal_pcr_control_move(
             .map_err(|error| format!("self-principal PCR Seal basis is unavailable: {error}"))?
             .is_none()
         {
-            return Ok(false);
+            return Ok(Some("event Seal basis is no longer accepted"));
         }
     }
-    Ok(true)
+    Ok(None)
+}
+
+pub(in crate::routing::events::event_log) async fn is_authority_authored_self_principal_pcr_control_move(
+    state: &AppState,
+    event: &Event,
+) -> Result<bool, String> {
+    Ok(self_principal_pcr_control_authority_rejection(state, event)
+        .await?
+        .is_none())
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -2093,11 +2157,12 @@ pub(super) async fn submit_event_value_with_context(
         state.wake_control_seal_coordinator();
     }
     if let Some(operation) = projection_operation {
-        crate::routing::events::projection::project_accepted_operations_from_device(
+        crate::routing::events::projection::project_accepted_canonical_event_from_device(
             state,
             &parsed.actor_id,
             &parsed.device_id,
-            std::slice::from_ref(&operation),
+            &operation,
+            &projected_cell_writes,
         )
         .await;
         resolve_moderation_dismiss_queue_item(state, &operation, &parsed.event_id).await;

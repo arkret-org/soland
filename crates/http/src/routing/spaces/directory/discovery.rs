@@ -164,3 +164,60 @@ pub async fn actor_visible_to(
         None => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn accepted_contact_visibility_does_not_turn_a_mismatched_query_into_a_hit() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        let observed_at = now();
+        state
+            .contacts()
+            .save_contact(soland_services::identity::ContactRecord {
+                requester: alice.to_owned(),
+                target: bob.to_owned(),
+                basis_id: Some(format!("sha256:{}", "1".repeat(64))),
+                version: Some(1),
+                granted_to_target_scopes: vec!["direct_message".to_owned()],
+                granted_to_requester_scopes: vec!["direct_message".to_owned()],
+                status: "accepted".to_owned(),
+                request_event_ref: None,
+                response_event_ref: None,
+                tombstone_event_ref: None,
+                message: None,
+                peer_service_id: None,
+                created_at: observed_at,
+                updated_at: observed_at,
+            })
+            .await
+            .unwrap();
+        let session = SessionRecord {
+            token_hash: "directory-test-token".to_owned(),
+            actor: alice.to_owned(),
+            device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: observed_at + chrono::Duration::hours(1),
+            created_at: observed_at,
+            revoked_at: None,
+        };
+        let candidate = json!({
+            "did": bob,
+            "handle": "@collab-bob",
+            "display_name": "collab-bob"
+        });
+
+        assert!(actor_visible_to(&state, &candidate, Some(&session)).await);
+        assert!(query_matches(&candidate, Some("collab-bob")));
+        assert!(!query_matches(&candidate, Some("cotest-collab-bob")));
+    }
+}
