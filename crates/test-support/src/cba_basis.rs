@@ -357,7 +357,11 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             arkret_wire::EventKind::MemberState,
         ]
         .into_iter()
-        .all(|kind| existing_records.iter().any(|record| record.kind == kind));
+        .all(|kind| {
+            existing_records
+                .iter()
+                .any(|record| record.kind == kind.as_str())
+        });
         if is_principal_control_realm || has_complete_ordinary_bootstrap {
             project_fixture_genesis_event(state, &realm, event, payload).await;
             return;
@@ -628,7 +632,7 @@ async fn persist_and_project_realm_genesis_event(
     for (offset, (kind, followup_payload)) in followups.into_iter().enumerate() {
         let actor_seq = u64::try_from(offset + 1).expect("fixture bootstrap sequence");
         let mut followup = arkret_wire::test_support::raw_event_at(
-            kind,
+            kind.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },

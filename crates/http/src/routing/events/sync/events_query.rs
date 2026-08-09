@@ -1285,13 +1285,19 @@ pub(crate) async fn full_event_from_projection_json(
 }
 
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
-    matches!(
-        row.get("event_kind").and_then(Value::as_str),
-        Some(arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise)
-    ) && row.get("payload").is_some_and(|payload| {
-        payload.get("redacted").and_then(Value::as_bool) == Some(true)
-            || payload.get("state").and_then(Value::as_str) == Some("redacted")
-    })
+    row.get("event_kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| {
+            matches!(
+                kind,
+                arkret_wire::event_kind_str::MESSAGE_CREATE
+                    | arkret_wire::event_kind_str::MESSAGE_REVISE
+            )
+        })
+        && row.get("payload").is_some_and(|payload| {
+            payload.get("redacted").and_then(Value::as_bool) == Some(true)
+                || payload.get("state").and_then(Value::as_str) == Some("redacted")
+        })
 }
 
 #[cfg(test)]

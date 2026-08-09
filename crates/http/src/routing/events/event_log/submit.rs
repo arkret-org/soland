@@ -1113,7 +1113,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 || agent.state
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())
-                || accepted_provision.kind != arkret_wire::EventKind::AgentProvision
+                || accepted_provision.kind != arkret_wire::EventKind::AgentProvision.as_str()
                 || accepted_provision.canonical_digest != agent_provision_digest.as_str()
             {
                 return Err(SubmitOneError::new(

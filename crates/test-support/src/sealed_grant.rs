@@ -191,7 +191,10 @@ pub async fn seal_accepted_capability_grant(
         .expect("accepted capability grant producer Event");
     let event: arkret_wire::Event =
         serde_json::from_value(record.envelope).expect("accepted capability grant envelope");
-    assert_eq!(event.kind.as_str(), arkret_wire::EventKind::CapabilityGrant);
+    assert_eq!(
+        event.kind.as_str(),
+        arkret_wire::EventKind::CapabilityGrant.as_str()
+    );
     assert_eq!(event.realm_id, realm);
     assert_eq!(event.event_id, event_id);
 

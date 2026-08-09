@@ -188,7 +188,11 @@ pub fn terminal_realm_check(
     realm_in_terminal_state: bool,
     kind: &str,
 ) -> Option<(ErrorCode, &'static str)> {
-    if realm_in_terminal_state && !arkret_wire::events::kinds::is_audit_kind(kind) {
+    if realm_in_terminal_state
+        && !kind
+            .parse::<arkret_wire::EventKind>()
+            .is_ok_and(|kind| arkret_wire::events::kinds::is_audit_kind(&kind))
+    {
         return Some((
             ErrorCode::FailedPrecondition,
             "Realm has reached ak.realm.tombstone or ak.realm.destroy \
@@ -199,7 +203,8 @@ pub fn terminal_realm_check(
 }
 
 fn frozen_realm_write_exempt(kind: &str) -> bool {
-    arkret_wire::events::kinds::is_audit_kind(kind)
+    kind.parse::<arkret_wire::EventKind>()
+        .is_ok_and(|kind| arkret_wire::events::kinds::is_audit_kind(&kind))
         || matches!(
             kind,
             arkret_wire::event_kind_str::REALM_ARCHIVE

@@ -414,7 +414,7 @@ pub(crate) async fn active_series_pointer_is_current(
         return Ok(false);
     };
     if authorize.actor_id != controller_id
-        || authorize.kind != arkret_wire::EventKind::DeviceAuthorize
+        || authorize.kind != arkret_wire::EventKind::DeviceAuthorize.as_str()
     {
         return Ok(false);
     }
@@ -762,7 +762,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_delegation_scope",
         ));
     }
-    if kind == arkret_wire::EventKind::RealmCreate {
+    if kind == arkret_wire::EventKind::RealmCreate.as_str() {
         let object = envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))

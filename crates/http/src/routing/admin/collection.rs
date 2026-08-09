@@ -257,7 +257,7 @@ pub(super) async fn admin_create_realm(
             "discoverability must be public, invite_only, or private",
         ));
     }
-    let _ = (body, discoverability, session);
+    let _ = (discoverability, session);
     Err(AppError::unsupported_feature(
         "Realm creation requires a caller-signed canonical ak.realm.create Event",
     ))

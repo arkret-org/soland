@@ -106,13 +106,11 @@ pub(crate) fn validate_reaction_target_kind(
     ) {
         return Ok(());
     }
-    let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
-        operation
-            .payload
-            .get(*field)
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-    });
+    let target = operation
+        .payload
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
         // unsupported so the canonical reason still surfaces.
@@ -214,26 +212,6 @@ fn validate_typed_payload_shapes(
             validate_consent_revoke_payload(&wire_payload)
                 .map(|_| ())
                 .map_err(|_| "ak.consent.revoke payload violates its canonical typed shape")
-        }
-        // ak.audit.policy_access — when `access_kind=e2ee_late_recovery`
-        // the payload MUST carry `late_recovery_original_event_id`.
-        arkret_wire::EventKind::AuditPolicyAccess => {
-            if let Some(access_kind) = operation
-                .payload
-                .get("access_kind")
-                .and_then(|v| v.as_str())
-                && access_kind == "e2ee_late_recovery"
-                && operation
-                    .payload
-                    .get("late_recovery_original_event_id")
-                    .is_none()
-            {
-                return Err(
-                    "ak.audit.policy_access access_kind=e2ee_late_recovery requires \
-                     late_recovery_original_event_id (round-4 wire break)",
-                );
-            }
-            Ok(())
         }
         arkret_wire::EventKind::RealmMediaService => {
             if operation.payload.get("sfu_endpoint").is_some() {

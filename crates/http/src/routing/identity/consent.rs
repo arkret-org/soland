@@ -205,7 +205,7 @@ async fn grant_consent_cell(
         &session.actor,
         &holder,
         &submission.event,
-        arkret_wire::EventKind::ConsentGrant,
+        arkret_wire::EventKind::ConsentGrant.as_str(),
     )?;
     submit_caller_signed_consent_event(state, &session, submission).await?;
     // Admission projected the or_set add through
@@ -255,7 +255,7 @@ async fn revoke_consent_cell(
         &session.actor,
         &holder,
         &submission.event,
-        arkret_wire::EventKind::ConsentRevoke,
+        arkret_wire::EventKind::ConsentRevoke.as_str(),
     )?;
     // The dots being removed come from the Event the holder signed, never from a
     // server-side enumeration: an observe-remove OR-Set revoke is only correct

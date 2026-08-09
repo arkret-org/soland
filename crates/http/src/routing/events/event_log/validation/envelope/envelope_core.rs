@@ -343,23 +343,27 @@ async fn validate_event_envelope_with_ingress(
     // recover its stored Control Proposal Ack. Let an already accepted Event id
     // reach the submitter's canonical-byte duplicate check; only a different
     // create for the existing Realm is a `realm_already_exists` conflict here.
-    let historical_realm_create = if kind == arkret_wire::EventKind::RealmCreate && realm_exists {
-        state
-            .event_queries()
-            .canonical_event(&event_id)
-            .await
-            .map_err(|error| {
-                event_validation_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("canonical Event duplicate lookup failed: {error}"),
-                )
-            })?
-            .is_some()
-    } else {
-        false
-    };
-    if kind == arkret_wire::EventKind::RealmCreate && realm_exists && !historical_realm_create {
+    let historical_realm_create =
+        if kind == arkret_wire::EventKind::RealmCreate.as_str() && realm_exists {
+            state
+                .event_queries()
+                .canonical_event(&event_id)
+                .await
+                .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("canonical Event duplicate lookup failed: {error}"),
+                    )
+                })?
+                .is_some()
+        } else {
+            false
+        };
+    if kind == arkret_wire::EventKind::RealmCreate.as_str()
+        && realm_exists
+        && !historical_realm_create
+    {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -397,7 +401,7 @@ async fn validate_event_envelope_with_ingress(
             && realm_bootstrap_contexts
                 .iter()
                 .any(|context| context.realm_id == realm_id && context.actor_id == actor_id));
-    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize
+    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -411,7 +415,7 @@ async fn validate_event_envelope_with_ingress(
                             .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
                     })
         });
-    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor
+    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -445,7 +449,8 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
     require_object_field(object, "payload")?;
-    let is_self_principal_pcr_bootstrap_create = kind == arkret_wire::EventKind::RealmCreate
+    let is_self_principal_pcr_bootstrap_create = kind
+        == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
                 && context.realm_id == realm_id
@@ -523,7 +528,7 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
-    if kind == arkret_wire::EventKind::MemberIdentityUpdate {
+    if kind == arkret_wire::EventKind::MemberIdentityUpdate.as_str() {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }
@@ -531,7 +536,7 @@ async fn validate_event_envelope_with_ingress(
         validate_device_authorization_binding(state, object, &actor_id, realm_bootstrap_contexts)
             .await?;
     }
-    if kind == arkret_wire::EventKind::AccountStatus {
+    if kind == arkret_wire::EventKind::AccountStatus.as_str() {
         validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -630,7 +635,7 @@ async fn validate_event_envelope_with_ingress(
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
     let sidecar_bootstrap = internal_admission.is_some_and(|admission| {
-        kind == arkret_wire::EventKind::SidecarCreate
+        kind == arkret_wire::EventKind::SidecarCreate.as_str()
             && admission.is_sidecar_ensure(session, object)
     });
     let cba_context = if is_direct_conversation_founding {

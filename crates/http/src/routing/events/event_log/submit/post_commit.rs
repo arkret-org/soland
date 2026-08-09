@@ -536,7 +536,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
 }
 
 fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Option<&'a str> {
-    if kind != arkret_wire::EventKind::MemberState {
+    if kind != arkret_wire::EventKind::MemberState.as_str() {
         return None;
     }
     let payload = envelope.get("payload")?;

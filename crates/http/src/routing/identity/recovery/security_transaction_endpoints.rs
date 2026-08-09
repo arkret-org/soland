@@ -824,7 +824,9 @@ pub(crate) async fn backup_series_erase_command(
             .accepted_event(rotation.active_series_event_id.as_str())
             .await
             .map_err(recovery_service_error)?;
-        if active.is_none_or(|event| event.kind != arkret_wire::EventKind::KeyBackupActiveSeries) {
+        if active.is_none_or(|event| {
+            event.kind != arkret_wire::EventKind::KeyBackupActiveSeries.as_str()
+        }) {
             return Err(
                 AppError::conflict("replacement active-series Event is not accepted")
                     .with_wire_code("security_transaction_failed_precondition"),
@@ -1284,7 +1286,7 @@ async fn continue_issue_terminal_receipt(
         .accepted_event(authorize_event_id.as_str())
         .await
         .map_err(recovery_service_error)?
-        .filter(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize)
+        .filter(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str())
         .ok_or_else(|| {
             AppError::conflict("durable device authorization Event is unavailable")
                 .with_wire_code("security_transaction_failed_precondition")
@@ -1365,7 +1367,7 @@ async fn continue_issue_terminal_receipt(
                 .accepted_event(reanchor_event_id.as_str())
                 .await
                 .map_err(recovery_service_error)?
-                .filter(|event| event.kind == arkret_wire::EventKind::DeviceReanchor)
+                .filter(|event| event.kind == arkret_wire::EventKind::DeviceReanchor.as_str())
                 .ok_or_else(|| {
                     AppError::conflict("durable device re-anchor Event is unavailable")
                         .with_wire_code("security_transaction_failed_precondition")

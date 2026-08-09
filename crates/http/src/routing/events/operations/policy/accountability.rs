@@ -5,7 +5,7 @@ pub(super) fn validate_pin_scope_safety(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !kinds::canonical_kind_for_operation(operation)
-        .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(kind.as_str()))
+        .is_some_and(|kind| arkret_wire::events::kinds::is_pin_kind(&kind))
     {
         return Ok(());
     }

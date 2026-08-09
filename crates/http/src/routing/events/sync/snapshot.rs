@@ -1069,7 +1069,7 @@ async fn state_events_for_realm(
         .iter()
         .filter(|event| required_security_baseline_kind(&event.event_kind))
         .fold(
-            BTreeMap::<arkret_wire::EventKind, (i64, String)>::new(),
+            std::collections::HashMap::<arkret_wire::EventKind, (i64, String)>::new(),
             |mut newest, event| {
                 let position = projection_event_position(event);
                 let key = event.event_kind.clone();

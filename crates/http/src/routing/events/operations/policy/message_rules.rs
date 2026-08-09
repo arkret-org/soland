@@ -20,13 +20,11 @@ pub(super) fn validate_reaction_scope_policy(
     ) {
         return Ok(());
     }
-    let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
-        operation
-            .payload
-            .get(*field)
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-    });
+    let target = operation
+        .payload
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
     let Some(target) = target else {
         return Ok(());
     };
@@ -122,13 +120,11 @@ pub(super) fn operation_target_scope_circle_id(
             // membership just like authoring there. Unknown target (not yet
             // observed) → None: the reducer keeps the reaction pending and a
             // non-member cannot name a Circle message id it never received.
-            let target = REACTION_TARGET_FIELDS.iter().find_map(|field| {
-                operation
-                    .payload
-                    .get(*field)
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-            })?;
+            let target = operation
+                .payload
+                .get("target_ref")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())?;
             let (_, _, thread_id) = projection.message_origin(target)?;
             projection.strand_scope_circle_id(&thread_id)
         }

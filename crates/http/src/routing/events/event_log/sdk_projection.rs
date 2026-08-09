@@ -177,7 +177,7 @@ pub(in crate::routing) fn projection_operation_from_event(
         return None;
     };
     let event = event_for_canonical_digest(envelope).map_err(|error| {
-        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, %error, "projection: SDK Event decode failed");
+        tracing::debug!(kind = %parsed.kind, event_id = %parsed.event_id, ?error, "projection: SDK Event decode failed");
         error
     }).ok()?;
     Operation::from_accepted_event(

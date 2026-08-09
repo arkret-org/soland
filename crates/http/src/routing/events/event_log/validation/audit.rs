@@ -23,7 +23,7 @@ pub(crate) async fn append_encrypted_message_franking(
     append_audit_log(
         state,
         Some(&parsed.actor_id),
-        arkret_wire::EventKind::ModerationFrankingProof,
+        arkret_wire::EventKind::ModerationFrankingProof.as_str(),
         proof,
         "accepted",
     )
@@ -35,7 +35,7 @@ fn encrypted_message_franking_proof(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Value> {
-    if parsed.kind != arkret_wire::EventKind::MessageCreate {
+    if parsed.kind != arkret_wire::EventKind::MessageCreate.as_str() {
         return None;
     }
     let ciphertext_digest = encrypted_message_ciphertext_digest(envelope)?;
@@ -70,7 +70,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "kind": proof
             .get("kind")
             .and_then(Value::as_str)
-            .unwrap_or(arkret_wire::EventKind::ModerationFrankingProof),
+            .unwrap_or(arkret_wire::EventKind::ModerationFrankingProof.as_str()),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_id": proof.get("receiving_service_id").and_then(Value::as_str).unwrap_or_default(),

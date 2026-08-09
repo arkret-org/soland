@@ -237,7 +237,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceAuthorize
+                    && event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)
@@ -246,7 +246,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceRevoke
+                    && event.kind == arkret_wire::EventKind::DeviceRevoke.as_str()
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)

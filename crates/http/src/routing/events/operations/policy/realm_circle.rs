@@ -1,7 +1,8 @@
 use super::*;
 
 pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
-    arkret_wire::events::kinds::is_audit_kind(kind)
+    kind.parse::<arkret_wire::EventKind>()
+        .is_ok_and(|kind| arkret_wire::events::kinds::is_audit_kind(&kind))
         || matches!(
             kind,
             arkret_wire::event_kind_str::REALM_ARCHIVE
@@ -24,7 +25,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
         return Err("realm_terminal_state");
     }
     if projection.realm_is_frozen_at(realm_id, chrono::Utc::now())
-        && !realm_frozen_operation_exempt(&kind)
+        && !realm_frozen_operation_exempt(kind.as_str())
     {
         return Err(arkret_wire::ErrorCode::REALM_FROZEN);
     }
@@ -56,7 +57,7 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            action: arkret_wire::EventKind::MorphSchemaMigrate,
+            action: arkret_wire::EventKind::MorphSchemaMigrate.as_str(),
             resource: realm_id,
             realm_id,
             owner: owner.as_deref(),

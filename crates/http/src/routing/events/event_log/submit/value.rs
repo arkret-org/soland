@@ -82,7 +82,7 @@ pub(super) async fn derive_submit_cell_writes(
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
-    let projected = if parsed.kind == arkret_wire::EventKind::InviteCancel {
+    let projected = if parsed.kind == arkret_wire::EventKind::InviteCancel.as_str() {
         state
             .projections()
             .project_cell_writes_with_pre_state(&event, &frozen_pre_state)
@@ -122,7 +122,7 @@ async fn validate_active_series_authority_before_commit(
     parsed: &ValidatedEventEnvelope,
     operation: &Operation,
 ) -> Result<(), SubmitOneError> {
-    if parsed.kind != arkret_wire::EventKind::KeyBackupActiveSeries {
+    if parsed.kind != arkret_wire::EventKind::KeyBackupActiveSeries.as_str() {
         return Ok(());
     }
     let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
@@ -823,7 +823,7 @@ pub(super) async fn submit_event_value_with_context(
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
     // value at every admissible Event CBA.
-    let profile = if parsed.kind == arkret_wire::EventKind::RealmCreate {
+    let profile = if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str() {
         envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))
@@ -868,20 +868,21 @@ pub(super) async fn submit_event_value_with_context(
     });
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
-    let _account_data_submit_guard = if parsed.kind == arkret_wire::EventKind::AccountDataSet {
-        envelope
-            .get("payload")
-            .and_then(Value::as_object)
-            .and_then(|payload| {
-                Some((
-                    payload.get("owner")?.as_str()?,
-                    payload.get("key")?.as_str()?,
-                ))
-            })
-            .map(|(owner, key)| account_data_submit_lock(owner, key))
-    } else {
-        None
-    };
+    let _account_data_submit_guard =
+        if parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str() {
+            envelope
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| {
+                    Some((
+                        payload.get("owner")?.as_str()?,
+                        payload.get("key")?.as_str()?,
+                    ))
+                })
+                .map(|(owner, key)| account_data_submit_lock(owner, key))
+        } else {
+            None
+        };
     let _account_data_submit_guard = match _account_data_submit_guard {
         Some(lock) => Some(lock.lock_owned().await),
         None => None,
@@ -1020,7 +1021,7 @@ pub(super) async fn submit_event_value_with_context(
             super::identity_anchor::canonical_record(&parsed, envelope.clone(), received_at);
         return Err(quarantine_verified_event_collision(state, record).await);
     }
-    if parsed.kind == arkret_wire::EventKind::RealmCreate
+    if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         && service
             .realm_event_stats(parsed.realm_id.as_str())
             .await
@@ -1652,7 +1653,7 @@ pub(super) async fn submit_event_value_with_context(
     // MUST emit a `schema_migration_breaking` audit record carrying issuer,
     // from/to schema sets, compatibility class, the capability action used, and
     // the opt-in profile ref. (additive migrations need no audit-grade record.)
-    if parsed.kind == arkret_wire::EventKind::MorphSchemaMigrate {
+    if parsed.kind == arkret_wire::EventKind::MorphSchemaMigrate.as_str() {
         let migrate_payload = envelope.get("payload");
         let compatibility_class = migrate_payload
             .and_then(|payload| payload.get("compatibility_class"))
@@ -1998,7 +1999,9 @@ pub(super) async fn submit_event_value_with_context(
         deliveries: outbox,
     };
     if let Err(error) = state.events().commit_accepted_event(command).await {
-        if parsed.kind == arkret_wire::EventKind::RealmCreate && error.is_realm_already_exists() {
+        if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+            && error.is_realm_already_exists()
+        {
             return Err(realm_already_exists_error());
         }
         if error.is_conflict_kind() {
@@ -2242,7 +2245,7 @@ async fn preflight_moderation_dismiss(
             )
         })?;
     if report.as_ref().is_none_or(|report| {
-        report.kind != arkret_wire::EventKind::SelfModerationReport
+        report.kind != arkret_wire::EventKind::SelfModerationReport.as_str()
             || report.realm_id.as_deref() != Some(operation.realm_id.as_str())
     }) {
         return Err(SubmitOneError::new(

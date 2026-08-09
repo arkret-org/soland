@@ -296,7 +296,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
     })
 }
 
-pub(super) fn agent_participation_action(operation: &Operation) -> Option<&str> {
+pub(super) fn agent_participation_action(operation: &Operation) -> Option<arkret_wire::EventKind> {
     kinds::canonical_kind_for_operation(operation)
 }
 
@@ -330,7 +330,10 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     else {
         return Err("agent_act_on_behalf_authorization_ref_inactive");
     };
-    let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
+    let action_allowed = grant
+        .actions
+        .iter()
+        .any(|candidate| candidate == action.as_str());
     let resource_expr = {
         let projection = state.projections().snapshot();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
@@ -368,7 +371,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         agent_id,
         request_id,
         approval_nonce,
-        action,
+        action.as_str(),
         chrono::Utc::now(),
     )?;
     if !state.remember_agent_approval_nonce(
@@ -594,7 +597,10 @@ pub(super) fn validate_agent_context_authorization_ref(
     else {
         return Err("agent_context_authorization_ref_inactive");
     };
-    let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
+    let action_allowed = grant
+        .actions
+        .iter()
+        .any(|candidate| candidate == action.as_str());
     let resource_expr = {
         let projection = state.projections().snapshot();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))

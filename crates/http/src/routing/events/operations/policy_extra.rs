@@ -400,7 +400,7 @@ fn read_receipt_policy_parent_realm_id(
     if !policy
         .allowed_policies
         .iter()
-        .any(|policy| policy == EventKind::RealmReadReceiptPolicy)
+        .any(|policy| policy == EventKind::RealmReadReceiptPolicy.as_str())
     {
         return None;
     }
@@ -423,7 +423,7 @@ fn pending_read_receipt_policy_source_realm(
             soland_services::operation_semantics::inheritance_allowed_policies(&operation.payload);
         if !policies
             .iter()
-            .any(|policy| policy == EventKind::RealmReadReceiptPolicy)
+            .any(|policy| policy == EventKind::RealmReadReceiptPolicy.as_str())
         {
             return Some(None);
         }

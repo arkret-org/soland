@@ -545,7 +545,7 @@ fn install_execution_steps(
     if let Some(event) = record.registration_event.as_ref() {
         steps.push(install_execution_step(
             0,
-            arkret_wire::EventKind::AppletRegistration,
+            arkret_wire::EventKind::AppletRegistration.as_str(),
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!("registration Event serialization failed: {error}"))
@@ -558,7 +558,7 @@ fn install_execution_steps(
         let grant_id = arkret_identifiers::GrantId::from_event_id(&event.event_id);
         steps.push(install_execution_step(
             offset + 1,
-            arkret_wire::EventKind::CapabilityGrant,
+            arkret_wire::EventKind::CapabilityGrant.as_str(),
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!(

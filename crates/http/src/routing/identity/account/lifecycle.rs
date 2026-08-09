@@ -665,7 +665,7 @@ async fn enqueue_erasure_receipt_fanout<'a>(
                 .as_deref()
                 .is_some_and(|realm_id| affected.contains(realm_id))
         })
-        .filter(|event| event.kind == arkret_wire::EventKind::MemberState)
+        .filter(|event| event.kind == arkret_wire::EventKind::MemberState.as_str())
         .filter_map(|event| {
             event
                 .envelope

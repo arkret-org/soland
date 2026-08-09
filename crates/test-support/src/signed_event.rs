@@ -93,7 +93,7 @@ impl<'a> CallerSignedEvent<'a> {
     #[must_use]
     pub fn realm_genesis(actor_id: &'a str, device_id: &'a str, payload: Value) -> Self {
         let mut event = Self::new(
-            arkret_wire::EventKind::RealmCreate,
+            arkret_wire::EventKind::RealmCreate.as_str(),
             actor_id,
             device_id,
             "",

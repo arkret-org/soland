@@ -29,7 +29,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
     if crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await {
         return true;
     }
-    event_kind == Some(arkret_wire::EventKind::InviteAccept)
+    event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
         && state
             .projections()
             .invite_member_is_invited(binding_realm, actor)

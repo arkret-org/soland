@@ -92,7 +92,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
     // solve. Receivers derive it instead, which is also what makes `realm_id`
     // self-certifying against the genesis they were served.
     let is_realm_genesis = event_string_field(object, &["kind"])
-        .is_some_and(|kind| kind == arkret_wire::EventKind::RealmCreate);
+        .is_some_and(|kind| kind == arkret_wire::EventKind::RealmCreate.as_str());
 
     if is_realm_genesis {
         if object.contains_key("realm_id") {

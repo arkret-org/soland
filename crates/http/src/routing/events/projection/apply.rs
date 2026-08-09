@@ -656,7 +656,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
             .typed_payload::<arkret_wire::event_spec::ModerationAppealReview>()
             .map(|payload| record(payload, None, operation, new_state)),
         arkret_wire::EventKind::ModerationAppealDecision => operation
-            .typed_payload::<arkret_wire::event_spec::ModerationAppealDecide>()
+            .typed_payload::<arkret_wire::event_spec::ModerationAppealDecision>()
             .map(|payload| record(payload, None, operation, new_state)),
         arkret_wire::EventKind::ModerationAppealClose => operation
             .typed_payload::<arkret_wire::event_spec::ModerationAppealClose>()
@@ -1006,13 +1006,13 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
                 Value::String(generation_ref),
             );
         }
-        if let Some(binding_kind) = payload.get("authorization_binding_kind") {
+        if let Some(binding_kind) = operation.payload.get("authorization_binding_kind") {
             map.insert(
                 "authorization_binding_kind".to_owned(),
                 binding_kind.clone(),
             );
         }
-        if let Some(authorized_by) = payload.get("authorized_by") {
+        if let Some(authorized_by) = operation.payload.get("authorized_by") {
             map.insert("authorized_by".to_owned(), authorized_by.clone());
         }
     }
