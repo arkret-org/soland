@@ -11,12 +11,13 @@ use super::{
     EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
-    FederationOutboxTransition, IdempotencyRecord, IdempotencyStore, MlsKeyPackageClaim,
-    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
-    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
-    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
+    FederationOutboxTransition, IdempotencyRecord, IdempotencyStore, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
+    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
+    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
+    ProjectionEventStore,
 };
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {
@@ -644,6 +645,45 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
             .expect("read first-writer response"),
         Some(first),
         "the first response must win a duplicate-key race"
+    );
+}
+
+pub async fn assert_mimi_consent_correlation_store_contract(
+    store: &dyn MimiConsentCorrelationStore,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let consent_id = format!("ak:consent:{namespace}");
+    let first = MimiConsentCorrelationRecord {
+        consent_id: consent_id.clone(),
+        requester_id: format!("did:web:{namespace}-requester.example"),
+        target_kind: "did".to_owned(),
+        target_id: format!("did:web:{namespace}-target.example"),
+        purpose: "direct_message".to_owned(),
+        strand_id: None,
+        source_service_id: Some(format!("did:web:{namespace}-provider.example")),
+        created_at: now,
+        expires_at: Some(now + Duration::hours(1)),
+    };
+    store.put(&first).await.expect("record MIMI correlation");
+    assert_eq!(
+        store.get(&consent_id).await.expect("read MIMI correlation"),
+        Some(first.clone())
+    );
+
+    let mut competing = first.clone();
+    competing.target_id = format!("did:web:{namespace}-other-target.example");
+    store
+        .put(&competing)
+        .await
+        .expect("record competing MIMI correlation");
+    assert_eq!(
+        store
+            .get(&consent_id)
+            .await
+            .expect("read first-writer MIMI correlation"),
+        Some(first),
+        "the first private correlation must win a duplicate-id race"
     );
 }
 

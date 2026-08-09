@@ -355,6 +355,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    mimi_consent_correlations (consent_id) {
+        consent_id -> Text,
+        requester_id -> Text,
+        target_kind -> Text,
+        target_id -> Text,
+        purpose -> Text,
+        strand_id -> Nullable<Text>,
+        source_service_id -> Nullable<Text>,
+        created_at -> Timestamptz,
+        expires_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     contacts (id) {
         id -> Uuid,
         requester_id -> Text,
@@ -1458,6 +1472,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     canonical_events,
     canonical_realms,
     consent_cells,
+    mimi_consent_correlations,
     contacts,
     device_message_ack_tokens,
     device_message_idempotency,

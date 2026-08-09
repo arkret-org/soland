@@ -30,7 +30,8 @@ use arkret_models_collaboration::http_bodies::{
     MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
-    MimiDelivery, MimiDeliveryStatus, MimiGroupInfo, MimiIdentifierMatch,
+    MimiConsentPurpose, MimiConsentTargetKind, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
+    MimiIdentifierMatch,
 };
 use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
@@ -47,6 +48,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::http_signature;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::MimiConsentCorrelation;
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,

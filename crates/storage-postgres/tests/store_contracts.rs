@@ -3,7 +3,8 @@ use soland_storage::contract_tests::{
     assert_control_proposal_authority_ack_store_contract,
     assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
-    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
+    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
+    assert_organization_registration_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
@@ -11,8 +12,8 @@ use soland_storage::{
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgControlProposalAuthorityAckStore, PgEventCommitUnitOfWork,
-    PgEventStore, PgFederationOutboxStore, PgIdempotencyStore, PgMlsKeyPackageStore,
-    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgEventStore, PgFederationOutboxStore, PgIdempotencyStore, PgMimiConsentCorrelationStore,
+    PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -48,6 +49,17 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
     assert_idempotency_store_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_mimi_consent_correlation_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgMimiConsentCorrelationStore { pool };
+    let namespace = format!("postgres-mimi-consent-{}", uuid::Uuid::now_v7());
+    assert_mimi_consent_correlation_store_contract(&store, &namespace).await;
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ struct PersistenceAccountData(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceKeys(Arc<dyn PersistenceStore>);
 struct PersistenceOneTimeKeys(Arc<dyn PersistenceStore>);
 struct PersistenceConsentCells(Arc<dyn PersistenceStore>);
+struct PersistenceMimiConsentCorrelations(Arc<dyn PersistenceStore>);
 struct PersistenceContacts(Arc<dyn PersistenceStore>);
 struct PersistenceInviteReceivePolicies(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceDirectory(Arc<dyn PersistenceStore>);
@@ -372,6 +373,64 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
             .into_iter()
             .map(|(key, cell)| (application_consent_key(key), application_consent_cell(cell)))
             .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity::MimiConsentCorrelationPort for PersistenceMimiConsentCorrelations {
+    async fn save_correlation(
+        &self,
+        correlation: crate::identity::MimiConsentCorrelation,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .mimi_consent_correlations()
+            .put(&storage_mimi_consent_correlation(correlation))
+            .await?;
+        Ok(())
+    }
+
+    async fn correlation(
+        &self,
+        consent_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::MimiConsentCorrelation>> {
+        Ok(self
+            .0
+            .mimi_consent_correlations()
+            .get(consent_id)
+            .await?
+            .map(application_mimi_consent_correlation))
+    }
+}
+
+fn storage_mimi_consent_correlation(
+    correlation: crate::identity::MimiConsentCorrelation,
+) -> soland_storage::MimiConsentCorrelationRecord {
+    soland_storage::MimiConsentCorrelationRecord {
+        consent_id: correlation.consent_id,
+        requester_id: correlation.requester_id,
+        target_kind: correlation.target_kind,
+        target_id: correlation.target_id,
+        purpose: correlation.purpose,
+        strand_id: correlation.strand_id,
+        source_service_id: correlation.source_service_id,
+        created_at: correlation.created_at,
+        expires_at: correlation.expires_at,
+    }
+}
+
+fn application_mimi_consent_correlation(
+    correlation: soland_storage::MimiConsentCorrelationRecord,
+) -> crate::identity::MimiConsentCorrelation {
+    crate::identity::MimiConsentCorrelation {
+        consent_id: correlation.consent_id,
+        requester_id: correlation.requester_id,
+        target_kind: correlation.target_kind,
+        target_id: correlation.target_id,
+        purpose: correlation.purpose,
+        strand_id: correlation.strand_id,
+        source_service_id: correlation.source_service_id,
+        created_at: correlation.created_at,
+        expires_at: correlation.expires_at,
     }
 }
 
@@ -2036,7 +2095,10 @@ pub fn build_persistence_identity_services(
             Arc::new(PersistenceDeviceKeys(persistence.clone())),
             Arc::new(PersistenceOneTimeKeys(persistence.clone())),
         ),
-        consent: ConsentService::new(Arc::new(PersistenceConsentCells(persistence.clone()))),
+        consent: ConsentService::new(
+            Arc::new(PersistenceConsentCells(persistence.clone())),
+            Arc::new(PersistenceMimiConsentCorrelations(persistence.clone())),
+        ),
         contact: ContactService::new(
             Arc::new(PersistenceContacts(persistence.clone())),
             Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),

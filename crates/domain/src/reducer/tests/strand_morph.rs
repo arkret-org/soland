@@ -666,11 +666,9 @@ fn strand_tracks_update_touches_active_strand_only() {
             arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
             realm_id,
             serde_json::json!({
-                "strand_id": strand_id,
+                "target_ref": strand_id,
                 "patch": {
-                    "tracks": {
-                        "synthesis": {"profile": "synthesis"}
-                    }
+                    "tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}
                 },
                 "sender": "did:web:alice.example",
             }),
@@ -720,7 +718,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
         arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
         realm_id,
         serde_json::json!({
-            "strand_id": strand_id,
+            "target_ref": strand_id,
             // `strand-and-message.md` §4.6/§4.8 — closing the current primary
             // track MUST hand primary to another active track in the SAME
             // patch, so this disables `discussion` while promoting `synthesis`.
@@ -794,8 +792,8 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
         arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
         realm_id,
         serde_json::json!({
-            "strand_id": strand_id,
-            "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
+            "target_ref": strand_id,
+            "patch": {"tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}}
         }),
     );
     assert_eq!(
@@ -819,8 +817,8 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
         arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
-            "strand_id": "ak:strand:nope-not-here",
-            "patch": {"tracks": {"synthesis": {"profile": "synthesis"}}}
+            "target_ref": "ak:strand:nope-not-here",
+            "patch": {"tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}}
         }),
     );
     assert_eq!(state.check_strand_tracks_transition(&tracks_op), Ok(()));

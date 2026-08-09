@@ -1,6 +1,7 @@
 use super::{
     Arc, BTreeMap, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey, ContactRecord,
-    ContactStore, InviteReceivePolicyStore, Mutex, PersistenceResult, async_trait,
+    ContactStore, InviteReceivePolicyStore, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, Mutex, PersistenceResult, async_trait,
 };
 pub(crate) struct MemoryContactStore {
     data: Arc<Mutex<BTreeMap<ContactKey, ContactRecord>>>,
@@ -147,5 +148,35 @@ impl ConsentCellStore for MemoryConsentCellStore {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect())
+    }
+}
+
+pub(crate) struct MemoryMimiConsentCorrelationStore {
+    data: Arc<Mutex<BTreeMap<String, MimiConsentCorrelationRecord>>>,
+}
+
+impl MemoryMimiConsentCorrelationStore {
+    pub(crate) fn new() -> Self {
+        Self {
+            data: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl MimiConsentCorrelationStore for MemoryMimiConsentCorrelationStore {
+    async fn get(
+        &self,
+        consent_id: &str,
+    ) -> PersistenceResult<Option<MimiConsentCorrelationRecord>> {
+        Ok(self.data.lock().get(consent_id).cloned())
+    }
+
+    async fn put(&self, record: &MimiConsentCorrelationRecord) -> PersistenceResult<()> {
+        self.data
+            .lock()
+            .entry(record.consent_id.clone())
+            .or_insert_with(|| record.clone());
+        Ok(())
     }
 }

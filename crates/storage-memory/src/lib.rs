@@ -32,12 +32,12 @@ pub(crate) use soland_storage::{
     IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
     InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
     InviteLocatorStore, InviteReceivePolicyStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
-    MessageRecord, MessageStore, MlsCommitEpochAdvance, MlsCommitEpochRecord,
-    MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
-    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
-    MlsWelcomeStore, ModerationStore, MorphProjectionRecord, MorphProjectionStore,
-    MultisigPendingRecord, MultisigPendingStore, NotificationStore, OneTimeKeyStore,
-    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
+    MessageRecord, MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
+    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis,
+    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
+    OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
     OrganizationRegistrationStore, OrganizationStore, OutboundPushBridgeCacheRecord,
     PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
@@ -118,6 +118,7 @@ pub(crate) use audit::MemoryAuditStore;
 pub(crate) use blobs::MemoryBlobStore;
 pub(crate) use contacts::{
     MemoryConsentCellStore, MemoryContactStore, MemoryInviteReceivePolicyStore,
+    MemoryMimiConsentCorrelationStore,
 };
 pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use device_pairings::MemoryDevicePairingStore;
