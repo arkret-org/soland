@@ -14,6 +14,7 @@ mod queries;
 mod retention;
 mod seal;
 mod server_ops;
+mod service_routes;
 mod settings;
 
 use audit::append_audit_log;
@@ -200,6 +201,7 @@ pub fn admin_router() -> Router {
         .push(Router::with_path("devices").get(queries::admin_list_devices))
         .push(media::router())
         .push(moderation::router())
+        .push(service_routes::router())
         // Operator audit queries (`/_soland/admin/audit/events`,
         // `/_soland/admin/audit/erasure-receipts`) under the shared
         // `RequireAdmin` gate (SOL-NAME-02 — client ingest lives at

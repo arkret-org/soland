@@ -85,11 +85,50 @@ pub struct ServiceResolutionForkEvidence {
     pub quarantined_at: DateTime<Utc>,
 }
 
+/// Stable key for one locally persisted, independently verified service-route
+/// projection. It is deployment-local inventory data, not a protocol
+/// discovery or authorization statement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ServiceRouteStoredKey {
+    pub service_id: ServiceId,
+    pub service_kind: String,
+}
+
 /// Durable safety state for remote route material. Mirror artifacts and ACKs are
 /// exact bytes represented by their typed canonical values; the TTL cache is
 /// explicitly disposable and never supplies an authority decision.
 #[async_trait]
 pub trait ServiceRouteStore: Send + Sync {
+    /// Keyset-paginated inventory across durable floor, notice, quarantine,
+    /// and disposable-cache tables. Implementations must clamp `limit` to a
+    /// bounded value and return at most that many keys.
+    async fn list_stored_route_keys(
+        &self,
+        after: Option<&ServiceRouteStoredKey>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteStoredKey>>;
+
+    async fn notice_states(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteNoticeState>>;
+
+    async fn handover_mirror_entries(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>>;
+
+    async fn quarantine_evidence(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>>;
+
     async fn last_seen_floor(
         &self,
         service_id: &ServiceId,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arkret_identifiers::{Did, Hash};
+use arkret_identifiers::{CoreId, Did, FullId, Hash, project_full_id_to_core_id};
 use arkret_models_identity::{
     OrganizationControlProof, OrganizationControlProofKind, OrganizationRegistrationChallenge,
     OrganizationRegistrationEnsureRequestBody, OrganizationRegistrationOutcome,
@@ -54,26 +54,34 @@ impl OrganizationDidResolutionPort for StaticOrganizationResolver {
     }
 }
 
-fn organization_fixture() -> (Did, Did, PinnedDidDocumentState, Ed25519DetachedJwsSigner) {
-    let organization_id = Did::new("did:webvh:z6mkfixture:http-org.example".to_owned()).unwrap();
-    let admin_id = Did::new("did:web:alice.example".to_owned()).unwrap();
-    let verification_method = format!("{organization_id}#org-control-key-1");
+fn organization_fixture() -> (
+    CoreId,
+    FullId,
+    CoreId,
+    PinnedDidDocumentState,
+    Ed25519DetachedJwsSigner,
+) {
+    let full_id = FullId::new("did:webvh:z6mkfixture:http-org.example".to_owned()).unwrap();
+    let organization_id = project_full_id_to_core_id(&full_id).unwrap();
+    let admin_full_id = FullId::new("did:web:alice.example".to_owned()).unwrap();
+    let admin_id = project_full_id_to_core_id(&admin_full_id).unwrap();
+    let verification_method = format!("{full_id}#org-control-key-1");
     let signer = Ed25519DetachedJwsSigner::from_seed([51; 32], verification_method.clone());
     let public_key =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
     let document = serde_json::json!({
-        "id": organization_id,
+        "id": full_id,
         "verificationMethod": [{
             "id": verification_method,
             "type": "Multikey",
-            "controller": organization_id,
+            "controller": full_id,
             "publicKeyMultibase": public_key,
         }],
         "authentication": [verification_method],
         "assertionMethod": [verification_method],
     });
     let pinned = PinnedDidDocumentState {
-        did: organization_id.clone(),
+        did: full_id.clone(),
         version_id: "3-zHttpFixtureVersion".to_owned(),
         log_head_digest: Hash::new(format!("sha256:{}", "5".repeat(64))).unwrap(),
         document,
@@ -81,7 +89,7 @@ fn organization_fixture() -> (Did, Did, PinnedDidDocumentState, Ed25519DetachedJ
         current_version_id: "3-zHttpFixtureVersion".to_owned(),
         status: PinnedDidVersionStatus::Current,
     };
-    (organization_id, admin_id, pinned, signer)
+    (organization_id, full_id, admin_id, pinned, signer)
 }
 
 fn signed_control_proof(
@@ -105,6 +113,7 @@ fn signed_control_proof(
         "context": ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1,
         "challenge_id": challenge.challenge_id,
         "organization_id": challenge.organization_id,
+        "full_id": challenge.full_id,
         "local_admin_subject": challenge.local_admin_subject,
         "version_id": pinned.version_id,
         "log_head_digest": pinned.log_head_digest,
@@ -127,7 +136,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     config.admin_principal_dids = vec!["did:web:alice.example".to_owned()];
     let mut state = soland_test_support::app_state(config);
     let persistence = state.test_persistence();
-    let (organization_id, admin_id, pinned, control_signer) = organization_fixture();
+    let (organization_id, full_id, admin_id, pinned, control_signer) = organization_fixture();
     state.test_set_organization_registration_service(
         OrganizationRegistrationService::with_resolver(
             persistence,
@@ -192,6 +201,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
             .add_header("content-type", "application/json", true)
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
+                "full_id": full_id,
                 "local_admin_subject": admin_id,
                 "requested_scopes": ["organization_unregistered_scope"],
             })))
@@ -211,6 +221,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
             .add_header("content-type", "application/json", true)
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
+                "full_id": full_id,
                 "local_admin_subject": admin_id,
                 "requested_scopes": ["organization_profile_manage"],
             })))
@@ -221,6 +232,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
             .unwrap();
     let ensure = OrganizationRegistrationEnsureRequestBody {
         organization_id: organization_id.clone(),
+        full_id: full_id.clone(),
         challenge_id: challenge.challenge_id.clone(),
         version_id: pinned.version_id.clone(),
         log_head_digest: pinned.log_head_digest.clone(),
@@ -264,7 +276,8 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
             .add_header("content-type", "application/json", true)
             .body(canonical_body(&serde_json::json!({
                 "organization_id": organization_id,
-                "local_admin_subject": "did:web:alice.example",
+                "full_id": full_id,
+                "local_admin_subject": admin_id,
                 "requested_scopes": ["organization_profile_manage"],
             })))
             .send(&app)
@@ -279,6 +292,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
             .body(canonical_body(
                 &OrganizationRegistrationRefreshRequestBody {
                     organization_id: organization_id.clone(),
+                    full_id: full_id.clone(),
                     challenge_id: refresh_challenge.challenge_id.clone(),
                     version_id: pinned.version_id.clone(),
                     log_head_digest: pinned.log_head_digest.clone(),

@@ -966,6 +966,7 @@ async fn register_native_agent_membership_context(
             role: "owner".to_owned(),
             delivery_status: Some("unroutable".to_owned()),
             recipient_service_id: None,
+            recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
             invited_at: None,
@@ -1313,9 +1314,12 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000604",
         arkret_wire::EventKind::InviteCreate,
         json!({
-            "invitee": "did:web:charlie.example",
+            "invitee": "ak:did_core:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_id": "did:web:local.host",
+                "recipient_service_id": "ak:did_core:web:local.host",
+                "service_resolution": {
+                    "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
+                },
                 "recipient_service_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -3072,7 +3076,10 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 state: "join".to_owned(),
                 role: "member".to_owned(),
                 delivery_status: Some("routable".to_owned()),
-                recipient_service_id: Some("did:web:local.host".to_owned()),
+                recipient_service_id: Some("ak:did_core:web:local.host".to_owned()),
+                recipient_service_resolution: Some(json!({
+                    "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
+                })),
                 membership_event_ref: Some(
                     "ak:event:Aen872J0_GJsInIbyMOsXR2xbw27ZfJY2H6f96pYsgUC".to_owned(),
                 ),

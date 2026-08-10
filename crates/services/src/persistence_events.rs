@@ -132,6 +132,7 @@ fn persistence_event_commit_request(
                     tombstone_event_ref: commit.record.tombstone_event_ref,
                     message: commit.record.message,
                     peer_service_id: commit.record.peer_service_id,
+                    peer_service_resolution: commit.record.peer_service_resolution,
                     created_at: commit.record.created_at,
                     updated_at: commit.record.updated_at,
                 },

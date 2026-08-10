@@ -87,6 +87,7 @@ type DeviceMessageIntent = (String, bool, chrono::DateTime<Utc>);
 
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
+    inventory: Option<Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>>,
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeMap<String, DeviceMessageTransaction>>,
     message_intents: Mutex<BTreeMap<String, DeviceMessageIntent>>,
@@ -96,6 +97,15 @@ pub(crate) struct MemoryDeviceMessageStore {
 impl MemoryDeviceMessageStore {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn with_inventory(
+        inventory: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
+    ) -> Self {
+        Self {
+            inventory: Some(inventory),
+            ..Self::default()
+        }
     }
 }
 #[async_trait]
@@ -166,6 +176,18 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
                 Ok(DeviceMessageBatchCommitOutcome::RequestConflict)
             };
         }
+        let _inventory_guard = match (&batch.target_snapshot_guard, &self.inventory) {
+            (Some(expected), Some(inventory)) => {
+                let guard = inventory.lock();
+                if current_verified_device_snapshot(&guard, &expected.recipient) != expected.devices
+                {
+                    return Ok(DeviceMessageBatchCommitOutcome::SnapshotConflict);
+                }
+                Some(guard)
+            }
+            (Some(_), None) => return Ok(DeviceMessageBatchCommitOutcome::SnapshotConflict),
+            (None, _) => None,
+        };
         let mut batch_digests = BTreeMap::new();
         for item in &batch.items {
             if let Some(digest) =
@@ -374,6 +396,21 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
             .retain(|_, token| !(token.recipient == recipient && token.device_id == device_id));
         Ok(before - queue.len())
     }
+}
+
+fn current_verified_device_snapshot(
+    inventory: &BTreeMap<(String, String), DeviceInventoryRecord>,
+    recipient: &str,
+) -> Vec<(String, chrono::DateTime<Utc>)> {
+    inventory
+        .values()
+        .filter(|record| {
+            record.actor == recipient
+                && record.revoked_at.is_none()
+                && record.verification_state == "verified"
+        })
+        .map(|record| (record.device_id.clone(), record.updated_at))
+        .collect()
 }
 #[derive(Default)]
 pub(crate) struct MemoryDeviceKeyStore {

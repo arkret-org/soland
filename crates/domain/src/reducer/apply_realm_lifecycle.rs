@@ -707,6 +707,16 @@ impl ProjectionState {
             } else {
                 None
             };
+        let recipient_service_resolution =
+            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
+                payload
+                    .get("delivery_binding")
+                    .and_then(Value::as_object)
+                    .and_then(|binding| binding.get("service_resolution"))
+                    .cloned()
+            } else {
+                None
+            };
         let delivery_binding_frontier =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
                 payload
@@ -738,6 +748,7 @@ impl ProjectionState {
                 role,
                 delivery_status,
                 recipient_service_id,
+                recipient_service_resolution,
                 membership_event_ref: event_ref,
                 delivery_binding_frontier,
                 invited_at,
@@ -923,6 +934,7 @@ impl ProjectionState {
                     state: "leave".to_owned(),
                     delivery_status: None,
                     recipient_service_id: None,
+                    recipient_service_resolution: None,
                     delivery_binding_frontier: None,
                     membership_event_ref: membership_frontier.first().cloned(),
                     updated_at: now,

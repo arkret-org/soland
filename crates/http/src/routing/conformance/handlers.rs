@@ -453,8 +453,13 @@ pub async fn device_signing_key(
     super::ensure_enabled()?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    arkret_identifiers::Did::new(body.actor_id.clone())
-        .map_err(|_| AppError::invalid_param("actor_id must be a canonical DID"))?;
+    if arkret_wire::CoreId::new(body.actor_id.clone()).is_err()
+        && arkret_identifiers::Did::new(body.actor_id.clone()).is_err()
+    {
+        return Err(AppError::invalid_param(
+            "actor_id must be a canonical full_id or core_id",
+        ));
+    }
     arkret_identifiers::DeviceId::new(body.device_id.clone())
         .map_err(|_| AppError::invalid_param("device_id must be canonical"))?;
     arkret_canonical::decode_ed25519_multibase(&body.public_key_multibase)

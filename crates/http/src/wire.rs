@@ -708,11 +708,10 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "federation.delivery_binding_handover_emit",
-            "status": "emit_shape_only_unwired",
+            "status": "implemented",
             "spec": "B1.9 / federation.md service-binding handover",
-            "implemented": "the 409 emit shapes for `delivery_binding_stale` and `delivery_binding_handed_over` are defined as reference contracts",
-            "unsupported": "the protocol receive track does not yet detect a stale/handed-over delivery binding and therefore never emits these 409s; doing so requires the B1.7/B1.8 service-binding handover state machine (current recipient tracking + handover frontier) which is not implemented",
-            "reason": "delivery-binding handover detection needs binding-state tracking soland does not maintain"
+            "implemented": "the peer Event receive track compares the submitted delivery-binding frontier with the accepted member projection, applies handover grace, and emits typed delivery_binding_stale details only when a fresh verified new-service resolution carrier is available; otherwise it fails closed without redirecting",
+            "reason": "member projection, accepted frontier witness, and verified service-route cache jointly supply the handover proof"
         }),
         json!({
             "area": "audit.policy_receipt_emit",
@@ -1036,7 +1035,7 @@ pub fn describe(
             arkret_models_discovery::service_description::SupportedBinding::new(
                 arkret_wire::BindingKind::HttpJson,
             )
-                .with_base_url(public_base_url.trim_end_matches('/')),
+                .with_base_url(format!("{}/", public_base_url.trim_end_matches('/'))),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
@@ -1377,7 +1376,7 @@ mod tests {
         let value = serde_json::to_value(description).expect("description serializes");
         assert_eq!(
             value["supported_bindings"][0],
-            json!({"kind": "http_json", "base_url": "https://soland.example"})
+            json!({"kind": "http_json", "base_url": "https://soland.example/"})
         );
         assert!(value["supported_bindings"][0].get("base_path").is_none());
         // Spec media-and-blob.md §2.1 — the resumable upload binding is

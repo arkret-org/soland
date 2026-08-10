@@ -198,6 +198,7 @@ mod tests {
                 tombstone_event_ref: None,
                 message: None,
                 peer_service_id: None,
+                peer_service_resolution: None,
                 created_at: observed_at,
                 updated_at: observed_at,
             })

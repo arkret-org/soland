@@ -66,6 +66,13 @@ struct DeviceMessageIntentRow {
     #[diesel(sql_type = Bool)]
     delivered: bool,
 }
+#[derive(QueryableByName)]
+struct DeviceMessageSnapshotRow {
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<Utc>,
+}
 #[async_trait]
 impl DeviceMessageStore for PgDeviceMessageStore {
     async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
@@ -200,6 +207,31 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 } else {
                     Ok(DeviceMessageBatchCommitOutcome::RequestConflict)
                 };
+            }
+
+            if let Some(expected) = &batch.target_snapshot_guard {
+                // Device authorization mutations take ROW EXCLUSIVE on this
+                // table. SHARE holds them off until the request ledger and all
+                // queue rows commit, closing the read/enqueue revocation race.
+                sql_query("LOCK TABLE devices IN SHARE MODE")
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(PersistenceError::database)?;
+                let current = sql_query(
+                    "SELECT device_id, updated_at FROM devices \
+                     WHERE actor_id = $1 AND revoked_at IS NULL \
+                     AND verification_state = 'verified' ORDER BY device_id",
+                )
+                .bind::<Text, _>(&expected.recipient)
+                .load::<DeviceMessageSnapshotRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+                .into_iter()
+                .map(|row| (row.device_id, row.updated_at))
+                .collect::<Vec<_>>();
+                if current != expected.devices {
+                    return Ok(DeviceMessageBatchCommitOutcome::SnapshotConflict);
+                }
             }
 
             let mut batch_digests = BTreeMap::new();

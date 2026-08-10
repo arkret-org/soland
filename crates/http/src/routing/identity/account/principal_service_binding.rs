@@ -123,6 +123,43 @@ async fn compare_and_set_state(
     Ok(matches!(result, AccountDataCasOutcome::Applied(_)))
 }
 
+/// Development-only conformance seam for installing an already accepted
+/// principal-to-service projection. The caller supplies the complete typed
+/// binding and this function preserves the production account-data CAS path;
+/// no repair outcome or authorization decision is synthesized here.
+pub(crate) async fn install_conformance_current_binding(
+    state: &AppState,
+    binding: AcceptedAtServiceBinding,
+) -> Result<(), AppError> {
+    if !state.config().development_mode {
+        return Err(AppError::new(
+            ErrorCode::NotFound,
+            "conformance principal binding installation requires development mode",
+        ));
+    }
+    binding
+        .validate_shape()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    for _ in 0..MAX_CAS_ATTEMPTS {
+        let (previous, mut stored) = load_state(state, binding.principal_id.as_str()).await?;
+        stored.current_binding = Some(binding.clone());
+        if compare_and_set_state(
+            state,
+            binding.principal_id.as_str(),
+            previous.as_ref(),
+            &stored,
+            canonical_now()?,
+        )
+        .await?
+        {
+            return Ok(());
+        }
+    }
+    Err(AppError::conflict(
+        "principal service binding fixture changed concurrently",
+    ))
+}
+
 async fn binding_authority_evidence(
     state: &AppState,
     principal_id: &FullId,

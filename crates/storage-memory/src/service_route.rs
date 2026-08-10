@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_identity::{
     ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionRecord,
@@ -8,6 +8,7 @@ use arkret_wire::{Hash, RealmId, ServiceId};
 use soland_storage::{
     MonotonicRouteWrite, PersistenceError, PersistenceResult, ServiceResolutionForkEvidence,
     ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry, ServiceRouteStore,
+    ServiceRouteStoredKey,
 };
 
 use super::{Arc, Mutex, async_trait};
@@ -162,6 +163,114 @@ fn advance_mirror_sequence(
 
 #[async_trait]
 impl ServiceRouteStore for MemoryServiceRouteStore {
+    async fn list_stored_route_keys(
+        &self,
+        after: Option<&ServiceRouteStoredKey>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteStoredKey>> {
+        let state = self.state.lock();
+        let mut keys = BTreeSet::new();
+        keys.extend(state.floors.keys().cloned());
+        keys.extend(
+            state
+                .notices
+                .keys()
+                .map(|(service_id, service_kind, _)| (service_id.clone(), service_kind.clone())),
+        );
+        keys.extend(state.quarantine.values().map(|entry| {
+            (
+                entry.service_id.as_str().to_owned(),
+                entry.service_kind.clone(),
+            )
+        }));
+        keys.extend(state.cache.keys().cloned());
+        let after = after.map(|key| (key.service_id.as_str(), key.service_kind.as_str()));
+        keys.into_iter()
+            .filter(|(service_id, service_kind)| {
+                after.is_none_or(|after| (service_id.as_str(), service_kind.as_str()) > after)
+            })
+            .take(limit.clamp(1, 256))
+            .map(|(service_id, service_kind)| {
+                Ok(ServiceRouteStoredKey {
+                    service_id: ServiceId::new(service_id)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    service_kind,
+                })
+            })
+            .collect()
+    }
+
+    async fn notice_states(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteNoticeState>> {
+        let mut states = self
+            .state
+            .lock()
+            .notices
+            .values()
+            .filter(|state| &state.service_id == service_id && state.service_kind == service_kind)
+            .cloned()
+            .collect::<Vec<_>>();
+        states.sort_by(|left, right| {
+            right
+                .verified_at
+                .cmp(&left.verified_at)
+                .then_with(|| left.handover_id.cmp(&right.handover_id))
+        });
+        states.truncate(limit.clamp(1, 256));
+        Ok(states)
+    }
+
+    async fn handover_mirror_entries(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>> {
+        let mut entries = self
+            .state
+            .lock()
+            .mirrors_by_request
+            .values()
+            .filter(|entry| {
+                entry
+                    .request
+                    .service_route_handover_notice
+                    .as_ref()
+                    .is_some_and(|notice| {
+                        &notice.notice.service_id == service_id
+                            && notice.notice.service_kind == service_kind
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| right.accepted_at.cmp(&left.accepted_at));
+        entries.truncate(limit.clamp(1, 256));
+        Ok(entries)
+    }
+
+    async fn quarantine_evidence(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>> {
+        let mut entries = self
+            .state
+            .lock()
+            .quarantine
+            .values()
+            .filter(|entry| &entry.service_id == service_id && entry.service_kind == service_kind)
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| right.quarantined_at.cmp(&left.quarantined_at));
+        entries.truncate(limit.clamp(1, 256));
+        Ok(entries)
+    }
+
     async fn last_seen_floor(
         &self,
         service_id: &ServiceId,
@@ -644,5 +753,48 @@ mod tests {
             store.commit_mirror(artifact_conflict).await.unwrap(),
             ServiceResolutionMirrorCommit::ArtifactConflict { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn admin_reads_are_bounded_sorted_and_local_only() {
+        let store = MemoryServiceRouteStore::new();
+        let route = record();
+        let service_id = route.record.service_id.clone();
+        let service_kind = route.record.service_kind.clone();
+        let now = route.record.issued_at;
+        store
+            .advance_last_seen_floor(ServiceResolutionLastSeenFloor {
+                service_id: service_id.clone(),
+                service_kind: service_kind.clone(),
+                record_sequence: 0,
+                record_digest: hash('a'),
+                verified_at: now,
+            })
+            .await
+            .unwrap();
+        store
+            .quarantine_fork(ServiceResolutionForkEvidence {
+                service_id: service_id.clone(),
+                service_kind: service_kind.clone(),
+                artifact_family: "service_resolution_record".to_owned(),
+                artifact_key: "0".to_owned(),
+                accepted_digest: hash('a'),
+                conflicting_digest: hash('b'),
+                evidence: serde_json::json!({"source": "verified_test"}),
+                quarantined_at: now,
+            })
+            .await
+            .unwrap();
+
+        let keys = store.list_stored_route_keys(None, 1).await.unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].service_id, service_id);
+        assert_eq!(keys[0].service_kind, service_kind);
+        let quarantine = store
+            .quarantine_evidence(&service_id, &service_kind, 1)
+            .await
+            .unwrap();
+        assert_eq!(quarantine.len(), 1);
+        assert_eq!(quarantine[0].evidence["source"], "verified_test");
     }
 }

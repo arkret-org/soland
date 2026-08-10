@@ -7,6 +7,7 @@ pub mod did_resolver_chain;
 mod app_state;
 mod member_identity;
 mod notification;
+mod service_route_fetcher;
 
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_REALM_ID, build_realm_directory,
@@ -20,4 +21,5 @@ pub(crate) use member_identity::{
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
+pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

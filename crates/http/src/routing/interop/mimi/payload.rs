@@ -254,12 +254,13 @@ pub(super) fn mimi_provider_directory_value(
     };
     use arkret_wire::PayloadSigner as _;
 
-    let service_id = arkret_identifiers::Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| AppError::internal(format!("service notary key id invalid: {error}")),
-        )?;
+    // ProviderDirectory still carries the resolution-bearing DID shape. The
+    // service's stable core id is used in transport headers; obtain the full
+    // controller from the verified local resolution commitment instead of
+    // trying to reconstruct a DID from the core id.
+    let service_id = state.service_resolution_commitment().full_id.clone();
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#notary-key", service_id))
+        .map_err(|error| AppError::internal(format!("service notary key id invalid: {error}")))?;
     let placeholder = arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
         verification_method: verification_method.clone(),

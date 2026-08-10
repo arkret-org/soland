@@ -31,6 +31,7 @@ fn state_with_successor() -> ProjectionState {
             role: "member".to_owned(),
             delivery_status: Some("unroutable".to_owned()),
             recipient_service_id: None,
+            recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
             invited_at: None,

@@ -407,6 +407,12 @@ fn persistence_device_message_batch(
         request_key: batch.request_key,
         request_digest: batch.request_digest,
         idempotency_expires_at: batch.idempotency_expires_at,
+        target_snapshot_guard: batch.target_snapshot_guard.map(|guard| {
+            soland_storage::DeviceMessageTargetSnapshotGuard {
+                recipient: guard.recipient,
+                devices: guard.devices,
+            }
+        }),
         items: batch
             .items
             .into_iter()
@@ -456,6 +462,9 @@ fn application_device_message_commit_outcome(
         }
         soland_storage::DeviceMessageBatchCommitOutcome::MessageConflict { message_key } => {
             crate::delivery::DeviceMessageBatchCommitOutcome::MessageConflict { message_key }
+        }
+        soland_storage::DeviceMessageBatchCommitOutcome::SnapshotConflict => {
+            crate::delivery::DeviceMessageBatchCommitOutcome::SnapshotConflict
         }
     }
 }

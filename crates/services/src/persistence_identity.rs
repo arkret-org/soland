@@ -591,6 +591,7 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
         peer_service_id: record.peer_service_id,
+        peer_service_resolution: record.peer_service_resolution,
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
@@ -615,6 +616,7 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
         peer_service_id: record.peer_service_id,
+        peer_service_resolution: record.peer_service_resolution,
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
@@ -946,6 +948,17 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .0
             .agents()
             .confirm_provisioning_abandonment(command)
+            .await?)
+    }
+
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &crate::identity::EnqueueAgentRuntimeMessageCommand,
+    ) -> crate::ServiceResult<crate::identity::AgentRuntimeEnqueueResult> {
+        Ok(self
+            .0
+            .agents()
+            .enqueue_runtime_message_if_current(command)
             .await?)
     }
 }

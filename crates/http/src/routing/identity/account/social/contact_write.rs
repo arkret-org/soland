@@ -13,6 +13,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
+use arkret_models_identity::ServiceResolutionCarrier;
 use arkret_wire::{
     Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId, ProtocolSignature,
     ReservationHandle,
@@ -919,7 +920,8 @@ async fn commit(
         &body.signed_event,
         &outcome,
         contact_projection.as_ref().map(|commit| &commit.record),
-    )?;
+    )
+    .await?;
     let idempotency_created_at = now();
     let contact_idempotency = soland_services::events::IdempotentResponse {
         principal_id: session.actor.clone(),
@@ -985,7 +987,8 @@ async fn plan_contact_commit(
                 reservation.holder.subject_id(),
                 reservation.branch.peer().subject_id(),
                 introduction_evidence,
-            )?
+            )
+            .await?
             .map(|address| address.recipient_service_id.to_string());
             let existing = contacts
                 .contact_any(&holder, &peer)
@@ -1092,6 +1095,8 @@ async fn plan_contact_commit(
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     peer_service_id,
+                    peer_service_resolution: contact_service_resolution(state, &reservation.branch)
+                        .await?,
                     created_at,
                     updated_at: expected_updated_at
                         .map(|expected| contact_revision_after(expected, event.created_at))
@@ -1392,7 +1397,7 @@ async fn plan_contact_commit(
     Ok((outcome, projection))
 }
 
-fn prepare_contact_federation_delivery(
+async fn prepare_contact_federation_delivery(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
@@ -1408,7 +1413,7 @@ fn prepare_contact_federation_delivery(
         ContactReservationBranch::Request {
             introduction_evidence,
             ..
-        } => contact_request_delivery_address(state, holder, peer, introduction_evidence)?,
+        } => contact_request_delivery_address(state, holder, peer, introduction_evidence).await?,
         _ => {
             let Some(recipient_service_id) =
                 planned_record.and_then(|record| record.peer_service_id.as_deref())
@@ -1418,14 +1423,38 @@ fn prepare_contact_federation_delivery(
                 // Server from the peer subject DID.
                 return Ok(None);
             };
-            Some(PeerContactAddress {
-                subject_id: peer.clone(),
-                recipient_service_id: arkret_wire::ServiceId::new(recipient_service_id.to_owned())
-                    .map_err(|error| {
-                        AppError::internal(format!("Contact recipient service invalid: {error}"))
-                    })?,
-                recipient_service_kind: Some("principal_server".to_owned()),
-            })
+            let Some(carried_resolution) =
+                planned_record.and_then(|record| record.peer_service_resolution.as_ref())
+            else {
+                return Ok(None);
+            };
+            let Ok(recipient_service_id) =
+                arkret_wire::ServiceId::new(recipient_service_id.to_owned())
+            else {
+                return Ok(None);
+            };
+            let Ok(service_resolution) =
+                serde_json::from_value::<ServiceResolutionCarrier>(carried_resolution.clone())
+            else {
+                return Ok(None);
+            };
+            let subject_id = arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(peer).map_err(|error| {
+                    AppError::internal(format!("Contact recipient full_id cannot project: {error}"))
+                })?,
+            );
+            let address = PeerContactAddress::principal_server(
+                subject_id,
+                recipient_service_id,
+                service_resolution,
+            );
+            address.validate_shape().map_err(|error| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    format!("retained Contact delivery address is invalid: {error}"),
+                )
+            })?;
+            Some(address)
         }
     };
     let Some(contact_address) = address else {
@@ -1529,9 +1558,10 @@ fn prepare_contact_federation_delivery(
         recipient_service_id,
         &delivery,
     )
+    .await
 }
 
-fn contact_request_delivery_address(
+async fn contact_request_delivery_address(
     state: &AppState,
     holder: &Did,
     peer: &Did,
@@ -1588,38 +1618,7 @@ fn contact_request_delivery_address(
                 Some("principal_server".to_owned()),
             )
         }
-        ContactIntroductionEvidence::HandleClaim {
-            handle,
-            handle_claim,
-            ..
-        } => {
-            let Some(binding) = handle_claim.member_delivery_binding.as_ref() else {
-                return Ok(None);
-            };
-            if handle_claim.handle.as_ref() != Some(handle)
-                || handle_claim.subject.as_ref() != Some(peer)
-                || handle_claim
-                    .validate_remote_resolution(
-                        Some(state.service_id()),
-                        Some(&binding.recipient_service_id),
-                        now(),
-                    )
-                    .is_err()
-            {
-                return Ok(None);
-            }
-            (
-                arkret_wire::ServiceId::from(
-                    arkret_wire::project_full_id_to_core_id(&binding.recipient_service_id)
-                        .map_err(|error| {
-                            AppError::internal(format!(
-                                "handle delivery service full_id cannot be projected: {error}"
-                            ))
-                        })?,
-                ),
-                Some("principal_server".to_owned()),
-            )
-        }
+        ContactIntroductionEvidence::HandleClaim { .. } => return Ok(None),
         ContactIntroductionEvidence::SamePrincipalServer => (
             arkret_wire::ServiceId::new(state.service_id().clone()).map_err(|error| {
                 AppError::internal(format!("local Contact service core id invalid: {error}"))
@@ -1628,11 +1627,92 @@ fn contact_request_delivery_address(
         ),
         ContactIntroductionEvidence::ExplicitAddress => return Ok(None),
     };
-    Ok(Some(PeerContactAddress {
-        subject_id: peer.clone(),
+    let Some(service_resolution) = contact_introduction_service_resolution(state, evidence).await?
+    else {
+        return Ok(None);
+    };
+    let subject_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(peer).map_err(|error| {
+            AppError::internal(format!("Contact recipient full_id cannot project: {error}"))
+        })?,
+    );
+    let address = PeerContactAddress {
+        subject_id,
         recipient_service_id,
+        service_resolution,
+        route_assistance: match evidence {
+            ContactIntroductionEvidence::LocatorRef { principal_locator } => {
+                principal_locator.route_assistance.clone()
+            }
+            _ => None,
+        },
         recipient_service_kind,
-    }))
+    };
+    address.validate_shape().map_err(|error| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            format!("Contact delivery address is invalid: {error}"),
+        )
+    })?;
+    Ok(Some(address))
+}
+
+async fn contact_introduction_service_resolution(
+    state: &AppState,
+    introduction_evidence: &ContactIntroductionEvidence,
+) -> Result<Option<ServiceResolutionCarrier>, AppError> {
+    let carrier = match introduction_evidence {
+        ContactIntroductionEvidence::LocatorRef { principal_locator } => {
+            Some(principal_locator.service_resolution.clone())
+        }
+        ContactIntroductionEvidence::SharedRealm {
+            realm_id,
+            target_member_ref,
+            ..
+        } => state
+            .projections()
+            .snapshot()
+            .members_of_realm(realm_id.as_str())
+            .into_iter()
+            .find(|member| {
+                member.state == "join"
+                    && member.delivery_status.as_deref() == Some("routable")
+                    && member.membership_event_ref.as_deref() == Some(target_member_ref.as_str())
+            })
+            .and_then(|member| member.recipient_service_resolution.clone())
+            .and_then(|value| serde_json::from_value(value).ok()),
+        ContactIntroductionEvidence::SamePrincipalServer => state
+            .current_signed_service_resolution()
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("current service resolution unavailable: {error}"))
+            })?
+            .map(|inline| ServiceResolutionCarrier::Inline { inline }),
+        ContactIntroductionEvidence::HandleClaim { .. }
+        | ContactIntroductionEvidence::ExplicitAddress => None,
+    };
+    Ok(carrier)
+}
+
+async fn contact_service_resolution(
+    state: &AppState,
+    branch: &ContactReservationBranch,
+) -> Result<Option<Value>, AppError> {
+    let ContactReservationBranch::Request {
+        introduction_evidence,
+        ..
+    } = branch
+    else {
+        return Ok(None);
+    };
+    contact_introduction_service_resolution(state, introduction_evidence)
+        .await?
+        .map(|carrier| {
+            serde_json::to_value(carrier).map_err(|error| {
+                AppError::internal(format!("Contact service resolution encode failed: {error}"))
+            })
+        })
+        .transpose()
 }
 
 async fn contact_record_for_lineage(

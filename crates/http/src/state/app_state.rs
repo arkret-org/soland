@@ -53,9 +53,9 @@ use soland_services::runtime_guards::{
 use soland_services::service_route::ServiceRouteResolver;
 use soland_services::sync::SyncService;
 
-use super::did_resolver_chain;
 use super::member_identity::MemberIdentityRegistry;
 use super::notification::{EventBroadcast, EventNotification, Mutex};
+use super::{VerifiedBindingRouteFetcher, did_resolver_chain};
 use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::verified_profiles::VerifiedProfileDescriptor;
@@ -900,6 +900,14 @@ impl AppState {
             upstream_available: true,
             ..Default::default()
         });
+        let service_route_resolver = Arc::new(ServiceRouteResolver::new(
+            Arc::new(persistence.clone()),
+            Arc::new(VerifiedBindingRouteFetcher::new(
+                projections.clone(),
+                dids.clone(),
+                config.development_mode,
+            )),
+        ));
 
         Self {
             config,
@@ -931,7 +939,7 @@ impl AppState {
             recovery_sessions,
             security_transactions,
             dids,
-            service_route_resolver: Arc::new(Mutex::new(None)),
+            service_route_resolver: Arc::new(Mutex::new(Some(service_route_resolver))),
             did_bindings,
             organization_registrations,
             federation,

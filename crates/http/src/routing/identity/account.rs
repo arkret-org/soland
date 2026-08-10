@@ -31,6 +31,11 @@ use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationFoundingInput, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
+use arkret_models_collaboration::direct_conversation_repair::{
+    DirectConversationRepairAuthorization, DirectConversationRepairDispatchRequest,
+    DirectConversationRepairEnqueueOutcome,
+};
+use arkret_models_collaboration::events_payloads::MemberRepairRequester;
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
@@ -197,6 +202,7 @@ pub(crate) use social::{
 };
 mod lifecycle;
 mod principal_service_binding;
+pub(in crate::routing) mod repair;
 
 pub(crate) async fn current_principal_service_binding(
     state: &AppState,
@@ -206,6 +212,13 @@ pub(crate) async fn current_principal_service_binding(
     AppError,
 > {
     principal_service_binding::current_binding(state, principal_id).await
+}
+
+pub(crate) async fn install_conformance_principal_service_binding(
+    state: &AppState,
+    binding: arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
+) -> Result<(), AppError> {
+    principal_service_binding::install_conformance_current_binding(state, binding).await
 }
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
@@ -278,6 +291,7 @@ fn contact_routes() -> Router {
 fn direct_conversation_routes() -> Router {
     Router::with_path("direct-conversations")
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
+        .push(Router::with_path("repair-dispatch").post(direct_conversation_repair_dispatch))
 }
 
 #[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
@@ -1755,6 +1769,273 @@ async fn direct_conversation_resolve(
             retry_after_ms: None,
         }),
     }
+}
+
+/// Validate and durably freeze one repair request, relay its exact bytes to
+/// the peer Principal Server, and return only its durable enqueue outcome.
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.direct_conversation.command.repair_dispatch",
+    tags("identity")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.direct_conversation.command.repair_dispatch")
+)]
+async fn direct_conversation_repair_dispatch(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<DirectConversationRepairDispatchRequest>,
+) -> JsonResult<DirectConversationRepairEnqueueOutcome> {
+    repair::dispatch(aa, depot, req, body).await
+}
+
+fn session_actor_core_id(actor: &str) -> Result<CoreId, AppError> {
+    if let Ok(core_id) = CoreId::new(actor.to_owned()) {
+        return Ok(core_id);
+    }
+    let full_id = FullId::new(actor.to_owned()).map_err(|error| {
+        AppError::invalid_param(format!("session principal is invalid: {error}"))
+    })?;
+    arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
+        AppError::invalid_param(format!("session principal cannot be projected: {error}"))
+    })
+}
+
+async fn validate_direct_conversation_repair_state(
+    state: &AppState,
+    request: &DirectConversationRepairDispatchRequest,
+) -> Result<(), AppError> {
+    let content = &request.content;
+    let requester = content.requester_principal_id.as_str();
+    let binding = state
+        .contacts()
+        .settled_direct_binding_for_realm(content.realm_id.as_str())
+        .filter(|binding| direct_binding_matches_projection(state, binding))
+        .ok_or_else(|| {
+            direct_repair_precondition("accepted Direct Conversation binding is unavailable")
+        })?;
+    if binding.participants_unordered.len() != 2
+        || !binding
+            .participants_unordered
+            .iter()
+            .any(|value| value == requester)
+    {
+        return Err(direct_repair_precondition(
+            "repair requester is not a participant of the immutable pair",
+        ));
+    }
+    let peer = binding
+        .participants_unordered
+        .iter()
+        .find(|value| value.as_str() != requester)
+        .ok_or_else(|| direct_repair_precondition("repair pair has no distinct peer"))?;
+    for (directional_requester, directional_target) in
+        [(requester, peer.as_str()), (peer.as_str(), requester)]
+    {
+        let contact = state
+            .contacts()
+            .contact_any(directional_requester, directional_target)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .filter(|contact| {
+                contact.status == "accepted"
+                    && contact_has_scope_for_both(contact, "direct_message")
+                    && accepted_contact_has_fact_refs(contact)
+            });
+        if contact.is_none() {
+            return Err(direct_repair_precondition(
+                "both current directional Contact authorities are required",
+            ));
+        }
+    }
+    let pair_key = direct_pair_key(state, requester, peer)?;
+    let (_, current_digest) = direct_active_generation_cell(state, &pair_key, &binding)
+        .await?
+        .ok_or_else(|| direct_repair_precondition("active MLS generation is unavailable"))?;
+    if current_digest != content.observed_active_generation_value_digest {
+        return Err(direct_repair_precondition(
+            "observed active MLS generation digest is stale",
+        ));
+    }
+
+    let accepted = state
+        .event_queries()
+        .accepted_event(content.rejoin_event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("repair rejoin lookup failed: {error}")))?
+        .ok_or_else(|| direct_repair_precondition("repair rejoin Event is not accepted"))?;
+    let event: arkret_wire::Event = serde_json::from_value(accepted.envelope).map_err(|error| {
+        AppError::internal(format!("accepted repair rejoin Event is invalid: {error}"))
+    })?;
+    let self_rejoin = event.event_id == content.rejoin_event_id
+        && event.kind == arkret_wire::EventKind::MemberState
+        && event.realm_id == content.realm_id
+        && event.actor_id.as_str() == requester
+        && event.authorization_ref.as_ref().map(|value| value.as_str())
+            == Some("ak.authority.direct_conversation_repair.v1")
+        && event.payload.get("actor_id").and_then(Value::as_str) == Some(requester)
+        && event.payload.get("membership").and_then(Value::as_str) == Some("join");
+    if !self_rejoin {
+        return Err(direct_repair_precondition(
+            "rejoin_event_id is not the requester's accepted repair self-rejoin",
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_direct_conversation_repair_signature(
+    state: &AppState,
+    request: &DirectConversationRepairDispatchRequest,
+) -> Result<(), AppError> {
+    let signing_input = request
+        .signing_input()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    match (&request.requester_authorization, &request.content.requester) {
+        (
+            DirectConversationRepairAuthorization::Device {
+                requester_device_id,
+                verification_method,
+                device_authorize_event_id,
+                signature,
+                ..
+            },
+            MemberRepairRequester::Device { .. },
+        ) => {
+            let facet = crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
+                state,
+                request.content.requester_principal_id.as_str(),
+                requester_device_id.as_str(),
+            )
+            .await
+            .map_err(|error| AppError::internal(format!("repair device directory lookup failed: {error}")))?;
+            if !matches!(facet.status, arkret_models_crypto::DeviceStatus::Active)
+                || facet.device_authorize_event_id.as_ref() != Some(device_authorize_event_id)
+            {
+                return Err(direct_repair_precondition(
+                    "repair requester device authorization is not current",
+                ));
+            }
+            let key_did = facet.signing_key_did.ok_or_else(|| {
+                direct_repair_precondition("repair requester device key is unavailable")
+            })?;
+            if !verification_method_controls_core_or_key(
+                verification_method.as_str(),
+                &request.content.requester_principal_id,
+                &key_did,
+            ) {
+                return Err(direct_repair_precondition(
+                    "repair device verification method does not match the requester",
+                ));
+            }
+            let key =
+                crate::routing::identity::device_signing::decode_ed25519_key(&key_did, "multibase")
+                    .map_err(|_| {
+                        direct_repair_precondition("repair requester device key is invalid")
+                    })?;
+            if !crate::routing::identity::device_signing::ed25519_verify(
+                &key,
+                &signing_input,
+                signature.jws.as_str(),
+            ) {
+                return Err(direct_repair_precondition(
+                    "repair requester signature is invalid",
+                ));
+            }
+        }
+        (
+            DirectConversationRepairAuthorization::NativeAgent {
+                requester_agent_id,
+                verification_method,
+                agent_key_authorize_event_id,
+                signature,
+                ..
+            },
+            MemberRepairRequester::NativeAgent { .. },
+        ) => {
+            let record = state
+                .agent_pairings()
+                .agent(requester_agent_id.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("repair Agent lookup failed: {error}"))
+                })?
+                .filter(|record| record.state == AgentLifecycleState::Active)
+                .ok_or_else(|| direct_repair_precondition("repair Agent is not active"))?;
+            let active = record
+                .runtime_bindings()
+                .map_err(|error| {
+                    AppError::internal(format!("repair Agent binding is invalid: {error}"))
+                })?
+                .active_binding
+                .ok_or_else(|| direct_repair_precondition("repair Agent signer is unavailable"))?;
+            if &active.verification_method != verification_method
+                || &active.authorized_event_ref != agent_key_authorize_event_id
+                || active.signing_key_binding.core.agent_id.as_str() != requester_agent_id.as_str()
+            {
+                return Err(direct_repair_precondition(
+                    "repair Agent authorization is not current",
+                ));
+            }
+            let raw = URL_SAFE_NO_PAD
+                .decode(
+                    active
+                        .signing_key_binding
+                        .core
+                        .public_key
+                        .key
+                        .as_str()
+                        .as_bytes(),
+                )
+                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
+            let bytes: [u8; 32] = raw
+                .as_slice()
+                .try_into()
+                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
+            let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+                .map_err(|_| direct_repair_precondition("repair Agent signing key is invalid"))?;
+            if !crate::routing::identity::device_signing::ed25519_verify(
+                &key,
+                &signing_input,
+                signature.jws.as_str(),
+            ) {
+                return Err(direct_repair_precondition(
+                    "repair requester signature is invalid",
+                ));
+            }
+        }
+        _ => {
+            return Err(AppError::invalid_param(
+                "repair requester branch is inconsistent",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verification_method_controls_core_or_key(
+    verification_method: &str,
+    requester: &CoreId,
+    key_did: &str,
+) -> bool {
+    let controller = verification_method
+        .split_once('?')
+        .map_or(verification_method, |(head, _)| head)
+        .split_once('#')
+        .map_or(verification_method, |(head, _)| head);
+    if controller == key_did {
+        return true;
+    }
+    FullId::new(controller.to_owned())
+        .ok()
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
+        .as_ref()
+        == Some(requester)
+}
+
+fn direct_repair_precondition(message: &'static str) -> AppError {
+    AppError::new(soland_http::error::ErrorCode::FailedPrecondition, message)
+        .with_status(StatusCode::PRECONDITION_FAILED)
 }
 
 async fn direct_contact_for_pair(

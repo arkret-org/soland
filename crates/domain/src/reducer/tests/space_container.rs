@@ -30,6 +30,7 @@ fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) 
             role: "member".to_owned(),
             delivery_status: None,
             recipient_service_id: None,
+            recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
             invited_at: None,

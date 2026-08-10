@@ -1164,6 +1164,10 @@ pub struct SolandMembershipState {
     /// `delivery_binding`. This is the single routing source for federated
     /// Realm event delivery; senders must not re-resolve DID Documents.
     pub recipient_service_id: Option<String>,
+    /// Exact first-hop carrier accepted with the current delivery binding.
+    /// This remains business-binding evidence, not a URL authority: outbound
+    /// routing must materialize and independently verify it before use.
+    pub recipient_service_resolution: Option<serde_json::Value>,
     /// Event frontier that established the current member state.
     pub membership_event_ref: Option<String>,
     /// Event frontier used for the current delivery binding. Falls back to

@@ -10,19 +10,145 @@ use chrono::{Duration, Utc};
 
 use super::{
     CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
-    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
-    DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore, EventCommitRequest,
-    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
-    FederationOutboxTransition, IdempotencyRecord, IdempotencyStore, MimiConsentCorrelationRecord,
-    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
-    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
-    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
-    ProjectionEventStore,
+    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord,
+    DeviceMessageBatchRecord, DeviceMessageRecord, DeviceMessageStore,
+    DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit, DevicePairingRecord,
+    DevicePairingStore, EventCommitRequest, EventCommitUnitOfWork, EventStore,
+    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
+    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
+    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition, IdempotencyRecord,
+    IdempotencyStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
+    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
+    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
+    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
+    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
 };
+
+pub async fn assert_device_message_snapshot_guard_contract(
+    inventory: &dyn DeviceInventoryStore,
+    messages: &dyn DeviceMessageStore,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let actor = format!("ak:did_core:webvh:z{namespace}");
+    let device_a = format!("ak:device:{}", uuid::Uuid::now_v7());
+    let device_b = format!("ak:device:{}", uuid::Uuid::now_v7());
+    for device_id in [&device_a, &device_b] {
+        inventory
+            .put(&DeviceInventoryRecord {
+                actor: actor.clone(),
+                device_id: device_id.clone(),
+                display_name: None,
+                verification_state: "verified".to_owned(),
+                payload: serde_json::json!({"device_id": device_id}),
+                created_at: now,
+                updated_at: now,
+                revoked_at: None,
+            })
+            .await
+            .expect("seed verified target device");
+    }
+    let request_key = format!("repair:{namespace}");
+    let request_digest = format!("sha256:{namespace}");
+    let expires_at = now + Duration::days(1);
+    let batch = DeviceMessageBatchRecord {
+        request_key: request_key.clone(),
+        request_digest: request_digest.clone(),
+        idempotency_expires_at: expires_at,
+        target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
+            recipient: actor.clone(),
+            devices: vec![(device_a.clone(), now), (device_b.clone(), now)],
+        }),
+        items: [&device_a, &device_b]
+            .into_iter()
+            .enumerate()
+            .map(|(index, device_id)| DeviceMessageBatchItemRecord {
+                message_key: format!("{namespace}:message:{index}"),
+                intent_digest: format!("{namespace}:intent:{index}"),
+                idempotency_expires_at: expires_at,
+                message: Some(DeviceMessageRecord {
+                    idempotency_key: request_key.clone(),
+                    sender: format!("{actor}:sender"),
+                    recipient: actor.clone(),
+                    device_id: device_id.clone(),
+                    position: index as i64 + 1,
+                    content: serde_json::json!({"kind":"ak.member.repair.request","content":{}}),
+                    created_at: now,
+                }),
+            })
+            .collect(),
+    };
+
+    let mut revoked = inventory
+        .get(&actor, &device_b)
+        .await
+        .expect("read target device")
+        .expect("target exists");
+    revoked.revoked_at = Some(now + Duration::seconds(1));
+    revoked.updated_at = now + Duration::seconds(1);
+    inventory.put(&revoked).await.expect("revoke target device");
+    assert_eq!(
+        messages
+            .commit_batch(batch.clone())
+            .await
+            .expect("snapshot conflict outcome"),
+        DeviceMessageBatchCommitOutcome::SnapshotConflict
+    );
+    assert!(
+        messages
+            .list_after(&actor, &device_a, 0)
+            .await
+            .expect("device A queue")
+            .is_empty(),
+        "snapshot conflict must enqueue zero targets"
+    );
+
+    revoked.revoked_at = None;
+    revoked.updated_at = now;
+    inventory
+        .put(&revoked)
+        .await
+        .expect("restore original snapshot");
+    let stored = messages
+        .commit_batch(batch.clone())
+        .await
+        .expect("commit guarded batch");
+    assert!(matches!(stored, DeviceMessageBatchCommitOutcome::Stored(_)));
+
+    revoked.revoked_at = Some(now + Duration::seconds(2));
+    revoked.updated_at = now + Duration::seconds(2);
+    inventory
+        .put(&revoked)
+        .await
+        .expect("revoke after durable commit");
+    let replay = messages
+        .commit_batch(batch.clone())
+        .await
+        .expect("exact replay");
+    assert!(matches!(
+        replay,
+        DeviceMessageBatchCommitOutcome::Duplicate(_)
+    ));
+    let mut conflict = batch;
+    conflict.request_digest.push_str("-different");
+    assert_eq!(
+        messages
+            .commit_batch(conflict)
+            .await
+            .expect("digest conflict"),
+        DeviceMessageBatchCommitOutcome::RequestConflict
+    );
+    assert_eq!(
+        messages
+            .list_after(&actor, &device_a, 0)
+            .await
+            .expect("device A queue")
+            .len(),
+        1
+    );
+}
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {
     chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
@@ -1083,6 +1209,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         tombstone_event_ref: None,
         message: None,
         peer_service_id: Some(format!("did:web:contact-service-{namespace}.example")),
+        peer_service_resolution: None,
         created_at: now,
         updated_at: now,
     };

@@ -3,8 +3,16 @@ use super::*;
 #[test]
 fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     let response = delivery_binding_stale_response(
-        &Did::new("did:web:bob.example").unwrap(),
-        &Did::new("did:web:alice.example").unwrap(),
+        &arkret_wire::ServiceId::new("ak:did_core:web:bob.example").unwrap(),
+        &arkret_wire::ActorId::new("ak:did_core:web:alice.example").unwrap(),
+        &arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
+            current_record_url:
+                "https://bob.example/_arkret/open/services/ak:did_core:web:bob.example/resolution"
+                    .to_owned(),
+            pinned_record_digest: Some(
+                arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            ),
+        },
         &[arkret_identifiers::EventId::new(
             "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
         )
@@ -22,7 +30,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         response
             .pointer("/error/details/new_recipient_service_id")
             .and_then(Value::as_str),
-        Some("did:web:bob.example")
+        Some("ak:did_core:web:bob.example")
     );
     assert_eq!(
         response
@@ -40,13 +48,13 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         response
             .pointer("/error/details/handover_proof/recipient_service_id")
             .and_then(Value::as_str),
-        Some("did:web:bob.example")
+        Some("ak:did_core:web:bob.example")
     );
     assert_eq!(
         response
             .pointer("/error/details/handover_proof/actor_id")
             .and_then(Value::as_str),
-        Some("did:web:alice.example")
+        Some("ak:did_core:web:alice.example")
     );
     let details = response
         .pointer("/error/details")
@@ -58,7 +66,9 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
 
 #[test]
 fn delivery_binding_handed_over_response_carries_new_service() {
-    let response = delivery_binding_handed_over_response(&Did::new("did:web:bob.example").unwrap());
+    let response = delivery_binding_handed_over_response(
+        &arkret_wire::ServiceId::new("ak:did_core:web:bob.example").unwrap(),
+    );
     assert_eq!(
         response.pointer("/error/code").and_then(Value::as_str),
         Some(arkret_wire::ErrorCode::DELIVERY_BINDING_HANDED_OVER)
@@ -67,6 +77,6 @@ fn delivery_binding_handed_over_response_carries_new_service() {
         response
             .pointer("/error/details/new_recipient_service_id")
             .and_then(Value::as_str),
-        Some("did:web:bob.example")
+        Some("ak:did_core:web:bob.example")
     );
 }

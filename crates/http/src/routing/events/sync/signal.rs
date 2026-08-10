@@ -139,17 +139,6 @@ pub(super) async fn submit_signal(
 /// opaque accepted outcome.
 fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) {
     for destination_service_id in remote_recipient_services(state, envelope) {
-        let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_id(
-            state,
-            &destination_service_id,
-        ) else {
-            tracing::debug!(
-                %destination_service_id,
-                realm = %envelope.realm_id,
-                "Signal recipient service has no configured peer target"
-            );
-            continue;
-        };
         let state = state.clone();
         let request = SignalRelayRequest {
             realm_id: envelope.realm_id.clone(),
@@ -158,7 +147,6 @@ fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) 
         tokio::spawn(async move {
             if let Err(error) = crate::routing::federation::outbox::relay_signal_once(
                 &state,
-                &peer_url,
                 &destination_service_id,
                 &request,
             )

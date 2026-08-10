@@ -84,6 +84,48 @@ pub struct AgentRuntimeApprovalWrite {
     pub runtime_key_request:
         arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
 }
+
+/// Exact active-runtime snapshot that a durable Agent inbox write is allowed
+/// to target.  `updated_at` is part of the guard so a pause, re-key, or
+/// endpoint replacement that races delivery cannot receive the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentRuntimeSnapshotGuard {
+    pub agent_id: String,
+    pub verification_method: String,
+    pub authorized_event_ref: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnqueueAgentRuntimeMessage {
+    pub request_key: String,
+    pub request_digest: String,
+    pub snapshot: AgentRuntimeSnapshotGuard,
+    /// The exact repair/runtime envelope delivered to the Agent.  Storage
+    /// compares this value on replay; a request digest alone is insufficient.
+    pub content: serde_json::Value,
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentRuntimeMessageRecord {
+    pub message_id: uuid::Uuid,
+    pub request_key: String,
+    pub request_digest: String,
+    pub agent_id: String,
+    pub verification_method: String,
+    pub authorized_event_ref: String,
+    pub content: serde_json::Value,
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentRuntimeEnqueueOutcome {
+    Stored(AgentRuntimeMessageRecord),
+    Duplicate(AgentRuntimeMessageRecord),
+    RequestConflict,
+    SnapshotConflict,
+}
 #[async_trait]
 pub trait AgentStore: Send + Sync {
     async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()>;
@@ -133,4 +175,10 @@ pub trait AgentStore: Send + Sync {
         &self,
         command: &ConfirmAgentProvisioningAbandonment,
     ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome>;
+    /// Check exact replay first, then atomically validate the unique current
+    /// active runtime snapshot and append one inbox message.
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> PersistenceResult<AgentRuntimeEnqueueOutcome>;
 }

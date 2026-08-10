@@ -1,7 +1,11 @@
+#[cfg(test)]
+use soland_storage::AgentRuntimeSnapshotGuard;
+
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
     AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
-    AgentStore, Arc, CanonicalEventRecord, ConfirmAgentProvisioningAbandonment,
+    AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentStore, Arc, CanonicalEventRecord,
+    ConfirmAgentProvisioningAbandonment, EnqueueAgentRuntimeMessage,
     IssueAgentProvisioningAbandonmentChallenge, Mutex, PendingAgentPairingCommitIntent,
     PersistenceError, PersistenceResult, Utc, Value, agent_participation_record_key,
     apply_agent_provisioning_abandonment, apply_agent_provisioning_abandonment_challenge,
@@ -101,6 +105,7 @@ pub(crate) struct MemoryAgentStore {
     #[cfg(feature = "fault-injection")]
     fault_injector: Arc<crate::FaultInjector>,
     data: Mutex<std::collections::BTreeMap<String, AgentPrincipalRecord>>,
+    runtime_messages: Mutex<std::collections::BTreeMap<String, AgentRuntimeMessageRecord>>,
     events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
 }
 impl MemoryAgentStore {
@@ -422,6 +427,55 @@ impl AgentStore for MemoryAgentStore {
             command,
         ))
     }
+
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> PersistenceResult<AgentRuntimeEnqueueOutcome> {
+        // Replay lookup deliberately precedes snapshot validation.  A retry
+        // of an already durable write remains a Duplicate even after the
+        // Agent rotates to a new runtime endpoint.
+        let mut messages = self.runtime_messages.lock();
+        if let Some(existing) = messages.get(&command.request_key) {
+            return Ok(
+                if existing.request_digest == command.request_digest
+                    && existing.agent_id == command.snapshot.agent_id
+                    && existing.content == command.content
+                {
+                    AgentRuntimeEnqueueOutcome::Duplicate(existing.clone())
+                } else {
+                    AgentRuntimeEnqueueOutcome::RequestConflict
+                },
+            );
+        }
+
+        let agents = self.data.lock();
+        let Some(agent) = agents.get(&command.snapshot.agent_id) else {
+            return Ok(AgentRuntimeEnqueueOutcome::SnapshotConflict);
+        };
+        if agent.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+            || agent.authorized_verification_method.as_deref()
+                != Some(command.snapshot.verification_method.as_str())
+            || agent.authorized_event_ref.as_deref()
+                != Some(command.snapshot.authorized_event_ref.as_str())
+            || agent.updated_at != command.snapshot.updated_at
+            || agent.authorized_signing_key_binding.is_none()
+        {
+            return Ok(AgentRuntimeEnqueueOutcome::SnapshotConflict);
+        }
+        let record = AgentRuntimeMessageRecord {
+            message_id: uuid::Uuid::now_v7(),
+            request_key: command.request_key.clone(),
+            request_digest: command.request_digest.clone(),
+            agent_id: command.snapshot.agent_id.clone(),
+            verification_method: command.snapshot.verification_method.clone(),
+            authorized_event_ref: command.snapshot.authorized_event_ref.clone(),
+            content: command.content.clone(),
+            enqueued_at: command.enqueued_at,
+        };
+        messages.insert(command.request_key.clone(), record.clone());
+        Ok(AgentRuntimeEnqueueOutcome::Stored(record))
+    }
 }
 
 #[cfg(test)]
@@ -451,9 +505,9 @@ mod tests {
     {
         serde_json::from_value(serde_json::json!({
             "schema": "ak.schema.agent_signing_key_binding.v1",
-            "agent_id": "did:web:agent.example",
+            "agent_id": "ak:did_core:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
             "agent_key_id": "runtime-1",
-            "verification_method": "did:web:agent.example#key-1",
+            "verification_method": "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH#key-1",
             "public_key": {
                 "kty": "OKP",
                 "algorithm": "Ed25519",
@@ -463,10 +517,10 @@ mod tests {
             "agent_key_authorize_event_id":
                 "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "issued_at": "2026-07-27T00:00:00.000Z",
-            "controller_id": "did:web:controller.example",
+            "controller_id": "ak:did_core:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
             "controller_proof": {
                 "kind": "controller_signature",
-                "verification_method": "did:web:controller.example#key-1",
+                "verification_method": "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH#controller-key-1",
                 "jws": "proof"
             }
         }))
@@ -630,5 +684,83 @@ mod tests {
             stored.authorized_event_ref.as_deref(),
             Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_inbox_is_snapshot_guarded_and_exactly_replayable() {
+        let store = MemoryAgentStore::default();
+        let mut agent = pending_agent();
+        agent.authorized_event_ref =
+            Some("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned());
+        agent.authorized_verification_method = Some("did:web:agent.example#key-1".to_owned());
+        agent.authorized_signing_key_binding = Some(signing_key_binding());
+        let snapshot_at = agent.updated_at;
+        store.put(agent).await.unwrap();
+        let command = EnqueueAgentRuntimeMessage {
+            request_key: "repair:request-1:recipient".to_owned(),
+            request_digest: "sha256:repair-request".to_owned(),
+            snapshot: AgentRuntimeSnapshotGuard {
+                agent_id: "did:web:agent.example".to_owned(),
+                verification_method: "did:web:agent.example#key-1".to_owned(),
+                authorized_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+                    .to_owned(),
+                updated_at: snapshot_at,
+            },
+            content: serde_json::json!({"kind": "direct_conversation_repair", "seq": 1}),
+            enqueued_at: Utc::now(),
+        };
+
+        assert!(matches!(
+            store
+                .enqueue_runtime_message_if_current(&command)
+                .await
+                .unwrap(),
+            AgentRuntimeEnqueueOutcome::Stored(_)
+        ));
+
+        // A later runtime replacement does not invalidate exact replay of
+        // the already durable result.
+        let replacement_at = {
+            let mut agents = store.data.lock();
+            let agent = agents.get_mut("did:web:agent.example").unwrap();
+            agent.updated_at += chrono::Duration::seconds(1);
+            agent.authorized_verification_method = Some("did:web:agent.example#key-2".to_owned());
+            agent.authorized_event_ref =
+                Some("ak:event:AaMg8gb2OZt5kq0i89-BmIjSl66D9rHfVx-DBzklB4el".to_owned());
+            agent.updated_at
+        };
+        let mut replay = command.clone();
+        replay.snapshot.verification_method = "did:web:agent.example#key-2".to_owned();
+        replay.snapshot.authorized_event_ref =
+            "ak:event:AaMg8gb2OZt5kq0i89-BmIjSl66D9rHfVx-DBzklB4el".to_owned();
+        replay.snapshot.updated_at = replacement_at;
+        assert!(matches!(
+            store
+                .enqueue_runtime_message_if_current(&replay)
+                .await
+                .unwrap(),
+            AgentRuntimeEnqueueOutcome::Duplicate(_)
+        ));
+
+        let mut conflicting = command.clone();
+        conflicting.content["seq"] = serde_json::json!(2);
+        assert_eq!(
+            store
+                .enqueue_runtime_message_if_current(&conflicting)
+                .await
+                .unwrap(),
+            AgentRuntimeEnqueueOutcome::RequestConflict
+        );
+
+        let mut fresh = command;
+        fresh.request_key = "repair:request-2:recipient".to_owned();
+        assert_eq!(
+            store
+                .enqueue_runtime_message_if_current(&fresh)
+                .await
+                .unwrap(),
+            AgentRuntimeEnqueueOutcome::SnapshotConflict
+        );
+        assert_eq!(store.runtime_messages.lock().len(), 1);
     }
 }

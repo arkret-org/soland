@@ -53,6 +53,11 @@ pub(super) async fn federation_service_binding_current_for_destination(
                 member_bindings = ?member_binding_diagnostics,
                 "federation delivery binding frontier is stale"
             );
+            evidence.new_service_resolution =
+                current_handover_service_resolution(state, &evidence).await;
+            if evidence.new_service_resolution.is_none() {
+                return FederationServiceBindingCheck::Reject("delivery_binding_stale");
+            }
             evidence.witness = delivery_binding_handover_witness(state, &evidence).await;
             FederationServiceBindingCheck::Stale(evidence)
         }
@@ -214,18 +219,37 @@ pub(super) fn federation_service_binding_check_from_members(
 pub(super) fn delivery_binding_handover_evidence_from_member(
     member: DeliveryBindingMemberView,
 ) -> Option<DeliveryBindingHandoverEvidence> {
-    let actor_id = Did::new(member.member.clone()).ok()?;
-    let new_recipient_service_id = Did::new(member.recipient_service_id.clone()).ok()?;
+    let actor_id = arkret_wire::ActorId::new(member.member.clone()).ok()?;
+    let new_recipient_service_id =
+        arkret_wire::ServiceId::new(member.recipient_service_id.clone()).ok()?;
     let handover_frontier = vec![EventId::new(member.delivery_binding_frontier_ref.clone()).ok()?];
     Some(DeliveryBindingHandoverEvidence {
         realm_id: member.realm_id,
         actor_id,
         new_recipient_service_id,
+        new_service_resolution: None,
         handover_frontier,
         membership_event_ref: member.membership_event_ref,
         delivery_binding_frontier_ref: member.delivery_binding_frontier_ref,
         updated_at: member.updated_at,
         witness: Value::Null,
+    })
+}
+
+async fn current_handover_service_resolution(
+    state: &AppState,
+    evidence: &DeliveryBindingHandoverEvidence,
+) -> Option<arkret_models_identity::ServiceResolutionCarrier> {
+    let entry = state
+        .persistence()
+        .service_route_cache(&evidence.new_recipient_service_id, "principal_server")
+        .await
+        .ok()??;
+    entry.is_routable_at(now()).then(|| {
+        arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
+            current_record_url: entry.current_record_url,
+            pinned_record_digest: Some(entry.record_digest),
+        }
     })
 }
 

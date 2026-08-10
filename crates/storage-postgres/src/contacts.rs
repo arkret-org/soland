@@ -69,6 +69,8 @@ struct ContactRow {
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     peer_service_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    peer_service_resolution: Option<Value>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -131,11 +133,12 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
             .map(format_contact_event_ref),
         message: row.message,
         peer_service_id: row.peer_service_id,
+        peer_service_resolution: row.peer_service_resolution,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, peer_service_resolution, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
@@ -173,8 +176,8 @@ impl ContactStore for PgContactStore {
         let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, peer_service_resolution, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (requester_id, target_id) DO UPDATE SET \
                 basis_id = EXCLUDED.basis_id, \
                 version = EXCLUDED.version, \
@@ -191,6 +194,7 @@ impl ContactStore for PgContactStore {
                 tombstone_event_ref = EXCLUDED.tombstone_event_ref, \
                 message = EXCLUDED.message, \
                 peer_service_id = EXCLUDED.peer_service_id, \
+                peer_service_resolution = EXCLUDED.peer_service_resolution, \
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
@@ -213,6 +217,7 @@ impl ContactStore for PgContactStore {
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
         .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
@@ -249,9 +254,10 @@ impl ContactStore for PgContactStore {
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
                 request_receipts = $9, request_mirror_receipts = $10, basis_evidence = $11, \
                 basis_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
-                tombstone_event_ref = $15, message = $16, peer_service_id = $17, updated_at = $18 \
+                tombstone_event_ref = $15, message = $16, peer_service_id = $17, \
+                peer_service_resolution = $18, updated_at = $19 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
-                    (requester_id = $2 AND target_id = $1)) AND updated_at = $19",
+                    (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
         )
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
@@ -278,6 +284,7 @@ impl ContactStore for PgContactStore {
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
         .bind::<Nullable<Text>, _>(record.peer_service_id.as_deref())
+        .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(expected_updated_at)
         .execute(&mut *conn)

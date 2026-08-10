@@ -387,6 +387,7 @@ diesel::table! {
         tombstone_event_ref -> Nullable<Bytea>,
         message -> Nullable<Text>,
         peer_service_id -> Nullable<Text>,
+        peer_service_resolution -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }

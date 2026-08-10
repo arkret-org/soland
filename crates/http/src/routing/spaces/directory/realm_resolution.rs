@@ -679,6 +679,17 @@ pub(super) async fn join_candidates_for_resolved_realm(
     };
     let realm_id_typed =
         RealmId::new(realm_id.to_owned()).expect("directory realm id is validated");
+    let own_resolution = state
+        .current_signed_service_resolution()
+        .await
+        .ok()
+        .flatten()
+        .filter(|record| {
+            record.record.service_id.as_str() == state.service_id()
+                && record.record.service_kind == "principal_server"
+                && observed_at < record.record.refresh_after
+                && observed_at < record.record.expires_at
+        });
     // Disclose the current accepted Realm Seal view to resolvers the Directory
     // has already authorized to resolve this Realm (this function is only
     // reached after `realm_resolvable_to`). An invitee who is not yet a member
@@ -701,32 +712,35 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let seal_basis = arkret_wire::SealBasis {
         leaves: vec![seal.id.clone()],
     };
-    let authority_dids = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-        .current_notary_profile_for_events(state, &realm_id_typed, &[])
-        .ok()
-        .flatten()
-        .map(|(profile, _)| match profile {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                BTreeSet::from([did.to_string()])
-            }
-            arkret_wire::notary::NotaryValue::Threshold { members, .. }
-            | arkret_wire::notary::NotaryValue::OpenSet { members } => members
-                .into_iter()
-                .map(|member| member.to_string())
-                .collect(),
-            arkret_wire::notary::NotaryValue::Mixed {
-                did,
-                recovery_members,
-            } => std::iter::once(did.to_string())
-                .chain(
-                    recovery_members
+    let authority_service_ids: BTreeSet<String> =
+        crate::notary::NotaryWorker::for_service(state.service_id().clone())
+            .current_notary_profile_for_events(state, &realm_id_typed, &[])
+            .ok()
+            .flatten()
+            .map(|(profile, _)| match profile {
+                arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+                    normalize_join_candidate_service_id(did.as_str())
                         .into_iter()
-                        .map(|member| member.to_string()),
-                )
-                .collect(),
-        })
-        .unwrap_or_default();
-    if authority_dids.is_empty() {
+                        .map(|service_id| service_id.to_string())
+                        .collect()
+                }
+                arkret_wire::notary::NotaryValue::Threshold { members, .. }
+                | arkret_wire::notary::NotaryValue::OpenSet { members } => members
+                    .into_iter()
+                    .filter_map(|member| normalize_join_candidate_service_id(member.as_str()))
+                    .map(|service_id| service_id.to_string())
+                    .collect(),
+                arkret_wire::notary::NotaryValue::Mixed {
+                    did,
+                    recovery_members,
+                } => std::iter::once(did)
+                    .chain(recovery_members)
+                    .filter_map(|member| normalize_join_candidate_service_id(member.as_str()))
+                    .map(|service_id| service_id.to_string())
+                    .collect(),
+            })
+            .unwrap_or_default();
+    if authority_service_ids.is_empty() {
         return Vec::new();
     }
 
@@ -750,23 +764,32 @@ pub(super) async fn join_candidates_for_resolved_realm(
                 let Some(service_id) = endpoint
                     .get("did")
                     .and_then(Value::as_str)
-                    .filter(|did| authority_dids.contains(*did))
-                    .and_then(|did| Did::new(did.to_owned()).ok())
+                    .and_then(normalize_join_candidate_service_id)
+                    .filter(|service_id| authority_service_ids.contains(service_id.as_str()))
                 else {
                     continue;
                 };
                 let Some((service_kind, role)) = join_candidate_endpoint_kind_role(endpoint) else {
                     continue;
                 };
+                let Some(service_resolution) = accepted_join_candidate_carrier(
+                    state,
+                    realm_id,
+                    endpoint,
+                    &service_id,
+                    own_resolution.as_ref(),
+                ) else {
+                    // The legacy endpoint is only a transport hint. Without
+                    // an accepted carrier it cannot become a join route.
+                    continue;
+                };
                 candidates.push(RealmJoinCandidate {
                     realm_id: realm_id_typed.clone(),
                     service_id,
+                    service_resolution,
                     service_kind,
                     role,
-                    endpoint: endpoint
-                        .get("endpoint")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
+                    endpoint: None,
                     operations: vec!["ak.self.events.command.submit".to_owned()],
                     join_methods: join_methods.clone(),
                     priority: Some(match role {
@@ -785,13 +808,19 @@ pub(super) async fn join_candidates_for_resolved_realm(
         }
     }
 
-    if candidates.is_empty() && authority_dids.contains(state.service_id()) {
+    if candidates.is_empty()
+        && authority_service_ids.contains(state.service_id())
+        && let Some(own_resolution) = own_resolution
+    {
         candidates.push(RealmJoinCandidate {
             realm_id: realm_id_typed,
-            service_id: Did::new(state.service_id().clone()).expect("service DID is validated"),
+            service_id: own_resolution.record.service_id.clone(),
+            service_resolution: ServiceResolutionCarrier::Inline {
+                inline: own_resolution,
+            },
             service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
             role: RealmJoinCandidateRole::Primary,
-            endpoint: Some(state.config().public_base_url.clone()),
+            endpoint: None,
             operations: vec!["ak.self.events.command.submit".to_owned()],
             join_methods,
             priority: Some(0),
@@ -810,6 +839,58 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .then_with(|| left.service_id.as_str().cmp(right.service_id.as_str()))
     });
     candidates
+}
+
+fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::ServiceId> {
+    arkret_wire::ServiceId::new(value.to_owned())
+        .ok()
+        .or_else(|| {
+            let full_id = arkret_wire::FullId::new(value.to_owned()).ok()?;
+            arkret_wire::project_full_id_to_core_id(&full_id)
+                .ok()
+                .map(arkret_wire::ServiceId::from)
+        })
+}
+
+fn accepted_join_candidate_carrier(
+    state: &AppState,
+    realm_id: &str,
+    endpoint: &Value,
+    service_id: &arkret_wire::ServiceId,
+    own_resolution: Option<&arkret_models_identity::ServiceResolutionRecord>,
+) -> Option<ServiceResolutionCarrier> {
+    if own_resolution.is_some_and(|record| &record.record.service_id == service_id) {
+        return own_resolution
+            .cloned()
+            .map(|inline| ServiceResolutionCarrier::Inline { inline });
+    }
+    if let Some(carrier) = endpoint
+        .get("service_resolution")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+    {
+        return Some(carrier);
+    }
+    state
+        .projections()
+        .snapshot()
+        .members
+        .values()
+        .filter(|member| {
+            member.realm_id == realm_id
+                && member.state == "join"
+                && member.delivery_status.as_deref() == Some("routable")
+        })
+        .find(|member| {
+            member
+                .recipient_service_id
+                .as_deref()
+                .and_then(normalize_join_candidate_service_id)
+                .as_ref()
+                == Some(service_id)
+        })
+        .and_then(|member| member.recipient_service_resolution.clone())
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn join_candidate_endpoint_kind_role(

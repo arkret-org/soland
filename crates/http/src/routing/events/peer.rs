@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{Did, EventId, RealmId};
+use arkret_models_collaboration::direct_conversation_repair::{
+    DirectConversationRepairEnqueueOutcome, DirectConversationRepairRelayRequest,
+};
 use arkret_models_collaboration::event_query::{
     EventsQueryPostRequestBody, PeerEventsDescribeRequestBody, PeerEventsFrontierRequestBody,
 };
@@ -66,8 +69,53 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
+        .push(
+            Router::with_path("direct-conversations/repair-relay")
+                .post(peer_direct_conversation_repair_relay),
+        )
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(Router::with_path("signal").post(peer_signal_relay))
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.direct_conversation.command.repair_relay",
+    tags("events")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.peer.direct_conversation.command.repair_relay")
+)]
+async fn peer_direct_conversation_repair_relay(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<DirectConversationRepairEnqueueOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let source_service_id = source_service_id_from_request(req)?;
+    let idempotency_key = required_header(req, "idempotency-key")?;
+    let request = parse_json_body::<DirectConversationRepairRelayRequest>(
+        req,
+        "invalid ak.peer.direct_conversation.command.repair_relay request body",
+    )
+    .await?;
+    if idempotency_key != request.request_id.as_str() {
+        return Err(cross_domain_replay(
+            "Idempotency-Key header does not match repair request_id",
+        ));
+    }
+    let outcome = crate::routing::identity::account::repair::accept_peer_relay(
+        state,
+        &source_service_id,
+        request,
+    )
+    .await?;
+    crate::routing::events::test_chaos::pause_at(
+        state,
+        crate::routing::events::test_chaos::POST_DIRECT_REPAIR_COMMIT_PRE_RESPONSE,
+        outcome.request_id.as_str(),
+    )
+    .await;
+    json_ok(outcome)
 }
 
 #[salvo::oapi::endpoint(

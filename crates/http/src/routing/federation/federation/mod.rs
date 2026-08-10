@@ -30,12 +30,12 @@ pub(super) use endpoints::{
 };
 pub(crate) use inbound_policy::federation_actor_origin_acceptable;
 pub(crate) use outbound::{
-    configured_peer_targets, peer_trust_domain_for_service_id, peer_url_for_service_id,
+    configured_peer_targets, peer_url_for_service_id, resolved_peer_base_url, resolved_peer_route,
+    resolved_peer_target,
 };
 pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 #[cfg(test)]
 use salvo::http::StatusCode;
-pub(crate) use signature::trust_domain_from_service_id;
 pub(in crate::routing) use signature::{
     signature_authority, signature_target_uri, verify_inbound_peer_http_signature,
 };

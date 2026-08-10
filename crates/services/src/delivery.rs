@@ -120,7 +120,14 @@ pub struct DeviceMessageBatchRecord {
     pub request_key: String,
     pub request_digest: String,
     pub idempotency_expires_at: DateTime<Utc>,
+    pub target_snapshot_guard: Option<DeviceMessageTargetSnapshotGuard>,
     pub items: Vec<DeviceMessageBatchItemRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceMessageTargetSnapshotGuard {
+    pub recipient: String,
+    pub devices: Vec<(String, DateTime<Utc>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +148,7 @@ pub enum DeviceMessageBatchCommitOutcome {
     Duplicate(BTreeMap<String, bool>),
     RequestConflict,
     MessageConflict { message_key: String },
+    SnapshotConflict,
 }
 
 /// One admitted `SignalEnvelope` held for its TTL (`sync/signal.md` §4).

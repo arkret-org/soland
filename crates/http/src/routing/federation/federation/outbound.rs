@@ -7,6 +7,12 @@ pub(crate) struct FederationPeerTarget {
     pub(crate) trust_domain: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedFederationPeerTarget {
+    pub(crate) base_url: String,
+    pub(crate) trust_domain: String,
+}
+
 pub(crate) fn configured_peer_targets(state: &AppState) -> Vec<FederationPeerTarget> {
     use crate::config::FederationFanoutTopology;
     let settings = state.settings();
@@ -61,6 +67,78 @@ pub(crate) fn peer_url_for_service_id(state: &AppState, service_id: &str) -> Opt
         .map(|peer| peer.url)
 }
 
+/// Resolve a production destination. Core service ids always go through the
+/// shared verified resolver; the stored/configured URL branch exists only for
+/// pre-core migration rows whose peer id is still a full DID.
+pub(crate) async fn resolved_peer_base_url(
+    state: &AppState,
+    service_id: &str,
+    service_kind: &str,
+    force_refresh: bool,
+) -> Result<String, String> {
+    Ok(
+        resolved_peer_target(state, service_id, service_kind, force_refresh)
+            .await?
+            .base_url,
+    )
+}
+
+/// Resolve the exact routable URL and destination trust domain from the same
+/// independently verified record→ServiceDescribe chain. A configured trust
+/// domain, when present, is only an additional accepted-binding constraint and
+/// must agree with the fetched description.
+pub(crate) async fn resolved_peer_target(
+    state: &AppState,
+    service_id: &str,
+    service_kind: &str,
+    force_refresh: bool,
+) -> Result<ResolvedFederationPeerTarget, String> {
+    if arkret_wire::ServiceId::new(service_id.to_owned()).is_ok() {
+        let route = resolved_peer_route(state, service_id, service_kind, force_refresh).await?;
+        return Ok(ResolvedFederationPeerTarget {
+            base_url: route.cache_entry.base_url.trim_end_matches('/').to_owned(),
+            trust_domain: route.trust_domain.to_string(),
+        });
+    }
+    if !state.config().development_mode {
+        return Err("non-core federation peer ids are rejected in production".to_owned());
+    }
+    let configured = configured_peer_targets(state)
+        .into_iter()
+        .find(|peer| peer.did == service_id)
+        .ok_or_else(|| "development full-DID peer has no configured test target".to_owned())?;
+    let trust_domain = configured.trust_domain.ok_or_else(|| {
+        "development full-DID peer requires an explicit configured trust_domain".to_owned()
+    })?;
+    Ok(ResolvedFederationPeerTarget {
+        base_url: configured.url.trim_end_matches('/').to_owned(),
+        trust_domain,
+    })
+}
+
+/// Resolve a core service id to the complete independently verified
+/// record→ServiceDescribe result. Callers that sign protocol requests should
+/// retain this value so the endpoint and trust domain come from one snapshot.
+pub(crate) async fn resolved_peer_route(
+    state: &AppState,
+    service_id: &str,
+    service_kind: &str,
+    force_refresh: bool,
+) -> Result<soland_services::service_route::ResolvedServiceRoute, String> {
+    let core = arkret_wire::ServiceId::new(service_id.to_owned())
+        .map_err(|error| format!("federation destination is not a service core id: {error}"))?;
+    let route = state
+        .service_route_resolver()
+        .map_err(str::to_owned)?
+        .resolve_route(&core, service_kind, chrono::Utc::now(), force_refresh)
+        .await
+        .map_err(|error| error.to_string())?;
+    route
+        .require_trust_domain(peer_trust_domain_for_service_id(state, service_id).as_deref())
+        .map_err(|error| error.to_string())?;
+    Ok(route)
+}
+
 pub(crate) fn peer_trust_domain_for_service_id(
     state: &AppState,
     service_id: &str,
@@ -87,10 +165,9 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
         .iter()
         .copied()
         .find(|part| part.starts_with("https://") || part.starts_with("http://"))?;
-    let did = parts
-        .iter()
-        .copied()
-        .find(|part| part.starts_with("did:"))?;
+    let did = parts.iter().copied().find(|part| {
+        part.starts_with("did:") || arkret_wire::ServiceId::new((*part).to_owned()).is_ok()
+    })?;
     let trust_domain = parts
         .iter()
         .copied()
@@ -98,7 +175,11 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
     if parts.len() == 3 && trust_domain.is_none() {
         return None;
     }
-    arkret_identifiers::Did::new(did.to_owned()).ok()?;
+    if arkret_identifiers::Did::new(did.to_owned()).is_err()
+        && arkret_wire::ServiceId::new(did.to_owned()).is_err()
+    {
+        return None;
+    }
     if let Some(trust_domain) = trust_domain {
         arkret_identifiers::TypedTrustDomainId::new(trust_domain.to_owned()).ok()?;
     }
@@ -128,5 +209,10 @@ mod tests {
             parse_peer_target("https://peer.example|did:web:peer.example|not-a-trust-domain")
                 .is_none()
         );
+        let core = parse_peer_target(
+            "https://peer.example|ak:did_core:webvh:z6mkpeer|ak:trust_domain:partner.example",
+        )
+        .expect("core service target");
+        assert_eq!(core.did, "ak:did_core:webvh:z6mkpeer");
     }
 }

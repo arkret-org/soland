@@ -224,6 +224,22 @@ CREATE UNIQUE INDEX agent_principals_approval_request_idx ON public.agent_princi
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 
+-- Durable Native Agent runtime inbox.  This is intentionally separate from
+-- device messages: the runtime authorization snapshot is the delivery guard.
+CREATE TABLE public.agent_runtime_messages (
+    message_id uuid PRIMARY KEY,
+    request_key text NOT NULL UNIQUE,
+    request_digest text NOT NULL,
+    agent_id text NOT NULL REFERENCES public.agent_principals(id) ON DELETE CASCADE,
+    verification_method text NOT NULL,
+    authorized_event_ref text NOT NULL,
+    content jsonb NOT NULL,
+    enqueued_at timestamp with time zone NOT NULL
+);
+
+CREATE INDEX agent_runtime_messages_agent_time_idx
+    ON public.agent_runtime_messages USING btree (agent_id, enqueued_at);
+
 ALTER TABLE ONLY public.agent_keys
     ADD CONSTRAINT agent_keys_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
@@ -686,6 +702,7 @@ CREATE TABLE public.contacts (
     tombstone_event_ref bytea CHECK (octet_length(tombstone_event_ref) = 33),
     message text,
     peer_service_id text,
+    peer_service_resolution jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );

@@ -52,6 +52,10 @@ pub struct ContactRecord {
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
     pub peer_service_id: Option<String>,
+    /// Exact carrier retained from the verified introduction or shared-Realm
+    /// delivery binding. It is re-verified before routing and is not a cached
+    /// endpoint authority.
+    pub peer_service_resolution: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

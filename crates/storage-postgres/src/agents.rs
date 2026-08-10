@@ -8,13 +8,49 @@ use soland_storage::PendingAgentPairingCommitIntent;
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
     AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
-    AgentStore, Array, BigInt, Bool, ConfirmAgentProvisioningAbandonment,
+    AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentStore, Array, BigInt, Bool,
+    ConfirmAgentProvisioningAbandonment, EnqueueAgentRuntimeMessage,
     IssueAgentProvisioningAbandonmentChallenge, Jsonb, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
     SqlUuid, Text, Timestamptz, Utc, Uuid, Value, apply_agent_provisioning_abandonment,
     apply_agent_provisioning_abandonment_challenge, async_trait, ids, pg_conn, sql_query,
 };
 use crate::schema::agent_principals;
+
+#[derive(QueryableByName)]
+struct AgentRuntimeMessageRow {
+    #[diesel(sql_type = SqlUuid)]
+    message_id: Uuid,
+    #[diesel(sql_type = Text)]
+    request_key: String,
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Text)]
+    agent_id: String,
+    #[diesel(sql_type = Text)]
+    verification_method: String,
+    #[diesel(sql_type = Text)]
+    authorized_event_ref: String,
+    #[diesel(sql_type = Jsonb)]
+    content: Value,
+    #[diesel(sql_type = Timestamptz)]
+    enqueued_at: chrono::DateTime<Utc>,
+}
+
+impl From<AgentRuntimeMessageRow> for AgentRuntimeMessageRecord {
+    fn from(row: AgentRuntimeMessageRow) -> Self {
+        Self {
+            message_id: row.message_id,
+            request_key: row.request_key,
+            request_digest: row.request_digest,
+            agent_id: row.agent_id,
+            verification_method: row.verification_method,
+            authorized_event_ref: row.authorized_event_ref,
+            content: row.content,
+            enqueued_at: row.enqueued_at,
+        }
+    }
+}
 #[derive(QueryableByName)]
 struct AgentParticipationRow {
     #[diesel(sql_type = Text)]
@@ -686,6 +722,89 @@ impl AgentStore for PgAgentStore {
                     .await?;
             }
             Ok(outcome)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> PersistenceResult<AgentRuntimeEnqueueOutcome> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let command = command.clone();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // Exact replay is authoritative even if the runtime has since
+            // rotated.  The row lock also serializes competing request-key
+            // attempts before the active snapshot is inspected.
+            let existing = sql_query(
+                "SELECT message_id, request_key, request_digest, agent_id, \
+                        verification_method, authorized_event_ref, content, enqueued_at \
+                   FROM agent_runtime_messages WHERE request_key = $1 FOR UPDATE",
+            )
+            .bind::<Text, _>(&command.request_key)
+            .get_result::<AgentRuntimeMessageRow>(conn)
+            .await
+            .optional()?;
+            if let Some(existing) = existing {
+                let existing = AgentRuntimeMessageRecord::from(existing);
+                return Ok(
+                    if existing.request_digest == command.request_digest
+                        && existing.agent_id == command.snapshot.agent_id
+                        && existing.content == command.content
+                    {
+                        AgentRuntimeEnqueueOutcome::Duplicate(existing)
+                    } else {
+                        AgentRuntimeEnqueueOutcome::RequestConflict
+                    },
+                );
+            }
+
+            let agent = agent_principals::table
+                .find(&command.snapshot.agent_id)
+                .for_update()
+                .select(AgentPrincipalRow::as_select())
+                .first::<AgentPrincipalRow>(conn)
+                .await
+                .optional()?;
+            let Some(agent) = agent else {
+                return Ok(AgentRuntimeEnqueueOutcome::SnapshotConflict);
+            };
+            let agent: AgentPrincipalRecord = agent.try_into()?;
+            if agent.state
+                != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+                || agent.authorized_verification_method.as_deref()
+                    != Some(command.snapshot.verification_method.as_str())
+                || agent.authorized_event_ref.as_deref()
+                    != Some(command.snapshot.authorized_event_ref.as_str())
+                || agent.updated_at != command.snapshot.updated_at
+                || agent.authorized_signing_key_binding.is_none()
+            {
+                return Ok(AgentRuntimeEnqueueOutcome::SnapshotConflict);
+            }
+
+            let message_id = Uuid::now_v7();
+            let stored = sql_query(
+                "INSERT INTO agent_runtime_messages \
+                    (message_id, request_key, request_digest, agent_id, verification_method, \
+                     authorized_event_ref, content, enqueued_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 RETURNING message_id, request_key, request_digest, agent_id, \
+                           verification_method, authorized_event_ref, content, enqueued_at",
+            )
+            .bind::<SqlUuid, _>(message_id)
+            .bind::<Text, _>(&command.request_key)
+            .bind::<Text, _>(&command.request_digest)
+            .bind::<Text, _>(&command.snapshot.agent_id)
+            .bind::<Text, _>(&command.snapshot.verification_method)
+            .bind::<Text, _>(&command.snapshot.authorized_event_ref)
+            .bind::<Jsonb, _>(&command.content)
+            .bind::<Timestamptz, _>(command.enqueued_at)
+            .get_result::<AgentRuntimeMessageRow>(conn)
+            .await?;
+            Ok(AgentRuntimeEnqueueOutcome::Stored(stored.into()))
         })
         .await
         .map_err(PgTransactionError::into_persistence)

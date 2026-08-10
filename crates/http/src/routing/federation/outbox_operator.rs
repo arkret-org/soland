@@ -259,10 +259,25 @@ pub async fn requeue_dead_letter(
             )
         })?;
 
-    // (1) Peer configuration must still resolve to the recorded URL.
-    let peer_url = super::federation::peer_url_for_service_id(state, &original.delivery.peer_did)
-        .map(|url| url.trim_end_matches('/').to_owned())
-        .unwrap_or_else(|| original.delivery.peer_url.clone());
+    // (1) The stable service core must still resolve through the verified
+    // record→describe chain. The historical peer_url is diagnostic only and
+    // intentionally does not pin a handover-era route.
+    let peer_target = super::federation::resolved_peer_target(
+        state,
+        &original.delivery.peer_did,
+        "principal_server",
+        true,
+    )
+    .await?;
+    if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
+        &original.delivery.peer_did,
+        Some(&peer_target.trust_domain),
+    ) {
+        return Err(format!(
+            "sovereign policy still denies verified destination trust_domain: {reason}"
+        ));
+    }
+    let peer_url = peer_target.base_url;
 
     // (2) The deployment egress policy must allow the target today. Requeueing
     // past a still-denying policy is exactly what §4.4 forbids.

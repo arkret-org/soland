@@ -52,6 +52,7 @@ use arkret_models_identity::handle::{HandleClaimKind, HandleHintBindingSource};
 use arkret_models_identity::handle_claim::DeliveryBindingHint;
 use arkret_models_identity::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
+    ServiceResolutionCarrier,
 };
 use arkret_server::{
     CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,

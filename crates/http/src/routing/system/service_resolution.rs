@@ -1,10 +1,10 @@
 use arkret_models_discovery::ServiceDescribe;
+use arkret_models_identity::service_identity::CanonicalServiceUrl;
 use arkret_models_identity::{
     AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
     ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence, ServiceResolutionRecord, ServiceResolutionRecordCore,
-    service_identity::CanonicalServiceUrl,
 };
 use arkret_wire::{DidUrl, Hash, ServiceId};
 use chrono::{Duration, Utc};

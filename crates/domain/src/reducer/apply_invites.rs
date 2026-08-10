@@ -230,6 +230,7 @@ impl ProjectionState {
                 role: role_from_join_rule_snapshot(&invite.join_rule_snapshot),
                 delivery_status: None,
                 recipient_service_id: None,
+                recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
                 invited_at: Some(admission_time),

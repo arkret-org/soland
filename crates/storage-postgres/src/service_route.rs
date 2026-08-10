@@ -10,6 +10,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     MonotonicRouteWrite, PersistenceError, PersistenceResult, ServiceResolutionForkEvidence,
     ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry, ServiceRouteStore,
+    ServiceRouteStoredKey,
 };
 
 use crate::{PgPool, PgTransactionError, async_trait, pg_conn};
@@ -50,6 +51,34 @@ struct MirrorRow {
 struct ExistsRow {
     #[diesel(sql_type = Bool)]
     found: bool,
+}
+
+#[derive(QueryableByName)]
+struct RouteKeyRow {
+    #[diesel(sql_type = Text)]
+    service_id: String,
+    #[diesel(sql_type = Text)]
+    service_kind: String,
+}
+
+#[derive(QueryableByName)]
+struct QuarantineRow {
+    #[diesel(sql_type = Text)]
+    service_id: String,
+    #[diesel(sql_type = Text)]
+    service_kind: String,
+    #[diesel(sql_type = Text)]
+    artifact_family: String,
+    #[diesel(sql_type = Text)]
+    artifact_key: String,
+    #[diesel(sql_type = Text)]
+    accepted_digest: String,
+    #[diesel(sql_type = Text)]
+    conflicting_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    evidence: serde_json::Value,
+    #[diesel(sql_type = Timestamptz)]
+    quarantined_at: chrono::DateTime<chrono::Utc>,
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> PersistenceResult<serde_json::Value> {
@@ -243,6 +272,107 @@ async fn advance_mirror_sequence(
 
 #[async_trait]
 impl ServiceRouteStore for PgServiceRouteStore {
+    async fn list_stored_route_keys(
+        &self,
+        after: Option<&ServiceRouteStoredKey>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteStoredKey>> {
+        let (after_service_id, after_service_kind) = after
+            .map(|key| (key.service_id.as_str(), key.service_kind.as_str()))
+            .unwrap_or(("", ""));
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query(
+            "SELECT service_id, service_kind FROM (\
+             SELECT service_id, service_kind FROM service_resolution_last_seen_floors UNION \
+             SELECT service_id, service_kind FROM service_route_notice_states UNION \
+             SELECT service_id, service_kind FROM service_resolution_fork_quarantine UNION \
+             SELECT service_id, service_kind FROM service_route_cache) AS route_keys \
+             WHERE service_id > $1 OR (service_id = $1 AND service_kind > $2) \
+             ORDER BY service_id ASC, service_kind ASC LIMIT $3",
+        )
+        .bind::<Text, _>(after_service_id)
+        .bind::<Text, _>(after_service_kind)
+        .bind::<BigInt, _>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
+        .load::<RouteKeyRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ServiceRouteStoredKey {
+                    service_id: ServiceId::new(row.service_id)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    service_kind: row.service_kind,
+                })
+            })
+            .collect()
+    }
+
+    async fn notice_states(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceRouteNoticeState>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT notice_state AS value FROM service_route_notice_states WHERE service_id=$1 AND service_kind=$2 ORDER BY updated_at DESC, handover_id ASC LIMIT $3")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
+            .bind::<BigInt,_>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
+            .load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?
+            .into_iter().map(|row| decode(row.value)).collect()
+    }
+
+    async fn handover_mirror_entries(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE artifact->'service_route_handover_notice'->'notice'->>'service_id'=$1 AND artifact->'service_route_handover_notice'->'notice'->>'service_kind'=$2 ORDER BY accepted_at DESC LIMIT $3")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
+            .bind::<BigInt,_>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
+            .load::<MirrorRow>(&mut *conn).await.map_err(PersistenceError::database)?
+            .into_iter().map(MirrorRow::decode).collect()
+    }
+
+    async fn quarantine_evidence(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query("SELECT service_id,service_kind,artifact_family,artifact_key,accepted_digest,conflicting_digest,evidence,quarantined_at FROM service_resolution_fork_quarantine WHERE service_id=$1 AND service_kind=$2 ORDER BY quarantined_at DESC LIMIT $3")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
+            .bind::<BigInt,_>(i64::try_from(limit.clamp(1, 256)).unwrap_or(256))
+            .load::<QuarantineRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ServiceResolutionForkEvidence {
+                    service_id: ServiceId::new(row.service_id)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    service_kind: row.service_kind,
+                    artifact_family: row.artifact_family,
+                    artifact_key: row.artifact_key,
+                    accepted_digest: Hash::new(row.accepted_digest)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    conflicting_digest: Hash::new(row.conflicting_digest)
+                        .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                    evidence: row.evidence,
+                    quarantined_at: row.quarantined_at,
+                })
+            })
+            .collect()
+    }
+
     async fn last_seen_floor(
         &self,
         service_id: &ServiceId,

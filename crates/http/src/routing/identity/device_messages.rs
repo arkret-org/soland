@@ -242,6 +242,7 @@ async fn send_device_messages(
             request_key,
             request_digest,
             idempotency_expires_at: idempotency_expires_at + chrono::Duration::hours(1),
+            target_snapshot_guard: None,
             items: batch_items,
         })
         .await
@@ -254,6 +255,9 @@ async fn send_device_messages(
         }
         DeviceMessageBatchCommitOutcome::MessageConflict { .. } => {
             return Err(device_message_intent_conflict());
+        }
+        DeviceMessageBatchCommitOutcome::SnapshotConflict => {
+            return Err(AppError::conflict("recipient device snapshot changed"));
         }
     };
     let outcome = device_message_send_outcome(&prepared_targets, &message_outcomes)?;

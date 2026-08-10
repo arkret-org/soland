@@ -542,7 +542,7 @@ async fn push_register_session_grant_bridge(
             "X-Arkret-Session-Grant must not be empty",
         ));
     }
-    let Some(principal_id) =
+    let Some(principal_identity) =
         optional_ascii_header(req, "x-arkret-principal-id", "X-Arkret-Principal-Id")?
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -553,13 +553,18 @@ async fn push_register_session_grant_bridge(
             "X-Arkret-Principal-Id is required when using X-Arkret-Session-Grant",
         ));
     };
-    if !principal_id.starts_with("did:") {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "invalid_param",
-            "principal_id must use the did: prefix when using X-Arkret-Session-Grant",
-        ));
-    }
+    let principal_id = arkret_wire::CoreId::new(principal_identity.to_owned())
+        .or_else(|_| {
+            arkret_wire::FullId::new(principal_identity.to_owned())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+        })
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "principal_id must be a core id or a projectable full id",
+            )
+        })?;
     let challenge = optional_ascii_header(
         req,
         "x-arkret-session-grant-challenge",
@@ -588,7 +593,7 @@ async fn push_register_session_grant_bridge(
         state,
         SessionGrantValidationInput {
             grant_jwt: grant,
-            principal_id,
+            principal_id: principal_id.as_str(),
             device_id: body.device_id.as_str(),
             proof: proof.as_ref(),
         },
@@ -611,7 +616,7 @@ async fn push_register_session_grant_bridge(
 
     Ok(Some(SessionRecord {
         token_hash: format!("grant-bridge:{}", sha256_hex(grant.as_bytes())),
-        actor: principal_id.to_owned(),
+        actor: principal_id.to_string(),
         device_id: body.device_id.as_str().to_owned(),
         audience: state.service_id().clone(),
         session_public_key,

@@ -23,35 +23,37 @@ pub(crate) fn direct_pair_key(
 }
 
 pub(super) fn direct_pair_key_participant(
-    did: &str,
+    identity: &str,
     role: &str,
 ) -> Result<
     arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant,
     AppError,
 > {
-    let did = Did::new(did.to_owned()).map_err(|error| {
-        AppError::internal(format!(
-            "stored direct conversation {role} DID invalid: {error}"
-        ))
-    })?;
-    let did_str = did.as_str();
-    if DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES
-        .iter()
-        .any(|prefix| did_str.starts_with(prefix))
-    {
-        return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-            "direct conversation pairwise DID requires a verified stable-subject identity link",
-        ));
-    }
+    let core_id = if let Ok(core_id) = CoreId::new(identity.to_owned()) {
+        core_id
+    } else {
+        let full_id = FullId::new(identity.to_owned()).map_err(|error| {
+            AppError::internal(format!(
+                "stored direct conversation {role} identity invalid: {error}"
+            ))
+        })?;
+        if DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES
+            .iter()
+            .any(|prefix| full_id.as_str().starts_with(prefix))
+        {
+            return Err(direct_resolve_precondition(
+                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                "direct conversation pairwise DID requires a verified stable-subject identity link",
+            ));
+        }
+        arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
+            AppError::internal(format!(
+                "stored direct conversation {role} full identity cannot be projected: {error}"
+            ))
+        })?
+    };
     Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-        arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(&did).map_err(|error| {
-                AppError::internal(format!(
-                    "stored direct conversation {role} DID cannot be projected: {error}"
-                ))
-            })?,
-        ),
+        arkret_wire::ActorId::from(core_id),
     ))
 }
 

@@ -383,17 +383,16 @@ pub(super) async fn peer_event_batch_fanout_records(
         {
             continue;
         }
-        let Some(url) =
-            crate::routing::federation::federation::peer_url_for_service_id(state, service_id)
-        else {
-            tracing::warn!(
-                event_id = %parsed.event_id,
-                realm_id = %parsed.realm_id,
-                destination_service_id = service_id,
-                "bootstrap peer member has no configured federation service URL"
-            );
-            continue;
-        };
+        let url = crate::routing::federation::federation::resolved_peer_base_url(
+            state,
+            service_id,
+            "principal_server",
+            false,
+        )
+        .await
+        .map_err(|error| {
+            format!("bootstrap peer member {service_id} has no verified service route: {error}")
+        })?;
         peers.push(DynamicPeerEventTarget {
             url,
             service_id: service_id.to_owned(),
@@ -523,13 +522,18 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         {
             continue;
         }
-        let Some(url) =
-            crate::routing::federation::federation::peer_url_for_service_id(state, service_id)
-        else {
-            return Err(format!(
-                "Direct Conversation founding destination {service_id} has no configured federation URL"
-            ));
-        };
+        let url = crate::routing::federation::federation::resolved_peer_base_url(
+            state,
+            service_id,
+            "principal_server",
+            false,
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "Direct Conversation founding destination {service_id} has no verified service route: {error}"
+            )
+        })?;
         peers.push(DynamicPeerEventTarget {
             url,
             service_id: service_id.to_owned(),
@@ -1176,38 +1180,54 @@ async fn dynamic_peer_event_targets(
         }
     }
 
-    service_frontiers
-        .into_iter()
-        .filter_map(
-            |(service_id, (membership_frontier, delivery_binding_frontier))| {
-                let url = match endpoint_urls.remove(&service_id).or_else(|| {
-                    crate::routing::federation::federation::peer_url_for_service_id(
-                        state,
-                        &service_id,
-                    )
-                }) {
-                    Some(url) => url,
-                    None => {
-                        tracing::warn!(
-                            event_id = %parsed.event_id,
-                            realm_id = %parsed.realm_id,
-                            destination_service_id = %service_id,
-                            "dynamic peer event fanout target has no configured service URL"
-                        );
-                        return None;
-                    }
-                };
-                let realm_sync_endpoint = realm_sync_endpoint_service_ids.contains(&service_id);
-                Some(DynamicPeerEventTarget {
-                    url,
-                    service_id,
-                    membership_frontier: membership_frontier.into_iter().collect(),
-                    delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
-                    realm_sync_endpoint,
-                })
-            },
-        )
-        .collect()
+    let mut targets = Vec::new();
+    for (service_id, (membership_frontier, delivery_binding_frontier)) in service_frontiers {
+        let url = if let Some(legacy_sync_url) = endpoint_urls.remove(&service_id) {
+            // `sync_endpoints` still carries the pre-core endpoint shape. It
+            // remains usable only while its identifier is also pre-core.
+            if arkret_wire::ServiceId::new(service_id.clone()).is_ok() {
+                crate::routing::federation::federation::resolved_peer_base_url(
+                    state,
+                    &service_id,
+                    "principal_server",
+                    false,
+                )
+                .await
+                .ok()
+            } else if state.config().development_mode {
+                Some(legacy_sync_url)
+            } else {
+                None
+            }
+        } else {
+            crate::routing::federation::federation::resolved_peer_base_url(
+                state,
+                &service_id,
+                "principal_server",
+                false,
+            )
+            .await
+            .ok()
+        };
+        let Some(url) = url else {
+            tracing::warn!(
+                event_id = %parsed.event_id,
+                realm_id = %parsed.realm_id,
+                destination_service_id = %service_id,
+                "dynamic peer event fanout target has no verified service route"
+            );
+            continue;
+        };
+        let realm_sync_endpoint = realm_sync_endpoint_service_ids.contains(&service_id);
+        targets.push(DynamicPeerEventTarget {
+            url,
+            service_id,
+            membership_frontier: membership_frontier.into_iter().collect(),
+            delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
+            realm_sync_endpoint,
+        });
+    }
+    targets
 }
 
 fn service_binding_ref_for_target(

@@ -128,6 +128,7 @@ impl SolandMemoryPersistenceStore {
         let account_localparts = MemoryAccountLocalpartStore::new();
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
+        let device_inventory_data = devices.shared_data();
         let publication_evidence_data = Arc::new(Mutex::new(BTreeMap::new()));
         let federation_outbox = MemoryFederationOutboxStore::new();
         let canonical_events = Arc::new(Mutex::new(BTreeMap::new()));
@@ -199,7 +200,7 @@ impl SolandMemoryPersistenceStore {
             events,
             projection_events,
             applets: MemoryAppletStore::new(),
-            device_messages: MemoryDeviceMessageStore::new(),
+            device_messages: MemoryDeviceMessageStore::with_inventory(device_inventory_data),
             device_keys: MemoryDeviceKeyStore::new(),
             one_time_keys: MemoryOneTimeKeyStore::new(),
             key_backups: MemoryKeyBackupStore::new(),

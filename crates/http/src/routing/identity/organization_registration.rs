@@ -1,4 +1,4 @@
-use arkret_identifiers::{CoreId, ServiceId};
+use arkret_identifiers::{CoreId, FullId, ServiceId, project_full_id_to_core_id};
 use arkret_models_identity::{
     OrganizationRegistrationChallenge, OrganizationRegistrationChallengeRequestBody,
     OrganizationRegistrationEnsureRequestBody, OrganizationRegistrationOutcome,
@@ -139,8 +139,10 @@ pub(crate) async fn get(
         .current(&organization_id)
         .await
         .map_err(map_error)?;
+    let actor_core_id = authenticated_actor_core_id(&actor);
     let authorized = current.as_ref().is_some_and(|current| {
-        state.is_admin_principal(&actor) || current.generation.local_admin_subject.as_str() == actor
+        state.is_admin_principal(&actor)
+            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject)
     });
     if !authorized {
         return Err(indistinguishable_not_found());
@@ -211,12 +213,19 @@ async fn require_registration_manager(
         .current(organization_id)
         .await
         .map_err(map_error)?;
+    let actor_core_id = authenticated_actor_core_id(&actor);
     if current.as_ref().is_some_and(|current| {
-        state.is_admin_principal(&actor) || current.generation.local_admin_subject.as_str() == actor
+        state.is_admin_principal(&actor)
+            || actor_core_id.as_ref() == Some(&current.generation.local_admin_subject)
     }) {
         return Ok(());
     }
     Err(indistinguishable_not_found())
+}
+
+fn authenticated_actor_core_id(actor: &str) -> Option<CoreId> {
+    let full_id = FullId::new(actor.to_owned()).ok()?;
+    project_full_id_to_core_id(&full_id).ok()
 }
 
 fn require_registry_admin(state: &AppState, actor: &str) -> Result<(), AppError> {
@@ -255,6 +264,19 @@ fn indistinguishable_not_found() -> AppError {
         "organization registration was not found",
     )
     .with_status(StatusCode::NOT_FOUND)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::authenticated_actor_core_id;
+
+    #[test]
+    fn authenticated_actor_is_projected_to_stable_core_id() {
+        let core = authenticated_actor_core_id("did:webvh:z6mkactor:alice.example")
+            .expect("active full DID projects to a core id");
+        assert_eq!(core.as_str(), "ak:did_core:webvh:z6mkactor");
+        assert!(authenticated_actor_core_id("ak:did_core:webvh:z6mkactor").is_none());
+    }
 }
 
 fn map_error(error: OrganizationRegistrationError) -> AppError {

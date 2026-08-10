@@ -1440,13 +1440,13 @@ mod tests {
     }
 
     struct TestReceiptSigner {
-        issuer: Did,
+        issuer: ServiceId,
         verification_method: DidUrl,
         signer: Ed25519DetachedJwsSigner,
     }
 
     impl OrganizationRegistrationReceiptSigner for TestReceiptSigner {
-        fn issuer_service_id(&self) -> &Did {
+        fn issuer_service_id(&self) -> &ServiceId {
             &self.issuer
         }
 
@@ -1462,8 +1462,9 @@ mod tests {
     struct SemanticFixture {
         service: OrganizationRegistrationService,
         resolver: Arc<StaticResolver>,
-        organization_id: Did,
-        admin_id: Did,
+        organization_id: CoreId,
+        full_id: FullId,
+        admin_id: CoreId,
         pinned: PinnedDidDocumentState,
         control_signer: Ed25519DetachedJwsSigner,
         governance_signers: Vec<Ed25519DetachedJwsSigner>,
@@ -1475,23 +1476,22 @@ mod tests {
         persistence: Arc<dyn PersistenceStore>,
         namespace: &str,
     ) -> SemanticFixture {
-        let organization_id = Did::new(format!(
-            "did:webvh:z6mkfixture:acme.example:semantic:{namespace}"
-        ))
-        .unwrap();
-        let admin_id = Did::new("did:webvh:z6mkfixture:admin.example".to_owned()).unwrap();
-        let issuer = Did::new("did:webvh:z6mkfixture:registry.example".to_owned()).unwrap();
-        let control_key = Ed25519DetachedJwsSigner::from_seed(
-            [31; 32],
-            format!("{organization_id}#org-control-key-1"),
-        );
+        let full_id = FullId::new(format!("did:webvh:z{namespace}:acme.example:semantic")).unwrap();
+        let organization_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+        let admin_id = CoreId::new("ak:did_core:webvh:z6mkadminfixture".to_owned()).unwrap();
+        let issuer_full_id =
+            FullId::new("did:webvh:z6mkregistryfixture:registry.example".to_owned()).unwrap();
+        let issuer =
+            ServiceId::from(arkret_wire::project_full_id_to_core_id(&issuer_full_id).unwrap());
+        let control_key =
+            Ed25519DetachedJwsSigner::from_seed([31; 32], format!("{full_id}#org-control-key-1"));
         let governance_key_1 = Ed25519DetachedJwsSigner::from_seed(
             [32; 32],
-            format!("{organization_id}#org-governance-key-1"),
+            format!("{full_id}#org-governance-key-1"),
         );
         let governance_key_2 = Ed25519DetachedJwsSigner::from_seed(
             [33; 32],
-            format!("{organization_id}#org-governance-key-2"),
+            format!("{full_id}#org-governance-key-2"),
         );
         let control_multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             control_key.verifying_key().as_bytes(),
@@ -1506,24 +1506,24 @@ mod tests {
         let governance_method_1 = governance_key_1.verification_method().to_owned();
         let governance_method_2 = governance_key_2.verification_method().to_owned();
         let document = json!({
-            "id": organization_id,
+            "id": full_id,
             "verificationMethod": [
                 {
                     "id": control_method,
                     "type": "Multikey",
-                    "controller": organization_id,
+                    "controller": full_id,
                     "publicKeyMultibase": control_multibase,
                 },
                 {
                     "id": governance_method_1,
                     "type": "Multikey",
-                    "controller": organization_id,
+                    "controller": full_id,
                     "publicKeyMultibase": governance_multibase_1,
                 },
                 {
                     "id": governance_method_2,
                     "type": "Multikey",
-                    "controller": organization_id,
+                    "controller": full_id,
                     "publicKeyMultibase": governance_multibase_2,
                 }
             ],
@@ -1538,7 +1538,7 @@ mod tests {
             }
         });
         let pinned = PinnedDidDocumentState {
-            did: organization_id.clone(),
+            did: full_id.clone(),
             version_id: "3-zFixtureVersionThree".to_owned(),
             log_head_digest: Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap(),
             document,
@@ -1549,11 +1549,12 @@ mod tests {
         let resolver = Arc::new(StaticResolver {
             state: RwLock::new(pinned.clone()),
         });
-        let receipt_vm = format!("{issuer}#registry-signing-key-1");
+        let receipt_vm = format!("{issuer_full_id}#registry-signing-key-1");
         SemanticFixture {
             service: OrganizationRegistrationService::with_resolver(persistence, resolver.clone()),
             resolver,
             organization_id,
+            full_id,
             admin_id,
             pinned,
             control_signer: control_key,
@@ -1576,6 +1577,7 @@ mod tests {
     ) -> OrganizationRegistrationChallengeRequestBody {
         OrganizationRegistrationChallengeRequestBody {
             organization_id: fixture.organization_id.clone(),
+            full_id: fixture.full_id.clone(),
             local_admin_subject: fixture.admin_id.clone(),
             requested_scopes: scopes,
         }
@@ -1584,7 +1586,7 @@ mod tests {
     fn signed_proof(
         challenge: &OrganizationRegistrationChallenge,
         pinned: &PinnedDidDocumentState,
-        local_admin_subject: &Did,
+        local_admin_subject: &CoreId,
         proof_kind: OrganizationControlProofKind,
         signers: &[&Ed25519DetachedJwsSigner],
         created_at: DateTime<Utc>,
@@ -1605,6 +1607,7 @@ mod tests {
             let bytes = control_transcript_bytes(
                 &challenge.challenge_id,
                 &challenge.organization_id,
+                &challenge.full_id,
                 local_admin_subject,
                 &pinned.version_id,
                 &pinned.log_head_digest,
@@ -1631,6 +1634,7 @@ mod tests {
     ) -> OrganizationRegistrationEnsureRequestBody {
         OrganizationRegistrationEnsureRequestBody {
             organization_id: fixture.organization_id.clone(),
+            full_id: fixture.full_id.clone(),
             challenge_id: challenge.challenge_id.clone(),
             version_id: fixture.pinned.version_id.clone(),
             log_head_digest: fixture.pinned.log_head_digest.clone(),
@@ -1789,6 +1793,7 @@ mod tests {
         let challenge_validation = challenge.validate_for_at(
             &OrganizationRegistrationChallengeRequestBody {
                 organization_id: challenge.organization_id.clone(),
+                full_id: challenge.full_id.clone(),
                 local_admin_subject: challenge.local_admin_subject.clone(),
                 requested_scopes: challenge.requested_scopes.clone(),
             },
@@ -1992,7 +1997,7 @@ mod tests {
             ),
         );
         redirected.local_admin_subject =
-            Did::new("did:webvh:z6mkfixture:attacker.example".to_owned()).unwrap();
+            CoreId::new("ak:did_core:webvh:z6mkattackerfixture".to_owned()).unwrap();
         let redirect_result = fixture
             .service
             .ensure(
@@ -2039,6 +2044,7 @@ mod tests {
             .refresh(
                 OrganizationRegistrationRefreshRequestBody {
                     organization_id: fixture.organization_id.clone(),
+                    full_id: fixture.full_id.clone(),
                     challenge_id: refresh_challenge.challenge_id,
                     version_id: fixture.pinned.version_id.clone(),
                     log_head_digest: fixture.pinned.log_head_digest.clone(),
@@ -2271,6 +2277,7 @@ mod tests {
             .refresh(
                 OrganizationRegistrationRefreshRequestBody {
                     organization_id: stale_fixture.organization_id.clone(),
+                    full_id: stale_fixture.full_id.clone(),
                     challenge_id: stale_recovery_challenge.challenge_id,
                     version_id: stale_fixture.pinned.version_id.clone(),
                     log_head_digest: stale_fixture.pinned.log_head_digest.clone(),
@@ -2378,6 +2385,7 @@ mod tests {
         let long_challenge_validation = long_challenge.validate_for_at(
             &OrganizationRegistrationChallengeRequestBody {
                 organization_id: long_challenge.organization_id.clone(),
+                full_id: long_challenge.full_id.clone(),
                 local_admin_subject: long_challenge.local_admin_subject.clone(),
                 requested_scopes: long_challenge.requested_scopes.clone(),
             },

@@ -221,14 +221,15 @@ fn rfc9421_sign_with_window(
 /// Send one Signal peer relay request without a durable outbox or retry.
 pub(crate) async fn relay_signal_once(
     state: &AppState,
-    peer_url: &str,
     peer_did: &str,
     request: &arkret_wire::SignalRelayRequest,
 ) -> Result<(), String> {
     request.validate().map_err(|error| error.to_string())?;
     let body =
         arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
-    let target = format!("{}/_arkret/peer/signal", peer_url.trim_end_matches('/'));
+    let peer_target =
+        super::federation::resolved_peer_target(state, peer_did, "principal_server", false).await?;
+    let target = format!("{}/_arkret/peer/signal", peer_target.base_url);
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target,
         "Signal peer relay",
@@ -255,7 +256,7 @@ pub(crate) async fn relay_signal_once(
     insert_header_if_valid(
         &mut headers,
         "destination-trust-domain",
-        &trust_domain_from_service_id(peer_did),
+        &peer_target.trust_domain,
     );
     let headers = rfc9421_sign_with_window(state, headers, "POST", &target, 5);
     let response = client
@@ -305,10 +306,6 @@ fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<Stri
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned)
-}
-
-fn trust_domain_from_service_id(service_id: &str) -> String {
-    super::federation::trust_domain_from_service_id(service_id)
 }
 
 /// Compute the RFC 9530 `Content-Digest` header value for a body.
@@ -679,17 +676,34 @@ impl FederationDispatcher {
             }
         };
         for row in rows {
-            let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
+            let peer_target = super::federation::resolved_peer_target(
+                &self.state,
+                &row.delivery.peer_did,
+                "principal_server",
+                false,
+            )
+            .await
+            .ok();
+            let Some(peer_target) = peer_target else {
+                let _ = self
+                    .state
+                    .federation()
+                    .resolve_policy_suppressed(
+                        &row.delivery.id,
+                        FederationPolicyResolution::Repin {
+                            policy_version: policy_version.clone(),
+                        },
+                    )
+                    .await;
+                continue;
+            };
+            let url = format!("{}{}", peer_target.base_url, row.delivery.endpoint);
             // §8 is re-checked here for the same reason the URL gate is: a
             // released row goes straight back to the wire, so a policy that
             // still denies the peer must still deny it after a version bump.
-            let peer_trust_domain = super::federation::peer_trust_domain_for_service_id(
-                &self.state,
-                &row.delivery.peer_did,
-            );
             let trust_domain_denied = crate::security::federation_outbound_trust_domain_denial(
                 &row.delivery.peer_did,
-                peer_trust_domain.as_deref(),
+                Some(&peer_target.trust_domain),
             )
             .is_some();
             let egress_ok = !trust_domain_denied
@@ -748,20 +762,54 @@ impl FederationDispatcher {
             );
             return;
         };
-        let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
+        let peer_target = super::federation::resolved_peer_target(
+            &self.state,
+            &row.delivery.peer_did,
+            "principal_server",
+            false,
+        )
+        .await;
+        let peer_target = match peer_target {
+            Ok(peer_target) => peer_target,
+            Err(error) => {
+                let attempts = row.attempts.saturating_add(1);
+                let now = now_unix_secs();
+                let command = if error.contains("quarantined") || error.contains("fork") {
+                    self.dead_letter(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        None,
+                        "service_route_quarantined",
+                        excerpt(&error),
+                        now,
+                    )
+                } else {
+                    self.transport_retry(
+                        &row,
+                        &lease_token,
+                        attempts,
+                        None,
+                        error_code::TRANSPORT_ERROR,
+                        excerpt(&format!("service_route_unavailable: {error}")),
+                        None,
+                        now,
+                    )
+                };
+                self.commit(command).await;
+                return;
+            }
+        };
+        let url = format!("{}{}", peer_target.base_url, row.delivery.endpoint);
         // `sovereign-deployment.md` §8 — the target service_id's trust_domain
         // MUST be checked against the local federation_allowlist BEFORE the
         // request leaves, and the sender MUST NOT rely on the receiver to
         // refuse. The URL egress gate below cannot stand in for this: it
         // decides on the host, and §8 binds the decision to the peer's
         // service_id.
-        let peer_trust_domain = super::federation::peer_trust_domain_for_service_id(
-            &self.state,
-            &row.delivery.peer_did,
-        );
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
             &row.delivery.peer_did,
-            peer_trust_domain.as_deref(),
+            Some(&peer_target.trust_domain),
         ) {
             tracing::warn!(
                 target = "federation_outbox",
@@ -873,7 +921,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-trust-domain",
-            &trust_domain_from_service_id(&row.delivery.peer_did),
+            &peer_target.trust_domain,
         );
         // A transport retry keeps the body and the key but always re-signs:
         // the signature window is short-lived and the old one has expired.

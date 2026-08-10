@@ -541,7 +541,7 @@ pub(crate) async fn accepted_contact_for_pair(
     }))
 }
 
-fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
+pub(super) fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
     let scope = contact_scope_wire(scope);
     contact
         .granted_to_target_scopes
@@ -553,7 +553,7 @@ fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -> bool {
             .any(|candidate| contact_scope_wire(candidate) == scope)
 }
 
-fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
+pub(super) fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
     if let Some(bundle) = contact.basis_evidence.as_ref()
         && matches!(
             &bundle.basis,

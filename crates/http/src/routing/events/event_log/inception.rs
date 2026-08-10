@@ -136,6 +136,13 @@ pub(super) async fn resolve_event_root_anchor_method(
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
 ) -> Result<Option<String>, EventValidationError> {
+    let actor_core_id = arkret_wire::CoreId::new(actor_id.to_owned()).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            format!("root-anchored Event actor_id must be a core id: {error}"),
+        )
+    })?;
     let refs = anchor_refs(object);
     if refs.is_empty() {
         return Ok(None);
@@ -185,7 +192,62 @@ pub(super) async fn resolve_event_root_anchor_method(
             "device re-anchor DID anchor reference must equal payload.did_version_id",
         ));
     }
-    if !actor_id.starts_with("did:webvh:") {
+    // Event actor_id is stable core state. did:webvh history lookup must use
+    // the separately carried/resolved full identity; reconstructing a URL or
+    // DID from the core id is forbidden.
+    let principal_full_id = if role == DID_INCEPTION_REF_ROLE {
+        let value = object
+            .get("payload")
+            .and_then(|payload| payload.pointer("/object/notary/did"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "missing_param",
+                    "principal-control genesis must carry its full notary DID",
+                )
+            })?;
+        let full_id = arkret_wire::FullId::new(value.to_owned()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                format!("principal-control genesis notary DID is invalid: {error}"),
+            )
+        })?;
+        if arkret_wire::project_full_id_to_core_id(&full_id)
+            .ok()
+            .as_ref()
+            != Some(&actor_core_id)
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "principal-control genesis full DID does not project to actor_id",
+            ));
+        }
+        full_id
+    } else {
+        state
+            .persistence()
+            .current_principal_resolution(&actor_core_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "stale_did_document",
+                    format!("principal resolution is unavailable: {error}"),
+                )
+            })?
+            .map(|record| record.projection.full_id)
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "stale_did_document",
+                    "principal full-id resolution is unavailable",
+                )
+            })?
+    };
+    if principal_full_id.method() != "webvh" {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "failed_precondition",
@@ -193,13 +255,17 @@ pub(super) async fn resolve_event_root_anchor_method(
         ));
     }
 
-    let mut records = state.dids().log_events(actor_id).await.map_err(|error| {
-        event_validation_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "stale_did_document",
-            format!("DID history is unavailable for root-anchor verification: {error}"),
-        )
-    })?;
+    let mut records = state
+        .dids()
+        .log_events(principal_full_id.as_str())
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "stale_did_document",
+                format!("DID history is unavailable for root-anchor verification: {error}"),
+            )
+        })?;
     records.sort_by_key(|record| record.seq);
     let log = records
         .iter()
@@ -214,23 +280,28 @@ pub(super) async fn resolve_event_root_anchor_method(
             format!("root-anchor DID history validation failed: {error}"),
         )
     })?;
-    crate::routing::identity::webvh_validation::verify_scid_against_did(actor_id, &log[0])
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("root-anchor DID SCID validation failed: {error}"),
-            )
-        })?;
-    crate::routing::identity::webvh_validation::verify_log_subject(actor_id, &log).map_err(
-        |error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                format!("root-anchor DID subject validation failed: {error}"),
-            )
-        },
-    )?;
+    crate::routing::identity::webvh_validation::verify_scid_against_did(
+        principal_full_id.as_str(),
+        &log[0],
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("root-anchor DID SCID validation failed: {error}"),
+        )
+    })?;
+    crate::routing::identity::webvh_validation::verify_log_subject(
+        principal_full_id.as_str(),
+        &log,
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            format!("root-anchor DID subject validation failed: {error}"),
+        )
+    })?;
     crate::routing::identity::webvh_validation::validate_witness_policy_for_log(
         &log,
         now().timestamp(),

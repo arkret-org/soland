@@ -1,10 +1,10 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
     assert_control_proposal_authority_ack_store_contract,
-    assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
-    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
-    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
-    assert_organization_registration_store_contract,
+    assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
+    assert_federation_outbox_store_contract, assert_idempotency_store_contract,
+    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
+    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
@@ -12,10 +12,22 @@ use soland_storage::{
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgContactStore, PgControlProposalAuthorityAckStore,
-    PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
-    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore,
+    PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
+    PgFederationOutboxStore, PgIdempotencyStore, PgMimiConsentCorrelationStore,
+    PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
+
+#[tokio::test]
+async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+    let messages = PgDeviceMessageStore { pool };
+    let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
+    assert_device_message_snapshot_guard_contract(&inventory, &messages, &namespace).await;
+}
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
 
@@ -121,11 +133,14 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     };
     let _db_guard = DB_GUARD.lock().await;
     let now = chrono::Utc::now();
-    let actor_id = arkret_identifiers::Did::new(format!(
+    let actor_full_id = arkret_identifiers::FullId::new(format!(
         "did:web:managed-anchor-{}.example",
         uuid::Uuid::now_v7()
     ))
     .unwrap();
+    let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
+        .map(arkret_identifiers::ActorId::from)
+        .unwrap();
     let realm_id =
         arkret_identifiers::RealmId::from_event_id(&arkret_identifiers::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,

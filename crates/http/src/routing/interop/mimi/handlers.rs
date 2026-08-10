@@ -939,13 +939,7 @@ pub(super) async fn mimi_report_abuse(
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
-    let routed_to = Did::new(state.service_id().clone()).map_or_else(
-        |error| {
-            tracing::warn!(%error, "mimi: service DID could not be represented in report outcome");
-            Vec::new()
-        },
-        |did| vec![did],
-    );
+    let routed_to = vec![state.service_resolution_commitment().full_id.clone()];
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.command.report_abuse",

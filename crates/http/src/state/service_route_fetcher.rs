@@ -1,0 +1,624 @@
+use arkret_models_identity::{
+    AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
+    ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
+    ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
+    ResolutionMethodHistoryEvidence, ServiceResolutionCarrier,
+};
+use arkret_wire::{BindingKind, Did, Hash, ServiceId, ServiceKind};
+use async_trait::async_trait;
+use chrono::Utc;
+use soland_services::identity::{DidService, PinnedDidVersionStatus};
+use soland_services::projection::ProjectionService;
+use soland_services::service_route::{
+    RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
+};
+use soland_services::{ServiceError, ServiceResult};
+
+/// Fetches only carriers retained by an effective business binding. It never
+/// derives a URL from a service core id and never treats a configured endpoint
+/// as resolution evidence.
+pub(crate) struct VerifiedBindingRouteFetcher {
+    projections: ProjectionService,
+    dids: DidService,
+    transport: arkret_http_client::ServiceResolutionFetcher,
+    development_mode: bool,
+}
+
+impl VerifiedBindingRouteFetcher {
+    pub(crate) fn new(
+        projections: ProjectionService,
+        dids: DidService,
+        development_mode: bool,
+    ) -> Self {
+        let egress = if development_mode {
+            arkret_egress_policy::OutboundPolicy::local_development()
+        } else {
+            arkret_egress_policy::OutboundPolicy::public_https()
+        };
+        Self {
+            projections,
+            dids,
+            transport: arkret_http_client::ServiceResolutionFetcher::with_egress_policy(egress),
+            development_mode,
+        }
+    }
+
+    fn current_member_carriers(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> Vec<ServiceResolutionCarrier> {
+        if service_kind != "principal_server" {
+            return Vec::new();
+        }
+        let snapshot = self.projections.snapshot();
+        let mut bindings = snapshot
+            .members
+            .values()
+            .filter(|member| {
+                member.state == "join"
+                    && member.delivery_status.as_deref() == Some("routable")
+                    && member.recipient_service_id.as_deref() == Some(service_id.as_str())
+            })
+            .filter_map(|member| {
+                let carrier = member.recipient_service_resolution.as_ref()?;
+                serde_json::from_value::<ServiceResolutionCarrier>(carrier.clone())
+                    .ok()
+                    .map(|carrier| (member.updated_at, member.realm_id.as_str(), carrier))
+            })
+            .collect::<Vec<_>>();
+        bindings.sort_by(|left, right| (right.0, right.1).cmp(&(left.0, left.1)));
+        bindings
+            .into_iter()
+            .map(|(_, _, carrier)| carrier)
+            .collect()
+    }
+
+    async fn verify_carrier(
+        &self,
+        carrier: &ServiceResolutionCarrier,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> ServiceResult<VerifiedRouteCandidate> {
+        let materialized = self
+            .transport
+            .materialize(carrier, service_id)
+            .await
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let record = materialized.into_record();
+        if record.record.service_kind != service_kind {
+            return Err(ServiceError::SchemaViolation(
+                "service resolution kind does not match the business binding".to_owned(),
+            ));
+        }
+        validate_route_binding(&record, self.development_mode)?;
+        let full_id = Did::new(record.record.full_id.to_string())
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let (document, method_history_evidence) = match full_id.method() {
+            "webvh" => {
+                let history_head = Hash::new(record.record.method_history_head.clone())
+                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+                let history_hex =
+                    history_head
+                        .as_str()
+                        .strip_prefix("sha256:")
+                        .ok_or_else(|| {
+                            ServiceError::SchemaViolation(
+                                "webvh service history head is not sha256".to_owned(),
+                            )
+                        })?;
+                if record.record.resolution_event_ref
+                    != format!("did-webvh-entry-sha256:{history_hex}")
+                {
+                    return Err(ServiceError::SchemaViolation(
+                        "webvh service resolution event ref does not match its history head"
+                            .to_owned(),
+                    ));
+                }
+                let pinned = self
+                    .dids
+                    .resolve_pinned_webvh_state(&full_id, &record.record.version_id, &history_head)
+                    .await
+                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+                if pinned.status != PinnedDidVersionStatus::Current {
+                    return Err(ServiceError::SchemaViolation(
+                        "service resolution is not at the current verified method-history head"
+                            .to_owned(),
+                    ));
+                }
+                let document: DidDocument = serde_json::from_value(pinned.document)
+                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+                let document_digest = canonical_document_digest(&document)?;
+                (
+                    document,
+                    webvh_evidence(&record, document_digest, empty_witness_digest()?),
+                )
+            }
+            "web" => {
+                let resolved = self
+                    .dids
+                    .resolve_did(&full_id)
+                    .await
+                    .map_err(ServiceError::SchemaViolation)?;
+                let document: DidDocument = serde_json::from_value(
+                    serde_json::to_value(resolved)
+                        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+                let digest = canonical_document_digest(&document)?;
+                validate_synthetic_method_coordinates(
+                    &record,
+                    &digest,
+                    "synthetic-jcs-sha256:",
+                    "did-web-document-sha256:",
+                )?;
+                (
+                    document,
+                    non_history_evidence(&record, digest, "web", "did:web:1", false),
+                )
+            }
+            "key" => {
+                let resolved = self
+                    .dids
+                    .resolve_did(&full_id)
+                    .await
+                    .map_err(ServiceError::SchemaViolation)?;
+                let document: DidDocument = serde_json::from_value(
+                    serde_json::to_value(resolved)
+                        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+                )
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+                let full_id_digest = Hash::new(arkret_canonical::sha256_digest(
+                    record.record.full_id.as_str().as_bytes(),
+                ))
+                .map_err(|error| ServiceError::Internal(error.to_string()))?;
+                validate_synthetic_method_coordinates(
+                    &record,
+                    &full_id_digest,
+                    "synthetic-full-id-sha256:",
+                    "did-key-full-id-sha256:",
+                )?;
+                let document_digest = canonical_document_digest(&document)?;
+                (
+                    document,
+                    non_history_evidence(&record, document_digest, "key", "did:key:1", true),
+                )
+            }
+            method => {
+                return Err(ServiceError::SchemaViolation(format!(
+                    "service resolution method {method:?} has no active adapter"
+                )));
+            }
+        };
+        let authenticated = AuthenticatedServiceResolution {
+            service_resolution_record: record.clone(),
+            method_history_evidence,
+            normalized_did_document: document,
+        };
+        arkret_signatures::service_resolution::verify_authenticated_service_resolution(
+            &authenticated,
+            service_id,
+            Utc::now(),
+        )
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let registered_kind = ServiceKind::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_str() == service_kind && kind.valid_in("service_describe"))
+            .ok_or_else(|| {
+                ServiceError::SchemaViolation(format!(
+                    "service resolution kind {service_kind:?} has no role-scoped describe surface"
+                ))
+            })?;
+        let description = self
+            .transport
+            .fetch_describe(&record.record.base_url, registered_kind)
+            .await
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let description = validate_service_describe(&record, description, registered_kind)?;
+        if Utc::now() >= record.record.expires_at {
+            return Err(ServiceError::SchemaViolation(
+                "service resolution expired while confirming ServiceDescribe".to_owned(),
+            ));
+        }
+        Ok(VerifiedRouteCandidate {
+            source: RouteSource::CurrentRecord,
+            record,
+            description,
+        })
+    }
+}
+
+fn validate_service_describe(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+    description: arkret_models_discovery::ServiceDescribe,
+    expected_kind: ServiceKind,
+) -> ServiceResult<VerifiedServiceDescribeMetadata> {
+    use arkret_models_identity::service_identity::CanonicalServiceUrl;
+
+    description
+        .validate()
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    if description.protocol_version != arkret_wire::PROTOCOL_VERSION
+        || description.service_id != record.record.service_id
+        || description.service_kind != expected_kind
+        || description.service_resolution.full_id != record.record.full_id
+        || description.service_resolution.method_history_head != record.record.method_history_head
+        || description.service_resolution.version_id != record.record.version_id
+    {
+        return Err(ServiceError::SchemaViolation(
+            "ServiceDescribe identity or resolution commitment does not match the verified record"
+                .to_owned(),
+        ));
+    }
+    let mut http_json_bindings = description
+        .supported_bindings
+        .iter()
+        .filter(|binding| binding.kind == BindingKind::HttpJson);
+    let binding = http_json_bindings.next().ok_or_else(|| {
+        ServiceError::SchemaViolation(
+            "ServiceDescribe has no selected http_json binding".to_owned(),
+        )
+    })?;
+    if http_json_bindings.next().is_some() {
+        return Err(ServiceError::SchemaViolation(
+            "ServiceDescribe has multiple http_json bindings".to_owned(),
+        ));
+    }
+    let advertised_base_raw = binding.base_url.as_deref().ok_or_else(|| {
+        ServiceError::SchemaViolation(
+            "ServiceDescribe http_json binding has no base_url".to_owned(),
+        )
+    })?;
+    let advertised_base = CanonicalServiceUrl::canonicalize(advertised_base_raw)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    if advertised_base.as_str() != advertised_base_raw
+        || advertised_base.as_str() != record.record.base_url
+    {
+        return Err(ServiceError::SchemaViolation(
+            "ServiceDescribe http_json base does not match the signed record target".to_owned(),
+        ));
+    }
+    #[derive(serde::Serialize)]
+    struct RouteBindingProjection<'a> {
+        service_id: &'a ServiceId,
+        service_kind: ServiceKind,
+        service_resolution: &'a arkret_models_identity::ResolutionCommitment,
+        http_json_base_url: &'a str,
+    }
+    let route_binding_digest = Hash::new(
+        arkret_canonical::canonical_sha256(&RouteBindingProjection {
+            service_id: &description.service_id,
+            service_kind: description.service_kind,
+            service_resolution: &description.service_resolution,
+            http_json_base_url: advertised_base.as_str(),
+        })
+        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    if route_binding_digest != record.record.describe_digest {
+        return Err(ServiceError::SchemaViolation(
+            "ServiceDescribe route-binding projection digest does not match the signed record"
+                .to_owned(),
+        ));
+    }
+    Ok(VerifiedServiceDescribeMetadata {
+        service_id: description.service_id,
+        service_kind: description.service_kind.as_str().to_owned(),
+        service_resolution: description.service_resolution,
+        http_json_base_url: advertised_base.to_string(),
+        route_binding_digest,
+        trust_domain: description.trust_domain,
+        protocol_version: description.protocol_version,
+    })
+}
+
+fn canonical_document_digest(document: &DidDocument) -> ServiceResult<Hash> {
+    Hash::new(
+        arkret_canonical::canonical_sha256(document)
+            .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))
+}
+
+fn validate_route_binding(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+    development_mode: bool,
+) -> ServiceResult<()> {
+    use arkret_models_identity::service_identity::CanonicalServiceUrl;
+
+    let base = CanonicalServiceUrl::canonicalize(&record.record.base_url)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    if base.to_string() != record.record.base_url {
+        return Err(ServiceError::SchemaViolation(
+            "service resolution base_url is not canonical".to_owned(),
+        ));
+    }
+    if !development_mode {
+        base.require_https()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    }
+    let expected_record_url = format!(
+        "{}{}",
+        base,
+        arkret_models_identity::canonical_service_current_record_path(&record.record.service_id)
+            .trim_start_matches('/')
+    );
+    if record.record.current_record_url != expected_record_url {
+        return Err(ServiceError::SchemaViolation(
+            "service resolution current_record_url is not derived from base_url".to_owned(),
+        ));
+    }
+    #[derive(serde::Serialize)]
+    struct RouteBindingProjection<'a> {
+        service_id: &'a ServiceId,
+        service_kind: &'a str,
+        service_resolution: arkret_models_identity::ResolutionCommitment,
+        http_json_base_url: &'a str,
+    }
+    let digest = Hash::new(
+        arkret_canonical::canonical_sha256(&RouteBindingProjection {
+            service_id: &record.record.service_id,
+            service_kind: &record.record.service_kind,
+            service_resolution: arkret_models_identity::ResolutionCommitment {
+                full_id: record.record.full_id.clone(),
+                method_history_head: record.record.method_history_head.clone(),
+                version_id: record.record.version_id.clone(),
+            },
+            http_json_base_url: &record.record.base_url,
+        })
+        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    if digest != record.record.describe_digest {
+        return Err(ServiceError::SchemaViolation(
+            "service resolution describe route-binding digest mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn empty_witness_digest() -> ServiceResult<Hash> {
+    Hash::new(
+        arkret_canonical::canonical_sha256(&Vec::<serde_json::Value>::new())
+            .map_err(|error| ServiceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))
+}
+
+fn evidence_boundary(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+) -> ResolutionMethodEvidenceBoundary {
+    ResolutionMethodEvidenceBoundary {
+        from_method_history_head: record.record.method_history_head.clone(),
+        from_version_id: record.record.version_id.clone(),
+        to_method_history_head: record.record.method_history_head.clone(),
+        to_version_id: record.record.version_id.clone(),
+    }
+}
+
+fn webvh_evidence(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+    document_digest: Hash,
+    witness_proofs_digest: Hash,
+) -> ResolutionMethodHistoryEvidence {
+    ResolutionMethodHistoryEvidence::WebvhLog {
+        adapter_version: "did:webvh:1.0".to_owned(),
+        boundary: evidence_boundary(record),
+        evidence: ResolutionDidBindingEvidenceReceipt {
+            kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+            method: "webvh".to_owned(),
+            document_digest,
+            method_proofs: vec![ResolutionDidBindingMethodProof {
+                kind: ResolutionDidBindingMethodProofKind::WebvhLog,
+                history_head: record.record.method_history_head.clone(),
+                witnesses: Vec::new(),
+                witness_proofs_digest,
+            }],
+        },
+    }
+}
+
+fn non_history_evidence(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+    document_digest: Hash,
+    method: &str,
+    adapter_version: &str,
+    did_key: bool,
+) -> ResolutionMethodHistoryEvidence {
+    let evidence = ResolutionDidBindingEvidenceReceipt {
+        kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+        method: method.to_owned(),
+        document_digest,
+        method_proofs: Vec::new(),
+    };
+    if did_key {
+        ResolutionMethodHistoryEvidence::DidKeyExpansion {
+            adapter_version: adapter_version.to_owned(),
+            boundary: evidence_boundary(record),
+            evidence,
+        }
+    } else {
+        ResolutionMethodHistoryEvidence::DidWebDocument {
+            adapter_version: adapter_version.to_owned(),
+            boundary: evidence_boundary(record),
+            evidence,
+        }
+    }
+}
+
+fn validate_synthetic_method_coordinates(
+    record: &arkret_models_identity::ServiceResolutionRecord,
+    digest: &Hash,
+    version_prefix: &str,
+    event_prefix: &str,
+) -> ServiceResult<()> {
+    let hex = digest
+        .as_str()
+        .strip_prefix("sha256:")
+        .ok_or_else(|| ServiceError::Internal("canonical hash lost sha256 prefix".to_owned()))?;
+    if record.record.method_history_head != digest.as_str()
+        || record.record.version_id != format!("{version_prefix}{hex}")
+        || record.record.resolution_event_ref != format!("{event_prefix}{hex}")
+    {
+        return Err(ServiceError::SchemaViolation(
+            "service resolution synthetic method coordinates do not match the active adapter"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
+    async fn fetch_carrier(
+        &self,
+        carrier: &ServiceResolutionCarrier,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        self.verify_carrier(carrier, service_id, service_kind)
+            .await
+            .map(Some)
+    }
+
+    async fn fetch_current(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        let carriers = self.current_member_carriers(service_id, service_kind);
+        let mut last_error = None;
+        for carrier in carriers {
+            match self
+                .verify_carrier(&carrier, service_id, service_kind)
+                .await
+            {
+                Ok(candidate) => return Ok(Some(candidate)),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+        Ok(None)
+    }
+
+    async fn fetch_notice_candidate(
+        &self,
+        _service_id: &ServiceId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_realm_peer_mirror(
+        &self,
+        _service_id: &ServiceId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_configured_mirror(
+        &self,
+        _service_id: &ServiceId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_discovery::{ServiceDescribe, SupportedBinding};
+    use arkret_models_identity::{
+        ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
+    };
+    use arkret_wire::{Base64UrlString, DidUrl, FullId, ProtocolSignature, TypedTrustDomainId};
+    use chrono::{Duration, TimeZone as _};
+
+    use super::*;
+
+    fn fixture() -> (ServiceResolutionRecord, ServiceDescribe) {
+        let full_id = FullId::new("did:webvh:z6mkdescribe:route.example").unwrap();
+        let service_id =
+            ServiceId::from(arkret_wire::project_full_id_to_core_id(&full_id).unwrap());
+        let base_url = "https://route.example/";
+        let commitment = ResolutionCommitment {
+            full_id: full_id.clone(),
+            method_history_head: "head-0".to_owned(),
+            version_id: "version-0".to_owned(),
+        };
+        let mut description = ServiceDescribe::development(
+            full_id.clone(),
+            TypedTrustDomainId::new("ak:trust_domain:route.example").unwrap(),
+            ServiceKind::PrincipalServer,
+        );
+        description.service_resolution = commitment.clone();
+        description.supported_bindings =
+            vec![SupportedBinding::new(BindingKind::HttpJson).with_base_url(base_url)];
+        #[derive(serde::Serialize)]
+        struct Projection<'a> {
+            service_id: &'a ServiceId,
+            service_kind: ServiceKind,
+            service_resolution: &'a ResolutionCommitment,
+            http_json_base_url: &'a str,
+        }
+        let describe_digest = Hash::new(
+            arkret_canonical::canonical_sha256(&Projection {
+                service_id: &service_id,
+                service_kind: ServiceKind::PrincipalServer,
+                service_resolution: &commitment,
+                http_json_base_url: base_url,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let issued_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
+        let record = ServiceResolutionRecord {
+            record: ServiceResolutionRecordCore {
+                service_id,
+                service_kind: "principal_server".to_owned(),
+                full_id: full_id.clone(),
+                method_history_head: commitment.method_history_head.clone(),
+                version_id: commitment.version_id.clone(),
+                resolution_event_ref: "fixture".to_owned(),
+                record_sequence: 0,
+                previous_record_digest: None,
+                current_record_url: format!("{base_url}_arkret/open/services/fixture/resolution"),
+                base_url: base_url.to_owned(),
+                describe_digest,
+                issued_at,
+                refresh_after: issued_at + Duration::minutes(5),
+                expires_at: issued_at + Duration::minutes(10),
+            },
+            proof: ProtocolSignature {
+                verification_method: DidUrl::new(format!("{full_id}#assertion-1")).unwrap(),
+                created_at: issued_at,
+                jws: Base64UrlString::new("AA").unwrap(),
+            },
+        };
+        (record, description)
+    }
+
+    #[test]
+    fn valid_record_rejects_describe_commitment_and_base_mismatch() {
+        let (record, description) = fixture();
+        validate_service_describe(&record, description.clone(), ServiceKind::PrincipalServer)
+            .unwrap();
+
+        let mut wrong_commitment = description.clone();
+        wrong_commitment.service_resolution.version_id = "other-version".to_owned();
+        assert!(
+            validate_service_describe(&record, wrong_commitment, ServiceKind::PrincipalServer)
+                .is_err()
+        );
+
+        let mut wrong_base = description;
+        wrong_base.supported_bindings[0].base_url = Some("https://other.example/".to_owned());
+        assert!(
+            validate_service_describe(&record, wrong_base, ServiceKind::PrincipalServer).is_err()
+        );
+    }
+}

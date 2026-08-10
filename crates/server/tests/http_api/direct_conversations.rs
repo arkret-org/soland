@@ -101,6 +101,7 @@ async fn seed_accepted_direct_message_contact(
             tombstone_event_ref: None,
             message: None,
             peer_service_id: peer_service_id.map(str::to_owned),
+            peer_service_resolution: None,
             created_at: now,
             updated_at: now,
         })
@@ -591,6 +592,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
             tombstone_event_ref: None,
             message: None,
             peer_service_id: None,
+            peer_service_resolution: None,
             created_at: now,
             updated_at: now,
         })

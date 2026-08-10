@@ -2323,6 +2323,7 @@ impl ProjectionService {
                 role: "member".to_owned(),
                 delivery_status,
                 recipient_service_id,
+                recipient_service_resolution: None,
                 membership_event_ref,
                 delivery_binding_frontier,
                 invited_at: previous
@@ -2382,6 +2383,7 @@ impl ProjectionService {
                     .unwrap_or_else(|| "member".to_owned()),
                 delivery_status: None,
                 recipient_service_id: None,
+                recipient_service_resolution: None,
                 membership_event_ref: Some(event_ref.clone()),
                 delivery_binding_frontier: None,
                 invited_at: previous
@@ -2422,6 +2424,7 @@ impl ProjectionService {
                 state: "leave".to_owned(),
                 delivery_status: None,
                 recipient_service_id: None,
+                recipient_service_resolution: None,
                 membership_event_ref: Some(projection_event_ref(operation)),
                 delivery_binding_frontier: previous.delivery_binding_frontier,
                 updated_at: operation.created_at,

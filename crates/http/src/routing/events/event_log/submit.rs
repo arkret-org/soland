@@ -622,8 +622,9 @@ struct DeliveryBindingMemberView {
 #[derive(Debug, Clone)]
 struct DeliveryBindingHandoverEvidence {
     realm_id: String,
-    actor_id: Did,
-    new_recipient_service_id: Did,
+    actor_id: arkret_wire::ActorId,
+    new_recipient_service_id: arkret_wire::ServiceId,
+    new_service_resolution: Option<arkret_models_identity::ServiceResolutionCarrier>,
     handover_frontier: Vec<EventId>,
     membership_event_ref: Option<String>,
     delivery_binding_frontier_ref: String,
@@ -2491,6 +2492,10 @@ pub(crate) async fn submit_federation_events(
                 crate::routing::federation::federation::delivery_binding_stale_response(
                     &evidence.new_recipient_service_id,
                     &evidence.actor_id,
+                    evidence
+                        .new_service_resolution
+                        .as_ref()
+                        .expect("stale evidence requires a verified route carrier"),
                     &evidence.handover_frontier,
                     evidence.witness,
                 ),

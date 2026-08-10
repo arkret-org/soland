@@ -86,6 +86,7 @@ pub struct ContactRecord {
     pub tombstone_event_ref: Option<String>,
     pub message: Option<String>,
     pub peer_service_id: Option<String>,
+    pub peer_service_resolution: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1380,6 +1381,9 @@ pub struct StoreAgentRuntimeApprovalCommand {
         arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
 }
 
+pub type EnqueueAgentRuntimeMessageCommand = soland_storage::EnqueueAgentRuntimeMessage;
+pub type AgentRuntimeEnqueueResult = soland_storage::AgentRuntimeEnqueueOutcome;
+
 #[async_trait]
 pub trait AgentPairingPort: Send + Sync {
     async fn pairing_record(
@@ -1417,6 +1421,10 @@ pub trait AgentPairingPort: Send + Sync {
         &self,
         command: &soland_storage::ConfirmAgentProvisioningAbandonment,
     ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessageCommand,
+    ) -> ServiceResult<AgentRuntimeEnqueueResult>;
 }
 
 #[derive(Clone, Debug)]
@@ -2117,6 +2125,15 @@ impl AgentPairingService {
         command: &soland_storage::ConfirmAgentProvisioningAbandonment,
     ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
         self.pairing.confirm_provisioning_abandonment(command).await
+    }
+
+    pub async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessageCommand,
+    ) -> ServiceResult<AgentRuntimeEnqueueResult> {
+        self.pairing
+            .enqueue_runtime_message_if_current(command)
+            .await
     }
 
     pub async fn ensure_sidecar(
@@ -3381,6 +3398,13 @@ mod tests {
             _command: &soland_storage::ConfirmAgentProvisioningAbandonment,
         ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
             Ok(soland_storage::AgentProvisioningAbandonmentWriteOutcome::NotFound)
+        }
+
+        async fn enqueue_runtime_message_if_current(
+            &self,
+            _command: &EnqueueAgentRuntimeMessageCommand,
+        ) -> ServiceResult<AgentRuntimeEnqueueResult> {
+            Ok(soland_storage::AgentRuntimeEnqueueOutcome::SnapshotConflict)
         }
     }
 

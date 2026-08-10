@@ -5,8 +5,10 @@ pub mod handles;
 pub mod invite_tokens;
 pub mod queries;
 pub mod seal;
+pub mod service_routes;
 
 pub use account_localparts::*;
 pub use delivery_binding::*;
 pub use device_signing_directory::*;
 pub use queries::*;
+pub use service_routes::*;

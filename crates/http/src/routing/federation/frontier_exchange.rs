@@ -77,7 +77,7 @@ impl FrontierExchangeWorker {
                 if peer.did == *self.state.service_id() {
                     continue;
                 }
-                let result = self.probe_peer(&peer.url, &peer.did, &realm_id).await;
+                let result = self.probe_peer(&peer.did, &realm_id).await;
                 let now = chrono::Utc::now().timestamp();
                 match result {
                     Ok(remote_root) if remote_root == local_root => {
@@ -115,16 +115,23 @@ impl FrontierExchangeWorker {
         Ok(())
     }
 
-    async fn probe_peer(
-        &self,
-        peer_url: &str,
-        peer_did: &str,
-        realm_id: &str,
-    ) -> Result<String, String> {
-        let canonical_target = format!(
-            "{}/_arkret/peer/events/frontier",
-            peer_url.trim_end_matches('/')
-        );
+    async fn probe_peer(&self, peer_did: &str, realm_id: &str) -> Result<String, String> {
+        let route = super::federation::resolved_peer_route(
+            &self.state,
+            peer_did,
+            "principal_server",
+            false,
+        )
+        .await
+        .map_err(|error| format!("service_route_unavailable:{error}"))?;
+        if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
+            peer_did,
+            Some(route.trust_domain.as_str()),
+        ) {
+            return Err(format!("trust_domain_policy_denied:{reason}"));
+        }
+        let peer_url = route.cache_entry.base_url.trim_end_matches('/');
+        let canonical_target = format!("{}/_arkret/peer/events/frontier", peer_url);
         let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .map_err(|error| format!("invalid_realm_id:{error}"))?,
@@ -139,7 +146,13 @@ impl FrontierExchangeWorker {
                 REQUEST_TIMEOUT,
             )
             .map_err(|error| format!("egress_policy_denied:{error}"))?;
-        let headers = signed_query_headers(&self.state, peer_did, &canonical_target, &body);
+        let headers = signed_query_headers(
+            &self.state,
+            peer_did,
+            route.trust_domain.as_str(),
+            &canonical_target,
+            &body,
+        );
         let query_method = reqwest::Method::from_bytes(b"QUERY")
             .map_err(|error| format!("invalid_query_method:{error}"))?;
         let mut response = client
@@ -164,7 +177,12 @@ impl FrontierExchangeWorker {
                     REQUEST_TIMEOUT,
                 )
                 .map_err(|error| format!("egress_policy_denied:{error}"))?;
-            let headers = signed_get_headers(&self.state, peer_did, &fallback_target);
+            let headers = signed_get_headers(
+                &self.state,
+                peer_did,
+                route.trust_domain.as_str(),
+                &fallback_target,
+            );
             response = fallback_client
                 .get(parsed_url)
                 .headers(headers)
@@ -223,6 +241,7 @@ impl FrontierExchangeWorker {
 fn signed_query_headers(
     state: &AppState,
     peer_did: &str,
+    peer_trust_domain: &str,
     target_url: &str,
     body: &[u8],
 ) -> HeaderMap {
@@ -234,33 +253,28 @@ fn signed_query_headers(
         &super::outbox::content_digest_header_value(body),
     );
     super::outbox::insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
-    super::outbox::insert_header_if_valid(&mut headers, "destination-service-id", peer_did);
+    insert_destination_binding(&mut headers, peer_did, peer_trust_domain);
     super::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
         &state.config().trust_domain,
-    );
-    super::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-trust-domain",
-        &super::federation::trust_domain_from_service_id(peer_did),
     );
     super::outbox::rfc9421_sign(state, headers, "QUERY", target_url)
 }
 
-fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> HeaderMap {
+fn signed_get_headers(
+    state: &AppState,
+    peer_did: &str,
+    peer_trust_domain: &str,
+    target_url: &str,
+) -> HeaderMap {
     let mut headers = HeaderMap::new();
     insert_header(&mut headers, "source-service-id", state.service_id());
-    insert_header(&mut headers, "destination-service-id", peer_did);
+    insert_destination_binding(&mut headers, peer_did, peer_trust_domain);
     insert_header(
         &mut headers,
         "source-trust-domain",
         &state.config().trust_domain,
-    );
-    insert_header(
-        &mut headers,
-        "destination-trust-domain",
-        &super::federation::trust_domain_from_service_id(peer_did),
     );
 
     let created = chrono::Utc::now().timestamp();
@@ -306,6 +320,15 @@ fn signed_get_headers(state: &AppState, peer_did: &str, target_url: &str) -> Hea
         &format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
     );
     headers
+}
+
+fn insert_destination_binding(
+    headers: &mut HeaderMap,
+    peer_service_id: &str,
+    verified_trust_domain: &str,
+) {
+    insert_header(headers, "destination-service-id", peer_service_id);
+    insert_header(headers, "destination-trust-domain", verified_trust_domain);
 }
 
 fn insert_header(headers: &mut HeaderMap, name: &'static str, value: &str) {
@@ -437,6 +460,24 @@ mod tests {
             )
             .unwrap_err(),
             "issuer_mismatch"
+        );
+    }
+
+    #[test]
+    fn destination_headers_use_verified_route_trust_domain_verbatim() {
+        let mut headers = HeaderMap::new();
+        insert_destination_binding(
+            &mut headers,
+            "ak:did_core:webvh:z6mkpeer",
+            "ak:trust_domain:verified.example",
+        );
+        assert_eq!(
+            header_value(&headers, "destination-service-id").as_deref(),
+            Some("ak:did_core:webvh:z6mkpeer")
+        );
+        assert_eq!(
+            header_value(&headers, "destination-trust-domain").as_deref(),
+            Some("ak:trust_domain:verified.example")
         );
     }
 }
