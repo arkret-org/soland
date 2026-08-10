@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_identifiers::{Did, RealmId, SealId};
+use arkret_identifiers::{DidFullId, RealmId, SealId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmLinkCreateRequestBody, RealmPolicyServerDeleteRequestBody,
     RealmPolicyServerReplaceRequestBody,
@@ -165,7 +165,7 @@ fn canonical_body<T: serde::Serialize>(body: &T) -> Vec<u8> {
 
 fn declaration_body(host: &str) -> Value {
     json!({
-        "policy_server_did": format!("did:web:{host}"),
+        "policy_server_service_id": format!("ak:did_core:web:{host}"),
         "policy_server_url": format!("https://{host}/_arkret/self/policy/check"),
         "cache_ttl_seconds": 60,
         "timeout_ms": 1500,
@@ -456,7 +456,10 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "org PUT: {view}");
-    assert_eq!(view["policy_server_did"], "did:web:org-policy.example");
+    assert_eq!(
+        view["policy_server_service_id"],
+        "ak:did_core:web:org-policy.example"
+    );
     assert_eq!(view["from_org_fallback"], false);
 
     // The declaration is a canonical Control Move in the durable Event log,
@@ -464,8 +467,8 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     let declared = policy_server_events(&state, &token, org_realm).await;
     assert_eq!(declared.len(), 1, "declaration events: {declared:?}");
     assert_eq!(
-        declared[0]["payload"]["policy_server_did"],
-        "did:web:org-policy.example"
+        declared[0]["payload"]["policy_server_service_id"],
+        "ak:did_core:web:org-policy.example"
     );
     assert_eq!(declared[0]["actor_id"], ALICE);
 
@@ -481,7 +484,10 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     // 2. The child has no direct binding; the resolver walks governed_by.
     let (status, inherited) = get_policy_server(&state, &token, child_realm).await;
     assert_eq!(status, StatusCode::OK, "inherited GET: {inherited}");
-    assert_eq!(inherited["policy_server_did"], "did:web:org-policy.example");
+    assert_eq!(
+        inherited["policy_server_service_id"],
+        "ak:did_core:web:org-policy.example"
+    );
     assert_eq!(inherited["from_org_fallback"], true);
 
     // 3. An inherited value is not a direct declaration: DELETE answers not_found and must not
@@ -523,8 +529,8 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         "fallback after tombstone: {inherited_again}"
     );
     assert_eq!(
-        inherited_again["policy_server_did"],
-        "did:web:org-policy.example"
+        inherited_again["policy_server_service_id"],
+        "ak:did_core:web:org-policy.example"
     );
     assert_eq!(inherited_again["from_org_fallback"], true);
     let (status, repeated) = delete_policy_server(&state, &token, child_realm).await;
@@ -585,25 +591,28 @@ async fn policy_server_declaration_survives_restart() {
 
     let (status, view) = get_policy_server(&restarted, &restarted_token, org_realm).await;
     assert_eq!(status, StatusCode::OK, "restarted GET: {view}");
-    assert_eq!(view["policy_server_did"], "did:web:org-policy.example");
+    assert_eq!(
+        view["policy_server_service_id"],
+        "ak:did_core:web:org-policy.example"
+    );
     assert_eq!(view["from_org_fallback"], false);
 
-    let restored_policy_server_did = {
+    let restored_policy_server_service_id = {
         let projection = restarted.test_projection().lock();
         projection
             .realm_null_subject_cells
             .get(&(org_realm.to_owned(), POLICY_CELL.to_owned()))
             .and_then(|cell| match cell {
-                arkret_state::lattice::CellState::Value(value) => {
-                    value.get("policy_server_did").and_then(Value::as_str)
-                }
+                arkret_state::lattice::CellState::Value(value) => value
+                    .get("policy_server_service_id")
+                    .and_then(Value::as_str),
                 arkret_state::lattice::CellState::Bottom(_) => None,
             })
             .map(ToOwned::to_owned)
     };
     assert_eq!(
-        restored_policy_server_did.as_deref(),
-        Some("did:web:org-policy.example"),
+        restored_policy_server_service_id.as_deref(),
+        Some("ak:did_core:web:org-policy.example"),
         "the declaration cell must survive restart"
     );
 
@@ -780,7 +789,10 @@ async fn policy_server_replace_without_head_eq_is_refused() {
     // the Event log did not grow.
     let (status, view) = get_policy_server(&state, &token, realm).await;
     assert_eq!(status, StatusCode::OK, "GET after refusal: {view}");
-    assert_eq!(view["policy_server_did"], "did:web:first.example");
+    assert_eq!(
+        view["policy_server_service_id"],
+        "ak:did_core:web:first.example"
+    );
     assert_eq!(
         policy_server_events(&state, &token, realm).await.len(),
         1,
@@ -791,7 +803,10 @@ async fn policy_server_replace_without_head_eq_is_refused() {
     let (status, view) =
         put_policy_server(&state, &token, realm, &declaration_body("second.example")).await;
     assert_eq!(status, StatusCode::OK, "guarded replace: {view}");
-    assert_eq!(view["policy_server_did"], "did:web:second.example");
+    assert_eq!(
+        view["policy_server_service_id"],
+        "ak:did_core:web:second.example"
+    );
 }
 
 /// `ak.self.events.read.resolve` returns the Seal covering each resolved Event.

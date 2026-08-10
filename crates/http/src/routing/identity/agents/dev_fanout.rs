@@ -22,8 +22,8 @@ use crate::state::AppState;
 /// `max_actor_seq(actor) + 1` so concurrent fan-out events stay strictly
 /// increasing.
 pub(super) async fn submit_agent_fanout_event(
-    _state: &AppState,
-    _session: &SessionRecord,
+    state: &AppState,
+    session: &SessionRecord,
     _realm_id: &str,
     _kind: &str,
     _payload: Value,
@@ -58,9 +58,14 @@ pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id =
-        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?
-            .into_string();
+    return Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "Agent provisioning requires an exact controller authority_instance selector",
+    )
+    .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+    .with_reason_code("principal_authority_instance_required"));
+    #[allow(unreachable_code)]
+    let realm_id: String = unreachable!("authority-instance selector required");
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -142,7 +147,7 @@ pub(super) async fn submit_provision_event(
     state: &AppState,
     session: &SessionRecord,
     controller_realm_id: &str,
-    agent_id: &arkret_wire::Did,
+    agent_id: &arkret_wire::DidCoreId,
     principal_control_realm_id: &arkret_wire::RealmId,
     controller_authorization_ref: &arkret_wire::DidUrl,
     agent_slug: &str,
@@ -227,7 +232,10 @@ pub(super) fn validate_durable_agent_lifecycle(
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
         || event.actor_id.as_str() != agent_id
-        || event.executed_by.as_ref().map(arkret_wire::ActorId::as_str)
+        || event
+            .executed_by
+            .as_ref()
+            .map(arkret_wire::DidCoreId::as_str)
             != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {

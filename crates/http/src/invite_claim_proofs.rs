@@ -1,5 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 #[cfg(test)]
 use arkret_identity::DidResolver;
 use arkret_models_collaboration::governance::membership_invite::{
@@ -331,9 +331,17 @@ fn resolve_current_ed25519_key(
     controller_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    crate::jws_verify::validate_verification_method_controller(controller_id, verification_method)?;
-    let did = Did::new(controller_id.to_owned())
-        .map_err(|error| format!("controller DID invalid: {error}"))?;
+    let controller = verification_method
+        .rsplit_once('#')
+        .map(|(controller, _)| controller)
+        .ok_or_else(|| "verification method has no fragment".to_owned())?;
+    let did = arkret_identifiers::DidFullId::new(controller.to_owned())
+        .map_err(|error| format!("verification method controller is invalid: {error}"))?;
+    let core = arkret_wire::project_full_id_to_core_id(&did)
+        .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
+    if core.as_str() != controller_id {
+        return Err("verification method controller does not match core identity".to_owned());
+    }
     let document = resolver
         .resolve_did_document(&did)
         .map_err(|error| format!("DID resolution failed: {error}"))?;
@@ -350,9 +358,17 @@ async fn resolve_current_ed25519_key_for_state(
     controller_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    crate::jws_verify::validate_verification_method_controller(controller_id, verification_method)?;
-    let did = Did::new(controller_id.to_owned())
-        .map_err(|error| format!("controller DID invalid: {error}"))?;
+    let controller = verification_method
+        .rsplit_once('#')
+        .map(|(controller, _)| controller)
+        .ok_or_else(|| "verification method has no fragment".to_owned())?;
+    let did = arkret_identifiers::DidFullId::new(controller.to_owned())
+        .map_err(|error| format!("verification method controller is invalid: {error}"))?;
+    let core = arkret_wire::project_full_id_to_core_id(&did)
+        .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
+    if core.as_str() != controller_id {
+        return Err("verification method controller does not match core identity".to_owned());
+    }
     let document = crate::jws_verify::resolve_did_document_async(state, &did).await?;
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
     crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method).await
@@ -411,7 +427,7 @@ mod tests {
 
     impl StubResolver {
         fn with_method(mut self, did: &str, method: &str, key: &SigningKey) -> Self {
-            let document_did = Did::new(did.to_owned()).unwrap();
+            let document_did = DidFullId::new(did.to_owned()).unwrap();
             let entry = self
                 .docs
                 .entry(did.to_owned())
@@ -433,11 +449,14 @@ mod tests {
     }
 
     impl DidResolver for StubResolver {
-        fn supports(&self, did: &Did) -> bool {
+        fn supports(&self, did: &DidFullId) -> bool {
             self.docs.contains_key(did.as_str())
         }
 
-        fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+        fn resolve_did(
+            &self,
+            did: &DidFullId,
+        ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
             self.docs
                 .get(did.as_str())
                 .cloned()

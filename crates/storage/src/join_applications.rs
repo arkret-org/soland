@@ -57,7 +57,7 @@ impl JoinApplicationRecord {
     pub fn append_audit(
         &mut self,
         action: JoinApplicationAuditAction,
-        actor_id: arkret_wire::Did,
+        actor_id: arkret_wire::DidCoreId,
         occurred_at: DateTime<Utc>,
         receipt_ref: Hash,
     ) {
@@ -192,7 +192,7 @@ pub fn apply_join_application_mutation(
         } => {
             let mut record = *record;
             let realm_id = record.receipt.realm_id.as_str().to_owned();
-            let applicant = record.receipt.applicant_did.as_str();
+            let applicant = record.receipt.applicant_actor_id.as_str();
             let now = record.receipt.submitted_at;
             let key = (realm_id.clone(), record.application_ref.as_str().to_owned());
             if records.contains_key(&key) {
@@ -204,7 +204,7 @@ pub fn apply_join_application_mutation(
                 .iter()
                 .find(|(_, existing)| {
                     existing.receipt.realm_id.as_str() == realm_id
-                        && existing.receipt.applicant_did.as_str() == applicant
+                        && existing.receipt.applicant_actor_id.as_str() == applicant
                         && existing.receipt.knock_ref == record.receipt.knock_ref
                         && existing.status == JoinApplicationStatus::ChangesRequested
                         && existing.superseded_by.is_none()
@@ -213,7 +213,7 @@ pub fn apply_join_application_mutation(
             let mut open = 0usize;
             for existing in records.values_mut().filter(|existing| {
                 existing.receipt.realm_id.as_str() == realm_id
-                    && existing.receipt.applicant_did.as_str() == applicant
+                    && existing.receipt.applicant_actor_id.as_str() == applicant
             }) {
                 existing.refresh_expiry(now);
                 if existing.is_open() {
@@ -247,7 +247,7 @@ pub fn apply_join_application_mutation(
             }
             record.append_audit(
                 JoinApplicationAuditAction::Submitted,
-                record.receipt.applicant_did.clone(),
+                record.receipt.applicant_actor_id.clone(),
                 record.receipt.submitted_at,
                 record.application_ref.clone(),
             );
@@ -311,7 +311,7 @@ pub fn apply_join_application_mutation(
             };
             record.append_audit(
                 JoinApplicationAuditAction::Reviewed,
-                receipt.reviewer_did.clone(),
+                receipt.reviewer_actor_id.clone(),
                 receipt.reviewed_at,
                 receipt.review_receipt_digest.clone(),
             );
@@ -327,7 +327,7 @@ pub fn apply_join_application_mutation(
                 .get_mut(&key)
                 .ok_or_else(|| super::PersistenceError::NotFound("join application".to_owned()))?;
             record.refresh_expiry(receipt.cancelled_at);
-            if !record.is_open() || receipt.cancelled_by != record.receipt.applicant_did {
+            if !record.is_open() || receipt.cancelled_by != record.receipt.applicant_actor_id {
                 return Err(super::PersistenceError::Conflict(
                     "failed_precondition".to_owned(),
                 ));
@@ -355,7 +355,7 @@ fn effective_accept_receipts<'a>(
         .iter()
         .filter(|review| &review.application_revision_digest == revision)
     {
-        let key = review.reviewer_did.as_str().to_owned();
+        let key = review.reviewer_actor_id.as_str().to_owned();
         match latest.get_mut(&key) {
             None => {
                 latest.insert(key, (review, false));
@@ -380,8 +380,8 @@ fn effective_accept_receipts<'a>(
         })
         .collect::<Vec<_>>();
     accepted.sort_by(|left, right| {
-        left.reviewer_did
-            .cmp(&right.reviewer_did)
+        left.reviewer_actor_id
+            .cmp(&right.reviewer_actor_id)
             .then_with(|| left.review_receipt_digest.cmp(&right.review_receipt_digest))
     });
     accepted

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver, DidWebResolver};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
@@ -41,11 +41,12 @@ use soland_services::authorization::{AuthorizationService, RealmPolicyServerConf
 
 const REALM_ID: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
 const POLICY_SERVER_DID: &str = "did:web:policy.example.com";
+const POLICY_SERVER_SERVICE_ID: &str = "ak:did_core:web:policy.example.com";
 
 fn config_for(url: &str, timeout_ms: u64) -> RealmPolicyServerConfig {
     RealmPolicyServerConfig {
         realm_id: REALM_ID.to_owned(),
-        policy_server_did: POLICY_SERVER_DID.to_owned(),
+        policy_server_service_id: DidCoreId::new(POLICY_SERVER_SERVICE_ID).unwrap(),
         policy_server_url: url.to_owned(),
         cache_ttl_seconds: 60,
         timeout_ms,
@@ -58,10 +59,10 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
     PolicyCheckRequestInput {
         request_id: "polreq_integ".to_owned(),
         realm_id: RealmId::new(REALM_ID).unwrap(),
-        actor_id: Did::new("did:web:alice.example").unwrap(),
+        actor_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
         action: "ak.message.create".to_owned(),
-        source_service_id: Did::new(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        source_service_id: DidCoreId::new(
+            "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
         )
         .unwrap(),
         source_service_kind: "principal_server".to_owned(),
@@ -87,7 +88,7 @@ fn policy_resolver(signing: &SigningKey) -> Arc<dyn DidResolver + Send + Sync> {
     let mut resolver = DidWebResolver::new();
     resolver
         .insert(DidDocument::new(
-            Did::new(POLICY_SERVER_DID).unwrap(),
+            DidFullId::new(POLICY_SERVER_DID).unwrap(),
             format!("{POLICY_SERVER_DID}#key-1"),
             ed25519_public_multibase(signing),
         ))
@@ -136,7 +137,10 @@ fn mock_allow_response(
             actor_id: request.actor_id.clone(),
             action: request.action.clone(),
             request_canonical_digest: request.request_canonical_digest.clone(),
-            policy_server_id: Did::new(POLICY_SERVER_DID).unwrap(),
+            policy_server_id: arkret_wire::project_full_id_to_core_id(
+                &DidFullId::new(POLICY_SERVER_DID).unwrap(),
+            )
+            .unwrap(),
         },
         freshness_state: FreshnessState::Fresh,
         auth_state_digest: input.expected_frontiers.auth_state_digest.clone(),

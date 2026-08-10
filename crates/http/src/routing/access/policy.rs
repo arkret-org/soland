@@ -22,7 +22,7 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_identifiers::{DidCoreId, Hash, RealmId};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
 };
@@ -385,7 +385,7 @@ async fn policy_check(
         .await;
     }
 
-    let policy_server_id = Did::new(state.service_id().clone())
+    let policy_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid service DID: {error}")))?;
     let expires_at = now() + chrono::Duration::minutes(5);
     let bound_to = PolicyCheckBoundTo {
@@ -796,12 +796,12 @@ mod tests {
             request_id: "ak:policy_request:test".to_owned(),
             realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                 .unwrap(),
-            actor_id: Did::new(actor.to_owned()).unwrap(),
+            actor_id: DidCoreId::new(actor.to_owned()).unwrap(),
             device_id: None,
             action: "ak.message.create".to_owned(),
             request_canonical_digest: test_hash(),
             source: arkret_models_collaboration::governance::policy_check::PolicyCheckSource {
-                service_id: Did::new(source_service.to_owned()).unwrap(),
+                service_id: DidCoreId::new(source_service.to_owned()).unwrap(),
                 service_kind: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),
                 signed_transport: true,

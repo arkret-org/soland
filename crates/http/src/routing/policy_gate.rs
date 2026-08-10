@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_identifiers::{DidFullId, Hash, RealmId};
 use arkret_identity::DidResolver;
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
@@ -61,11 +61,14 @@ struct SharedDidResolver {
 }
 
 impl DidResolver for SharedDidResolver {
-    fn supports(&self, did: &Did) -> bool {
+    fn supports(&self, did: &DidFullId) -> bool {
         self.inner.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+    fn resolve_did(
+        &self,
+        did: &DidFullId,
+    ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         self.inner.resolve_did(did)
     }
 }
@@ -255,12 +258,13 @@ async fn policy_request_for_operation(
             "invalid realm_id for policy check: {error}"
         ))
     })?;
-    let actor_id = Did::new(actor_id.to_owned()).map_err(|error| {
+    let actor_id = arkret_identifiers::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!("invalid actor DID: {error}"))
     })?;
-    let source_service_id = Did::new(state.service_id().clone()).map_err(|error| {
-        PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
-    })?;
+    let source_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| {
+            PolicyGateRejection::internal(format!("invalid local service DID: {error}"))
+        })?;
     let event_preview = serde_json::to_value(operation).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!(
             "operation preview serialization failed: {error}"

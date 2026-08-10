@@ -58,7 +58,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .await
             .unwrap();
     assert_eq!(
-        organizations["organizations"][0]["organization_did"],
+        organizations["organizations"][0]["organization_principal_id"],
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
     );
     assert_eq!(

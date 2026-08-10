@@ -1047,8 +1047,10 @@ async fn range_completeness_for_query(
     };
     let realm_id = RealmId::new(realms[0].clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    if crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?
-        != realm_id
+    if !state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &session.actor)
     {
         return Ok(None);
     }
@@ -1088,7 +1090,7 @@ async fn range_completeness_for_query(
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
 
     let issuer = state.service_resolution_commitment().full_id.clone();
-    let issuer_actor = arkret_wire::ActorId::from(
+    let issuer_actor = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&issuer)
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
     );
@@ -1110,7 +1112,7 @@ async fn range_completeness_for_query(
     let mut payload = RangeCompletenessAttestation {
         attestation_id,
         schema: "ak.schema.range_completeness_attestation.v1".to_owned(),
-        issuer: issuer.clone(),
+        issuer: issuer_actor.clone(),
         issuer_role: "events_api".to_owned(),
         realm_id: realm_id.clone(),
         event_range: RangeCompletenessAttestationEventRange {
@@ -1131,9 +1133,9 @@ async fn range_completeness_for_query(
             kind: "single_source".to_owned(),
             witnesses: vec![
                 RangeCompletenessAttestationWitnessAttestationWitnessesItem {
-                    issuer: issuer.clone(),
+                    issuer: issuer_actor.clone(),
                     verification_method: verification_method.clone(),
-                    controlling_organization: issuer.clone(),
+                    controlling_organization: issuer_actor.clone(),
                     attested_at: Some(observed_at),
                     extra: BTreeMap::new(),
                 },
@@ -1549,7 +1551,7 @@ mod tests {
         let redacted_at = created_at + chrono::Duration::minutes(1);
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
-        let actor_id = arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap();
+        let actor_id = arkret_identifiers::DidFullId::new(TEST_ACTOR.to_owned()).unwrap();
         let message_event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {

@@ -32,7 +32,9 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, Did, MorphId, RealmId, RelationId, SealId, SpaceId, StrandId};
+use arkret_identifiers::{
+    CellRef, DidCoreId, MorphId, RealmId, RelationId, SealId, SpaceId, StrandId,
+};
 use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
@@ -380,7 +382,10 @@ fn strand_assigned_to_relations(
                     &relation_id,
                     "assigned_to_relations.relation_id",
                 )?,
-                actor_id: parse_projection_id::<Did>(&actor_id, "assigned_to_relations.actor_id")?,
+                actor_id: parse_projection_id::<DidCoreId>(
+                    &actor_id,
+                    "assigned_to_relations.actor_id",
+                )?,
             })
         })
         .collect()
@@ -395,9 +400,9 @@ fn document_projection_document(
 {
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
-    parse_projection_id::<Did>(&morph.created_by, "document.created_by")?;
+    parse_projection_id::<DidCoreId>(&morph.created_by, "document.created_by")?;
     if let Some(updated_by) = morph.updated_by.as_deref() {
-        parse_projection_id::<Did>(updated_by, "document.updated_by")?;
+        parse_projection_id::<DidCoreId>(updated_by, "document.updated_by")?;
     }
 
     let mut document = serde_json::Map::new();
@@ -1044,7 +1049,10 @@ async fn list_space_container_projections(
                     .transpose()?,
                 rank: p.rank.clone(),
                 state: projection_space_state(p.state),
-                created_by: Some(parse_projection_id::<Did>(&p.created_by, "created_by")?),
+                created_by: Some(parse_projection_id::<DidCoreId>(
+                    &p.created_by,
+                    "created_by",
+                )?),
                 created_at: Some(p.created_at),
                 updated_at: p.updated_at,
                 state_changed_at: p.state_changed_at,
@@ -1134,12 +1142,15 @@ async fn list_strand_projections(
                 rank,
                 assigned_actor_ids,
                 assigned_to_relations,
-                created_by: Some(parse_projection_id::<Did>(&f.created_by, "created_by")?),
+                created_by: Some(parse_projection_id::<DidCoreId>(
+                    &f.created_by,
+                    "created_by",
+                )?),
                 created_at: Some(f.created_at),
                 updated_by: f
                     .updated_by
                     .as_deref()
-                    .map(|actor| parse_projection_id::<Did>(actor, "updated_by"))
+                    .map(|actor| parse_projection_id::<DidCoreId>(actor, "updated_by"))
                     .transpose()?,
                 updated_at: f.updated_at,
                 is_default: default_strand_id.as_deref() == Some(f.strand_id.as_str()),
@@ -1576,7 +1587,10 @@ async fn list_morph_projections(
                 morph_kind: m.morph_kind.clone(),
                 state: projection_object_state(m.state),
                 title: m.title.clone(),
-                created_by: Some(parse_projection_id::<Did>(&m.created_by, "created_by")?),
+                created_by: Some(parse_projection_id::<DidCoreId>(
+                    &m.created_by,
+                    "created_by",
+                )?),
                 created_at: Some(m.created_at),
                 updated_at: m.updated_at,
                 state_changed_at: m.state_changed_at,

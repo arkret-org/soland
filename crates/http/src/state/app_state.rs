@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arc_swap::ArcSwap;
-use arkret_identifiers::{Did, Hash, RealmId};
-use arkret_identity::service_identity::ServiceIdentityState;
+use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId};
+use arkret_identity::service_identity::DidCoreIdentityState;
 #[cfg(test)]
-use arkret_identity::service_identity::{LocalServiceIdentity, ServiceIdentityKeyRef};
+use arkret_identity::service_identity::{DidCoreIdentityKeyRef, LocalDidCoreIdentity};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::ResolutionCommitment;
 use arkret_models_identity::account::AccountRegistrationPolicy;
@@ -90,10 +90,10 @@ pub struct AppState {
     service_id: String,
     /// Full service-identity lifecycle state used by readiness, doctor, and
     /// identity-mutation gates.
-    service_identity: Arc<ArcSwap<ServiceIdentityState>>,
+    service_identity: Arc<ArcSwap<DidCoreIdentityState>>,
     /// Exact current service method-history coordinates. Public describe,
     /// open resolution, and Account-Authority gate assembly all read this
-    /// same snapshot instead of projecting a stable CoreId back into a DID.
+    /// same snapshot instead of projecting a stable DidCoreId back into a DID.
     service_resolution_commitment: Arc<ArcSwap<ResolutionCommitment>>,
     /// Mutable operational overlay (admin allowlist, rate-limit ceilings,
     /// federation peers, feature toggles). Seeded from `config` at boot,
@@ -265,7 +265,7 @@ pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
         demo.description = Some("Shared demo Realm served by soland".to_owned());
         demo.public = true;
         demo.members
-            .insert(Did::new("did:web:alice.example").expect("valid did"));
+            .insert(DidCoreId::new("ak:did_core:web:alice.example").expect("valid principal id"));
         demo.tags.insert("demo".to_owned());
         demo.category = Some("collaboration".to_owned());
         realms.upsert(demo);
@@ -274,7 +274,7 @@ pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
 }
 
 #[cfg(test)]
-fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
+fn development_fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
         ServiceKind::PrincipalServer,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
@@ -282,16 +282,16 @@ fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentitySt
     )
     .expect("principal-server registration key");
     let signing_key_ref =
-        ServiceIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
-    ServiceIdentityState::Ready {
-        identity: LocalServiceIdentity {
-            full_id: Did::new(
+        DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
+    DidCoreIdentityState::Ready {
+        identity: LocalDidCoreIdentity {
+            full_id: DidFullId::new(
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             )
             .expect("fixture service DID"),
-            service_id: arkret_wire::ServiceId::from(
+            service_id: arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(
-                    &Did::new(
+                    &DidFullId::new(
                         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                     )
                     .expect("fixture service DID"),
@@ -302,7 +302,7 @@ fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentitySt
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],
             active_signing_key_ref: signing_key_ref,
-            control_key_ref: ServiceIdentityKeyRef::new("fixture:soland:webvh-control-key")
+            control_key_ref: DidCoreIdentityKeyRef::new("fixture:soland:webvh-control-key")
                 .expect("fixture control key ref"),
             version_id: "fixture-v1".to_owned(),
             last_verified_at: chrono::Utc::now(),
@@ -312,17 +312,17 @@ fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentitySt
 
 #[cfg(test)]
 fn development_fixture_resolution_commitment(
-    identity: &ServiceIdentityState,
+    identity: &DidCoreIdentityState,
 ) -> ResolutionCommitment {
     ResolutionCommitment {
-        full_id: arkret_wire::FullId::new(
+        full_id: arkret_wire::DidFullId::new(
             identity
                 .identity()
                 .expect("fixture has a serving identity")
                 .full_id
                 .to_string(),
         )
-        .expect("fixture service FullId"),
+        .expect("fixture service DidFullId"),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     }
@@ -384,7 +384,7 @@ mod test_construction {
             config: AppConfig,
             db: Db,
             persistence: Arc<dyn PersistenceStore>,
-            service_identity: ServiceIdentityState,
+            service_identity: DidCoreIdentityState,
             service_resolution_commitment: ResolutionCommitment,
             resolved_signing_seed: [u8; 32],
         ) -> Self {
@@ -430,7 +430,7 @@ mod test_construction {
         }
     }
 
-    fn fixture_signing_seed(config: &AppConfig, identity: &ServiceIdentityState) -> [u8; 32] {
+    fn fixture_signing_seed(config: &AppConfig, identity: &DidCoreIdentityState) -> [u8; 32] {
         config.notary_signing_key_seed.unwrap_or_else(|| {
             let mut hasher = Sha256::new();
             hasher.update(b"soland:test-fixture-notary:");
@@ -628,7 +628,7 @@ impl AppState {
 
     pub async fn stored_service_identity(
         &self,
-    ) -> Result<arkret_identity::service_identity::StoredServiceIdentity, String> {
+    ) -> Result<arkret_identity::service_identity::StoredDidCoreIdentity, String> {
         self.persistence
             .stored_service_identity()
             .await
@@ -711,11 +711,11 @@ impl AppState {
     }
 
     /// Snapshot the current service-identity lifecycle state.
-    pub fn service_identity_state(&self) -> Arc<ServiceIdentityState> {
+    pub fn service_identity_state(&self) -> Arc<DidCoreIdentityState> {
         self.service_identity.load_full()
     }
 
-    pub fn replace_service_identity_state(&self, state: ServiceIdentityState) {
+    pub fn replace_service_identity_state(&self, state: DidCoreIdentityState) {
         self.service_identity.store(Arc::new(state));
     }
 
@@ -776,7 +776,7 @@ impl AppState {
     pub fn from_runtime(
         config: AppConfig,
         runtime: AppStateRuntime,
-        service_identity: ServiceIdentityState,
+        service_identity: DidCoreIdentityState,
         service_resolution_commitment: ResolutionCommitment,
         resolved_signing_seed: [u8; 32],
     ) -> Self {
@@ -1112,7 +1112,7 @@ impl AppState {
     /// Called from the single place soland learns a DID document moved —
     /// [`Self::cache_resolved_did_document`] — so an ordinary Event can never
     /// keep verifying against a superseded key.
-    pub fn invalidate_did_bindings(&self, did: &arkret_identifiers::Did) -> usize {
+    pub fn invalidate_did_bindings(&self, did: &arkret_identifiers::DidFullId) -> usize {
         self.did_bindings
             .invalidate(&arkret_identity::BindingInvalidation::for_did(did.clone()))
     }
@@ -1848,7 +1848,7 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use arkret_identifiers::{Did, RealmId};
+    use arkret_identifiers::{DidFullId, RealmId};
     use soland_services::hydration::{
         hydrate_projections_from_persistence, hydrate_realm_member_state_event,
     };
@@ -1941,7 +1941,7 @@ mod membership_hydration_tests {
         )
     }
 
-    fn directory_with_creator(realm_id: &RealmId, creator: &Did) -> RealmDirectoryIndex {
+    fn directory_with_creator(realm_id: &RealmId, creator: &DidCoreId) -> RealmDirectoryIndex {
         let mut realms = RealmDirectoryIndex::new();
         let mut entry = RealmDirectoryEntry::new(
             realm_id.clone(),
@@ -1962,8 +1962,8 @@ mod membership_hydration_tests {
         let realm_id =
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
-        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
-        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
+        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         // Before replay: only the creator is present (the realm.create seed).
@@ -1988,8 +1988,8 @@ mod membership_hydration_tests {
         let realm_id =
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
-        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
-        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
+        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         hydrate_realm_member_state_event(
@@ -2014,8 +2014,8 @@ mod membership_hydration_tests {
         let realm_id =
             RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
                 .expect("realm id");
-        let creator = Did::new("did:web:alice.example".to_owned()).expect("creator did");
-        let invitee = Did::new("did:web:bob.example".to_owned()).expect("invitee did");
+        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
+        let invitee = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
 
         let mut realms = directory_with_creator(&realm_id, &creator);
         hydrate_realm_member_state_event(

@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{Did, GrantId, Hash, InviteId, RealmId};
+use arkret_identifiers::{DidFullId, GrantId, Hash, InviteId, RealmId};
 use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,
@@ -410,9 +410,9 @@ fn capability_grant_from_authz_grant(
 ) -> Result<CapabilityGrant, AppError> {
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let issuer =
-        Did::new(grant.issuer.clone()).map_err(|error| AppError::internal(error.to_string()))?;
-    let subject = Did::new(grant.subject.clone())
+    let issuer = arkret_wire::DidCoreId::new(grant.issuer.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let subject = arkret_wire::DidCoreId::new(grant.subject.clone())
         .map(CapabilitySubject::Did)
         .unwrap_or_else(|_| CapabilitySubject::Selector(json!(grant.subject)));
     let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
@@ -428,6 +428,7 @@ fn capability_grant_from_authz_grant(
         realm_id: Some(realm_id),
         issuer,
         subject,
+        subject_authority_instance: None,
         actions: grant.actions,
         resources: vec![resource_selector],
         capability_action_registry_digest: grant.capability_action_registry_digest,
@@ -722,11 +723,11 @@ fn invite_record_to_sdk(
             .map_err(|error| AppError::internal(error.to_string()))?,
         realm_id: RealmId::new(invite.realm_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        inviter: Did::new(invite.inviter.clone())
+        inviter: arkret_wire::DidCoreId::new(invite.inviter.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         invitee: invite
             .invitee
-            .map(Did::new)
+            .map(arkret_wire::DidCoreId::new)
             .transpose()
             .map_err(|error| AppError::internal(error.to_string()))?,
         invite_delivery_target,

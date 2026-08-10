@@ -327,7 +327,7 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
         alias: None,
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
-        organization_did: None,
+        organization_principal_id: None,
         join_rule: Some(default_join_rule().to_owned()),
         member_count_bucket: entry
             .public
@@ -395,8 +395,8 @@ pub(super) fn organization_preview_from_value(
     organization: &Value,
     state: &AppState,
 ) -> Result<OrganizationPreview, AppError> {
-    let organization_did = organization
-        .get("organization_did")
+    let organization_principal_id = organization
+        .get("organization_principal_id")
         .and_then(Value::as_str)
         .unwrap_or(state.service_id().as_str());
     let as_of = organization_timestamp(organization).unwrap_or_else(now);
@@ -419,9 +419,13 @@ pub(super) fn organization_preview_from_value(
         .and_then(Value::as_u64)
         .or_else(|| (!realms.is_empty()).then_some(realms.len() as u64));
     Ok(OrganizationPreview {
-        organization_did: Did::new(organization_did.to_owned()).map_err(|error| {
-            AppError::internal(format!("directory organization_did is invalid: {error}"))
-        })?,
+        organization_principal_id: DidCoreId::new(organization_principal_id.to_owned()).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "directory organization_principal_id is invalid: {error}"
+                ))
+            },
+        )?,
         handle: organization
             .get("handle")
             .and_then(Value::as_str)
@@ -508,7 +512,7 @@ pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, Ap
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("directory actor preview missing actor DID"))?;
     Ok(ActorPreview {
-        actor_id: Did::new(actor_id.to_owned()).map_err(|error| {
+        actor_id: arkret_identifiers::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
             AppError::internal(format!("directory actor DID is invalid: {error}"))
         })?,
         handle: actor
@@ -519,10 +523,10 @@ pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, Ap
             .get("display_name")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        organization_did: actor
-            .get("organization_did")
+        organization_principal_id: actor
+            .get("organization_principal_id")
             .and_then(Value::as_str)
-            .map(|value| Did::new(value.to_owned()))
+            .map(|value| DidCoreId::new(value.to_owned()))
             .transpose()
             .map_err(|error| {
                 AppError::internal(format!("directory organization DID is invalid: {error}"))
@@ -733,11 +737,15 @@ pub(super) async fn join_candidates_for_resolved_realm(
                 arkret_wire::notary::NotaryValue::Mixed {
                     did,
                     recovery_members,
-                } => std::iter::once(did)
-                    .chain(recovery_members)
-                    .filter_map(|member| normalize_join_candidate_service_id(member.as_str()))
-                    .map(|service_id| service_id.to_string())
-                    .collect(),
+                } => {
+                    normalize_join_candidate_service_id(did.as_str())
+                        .into_iter()
+                        .chain(recovery_members.into_iter().filter_map(|member| {
+                            normalize_join_candidate_service_id(member.as_str())
+                        }))
+                        .map(|service_id| service_id.to_string())
+                        .collect()
+                }
             })
             .unwrap_or_default();
     if authority_service_ids.is_empty() {
@@ -762,7 +770,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         {
             for endpoint in endpoints {
                 let Some(service_id) = endpoint
-                    .get("did")
+                    .get("service_id")
                     .and_then(Value::as_str)
                     .and_then(normalize_join_candidate_service_id)
                     .filter(|service_id| authority_service_ids.contains(service_id.as_str()))
@@ -841,14 +849,14 @@ pub(super) async fn join_candidates_for_resolved_realm(
     candidates
 }
 
-fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::ServiceId> {
-    arkret_wire::ServiceId::new(value.to_owned())
+fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::DidCoreId> {
+    arkret_wire::DidCoreId::new(value.to_owned())
         .ok()
         .or_else(|| {
-            let full_id = arkret_wire::FullId::new(value.to_owned()).ok()?;
+            let full_id = arkret_wire::DidFullId::new(value.to_owned()).ok()?;
             arkret_wire::project_full_id_to_core_id(&full_id)
                 .ok()
-                .map(arkret_wire::ServiceId::from)
+                .map(arkret_wire::DidCoreId::from)
         })
 }
 
@@ -856,7 +864,7 @@ fn accepted_join_candidate_carrier(
     state: &AppState,
     realm_id: &str,
     endpoint: &Value,
-    service_id: &arkret_wire::ServiceId,
+    service_id: &arkret_wire::DidCoreId,
     own_resolution: Option<&arkret_models_identity::ServiceResolutionRecord>,
 ) -> Option<ServiceResolutionCarrier> {
     if own_resolution.is_some_and(|record| &record.record.service_id == service_id) {
@@ -912,3 +920,4 @@ fn join_candidate_endpoint_kind_role(
     };
     Some((service_kind, role))
 }
+use arkret_identifiers::DidCoreId;

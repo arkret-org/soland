@@ -212,7 +212,9 @@ async fn submit_join_application(
     {
         return Err(proof_error("private body digest mismatch"));
     }
-    if body.receipt.realm_id != realm_id || body.receipt.applicant_did.as_str() != session.actor {
+    if body.receipt.realm_id != realm_id
+        || body.receipt.applicant_actor_id.as_str() != session.actor
+    {
         return Err(failed_precondition(
             "proof_invalid",
             "receipt actor or realm does not match the request",
@@ -225,7 +227,7 @@ async fn submit_join_application(
             .map_err(proof_error)?,
         &body.receipt.proof.jws,
         &body.receipt.proof.verification_method,
-        body.receipt.applicant_did.as_str(),
+        body.receipt.applicant_actor_id.as_str(),
     )
     .await?;
 
@@ -266,12 +268,12 @@ async fn submit_join_application(
                 || recipient.enc.is_empty()
                 || recipient.wrapped_key.is_empty()
                 || !recipients.insert((
-                    recipient.reviewer_did.as_str(),
+                    recipient.reviewer_actor_id.as_str(),
                     recipient.device_id.as_str(),
                 ))
                 || !snapshot.actor_governs_realm(
                     realm_id.as_str(),
-                    recipient.reviewer_did.as_str(),
+                    recipient.reviewer_actor_id.as_str(),
                     &[action.as_str()],
                     body.receipt.submitted_at,
                 )
@@ -346,7 +348,7 @@ async fn review_join_application(
     body.receipt.validate().map_err(proof_error)?;
     if body.receipt.realm_id != realm_id
         || body.receipt.application_ref != application_ref
-        || body.receipt.reviewer_did.as_str() != session.actor
+        || body.receipt.reviewer_actor_id.as_str() != session.actor
     {
         return Err(failed_precondition(
             "proof_invalid",
@@ -360,7 +362,7 @@ async fn review_join_application(
             .map_err(proof_error)?,
         &body.receipt.proof.jws,
         &body.receipt.proof.verification_method,
-        body.receipt.reviewer_did.as_str(),
+        body.receipt.reviewer_actor_id.as_str(),
     )
     .await?;
     let accept_threshold = state
@@ -444,7 +446,7 @@ async fn cancel_join_application(
         .await
         .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
-    if existing.receipt.applicant_did.as_str() != session.actor {
+    if existing.receipt.applicant_actor_id.as_str() != session.actor {
         return Err(AppError::not_found("join application not found"));
     }
     let command = JoinApplicationCommand {
@@ -507,7 +509,7 @@ fn application_entry(
     actor: &str,
     reviewer: bool,
 ) -> (JoinApplicationEntry, bool) {
-    let applicant = record.receipt.applicant_did.as_str() == actor;
+    let applicant = record.receipt.applicant_actor_id.as_str() == actor;
     let body_visible = reviewer
         || applicant
         || record.applicant_visibility == "public"
@@ -520,7 +522,7 @@ fn application_entry(
         JoinApplicationEntry {
             application_ref: record.application_ref.clone(),
             realm_id: record.receipt.realm_id.clone(),
-            applicant_did: record.receipt.applicant_did.clone(),
+            applicant_actor_id: record.receipt.applicant_actor_id.clone(),
             application_revision_digest: record.receipt.application_revision_digest.clone(),
             policy_version_digest: record.receipt.policy_version_digest.clone(),
             submitted_at: record.receipt.submitted_at,
@@ -598,7 +600,7 @@ async fn list_join_applications(
     let mut visible = records
         .into_iter()
         .filter(|record| {
-            reviewer || member || record.receipt.applicant_did.as_str() == session.actor
+            reviewer || member || record.receipt.applicant_actor_id.as_str() == session.actor
         })
         .filter(|record| {
             cursor
@@ -655,7 +657,7 @@ async fn get_join_application(
         .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let (reviewer, ..) = viewer_context(state, &realm_id, &session.actor);
-    if !reviewer && record.receipt.applicant_did.as_str() != session.actor {
+    if !reviewer && record.receipt.applicant_actor_id.as_str() != session.actor {
         return Err(AppError::not_found("join application not found"));
     }
     let (application, body_visible) = application_entry(&record, &session.actor, reviewer);
@@ -689,7 +691,7 @@ async fn list_join_application_audit(
         .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let (reviewer, audit_reader, _) = viewer_context(state, &realm_id, &session.actor);
-    if !reviewer && !audit_reader && record.receipt.applicant_did.as_str() != session.actor {
+    if !reviewer && !audit_reader && record.receipt.applicant_actor_id.as_str() != session.actor {
         return Err(AppError::not_found("join application not found"));
     }
     json_ok(JoinApplicationAuditOutcome {

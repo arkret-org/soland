@@ -219,9 +219,9 @@ pub(super) fn federation_service_binding_check_from_members(
 pub(super) fn delivery_binding_handover_evidence_from_member(
     member: DeliveryBindingMemberView,
 ) -> Option<DeliveryBindingHandoverEvidence> {
-    let actor_id = arkret_wire::ActorId::new(member.member.clone()).ok()?;
+    let actor_id = arkret_wire::DidCoreId::new(member.member.clone()).ok()?;
     let new_recipient_service_id =
-        arkret_wire::ServiceId::new(member.recipient_service_id.clone()).ok()?;
+        arkret_wire::DidCoreId::new(member.recipient_service_id.clone()).ok()?;
     let handover_frontier = vec![EventId::new(member.delivery_binding_frontier_ref.clone()).ok()?];
     Some(DeliveryBindingHandoverEvidence {
         realm_id: member.realm_id,

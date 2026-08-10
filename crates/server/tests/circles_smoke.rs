@@ -18,7 +18,7 @@
 //!    the row.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{Did, OperationId, RealmId};
+use arkret_identifiers::{DidFullId, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
@@ -143,6 +143,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             role: "member".to_owned(),
             delivery_status: None,
             recipient_service_id: None,
+            recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
             invited_at: None,
@@ -806,5 +807,5 @@ fn circle_tombstone_hides_from_read_helper() {
         live.iter().all(|c| c.circle_id != CIRCLE_A),
         "tombstoned Circle MUST not appear in circles_for_realm"
     );
-    let _ = Did::new(ALICE.to_owned()).expect("did parses"); // silence unused import
+    let _ = DidFullId::new(ALICE.to_owned()).expect("did parses"); // silence unused import
 }

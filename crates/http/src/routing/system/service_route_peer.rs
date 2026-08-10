@@ -1,10 +1,9 @@
-use arkret_identifiers::Did;
 use arkret_models_identity::{
     ServiceResolutionArtifactKey, ServiceResolutionPublishAckCore, ServiceResolutionPublishOutcome,
     ServiceResolutionPublishRequest, ServiceResolutionResolveOutcome,
     ServiceResolutionResolveRequest, ServiceRouteHandoverState,
 };
-use arkret_wire::{FullId, Hash, ServiceId};
+use arkret_wire::{DidCoreId, DidFullId, Hash};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::http::StatusCode;
@@ -284,7 +283,7 @@ async fn quarantine_sequence_conflict(
 async fn verify_target_artifact(
     state: &AppState,
     request: &ServiceResolutionPublishRequest,
-    expected: &ServiceId,
+    expected: &DidCoreId,
 ) -> Result<(), AppError> {
     let (proof, bytes, full_id, method_history_head, issued_at, expires_at) =
         if let Some(record) = request.service_resolution_record.as_ref() {
@@ -321,7 +320,7 @@ async fn verify_target_artifact(
         };
     if Utc::now() >= expires_at
         || proof.created_at != issued_at
-        || ServiceId::from(
+        || DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(&full_id).map_err(protocol_violation)?,
         ) != *expected
     {
@@ -341,7 +340,7 @@ async fn verify_target_artifact(
     // MUST resolve through the registered DID adapter and the exact method in
     // the target's verified document. Unsupported/stale history fails closed;
     // there is deliberately no transport-key fallback.
-    let did = Did::new(full_id.as_str().to_owned()).map_err(protocol_violation)?;
+    let did = DidFullId::new(full_id.as_str().to_owned()).map_err(protocol_violation)?;
     let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
         state,
         &did,
@@ -365,15 +364,15 @@ async fn verify_target_artifact(
         .map_err(|_| AppError::capability_denied("invalid target route proof"))
 }
 
-fn proof_bare_full_id(method: &arkret_wire::DidUrl) -> Result<FullId, AppError> {
+fn proof_bare_full_id(method: &arkret_wire::DidUrl) -> Result<DidFullId, AppError> {
     let bare = method
         .as_str()
         .split_once('#')
         .map_or(method.as_str(), |(bare, _)| bare);
-    FullId::new(bare.to_owned()).map_err(protocol_violation)
+    DidFullId::new(bare.to_owned()).map_err(protocol_violation)
 }
 
-fn artifact_service_id(key: &ServiceResolutionArtifactKey) -> &ServiceId {
+fn artifact_service_id(key: &ServiceResolutionArtifactKey) -> &DidCoreId {
     match key {
         ServiceResolutionArtifactKey::ServiceResolutionRecord { service_id, .. }
         | ServiceResolutionArtifactKey::ServiceRouteHandoverNotice { service_id, .. } => service_id,
@@ -436,8 +435,8 @@ async fn parse_json<T: serde::de::DeserializeOwned>(req: &mut Request) -> Result
         .map_err(|_| protocol_violation("invalid service resolution JSON body"))
 }
 
-fn required_service_id(req: &Request, name: &'static str) -> Result<ServiceId, AppError> {
-    ServiceId::new(required_header(req, name)?).map_err(protocol_violation)
+fn required_service_id(req: &Request, name: &'static str) -> Result<DidCoreId, AppError> {
+    DidCoreId::new(required_header(req, name)?).map_err(protocol_violation)
 }
 
 fn required_header(req: &Request, name: &'static str) -> Result<String, AppError> {

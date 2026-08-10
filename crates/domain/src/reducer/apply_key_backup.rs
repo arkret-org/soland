@@ -104,7 +104,7 @@ fn soland_active_series_head(
 ) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead> {
     Some(
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead {
-            actor_id: arkret_identifiers::Did::new(current.actor_id.clone()).ok()?,
+            actor_id: arkret_identifiers::DidCoreId::new(current.actor_id.clone()).ok()?,
             backup_kind: arkret_models_crypto::BackupKind::try_from(current.backup_kind.as_str())
                 .ok()?,
             active_series_id: arkret_identifiers::BackupSeriesId::new(

@@ -625,12 +625,10 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::ActorId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"seed": event_seed}),
@@ -678,12 +676,10 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::ActorId::from(
-                arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-                )
-                .unwrap(),
-            ),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"contact_id": "ak:contact:test"}),
@@ -758,9 +754,9 @@ mod tests {
         let mut delegated = request;
         let mut event: arkret_wire::Event =
             serde_json::from_value(delegated.event.envelope.clone()).unwrap();
-        event.executed_by = Some(arkret_wire::ActorId::from(
+        event.executed_by = Some(arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &arkret_wire::Did::new("did:web:controller.example").unwrap(),
+                &arkret_wire::DidFullId::new("did:web:controller.example").unwrap(),
             )
             .unwrap(),
         ));

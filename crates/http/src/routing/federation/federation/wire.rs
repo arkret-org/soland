@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_identifiers::ServiceId;
+use arkret_identifiers::DidCoreId;
 use serde_json::{Value, json};
 
 // ════════════════════════════════════════════════════════════════════════
@@ -89,8 +89,8 @@ impl HeaderViolation {
 /// response carries the new recipient service DID and a frontier the sender
 /// should replay from after re-binding.
 pub(crate) fn delivery_binding_stale_response(
-    new_recipient_service_id: &arkret_wire::ServiceId,
-    actor_id: &arkret_wire::ActorId,
+    new_recipient_service_id: &arkret_wire::DidCoreId,
+    actor_id: &arkret_wire::DidCoreId,
     new_service_resolution: &arkret_models_identity::ServiceResolutionCarrier,
     handover_frontier: &[arkret_identifiers::EventId],
     witness: Value,
@@ -124,7 +124,7 @@ pub(crate) fn delivery_binding_stale_response(
 /// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
 /// Returned when the inbound delivery is a duplicate of a binding that has
 /// already been handed over to the new recipient.
-pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_id: &ServiceId) -> Value {
+pub(crate) fn delivery_binding_handed_over_response(new_recipient_service_id: &DidCoreId) -> Value {
     error_envelope_with_details(
         arkret_wire::ErrorCode::DELIVERY_BINDING_HANDED_OVER,
         "delivery binding has already been handed over to the new recipient",

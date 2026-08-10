@@ -668,7 +668,7 @@ pub(super) fn effect_resource_candidates(
         && matches!(parts.next(), Some("cell"))
         && parts.next().is_some()
         && let Some(subject) = parts.next()
-        && (subject.starts_with("ak:") || subject.starts_with("did:"))
+        && subject.starts_with("ak:")
     {
         append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, subject);
     }

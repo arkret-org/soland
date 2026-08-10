@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -125,7 +125,7 @@ pub(super) fn admin_actor_row(
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
 ) -> Option<AdminActor> {
-    let did = match Did::new(account.did.clone()) {
+    let did = match DidFullId::new(account.did.clone()) {
         Ok(did) => did,
         Err(error) => {
             tracing::warn!(did = %account.did, %error, "account row DID fails canonical grammar; skipped");

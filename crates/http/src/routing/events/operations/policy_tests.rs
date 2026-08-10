@@ -33,7 +33,8 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     )
     .unwrap();
     let now = chrono::Utc::now();
-    let alice_full = arkret_identifiers::FullId::new("did:web:alice.example".to_owned()).unwrap();
+    let alice_full =
+        arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
     let alice = crate::test_actor_id(&alice_full);
     let bob = crate::test_actor_id_str("did:web:bob.example");
     let mut realm_create = op(
@@ -996,9 +997,9 @@ async fn register_native_agent_membership_context(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        arkret_wire::ActorId::from(
+        arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &arkret_identifiers::FullId::new(agent.to_owned()).unwrap(),
+                &arkret_identifiers::DidFullId::new(agent.to_owned()).unwrap(),
             )
             .unwrap(),
         ),

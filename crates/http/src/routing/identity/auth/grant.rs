@@ -43,7 +43,7 @@ pub(crate) async fn validate_session_grant_binding(
             )
         })?;
     let audience =
-        arkret_identifiers::ServiceId::new(state.service_id().clone()).map_err(|error| {
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!(
                 "runtime principal service_id is not a core_id: {error}"
             ))

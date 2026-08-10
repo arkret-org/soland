@@ -52,7 +52,7 @@ pub(crate) fn validate_invite_third_party_payload(
     }
     let inviter = invite_field(payload, invite, "inviter", "inviter")
         .ok_or("ak.invite.third_party requires inviter")?;
-    if arkret_identifiers::Did::new(inviter).is_err() {
+    if arkret_identifiers::DidFullId::new(inviter).is_err() {
         return Err("ak.invite.third_party inviter must be a DID");
     }
     let third_party_id = invite_value(payload, invite, "third_party_id")
@@ -67,7 +67,7 @@ pub(crate) fn validate_invite_third_party_payload(
         .get("verification_service_id")
         .and_then(Value::as_str)
         .ok_or("third_party_id.verification_service_id is required")?;
-    if arkret_identifiers::Did::new(service_id.to_owned()).is_err() {
+    if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
         return Err("third_party_id.verification_service_id must be a DID");
     }
     if third_party_id
@@ -109,7 +109,7 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     }
     let subject_id =
         payload_string(payload, "subject_id").ok_or("ak.invite.claim requires subject_id")?;
-    if arkret_identifiers::Did::new(subject_id.clone()).is_err() {
+    if arkret_identifiers::DidCoreId::new(subject_id.clone()).is_err() {
         return Err("ak.invite.claim subject_id must be a DID");
     }
     let token_commitment = payload_string(payload, "token_commitment")

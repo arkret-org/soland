@@ -11,8 +11,8 @@ pub(super) async fn search_actors(
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
-    if let Some(organization_did) = body.organization_did.as_ref()
-        && organization_did.as_str() != state.service_id()
+    if let Some(organization_principal_id) = body.organization_principal_id.as_ref()
+        && organization_principal_id.as_str() != state.service_id()
     {
         return json_ok(DirectoryActorSearchOutcome {
             actors: Vec::new(),
@@ -106,8 +106,8 @@ pub(super) fn project_search_users_row(
         .ok_or_else(|| AppError::internal("directory user search row missing DID"))?;
     Ok(UserSearchOutcome {
         handle: (!canonical.is_empty()).then_some(canonical),
-        did: Some(Did::new(did.to_owned()).map_err(|error| {
-            AppError::internal(format!("directory user DID is invalid: {error}"))
+        principal_id: Some(DidCoreId::new(did.to_owned()).map_err(|error| {
+            AppError::internal(format!("directory user principal id is invalid: {error}"))
         })?),
         display_name: actor
             .get("display_name")
@@ -119,3 +119,4 @@ pub(super) fn project_search_users_row(
         member_delivery_binding: None,
     })
 }
+use arkret_identifiers::DidCoreId;

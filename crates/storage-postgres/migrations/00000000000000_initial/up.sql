@@ -2116,8 +2116,11 @@ CREATE TABLE public.service_identity (
 -- Seals remain protocol truth; these rows provide a crash-safe current/history
 -- read index for the public resolution evidence surface.
 CREATE TABLE public.principal_resolutions (
-    principal_id text PRIMARY KEY,
-    principal_control_realm_id text UNIQUE NOT NULL,
+    authority_instance_digest text PRIMARY KEY CHECK (authority_instance_digest ~ '^sha256:[0-9a-f]{64}$'),
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    principal_server_id text NOT NULL CHECK (principal_server_id LIKE 'ak:did_core:%'),
+    pcr_realm_id text UNIQUE NOT NULL CHECK (pcr_realm_id LIKE 'ak:realm:%'),
+    principal_genesis_receipt_digest text NOT NULL CHECK (principal_genesis_receipt_digest ~ '^sha256:[0-9a-f]{64}$'),
     genesis_event_id text NOT NULL,
     current_event_id text NOT NULL,
     projection jsonb NOT NULL,
@@ -2125,23 +2128,23 @@ CREATE TABLE public.principal_resolutions (
 );
 
 CREATE TABLE public.principal_resolution_events (
-    principal_id text NOT NULL REFERENCES public.principal_resolutions(principal_id) ON DELETE CASCADE,
+    authority_instance_digest text NOT NULL REFERENCES public.principal_resolutions(authority_instance_digest) ON DELETE CASCADE,
     event_id text NOT NULL,
     previous_event_id text,
     method_history_head text NOT NULL,
     event_json jsonb NOT NULL,
     created_at timestamptz NOT NULL,
-    PRIMARY KEY (principal_id, event_id)
+    PRIMARY KEY (authority_instance_digest, event_id)
 );
 CREATE UNIQUE INDEX principal_resolution_events_predecessor_idx
-    ON public.principal_resolution_events (principal_id, previous_event_id)
+    ON public.principal_resolution_events (authority_instance_digest, previous_event_id)
     WHERE previous_event_id IS NOT NULL;
 
 -- Durable remote-route safety state is deliberately split from the
 -- replaceable TTL cache. Restart or cache eviction must never lower a floor,
 -- forget an accepted notice/fork, or lose a mirror receipt transcript.
 CREATE TABLE public.service_resolution_last_seen_floors (
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
     floor jsonb NOT NULL,
     updated_at timestamptz NOT NULL,
@@ -2149,7 +2152,7 @@ CREATE TABLE public.service_resolution_last_seen_floors (
 );
 
 CREATE TABLE public.service_route_notice_states (
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
     handover_id text NOT NULL,
     notice_state jsonb NOT NULL,
@@ -2158,7 +2161,7 @@ CREATE TABLE public.service_route_notice_states (
 );
 
 CREATE TABLE public.service_resolution_mirror_ledger (
-    source_service_id text NOT NULL,
+    source_service_id text NOT NULL CHECK (source_service_id LIKE 'ak:did_core:%'),
     realm_id text NOT NULL,
     request_id text NOT NULL,
     request_digest text NOT NULL,
@@ -2172,7 +2175,7 @@ CREATE TABLE public.service_resolution_mirror_ledger (
 );
 
 CREATE TABLE public.service_resolution_fork_quarantine (
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
     artifact_family text NOT NULL,
     artifact_key text NOT NULL,
@@ -2184,7 +2187,7 @@ CREATE TABLE public.service_resolution_fork_quarantine (
 );
 
 CREATE TABLE public.service_route_cache (
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     service_kind text NOT NULL,
     entry jsonb NOT NULL,
     cache_expires_at timestamptz NOT NULL,
@@ -2196,7 +2199,7 @@ CREATE INDEX service_route_cache_expiry_idx ON public.service_route_cache (cache
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
     public_base text NOT NULL,
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     version_id text NOT NULL,
     inception_digest text NOT NULL,
     outcome jsonb NOT NULL,
@@ -2221,9 +2224,9 @@ CREATE INDEX event_federation_outbox_outbox_id_idx
 -- protocol Realm id remains the full event-derived 264-bit token as text;
 -- this table is a uniqueness ledger, not a second Realm projection.
 CREATE TABLE public.identity_anchor_account_slots (
-    account_authority_id text NOT NULL,
+    account_authority_id text NOT NULL CHECK (account_authority_id LIKE 'ak:did_core:%'),
     account_subject text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     realm_id text NOT NULL,
     create_event_id text NOT NULL,
     PRIMARY KEY (account_authority_id, account_subject),

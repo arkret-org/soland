@@ -356,7 +356,7 @@ pub async fn realm_basis(
     let mut body = body.into_inner();
     let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
         .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
-    let subject = arkret_identifiers::Did::new(body.subject.clone())
+    let subject = arkret_identifiers::DidFullId::new(body.subject.clone())
         .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
     if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
         return Err(AppError::invalid_param(
@@ -453,8 +453,8 @@ pub async fn device_signing_key(
     super::ensure_enabled()?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if arkret_wire::CoreId::new(body.actor_id.clone()).is_err()
-        && arkret_identifiers::Did::new(body.actor_id.clone()).is_err()
+    if arkret_wire::DidCoreId::new(body.actor_id.clone()).is_err()
+        && arkret_identifiers::DidCoreId::new(body.actor_id.clone()).is_err()
     {
         return Err(AppError::invalid_param(
             "actor_id must be a canonical full_id or core_id",

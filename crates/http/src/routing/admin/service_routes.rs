@@ -47,7 +47,7 @@ fn decode_cursor(value: Option<String>) -> Result<Option<ServiceRouteStoredKey>,
     let cursor: RouteCursor = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::invalid_param("invalid service-route cursor"))?;
     Ok(Some(ServiceRouteStoredKey {
-        service_id: arkret_wire::ServiceId::new(cursor.service_id)
+        service_id: arkret_wire::DidCoreId::new(cursor.service_id)
             .map_err(|_| AppError::invalid_param("invalid service-route cursor"))?,
         service_kind: validate_service_kind(cursor.service_kind)?,
     }))
@@ -118,7 +118,7 @@ fn sanitize_private_diagnostic(value: serde_json::Value) -> serde_json::Value {
 
 async fn load_detail(
     state: &AppState,
-    service_id: arkret_wire::ServiceId,
+    service_id: arkret_wire::DidCoreId,
     service_kind: String,
 ) -> Result<AdminServiceRouteDetail, AppError> {
     let observed_at = chrono::Utc::now();
@@ -330,7 +330,7 @@ async fn admin_get_service_route(
 ) -> JsonResult<AdminServiceRouteDetail> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
-    let service_id = arkret_wire::ServiceId::new(service_id.into_inner())
+    let service_id = arkret_wire::DidCoreId::new(service_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid service_id core"))?;
     let service_kind = validate_service_kind(service_kind.into_inner())?;
     let detail = load_detail(state, service_id, service_kind).await?;

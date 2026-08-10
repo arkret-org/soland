@@ -1,6 +1,6 @@
 use arkret_models_collaboration::objects::read_receipts::Notification;
 use arkret_models_collaboration::sync_frames::account_sync::NotificationDelta;
-use arkret_wire::Did;
+use arkret_wire::DidCoreId;
 use arkret_wire::events::EventKind;
 
 use super::{PersistenceResult, async_trait};
@@ -9,15 +9,15 @@ use super::{PersistenceResult, async_trait};
 pub struct RecipientNotificationRecord {
     pub notification: Notification,
     pub event_kind: EventKind,
-    pub source_actor_id: Option<Did>,
+    pub source_actor_id: Option<DidCoreId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountNotificationDeltaWrite {
     pub delta: NotificationDelta,
-    pub recipient_id: Did,
+    pub recipient_id: DidCoreId,
     pub controller_account_id: String,
-    pub recipient_service_id: Did,
+    pub recipient_service_id: DidCoreId,
     pub source_account_artifact_id: String,
 }
 

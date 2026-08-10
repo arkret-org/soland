@@ -29,7 +29,7 @@
 //! the fail-closed [`NoDelegationResolver`]: a `governance_service` /
 //! `account_authority` statement (which requires a live delegation) is rejected
 //! here and only accepted once a runtime resolver is wired at the
-//! admission/HTTP layer (see SOL-ORG-06 notes). `organization_did` /
+//! admission/HTTP layer (see SOL-ORG-06 notes). `organization_principal_id` /
 //! `threshold_quorum` statements (no `delegation_ref`) project directly.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
@@ -301,7 +301,7 @@ fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
 fn issuer_role_str(payload: &RealmOrganizationPayload) -> &'static str {
     use arkret_models_collaboration::RealmOrganizationIssuerRole as Role;
     match payload.authorization.issuer_role {
-        Role::OrganizationDid => "organization_did",
+        Role::OrganizationDid => "organization_principal_id",
         Role::GovernanceService => "governance_service",
         Role::AccountAuthority => "account_authority",
         Role::ThresholdQuorum => "threshold_quorum",
@@ -361,7 +361,7 @@ mod tests {
         )
     }
 
-    /// Active `organization_did` statement (no delegation_ref required).
+    /// Active `organization_principal_id` statement (no delegation_ref required).
     fn active_payload(realm_id: &str, org: &str, relationship: &str, scopes: &[&str]) -> Value {
         json!({
             "statement_id": format!("org-stmt-{relationship}"),
@@ -373,7 +373,7 @@ mod tests {
             "issued_at": "2026-06-25T00:00:00.000Z",
             "authorization": {
                 "issuer": org,
-                "issuer_role": "organization_did",
+                "issuer_role": "organization_principal_id",
                 "verification_method": format!("{org}#k1"),
                 "signed_at": "2026-06-25T00:00:00.000Z",
                 "proof": "c2ln"
@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn active_organization_did_statement_projects_relationship() {
+    fn active_organization_principal_id_statement_projects_relationship() {
         let mut state = ProjectionState::new();
         let effect = apply(
             &mut state,

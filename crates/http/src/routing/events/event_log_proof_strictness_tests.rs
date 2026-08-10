@@ -98,7 +98,10 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
         "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned(),
     )
     .unwrap();
-    let actor_id = arkret_identifiers::Did::new(did.clone()).unwrap();
+    let actor_id = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(did.clone()).unwrap(),
+    )
+    .unwrap();
     let subject_id = actor_id.clone();
     let zero_hash = arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
     let mut identity = arkret_models_identity::member_identity::MemberIdentity::new(

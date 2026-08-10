@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{
-    BlobRef, CoreId, DeviceId, Did, EventId, FullId, Hash, RealmId, StrandId,
+    BlobRef, DeviceId, DidCoreId, DidFullId, EventId, Hash, RealmId, StrandId,
 };
 use arkret_models_collaboration::account_lifecycle::{
     AccountUpdateProfileRequestBody, AccountView,
@@ -85,7 +85,7 @@ use crate::wire::SolandAccountRegisterOutcome;
 /// this internal edge only confirms the durable local projection.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountProjectionRegisterOutcome {
-    principal_id: CoreId,
+    principal_id: DidCoreId,
     state: AccountStatus,
     #[salvo(schema(value_type = serde_json::Value))]
     devices: Vec<AccountDeviceSummary>,
@@ -105,8 +105,8 @@ struct AccountProjectionRegisterOutcome {
 #[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct AccountProjectionRegisterRequestBody {
-    principal_id: CoreId,
-    full_id: FullId,
+    principal_id: DidCoreId,
+    full_id: DidFullId,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -204,21 +204,21 @@ mod lifecycle;
 mod principal_service_binding;
 pub(in crate::routing) mod repair;
 
-pub(crate) async fn current_principal_service_binding(
+pub(crate) async fn principal_service_binding_for_authority(
     state: &AppState,
-    principal_id: &str,
+    authority: &arkret_wire::PrincipalAuthorityInstance,
 ) -> Result<
     Option<arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding>,
     AppError,
 > {
-    principal_service_binding::current_binding(state, principal_id).await
+    principal_service_binding::binding_for_authority(state, authority).await
 }
 
 pub(crate) async fn install_conformance_principal_service_binding(
     state: &AppState,
     binding: arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
 ) -> Result<(), AppError> {
-    principal_service_binding::install_conformance_current_binding(state, binding).await
+    principal_service_binding::install_conformance_binding(state, binding).await
 }
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
@@ -1099,8 +1099,9 @@ async fn account_viewer_impl(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
     let devices = account_device_summaries(state, &session.actor).await?;
-    let principal_id = Did::new(account.did.clone())
-        .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
+    let principal_id = DidCoreId::new(account.did.clone()).map_err(|error| {
+        AppError::internal(format!("stored account core id is invalid: {error}"))
+    })?;
 
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
@@ -1373,15 +1374,9 @@ async fn actor_profile_from_account(
     account: &AccountRecord,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ActorProfile, AppError> {
-    let principal_id = arkret_wire::CoreId::new(account.did.clone()).map_err(|error| {
+    let principal_id = arkret_wire::DidCoreId::new(account.did.clone()).map_err(|error| {
         AppError::internal(format!("stored account principal id is invalid: {error}"))
     })?;
-    let resolution = state
-        .persistence()
-        .current_principal_resolution(&principal_id)
-        .await
-        .map_err(|error| AppError::internal(format!("principal resolution store failed: {error}")))?
-        .map(|record| record.projection);
     let mut profile_fields = BTreeMap::new();
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
@@ -1405,7 +1400,10 @@ async fn actor_profile_from_account(
         avatar_blob_ref: account.avatar_blob_ref.clone(),
         status: None,
         accountable_principal_ids: vec![principal_id.clone()],
-        resolution,
+        // A profile read keyed only by principal_id cannot select between
+        // independently valid PCR authority instances. Resolution evidence is
+        // exposed only by an exact authority-instance/PCR read.
+        resolution: None,
         profile_fields,
         created_at: account.created_at,
         updated_by: Some(principal_id),
@@ -1428,10 +1426,10 @@ async fn direct_conversation_resolve(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let peer_descriptor = &body.peer;
-    if peer_descriptor.subject_id().as_str() == session.actor {
+    if peer_descriptor.contact_actor_id().as_str() == session.actor {
         return Err(AppError::invalid_param("invalid direct conversation peer"));
     }
-    let peer = peer_descriptor.subject_id().as_str().to_owned();
+    let peer = peer_descriptor.contact_actor_id().as_str().to_owned();
     if let ContactPeer::Agent { controller_id, .. } = peer_descriptor {
         let record =
             state.agent_pairings().agent(&peer).await.map_err(|error| {
@@ -1678,87 +1676,12 @@ async fn direct_conversation_resolve(
         });
     }
     match founder {
+        // The resolve request does not carry the founder's exact authority
+        // instance, so selecting a stored binding by principal core would
+        // permit same-core PCR substitution.
         Some(founder) if founder == session.actor => {
-            let Some(source_service_binding) =
-                principal_service_binding::current_binding(state, &session.actor).await?
-            else {
-                return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
-                    retry_after_ms: None,
-                });
-            };
-            let founder_basis_evidence = if managed_agent_basis.is_some() {
-                let record = state
-                    .agent_pairings()
-                    .agent(&peer)
-                    .await
-                    .map_err(|error| {
-                        AppError::internal(format!("managed Agent lookup failed: {error}"))
-                    })?
-                    .ok_or_else(|| AppError::internal("managed Agent disappeared"))?;
-                let provision_event_ref = record
-                    .provision_event_refs
-                    .as_ref()
-                    .and_then(|refs| refs.get("provision_event_id"))
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        AppError::internal("managed Agent provision reference is missing")
-                    })?;
-                let provision = state
-                    .event_queries()
-                    .accepted_event(provision_event_ref)
-                    .await
-                    .map_err(|error| AppError::internal(error.to_string()))?
-                    .ok_or_else(|| {
-                        AppError::internal("managed Agent provision Event is unavailable")
-                    })?;
-                DirectConversationFounderBasisEvidence::ControllerAgent {
-                    agent_provision_ref: EventId::new(provision.event_id).map_err(|error| {
-                        AppError::internal(format!("managed Agent provision ref invalid: {error}"))
-                    })?,
-                    agent_provision_digest: Hash::new(provision.canonical_digest).map_err(
-                        |error| {
-                            AppError::internal(format!(
-                                "managed Agent provision digest invalid: {error}"
-                            ))
-                        },
-                    )?,
-                    controller_binding_digest: source_service_binding.binding_digest.clone(),
-                }
-            } else {
-                let record = contact.as_ref().ok_or_else(|| {
-                    AppError::internal("accepted Contact basis evidence is unavailable")
-                })?;
-                let bundle = record.basis_evidence.clone().ok_or_else(|| {
-                    AppError::internal("accepted Contact basis evidence is unavailable")
-                })?;
-                let evidence = DirectConversationFounderBasisEvidence::Human {
-                    basis_evidence_bundle: bundle,
-                    root_basis_continuity_chain: record.basis_evidence_history.clone(),
-                };
-                let current_proofs_are_fresh = match &evidence {
-                    DirectConversationFounderBasisEvidence::Human {
-                        basis_evidence_bundle,
-                        ..
-                    } => basis_evidence_bundle.current_proofs.iter().all(|proof| {
-                        !proof.terminal
-                            && proof.complete_through > 0
-                            && proof.fresh_until > now()
-                            && proof.accepted_frontier.contains(&proof.head_event_ref)
-                    }),
-                    DirectConversationFounderBasisEvidence::ControllerAgent { .. } => false,
-                };
-                if evidence.participants_and_founder().is_err() || !current_proofs_are_fresh {
-                    return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
-                        retry_after_ms: None,
-                    });
-                }
-                evidence
-            };
-            json_ok(DirectConversationResolveOutcome::CreationRequired {
-                next_founding_input: DirectConversationFoundingInput {
-                    founder_basis_evidence,
-                    source_service_binding,
-                },
+            json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                retry_after_ms: None,
             })
         }
         Some(_) => json_ok(DirectConversationResolveOutcome::AwaitingFounder {
@@ -1790,15 +1713,9 @@ async fn direct_conversation_repair_dispatch(
     repair::dispatch(aa, depot, req, body).await
 }
 
-fn session_actor_core_id(actor: &str) -> Result<CoreId, AppError> {
-    if let Ok(core_id) = CoreId::new(actor.to_owned()) {
-        return Ok(core_id);
-    }
-    let full_id = FullId::new(actor.to_owned()).map_err(|error| {
-        AppError::invalid_param(format!("session principal is invalid: {error}"))
-    })?;
-    arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
-        AppError::invalid_param(format!("session principal cannot be projected: {error}"))
+fn session_actor_core_id(actor: &str) -> Result<DidCoreId, AppError> {
+    DidCoreId::new(actor.to_owned()).map_err(|error| {
+        AppError::invalid_param(format!("session principal core id is invalid: {error}"))
     })
 }
 
@@ -2015,7 +1932,7 @@ async fn validate_direct_conversation_repair_signature(
 
 fn verification_method_controls_core_or_key(
     verification_method: &str,
-    requester: &CoreId,
+    requester: &DidCoreId,
     key_did: &str,
 ) -> bool {
     let controller = verification_method
@@ -2026,7 +1943,7 @@ fn verification_method_controls_core_or_key(
     if controller == key_did {
         return true;
     }
-    FullId::new(controller.to_owned())
+    DidFullId::new(controller.to_owned())
         .ok()
         .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
         .as_ref()

@@ -1,25 +1,26 @@
 //! Durable service-identity bootstrap (identity-did.md §3.7).
 //!
 //! Soland is a class-B Service Identity Provider for its own identity. The
-//! database stores the SDK `StoredServiceIdentity` plus public WebVH evidence;
+//! database stores the SDK `StoredDidCoreIdentity` plus public WebVH evidence;
 //! signing and control secrets remain in a durable SDK `KeyStore`. Configuration
 //! never supplies or pins the resulting DID.
 
 use std::sync::Arc;
 
 use arkret_http_client::{Auth, Client, ClientBuilder};
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use arkret_identity::service_identity::{
-    FileIdentityBundleBackend, IdentityBundleBackend, IdentityBundleBackendAvailability,
-    LocalServiceIdentity, ServiceIdentityBundle, ServiceIdentityDiagnostic, ServiceIdentityKeyRef,
-    ServiceIdentityProviderRef, ServiceIdentityState, StoredServiceIdentity,
+    DidCoreIdentityBundle, DidCoreIdentityDiagnostic, DidCoreIdentityKeyRef,
+    DidCoreIdentityProviderRef, DidCoreIdentityState, FileIdentityBundleBackend,
+    IdentityBundleBackend, IdentityBundleBackendAvailability, LocalDidCoreIdentity,
+    StoredDidCoreIdentity,
 };
 use arkret_keystore::KeyStore;
 use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{PayloadProof, ServiceId, ServiceKind, project_full_id_to_core_id, proof_kind};
+use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
 use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -49,8 +50,8 @@ pub struct ServiceIdentityBootstrap {
     /// Waiting/degraded retries must retain it so a timed-out ensure cannot
     /// silently prepare a second control root.
     pub key_store: Option<Arc<dyn KeyStore>>,
-    pub state: ServiceIdentityState,
-    /// Stable FullId plus the exact current method-history coordinates that
+    pub state: DidCoreIdentityState,
+    /// Stable DidFullId plus the exact current method-history coordinates that
     /// every ServiceDescribe and signed ServiceResolutionRecord must share.
     pub resolution_commitment: Option<arkret_models_identity::ResolutionCommitment>,
     /// Signing seed resolved through the verified identity's active KeyRef.
@@ -158,7 +159,7 @@ async fn resolve_service_identity(
     key_store: Option<&dyn KeyStore>,
     bundle_backend: Option<&dyn IdentityBundleBackend>,
     first_provisioning: bool,
-) -> anyhow::Result<ServiceIdentityState> {
+) -> anyhow::Result<DidCoreIdentityState> {
     let configured_key = registration_key(config)?;
     if config.external_webvh_registration_bearer.is_some() {
         return resolve_external_service_identity(persistence, config, key_store, configured_key)
@@ -242,21 +243,21 @@ async fn resolve_service_identity(
     ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
 
     if stored.identity.registration_key != configured_key {
-        return Ok(ServiceIdentityState::RegistrationKeyDrift {
+        return Ok(DidCoreIdentityState::RegistrationKeyDrift {
             stored_key: stored.identity.registration_key.clone(),
             identity: stored.identity,
             computed_key: configured_key,
         });
     }
-    Ok(ServiceIdentityState::Ready {
+    Ok(DidCoreIdentityState::Ready {
         identity: stored.identity,
     })
 }
 
 struct ExternalIdentityMaterial {
     signing_seed: [u8; 32],
-    signing_key_ref: ServiceIdentityKeyRef,
-    control_key_ref: ServiceIdentityKeyRef,
+    signing_key_ref: DidCoreIdentityKeyRef,
+    control_key_ref: DidCoreIdentityKeyRef,
     prepared: arkret_signatures::webvh::PreparedInception,
 }
 
@@ -265,7 +266,7 @@ async fn resolve_external_service_identity(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
-) -> anyhow::Result<ServiceIdentityState> {
+) -> anyhow::Result<DidCoreIdentityState> {
     let provider = external_provider(config)?;
     let existing = persistence
         .stored_service_identity()
@@ -282,7 +283,7 @@ async fn resolve_external_service_identity(
     if let Some(stored) = existing.as_ref() {
         validate_external_stored_identity(stored, &provider, &material)?;
         if stored.identity.registration_key != registration_key {
-            return Ok(ServiceIdentityState::RegistrationKeyDrift {
+            return Ok(DidCoreIdentityState::RegistrationKeyDrift {
                 identity: stored.identity.clone(),
                 stored_key: stored.identity.registration_key.clone(),
                 computed_key: registration_key,
@@ -345,8 +346,8 @@ async fn resolve_external_service_identity(
                     Err(error) if provider_unavailable(&error) => {
                         Ok(waiting_provider(registration_key))
                     }
-                    Err(lookup_error) => Ok(ServiceIdentityState::Faulted {
-                        diagnostic: ServiceIdentityDiagnostic::RestoreFailed,
+                    Err(lookup_error) => Ok(DidCoreIdentityState::Faulted {
+                        diagnostic: DidCoreIdentityDiagnostic::RestoreFailed,
                         next_action: format!(
                             "verify SOLAND_EXTERNAL_WEBVH_PROVIDER_URL, its registration bearer, and the retained KeyStore; Provider rejected ensure ({ensure_error}) and lookup failed ({lookup_error})"
                         ),
@@ -355,15 +356,15 @@ async fn resolve_external_service_identity(
             }
         }
         Err(error) if provider_unavailable(&error) => match existing {
-            Some(stored) => Ok(ServiceIdentityState::DegradedStored {
+            Some(stored) => Ok(DidCoreIdentityState::DegradedStored {
                 identity: stored.identity,
                 retry_at: service_identity_retry_at(),
                 last_error: error.to_string(),
             }),
             None => Ok(waiting_provider(registration_key)),
         },
-        Err(error) => Ok(ServiceIdentityState::Faulted {
-            diagnostic: ServiceIdentityDiagnostic::RestoreFailed,
+        Err(error) => Ok(DidCoreIdentityState::Faulted {
+            diagnostic: DidCoreIdentityDiagnostic::RestoreFailed,
             next_action: format!(
                 "verify SOLAND_EXTERNAL_WEBVH_PROVIDER_URL, its registration bearer, and the retained KeyStore; Provider lookup failed: {error}"
             ),
@@ -373,16 +374,16 @@ async fn resolve_external_service_identity(
 
 async fn accept_external_outcome(
     persistence: &PersistenceHandle,
-    provider: &ServiceIdentityProviderRef,
+    provider: &DidCoreIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     material: &ExternalIdentityMaterial,
-    prior: Option<&StoredServiceIdentity>,
+    prior: Option<&StoredDidCoreIdentity>,
     outcome: ServiceRegistrationOutcome,
-) -> anyhow::Result<ServiceIdentityState> {
+) -> anyhow::Result<DidCoreIdentityState> {
     if let Some(prior) = prior
         && prior.identity.service_id != outcome.service_id
     {
-        return Ok(ServiceIdentityState::Conflict {
+        return Ok(DidCoreIdentityState::Conflict {
             stored_service_id: prior.identity.service_id.clone(),
             provider_service_id: outcome.service_id,
         });
@@ -390,19 +391,19 @@ async fn accept_external_outcome(
     let stored =
         stored_external_identity_from_outcome(provider, registration_key, material, outcome)?;
     persist_stored_identity(persistence, stored.clone()).await?;
-    Ok(ServiceIdentityState::Ready {
+    Ok(DidCoreIdentityState::Ready {
         identity: stored.identity,
     })
 }
 
-fn external_provider(config: &AppConfig) -> anyhow::Result<ServiceIdentityProviderRef> {
+fn external_provider(config: &AppConfig) -> anyhow::Result<DidCoreIdentityProviderRef> {
     let endpoint = config
         .external_webvh_provider_url
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("external service identity Provider URL is missing"))?;
     let endpoint = CanonicalServiceUrl::canonicalize(endpoint)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    Ok(ServiceIdentityProviderRef {
+    Ok(DidCoreIdentityProviderRef {
         name: "external-webvh".to_owned(),
         endpoint,
     })
@@ -410,7 +411,7 @@ fn external_provider(config: &AppConfig) -> anyhow::Result<ServiceIdentityProvid
 
 fn external_provider_client(
     config: &AppConfig,
-    provider: &ServiceIdentityProviderRef,
+    provider: &DidCoreIdentityProviderRef,
 ) -> anyhow::Result<Client> {
     let bearer = config
         .external_webvh_registration_bearer
@@ -426,24 +427,24 @@ fn external_provider_client(
 fn external_identity_material(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
-    provider: &ServiceIdentityProviderRef,
+    provider: &DidCoreIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     allow_create: bool,
 ) -> anyhow::Result<ExternalIdentityMaterial> {
     let key_store = required_key_store(key_store)?;
     let suffix = registration_key_ref_suffix(registration_key)?;
     let signing_key_ref = if config.notary_signing_key_seed.is_some() {
-        ServiceIdentityKeyRef::new(CONFIGURED_SIGNING_KEY_REF.to_owned())
+        DidCoreIdentityKeyRef::new(CONFIGURED_SIGNING_KEY_REF.to_owned())
             .map_err(|error| anyhow::anyhow!(error.to_string()))?
     } else {
-        ServiceIdentityKeyRef::new(format!("arkret:signer:soland-notary:external:{suffix}"))
+        DidCoreIdentityKeyRef::new(format!("arkret:signer:soland-notary:external:{suffix}"))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?
     };
     let signing_seed = match config.notary_signing_key_seed {
         Some(seed) => seed,
         None => load_or_create_seed(key_store, &signing_key_ref, allow_create)?,
     };
-    let inception_seed_ref = ServiceIdentityKeyRef::new(format!(
+    let inception_seed_ref = DidCoreIdentityKeyRef::new(format!(
         "arkret:control:soland-webvh:external:{suffix}:inception"
     ))
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -463,10 +464,10 @@ fn external_identity_material(
         )
         .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
     let control_key_ref =
-        ServiceIdentityKeyRef::new(format!("arkret:control:soland-webvh:external:{suffix}:1"))
+        DidCoreIdentityKeyRef::new(format!("arkret:control:soland-webvh:external:{suffix}:1"))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let next_control_key_ref =
-        ServiceIdentityKeyRef::new(format!("arkret:control:soland-webvh:external:{suffix}:2"))
+        DidCoreIdentityKeyRef::new(format!("arkret:control:soland-webvh:external:{suffix}:2"))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     store_or_verify_seed(
         key_store,
@@ -489,17 +490,17 @@ fn external_identity_material(
 }
 
 fn stored_external_identity_from_outcome(
-    provider: &ServiceIdentityProviderRef,
+    provider: &DidCoreIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     material: &ExternalIdentityMaterial,
     outcome: ServiceRegistrationOutcome,
-) -> anyhow::Result<StoredServiceIdentity> {
+) -> anyhow::Result<StoredDidCoreIdentity> {
     outcome
         .validate_for(registration_key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let stored = StoredServiceIdentity {
-        identity: LocalServiceIdentity {
+    let stored = StoredDidCoreIdentity {
+        identity: LocalDidCoreIdentity {
             service_id: outcome.service_id,
             full_id: outcome.full_id,
             registration_key: registration_key.clone(),
@@ -519,8 +520,8 @@ fn stored_external_identity_from_outcome(
 }
 
 fn validate_external_stored_identity(
-    stored: &StoredServiceIdentity,
-    provider: &ServiceIdentityProviderRef,
+    stored: &StoredDidCoreIdentity,
+    provider: &DidCoreIdentityProviderRef,
     material: &ExternalIdentityMaterial,
 ) -> anyhow::Result<()> {
     stored
@@ -570,7 +571,7 @@ fn registration_key_ref_suffix(key: &ServiceRegistrationKey) -> anyhow::Result<S
 
 fn load_or_create_seed(
     key_store: &dyn KeyStore,
-    key_ref: &ServiceIdentityKeyRef,
+    key_ref: &DidCoreIdentityKeyRef,
     allow_create: bool,
 ) -> anyhow::Result<[u8; 32]> {
     match key_store.load(key_ref.as_str()) {
@@ -592,7 +593,7 @@ fn load_or_create_seed(
 
 fn store_or_verify_seed(
     key_store: &dyn KeyStore,
-    key_ref: &ServiceIdentityKeyRef,
+    key_ref: &DidCoreIdentityKeyRef,
     expected: &[u8; 32],
     allow_create: bool,
 ) -> anyhow::Result<()> {
@@ -612,7 +613,7 @@ fn store_or_verify_seed(
     }
 }
 
-fn key_bytes_to_seed(key_ref: &ServiceIdentityKeyRef, bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
+fn key_bytes_to_seed(key_ref: &DidCoreIdentityKeyRef, bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
     if bytes.len() != 32 {
         anyhow::bail!(
             "service identity key {} must be 32 bytes, got {}",
@@ -625,8 +626,8 @@ fn key_bytes_to_seed(key_ref: &ServiceIdentityKeyRef, bytes: &[u8]) -> anyhow::R
     Ok(seed)
 }
 
-fn waiting_provider(registration_key: ServiceRegistrationKey) -> ServiceIdentityState {
-    ServiceIdentityState::WaitingProvider {
+fn waiting_provider(registration_key: ServiceRegistrationKey) -> DidCoreIdentityState {
+    DidCoreIdentityState::WaitingProvider {
         registration_key,
         retry_at: service_identity_retry_at(),
     }
@@ -650,7 +651,7 @@ fn provider_unavailable(error: &arkret_http_client::Error) -> bool {
 async fn ensure_identity_bundle(
     persistence: &PersistenceHandle,
     backend: Option<&dyn IdentityBundleBackend>,
-    stored: &StoredServiceIdentity,
+    stored: &StoredDidCoreIdentity,
 ) -> anyhow::Result<()> {
     let Some(backend) = backend else {
         return Ok(());
@@ -671,8 +672,8 @@ async fn ensure_identity_bundle(
     let inception = serde_json::from_value(history[0].operation.clone()).map_err(|error| {
         anyhow::anyhow!("decoding authoritative service WebVH inception failed: {error}")
     })?;
-    let bundle = ServiceIdentityBundle {
-        schema: ServiceIdentityBundle::SCHEMA.to_owned(),
+    let bundle = DidCoreIdentityBundle {
+        schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
         identity: stored.clone(),
         webvh_history: vec![inception],
         receipt_chain: vec![stored.registration_receipt.clone()],
@@ -686,7 +687,7 @@ async fn ensure_identity_bundle(
 fn load_identity_bundle(
     backend: Option<&dyn IdentityBundleBackend>,
     key: &ServiceRegistrationKey,
-) -> anyhow::Result<Option<ServiceIdentityBundle>> {
+) -> anyhow::Result<Option<DidCoreIdentityBundle>> {
     let Some(backend) = backend else {
         return Ok(None);
     };
@@ -703,8 +704,8 @@ async fn restore_identity_bundle(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
-    bundle: ServiceIdentityBundle,
-) -> anyhow::Result<StoredServiceIdentity> {
+    bundle: DidCoreIdentityBundle,
+) -> anyhow::Result<StoredDidCoreIdentity> {
     bundle
         .validate()
         .map_err(|error| anyhow::anyhow!("service identity bundle is invalid: {error}"))?;
@@ -778,7 +779,7 @@ async fn restore_identity_bundle(
 fn validate_bundle_key_custody(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
-    stored: &StoredServiceIdentity,
+    stored: &StoredDidCoreIdentity,
 ) -> anyhow::Result<()> {
     let signing_seed =
         load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
@@ -816,7 +817,7 @@ fn validate_signed_service_inception(
 }
 
 fn validate_registration_receipt_signature(
-    stored: &StoredServiceIdentity,
+    stored: &StoredDidCoreIdentity,
     _signing_seed: &[u8; 32],
 ) -> anyhow::Result<()> {
     let receipt = &stored.registration_receipt;
@@ -843,8 +844,8 @@ fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey
 
 async fn persist_stored_identity(
     persistence: &PersistenceHandle,
-    identity: StoredServiceIdentity,
-) -> anyhow::Result<StoredServiceIdentity> {
+    identity: StoredDidCoreIdentity,
+) -> anyhow::Result<StoredDidCoreIdentity> {
     identity
         .validate()
         .map_err(|error| anyhow::anyhow!("service identity is invalid: {error}"))?;
@@ -860,14 +861,14 @@ fn stored_identity_from_outcome(
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
     outcome: ServiceRegistrationOutcome,
-) -> anyhow::Result<StoredServiceIdentity> {
+) -> anyhow::Result<StoredDidCoreIdentity> {
     outcome
         .validate_for(&registration_key)
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
     let signing_key_ref = signing_key_ref(config, &outcome.full_id, key_store)?;
     let generation = webvh_version_number(&outcome.version_id)?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let identity = LocalServiceIdentity {
+    let identity = LocalDidCoreIdentity {
         service_id: outcome.service_id,
         full_id: outcome.full_id,
         registration_key,
@@ -878,7 +879,7 @@ fn stored_identity_from_outcome(
         version_id: outcome.version_id,
         last_verified_at: now,
     };
-    let stored = StoredServiceIdentity {
+    let stored = StoredDidCoreIdentity {
         identity,
         did_document: outcome.did_document,
         registration_receipt: outcome.registration_receipt,
@@ -894,7 +895,7 @@ async fn validate_stored_service_identity(
     persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
-    stored: &StoredServiceIdentity,
+    stored: &StoredDidCoreIdentity,
 ) -> anyhow::Result<()> {
     stored
         .validate()
@@ -959,7 +960,7 @@ fn validate_persisted_webvh_history(did: &str, history: &[WebvhLogRecord]) -> an
 }
 
 fn validate_service_signing_binding(
-    stored: &StoredServiceIdentity,
+    stored: &StoredDidCoreIdentity,
     signing_seed: &[u8; 32],
 ) -> anyhow::Result<()> {
     let expected = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
@@ -981,7 +982,7 @@ fn validate_service_signing_binding(
 
 fn validate_control_key_binding(
     key_store: Option<&dyn KeyStore>,
-    current_ref: &ServiceIdentityKeyRef,
+    current_ref: &DidCoreIdentityKeyRef,
     operation: &Value,
 ) -> anyhow::Result<()> {
     let key_store = required_key_store(key_store)?;
@@ -1016,7 +1017,7 @@ async fn mint_local_service_identity(
     key_store: Option<&dyn KeyStore>,
     bundle_backend: Option<&dyn IdentityBundleBackend>,
     registration_key: ServiceRegistrationKey,
-) -> anyhow::Result<StoredServiceIdentity> {
+) -> anyhow::Result<StoredDidCoreIdentity> {
     let key_store = required_key_store(key_store)?;
     let provider_endpoint = url::Url::parse(registration_key.public_base().as_str())
         .map_err(|error| anyhow::anyhow!("invalid service Provider endpoint: {error}"))?;
@@ -1041,7 +1042,7 @@ async fn mint_local_service_identity(
             &service_signing_seed,
         )
         .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
-    let service_id = Did::new(prepared.did.clone())
+    let service_id = DidFullId::new(prepared.did.clone())
         .map_err(|error| anyhow::anyhow!("minted service DID is invalid: {error}"))?;
     let signing_ref = signing_key_ref(config, &service_id, Some(key_store))?;
     if config.notary_signing_key_seed.is_none() {
@@ -1130,8 +1131,8 @@ async fn mint_local_service_identity(
         if let IdentityBundleBackendAvailability::Unavailable(error) = backend.probe() {
             anyhow::bail!("service identity bundle backend is unavailable: {error}");
         }
-        let bundle = ServiceIdentityBundle {
-            schema: ServiceIdentityBundle::SCHEMA.to_owned(),
+        let bundle = DidCoreIdentityBundle {
+            schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
             identity: stored.clone(),
             webvh_history: vec![request.inception_operation],
             receipt_chain: vec![stored.registration_receipt.clone()],
@@ -1148,7 +1149,7 @@ async fn mint_local_service_identity(
 fn sign_registration_receipt(
     key: &ServiceRegistrationKey,
     request: &ServiceRegistrationEnsureRequestBody,
-    provider_service_id: &Did,
+    provider_service_id: &DidFullId,
     signing_seed: &[u8; 32],
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<ServiceRegistrationReceipt> {
@@ -1156,9 +1157,9 @@ fn sign_registration_receipt(
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
     let full_id = request.inception_operation.state.id.clone();
-    let service_id = ServiceId::from(project_full_id_to_core_id(&full_id)?);
+    let service_id = DidCoreId::from(project_full_id_to_core_id(&full_id)?);
     let provider_full_id = provider_service_id;
-    let provider_service_id = ServiceId::from(project_full_id_to_core_id(provider_full_id)?);
+    let provider_service_id = DidCoreId::from(project_full_id_to_core_id(provider_full_id)?);
     let verification_method = arkret_wire::DidUrl::new(format!("{provider_full_id}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")
@@ -1199,26 +1200,29 @@ fn sign_registration_receipt(
 
 fn signing_key_ref(
     config: &AppConfig,
-    service_id: &Did,
+    service_id: &DidFullId,
     key_store: Option<&dyn KeyStore>,
-) -> anyhow::Result<ServiceIdentityKeyRef> {
+) -> anyhow::Result<DidCoreIdentityKeyRef> {
     if config.notary_signing_key_seed.is_some() {
-        return ServiceIdentityKeyRef::new(CONFIGURED_SIGNING_KEY_REF.to_owned())
+        return DidCoreIdentityKeyRef::new(CONFIGURED_SIGNING_KEY_REF.to_owned())
             .map_err(|error| anyhow::anyhow!(error.to_string()));
     }
     required_key_store(key_store)?;
-    ServiceIdentityKeyRef::new(format!("arkret:signer:soland-notary:{service_id}"))
+    DidCoreIdentityKeyRef::new(format!("arkret:signer:soland-notary:{service_id}"))
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-fn control_key_ref(service_id: &Did, generation: u64) -> anyhow::Result<ServiceIdentityKeyRef> {
-    ServiceIdentityKeyRef::new(format!(
+fn control_key_ref(
+    service_id: &DidFullId,
+    generation: u64,
+) -> anyhow::Result<DidCoreIdentityKeyRef> {
+    DidCoreIdentityKeyRef::new(format!(
         "arkret:control:soland-webvh:{service_id}:{generation}"
     ))
     .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-fn next_control_key_ref(current: &ServiceIdentityKeyRef) -> anyhow::Result<ServiceIdentityKeyRef> {
+fn next_control_key_ref(current: &DidCoreIdentityKeyRef) -> anyhow::Result<DidCoreIdentityKeyRef> {
     let (prefix, generation) = current
         .as_str()
         .rsplit_once(':')
@@ -1228,7 +1232,7 @@ fn next_control_key_ref(current: &ServiceIdentityKeyRef) -> anyhow::Result<Servi
         .map_err(|_| anyhow::anyhow!("WebVH control KeyRef generation is invalid"))?
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("WebVH control KeyRef generation overflow"))?;
-    ServiceIdentityKeyRef::new(format!("{prefix}:{generation}"))
+    DidCoreIdentityKeyRef::new(format!("{prefix}:{generation}"))
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -1252,7 +1256,7 @@ fn required_key_store(key_store: Option<&dyn KeyStore>) -> anyhow::Result<&dyn K
 fn load_signing_seed(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
-    key_ref: &ServiceIdentityKeyRef,
+    key_ref: &DidCoreIdentityKeyRef,
 ) -> anyhow::Result<[u8; 32]> {
     if key_ref.as_str() == CONFIGURED_SIGNING_KEY_REF {
         return config.notary_signing_key_seed.ok_or_else(|| {
@@ -1266,7 +1270,7 @@ fn load_signing_seed(
 
 fn load_seed(
     key_store: &dyn KeyStore,
-    key_ref: &ServiceIdentityKeyRef,
+    key_ref: &DidCoreIdentityKeyRef,
 ) -> anyhow::Result<[u8; 32]> {
     let bytes = key_store.load(key_ref.as_str()).map_err(|error| {
         anyhow::anyhow!(
@@ -1307,7 +1311,7 @@ mod tests {
         }
     }
 
-    fn state_did(state: &ServiceIdentityState) -> String {
+    fn state_did(state: &DidCoreIdentityState) -> String {
         state
             .identity()
             .expect("serving service identity")
@@ -1620,7 +1624,7 @@ mod tests {
             .expect("an external outage is a lifecycle state, not a startup error");
         assert!(matches!(
             first.state,
-            ServiceIdentityState::WaitingProvider { .. }
+            DidCoreIdentityState::WaitingProvider { .. }
         ));
         assert!(
             persistence_store
@@ -1638,7 +1642,7 @@ mod tests {
             .expect("retry remains fail-closed while the Provider is unavailable");
         assert!(matches!(
             retried.state,
-            ServiceIdentityState::WaitingProvider { .. }
+            DidCoreIdentityState::WaitingProvider { .. }
         ));
         assert_eq!(key_store.list().unwrap(), retained_key_ids);
         assert!(

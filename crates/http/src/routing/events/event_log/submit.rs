@@ -329,7 +329,7 @@ pub(in crate::routing) struct InternalEventAdmission {
 
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct VerifiedFederatedAgentSignerEvidence {
-    agent_id: arkret_wire::ActorId,
+    agent_id: arkret_wire::DidCoreId,
     verification_method: arkret_wire::DidUrl,
     public_key: [u8; 32],
 }
@@ -622,8 +622,8 @@ struct DeliveryBindingMemberView {
 #[derive(Debug, Clone)]
 struct DeliveryBindingHandoverEvidence {
     realm_id: String,
-    actor_id: arkret_wire::ActorId,
-    new_recipient_service_id: arkret_wire::ServiceId,
+    actor_id: arkret_wire::DidCoreId,
+    new_recipient_service_id: arkret_wire::DidCoreId,
     new_service_resolution: Option<arkret_models_identity::ServiceResolutionCarrier>,
     handover_frontier: Vec<EventId>,
     membership_event_ref: Option<String>,
@@ -1141,7 +1141,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         }
     }
     let issuer_service_id =
-        arkret_wire::ServiceId::new(state.service_id().clone()).map_err(|error| {
+        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1676,7 +1676,7 @@ async fn existing_pcr_genesis_outcome(
         .find(|receipt| {
             receipt.issuer.as_str() == state.service_id()
                 && receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                    scope.principal_id == request.identity_creation_control_proof.full_id
+                    scope.principal_id == request.principal_id
                         && scope.realm_id == request.pcr_realm_id
                         && scope.audience == request.account_authority_id
                         && scope.did_version_id == request.did_version_id
@@ -1722,7 +1722,7 @@ async fn validate_identity_creation_control_proof(
     }
     let mut history = state
         .dids()
-        .log_events(request.identity_creation_control_proof.full_id.as_str())
+        .log_events(request.full_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1745,7 +1745,7 @@ async fn validate_identity_creation_control_proof(
                 "PCR genesis requires the accepted pinned DID version",
             )
         })?;
-    if pinned.did != request.identity_creation_control_proof.full_id.as_str() {
+    if pinned.did != request.full_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
@@ -1783,7 +1783,7 @@ async fn validate_identity_creation_control_proof(
         .map(|entry| entry.operation.clone())
         .collect::<Vec<_>>();
     let history_point = arkret_signatures::webvh::validate_webvh_history_at(
-        &request.identity_creation_control_proof.full_id,
+        &request.full_id,
         &native_history,
         pinned_version_time,
     )
@@ -3046,7 +3046,7 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let source_service_id_typed = match arkret_wire::ServiceId::new(source_service_id.to_owned()) {
+    let source_service_id_typed = match arkret_wire::DidCoreId::new(source_service_id.to_owned()) {
         Ok(value) => value,
         Err(_) => {
             render_error(
@@ -3284,7 +3284,7 @@ async fn verify_accepted_principal_service_binding(
 
 async fn verify_principal_service_binding_continuity(
     continuity: &arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingContinuity,
-    transport_source: &arkret_wire::ServiceId,
+    transport_source: &arkret_wire::DidCoreId,
     state: &AppState,
 ) -> Result<(), String> {
     continuity
@@ -3471,7 +3471,8 @@ mod managed_agent_pcr_batch_tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
                 .unwrap();
-        let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let agent_id =
+            arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
                 arkret_wire::GenesisSalt::new(

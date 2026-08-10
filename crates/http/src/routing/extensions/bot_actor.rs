@@ -23,7 +23,7 @@
 //! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception
 //! grants remain a follow-up).
 
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use soland_http::error::AppError;
 
 /// Validate that an extension actor DID is a bare DID scalar (no DID URL
@@ -37,7 +37,7 @@ pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
         )
         .with_wire_code("schema_violation"));
     }
-    Did::new(did.to_owned()).map(|_| ()).map_err(|error| {
+    DidFullId::new(did.to_owned()).map(|_| ()).map_err(|error| {
         AppError::invalid_param(format!("bot or ghost actor DID is invalid: {error}"))
             .with_wire_code("schema_violation")
     })

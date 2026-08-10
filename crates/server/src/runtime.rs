@@ -26,7 +26,7 @@ pub fn build_app_state(
     config: AppConfig,
     db: Db,
     persistence: PersistenceHandle,
-    service_identity: arkret_identity::service_identity::ServiceIdentityState,
+    service_identity: arkret_identity::service_identity::DidCoreIdentityState,
     service_resolution_commitment: arkret_models_identity::ResolutionCommitment,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {

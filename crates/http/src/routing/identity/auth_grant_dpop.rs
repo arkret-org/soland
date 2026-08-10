@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_identifiers::{DeviceId, Did, ServiceId};
+use arkret_identifiers::{DeviceId, DidCoreId, DidFullId};
 use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
 use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;
@@ -76,8 +76,8 @@ fn unauthenticated(message: &'static str) -> AuthError {
     (StatusCode::UNAUTHORIZED, "unauthenticated", message)
 }
 
-fn configured_service_audience(state: &AppState) -> Result<ServiceId, AuthError> {
-    ServiceId::new(state.service_id().clone()).map_err(|_| {
+fn configured_service_audience(state: &AppState) -> Result<DidCoreId, AuthError> {
+    DidCoreId::new(state.service_id().clone()).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_misconfigured",
@@ -819,9 +819,9 @@ mod tests {
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
-            audience: arkret_wire::ServiceId::from(
+            audience: arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::FullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
+                    &arkret_wire::DidFullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
                 )
                 .unwrap(),
             ),
@@ -865,7 +865,7 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
-            agent_id: Did::new("did:web:agent.example").unwrap(),
+            agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
             device_id,
             agent_key_authorization_ref: arkret_identifiers::EventId::new(
                 "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),

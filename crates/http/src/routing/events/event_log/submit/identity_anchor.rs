@@ -58,7 +58,7 @@ pub(super) async fn submit_identity_anchor_batch(
     envelopes: Vec<Value>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
     submitted_control_proposal_acks: Option<&[Option<arkret_wire::ControlProposalAck>]>,
-    receipt_audience: Option<&Did>,
+    receipt_audience: Option<&DidCoreId>,
     pcr_genesis_pins: Option<PcrGenesisPins>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
@@ -494,8 +494,11 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.clone(),
-            version_number: payload.did_version_number(),
-            did_version_id: payload.did_version_id.to_string(),
+            authority_instance_digest: payload
+                .authority_instance
+                .authority_instance_digest
+                .to_string(),
+            new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
         })
@@ -733,7 +736,7 @@ fn validate_identity_anchor_candidate_preconditions(
     let authorize = typed_device_authorize_payload(&envelopes[1])?;
     let authorized_by_root = matches!(
         &authorize.authorized_by,
-        arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(did)
+        arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
             if did.as_str() == first.actor_id
     );
     if authorize.principal_id.as_str() != first.actor_id
@@ -1016,13 +1019,16 @@ fn conflicting_reanchor_slot(
     reanchor_envelope: &Value,
     existing: &[CanonicalEventRecord],
 ) -> Vec<String> {
-    let Some(version_id) = reanchor_envelope
-        .pointer("/payload/did_version_id")
-        .and_then(Value::as_str)
+    let Some(new_generation) = reanchor_envelope
+        .pointer("/payload/new_device_generation")
+        .and_then(Value::as_u64)
     else {
         return Vec::new();
     };
-    let Some((version_number, _)) = version_id.split_once('-') else {
+    let Some(authority_instance_digest) = reanchor_envelope
+        .pointer("/payload/authority_instance/authority_instance_digest")
+        .and_then(Value::as_str)
+    else {
         return Vec::new();
     };
     let mut evidence = existing
@@ -1031,20 +1037,21 @@ fn conflicting_reanchor_slot(
             record.actor_id == reanchor.actor_id && record.kind == "ak.device.reanchor"
         })
         .filter(|record| {
-            let candidate_version = record
+            let candidate_generation = record
                 .envelope
-                .pointer("/payload/did_version_id")
-                .and_then(Value::as_str);
-            let same_slot = candidate_version
-                .and_then(|candidate| candidate.split_once('-'))
-                .is_some_and(|(candidate_number, _)| candidate_number == version_number);
-            if !same_slot {
+                .pointer("/payload/new_device_generation")
+                .and_then(Value::as_u64);
+            if candidate_generation != Some(new_generation) {
                 return false;
             }
+            let candidate_authority_digest = record
+                .envelope
+                .pointer("/payload/authority_instance/authority_instance_digest")
+                .and_then(Value::as_str);
             let candidate_authorize_digest =
                 soland_services::events::paired_replacement_authorize(record, existing)
                     .map(|paired| paired.canonical_digest.as_str());
-            candidate_version != Some(version_id)
+            candidate_authority_digest != Some(authority_instance_digest)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
@@ -1162,7 +1169,7 @@ async fn validate_unit_relationships(
         let hpke_key_digest = format!("sha256:{}", sha256_hex(descriptor.hpke_key.as_bytes()));
         let authorized_by_root = matches!(
             &authorize.authorized_by,
-            arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(did)
+            arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
                 if did.as_str() == first.actor_id
         );
         if authorize.principal_id.as_str() != first.actor_id
@@ -1230,7 +1237,7 @@ async fn validate_unit_relationships(
             "device re-anchor requires an existing B-model generation",
         )
     })?;
-    if payload.previous_device_generation.as_str() != current.current_ref {
+    if current.current_ref.parse::<u64>().ok() != Some(payload.previous_device_generation) {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "device_generation_fenced",
@@ -1434,47 +1441,22 @@ async fn validate_reanchor_recovery_session(
         })?;
     if session.state != "verified"
         || session.expires_at <= now()
+        || session_id != &reanchor.recovery_session_id
         || session.principal_id != authorize.principal_id.as_str()
         || session.requesting_device_id != authorize.device_id.as_str()
+        || session.policy_id != reanchor.recovery_policy_id.as_str()
+        || u64::from(session.policy_version) != reanchor.recovery_policy_version
         || session
             .current_device_generation_ref
             .as_ref()
-            .map(|generation| generation.as_str())
-            != Some(reanchor.previous_device_generation.as_str())
+            .and_then(|generation| generation.as_str().parse::<u64>().ok())
+            != Some(reanchor.previous_device_generation)
         || session.accepted_seal_frontier.as_ref() != reanchor.pre_fence_basis.as_ref()
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "device_reanchor_authorize_mismatch",
             "replacement device authorization does not match an active verified recovery session",
-        ));
-    }
-    let mut entries = state
-        .dids()
-        .log_events(reanchor.principal_id.as_str())
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("DID history lookup failed: {error}"),
-            )
-        })?;
-    entries.sort_by_key(|entry| entry.seq);
-    let previous_registry_head = entries
-        .iter()
-        .position(|entry| {
-            entry.operation.get("versionId").and_then(Value::as_str)
-                == Some(reanchor.did_version_id.as_str())
-        })
-        .and_then(|position| position.checked_sub(1))
-        .and_then(|position| entries.get(position))
-        .map(|entry| entry.event_digest.as_str());
-    if session.registry_head.as_ref().map(|head| head.as_str()) != previous_registry_head {
-        return Err(SubmitOneError::new(
-            StatusCode::CONFLICT,
-            "device_reanchor_entry_not_head",
-            "device re-anchor does not immediately follow the recovery session registry snapshot",
         ));
     }
     Ok(())
@@ -1700,7 +1682,7 @@ fn build_pcr_genesis_batch_receipt(
     create: &ValidatedEventEnvelope,
     authorize: &ValidatedEventEnvelope,
     create_envelope: &Value,
-    audience: &Did,
+    audience: &DidCoreId,
     pins: &PcrGenesisPins,
     created_at: DateTime<Utc>,
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
@@ -1747,7 +1729,7 @@ fn build_pcr_genesis_batch_receipt(
                 )
             },
         )?,
-        issuer: Did::new(state.service_id().clone()).map_err(|error| {
+        issuer: DidCoreId::new(state.service_id().clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -1757,7 +1739,7 @@ fn build_pcr_genesis_batch_receipt(
         scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
             arkret_wire::event_receipt::PcrGenesisReceiptScope {
                 kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
-                principal_id: Did::new(create.actor_id.clone()).map_err(|error| {
+                principal_id: DidCoreId::new(create.actor_id.clone()).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",
@@ -1845,171 +1827,17 @@ fn build_pcr_genesis_batch_receipt(
 }
 
 async fn build_reanchor_batch_receipt(
-    state: &AppState,
-    reanchor: &ValidatedEventEnvelope,
-    authorize: &ValidatedEventEnvelope,
-    reanchor_envelope: &Value,
-    created_at: DateTime<Utc>,
+    _state: &AppState,
+    _reanchor: &ValidatedEventEnvelope,
+    _authorize: &ValidatedEventEnvelope,
+    _reanchor_envelope: &Value,
+    _created_at: DateTime<Utc>,
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
-    let payload = typed_device_reanchor_payload(reanchor_envelope)?;
-    let registry_head = state
-        .dids()
-        .log_events(&reanchor.actor_id)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("DID history lookup failed: {error}"),
-            )
-        })?
-        .into_iter()
-        .find(|entry| {
-            entry.operation.get("versionId").and_then(Value::as_str)
-                == Some(payload.did_version_id.as_str())
-        })
-        .map(|entry| entry.event_digest)
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "device_reanchor_entry_not_head",
-                "accepted registry head digest is unavailable",
-            )
-        })?;
-    let mut receipt = arkret_wire::EventBatchReceipt {
-        schema: "ak.schema.event_batch_receipt.v1".to_owned(),
-        receipt_id: arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
-            |error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("generated Event Batch Receipt id is invalid: {error}"),
-                )
-            },
-        )?,
-        issuer: Did::new(state.service_id().clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("service DID is invalid: {error}"),
-            )
-        })?,
-        scope: arkret_wire::EventBatchReceiptScope::DeviceReanchor(
-            arkret_wire::event_receipt::DeviceReanchorReceiptScope {
-                kind:
-                    arkret_wire::event_receipt::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
-                principal_id: payload.principal_id,
-                realm_id: RealmId::new(reanchor.realm_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("stored principal-control Realm id is invalid: {error}"),
-                    )
-                })?,
-                did_version_id: payload.did_version_id,
-                registry_head: Hash::new(registry_head).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("registry head digest is invalid: {error}"),
-                    )
-                })?,
-                reanchor_digest: Hash::new(reanchor.canonical_digest.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("re-anchor digest is invalid: {error}"),
-                    )
-                })?,
-                replacement_authorize_digest: Hash::new(authorize.canonical_digest.clone())
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!("replacement authorization digest is invalid: {error}"),
-                        )
-                    })?,
-            },
-        ),
-        frontier: arkret_wire::EventBatchReceiptFrontier {
-            actor_seq: Some(authorize.actor_seq),
-            event_id: Some(EventId::new(authorize.event_id.clone()).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("replacement authorization Event id is invalid: {error}"),
-                )
-            })?),
-            event_digest: Some(
-                Hash::new(authorize.canonical_digest.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("replacement authorization digest is invalid: {error}"),
-                    )
-                })?,
-            ),
-            hlc: None,
-        },
-        events: vec![
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
-                event_id: EventId::new(reanchor.event_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("re-anchor Event id is invalid: {error}"),
-                    )
-                })?,
-                event_digest: Hash::new(reanchor.canonical_digest.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("re-anchor digest is invalid: {error}"),
-                    )
-                })?,
-                kind: arkret_wire::NonEmptyString::new(reanchor.kind.clone())
-                    .expect("validated Event kind is non-empty"),
-            }),
-            arkret_wire::EventBatchReceiptEvent::Item(arkret_wire::EventBatchReceiptItem {
-                event_id: EventId::new(authorize.event_id.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("replacement authorization Event id is invalid: {error}"),
-                    )
-                })?,
-                event_digest: Hash::new(authorize.canonical_digest.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("replacement authorization digest is invalid: {error}"),
-                    )
-                })?,
-                kind: arkret_wire::NonEmptyString::new(authorize.kind.clone())
-                    .expect("validated Event kind is non-empty"),
-            }),
-        ],
-        created_at,
-        proofs: Vec::new(),
-    };
-    receipt.canonicalize_events().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("generated Event Batch Receipt events are invalid: {error}"),
-        )
-    })?;
-    receipt
-        .proofs
-        .push(sign_event_batch_receipt(state, &receipt)?);
-    receipt.validate().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("generated Event Batch Receipt is invalid: {error}"),
-        )
-    })?;
-    Ok(receipt)
+    Err(SubmitOneError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "failed_precondition",
+        "device re-anchor receipt contract still requires removed DID-version fields; refusing to fabricate receipt evidence",
+    ))
 }
 
 fn sign_event_batch_receipt(
@@ -2034,16 +1862,17 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt digest failed: {error}"),
         )
     })?;
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("service notary verification method is invalid: {error}"),
-                )
-            },
-        )?;
+    let verification_method = arkret_wire::DidUrl::new(format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    ))
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("service notary verification method is invalid: {error}"),
+        )
+    })?;
     let binding = json!({
         "context": "ak.receipt-proof-v1",
         "payload_digest": receipt_digest.as_str(),
@@ -2127,7 +1956,7 @@ mod tests {
     }
 
     fn fixture_founding_authorize_payload(
-        principal: &arkret_identifiers::Did,
+        principal: &arkret_identifiers::DidCoreId,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
         arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
@@ -2148,7 +1977,7 @@ mod tests {
             device_key_algorithm: Some(
                 arkret_wire::NonEmptyString::new("Ed25519".to_owned()).unwrap(),
             ),
-            authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(principal.clone()),
+            authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(principal.clone()),
             scopes: None,
             not_before: created_at,
             expires_at: None,
@@ -2161,7 +1990,7 @@ mod tests {
     }
 
     fn fixture_founding_device_descriptor(
-        principal: &arkret_identifiers::Did,
+        principal: &arkret_identifiers::DidCoreId,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
         let payload = fixture_founding_authorize_payload(principal, created_at);
@@ -2192,13 +2021,16 @@ mod tests {
     }
 
     fn sdk_canonical_self_principal_bootstrap_unit() -> Vec<Value> {
-        let principal =
-            arkret_identifiers::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned())
-                .unwrap();
+        let principal_full_id = arkret_identifiers::DidFullId::new(
+            "did:webvh:z6mkfixture:users.example:alice".to_owned(),
+        )
+        .unwrap();
+        let principal = arkret_identifiers::project_full_id_to_core_id(&principal_full_id).unwrap();
         let created_at = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let mut create = arkret_bootstrap::build_self_principal_pcr_create(
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
+                principal_full_id: principal_full_id.clone(),
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )
@@ -2229,11 +2061,11 @@ mod tests {
         let realm_id = arkret_identifiers::RealmId::from_event_id(&create.event_id);
 
         let payload = fixture_founding_authorize_payload(&principal, create.created_at);
-        let authorize_verification_method = format!("{}#{}", principal, payload.device_id);
+        let authorize_verification_method = format!("{}#{}", principal_full_id, payload.device_id);
         let mut authorize = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&principal),
+            principal,
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
             serde_json::to_value(payload).unwrap(),
@@ -2292,7 +2124,8 @@ mod tests {
     }
 
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
-        let actor = arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let actor =
+            arkret_identifiers::DidFullId::new("did:webvh:z6mkfixture:alice.example").unwrap();
         let mut event = arkret_wire::test_support::raw_event(
             envelope["kind"].as_str().unwrap(),
             arkret_wire::ScopeRef::Realm {

@@ -1,4 +1,4 @@
-use arkret_identity::service_identity::StoredServiceIdentity;
+use arkret_identity::service_identity::StoredDidCoreIdentity;
 use arkret_models_identity::ServiceResolutionRecord;
 use arkret_wire::Hash;
 
@@ -27,11 +27,11 @@ struct AppliedRow {
     #[diesel(sql_type = Bool)]
     applied: bool,
 }
-impl TryFrom<ServiceIdentityRow> for StoredServiceIdentity {
+impl TryFrom<ServiceIdentityRow> for StoredDidCoreIdentity {
     type Error = PersistenceError;
 
     fn try_from(row: ServiceIdentityRow) -> Result<Self, Self::Error> {
-        let identity: StoredServiceIdentity = serde_json::from_value(row.identity)
+        let identity: StoredDidCoreIdentity = serde_json::from_value(row.identity)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
         identity
             .validate()
@@ -41,7 +41,7 @@ impl TryFrom<ServiceIdentityRow> for StoredServiceIdentity {
 }
 #[async_trait]
 impl ServiceIdentityStore for PgServiceIdentityStore {
-    async fn get(&self) -> PersistenceResult<Option<StoredServiceIdentity>> {
+    async fn get(&self) -> PersistenceResult<Option<StoredDidCoreIdentity>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -51,11 +51,11 @@ impl ServiceIdentityStore for PgServiceIdentityStore {
             .await
             .optional()
             .map_err(PersistenceError::database)?
-            .map(StoredServiceIdentity::try_from)
+            .map(StoredDidCoreIdentity::try_from)
             .transpose()
     }
 
-    async fn put(&self, identity: StoredServiceIdentity) -> PersistenceResult<()> {
+    async fn put(&self, identity: StoredDidCoreIdentity) -> PersistenceResult<()> {
         identity
             .validate()
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;

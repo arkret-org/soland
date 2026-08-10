@@ -5,7 +5,7 @@
 //! consumes it) so producers and consumers still use one strong type without
 //! presenting product-local endpoints as protocol models.
 
-use arkret_identifiers::{CoreId, DeviceId, EventId};
+use arkret_identifiers::{DeviceId, DidCoreId, EventId};
 use arkret_models_crypto::DeviceStatus;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ pub struct DeviceSigningKeyDirectoryQueryRequestBody {
     /// Stable principal identity used by Soland's account/device projection.
     /// Resolution-bearing full DIDs are deliberately rejected at this
     /// deployment-local boundary.
-    pub principal_id: CoreId,
+    pub principal_id: DidCoreId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub device_ids: Vec<DeviceId>,
 }
@@ -37,7 +37,7 @@ pub struct AuthorizedDeviceSigningKey {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct DeviceSigningKeyDirectoryOutcome {
-    pub principal_id: CoreId,
+    pub principal_id: DidCoreId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub devices: Vec<AuthorizedDeviceSigningKey>,
 }

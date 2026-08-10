@@ -763,7 +763,7 @@ impl ProjectionState {
             .payload
             .get("actor_id")
             .and_then(|v| v.as_str())
-            .and_then(|value| arkret_identifiers::Did::new(value.to_owned()).ok());
+            .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok());
         let device_id = operation
             .payload
             .get("device_id")

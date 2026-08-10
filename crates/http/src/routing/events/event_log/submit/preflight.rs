@@ -26,7 +26,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
             return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
-    if envelope.requester_did.as_str() != actor_id {
+    if envelope.requester_actor_id.as_str() != actor_id {
         return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
     let sender_device_id = operation
@@ -76,7 +76,8 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         .and_then(|claim_ref| claim_ref.get("agent_key_authorize_event_id"))
         .and_then(Value::as_str)
     {
-        let Ok(recipient) = arkret_identifiers::CoreId::new(recipient_actor_id.to_owned()) else {
+        let Ok(recipient) = arkret_identifiers::DidCoreId::new(recipient_actor_id.to_owned())
+        else {
             return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
         };
         let authorization_matches = crate::routing::mls::current_agent_key_authorization_matches(

@@ -303,7 +303,7 @@ fn signal_envelope(
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id: realm },
-        sender_actor_id: arkret_identifiers::Did::new(sender_actor.to_owned()).unwrap(),
+        sender_actor_id: arkret_identifiers::DidCoreId::new(sender_actor.to_owned()).unwrap(),
         sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
@@ -577,11 +577,11 @@ fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
     entry.public = public;
     entry
         .members
-        .insert(arkret_identifiers::Did::new(ROSTER_ACTOR.to_owned()).unwrap());
+        .insert(arkret_identifiers::DidCoreId::new(ROSTER_ACTOR.to_owned()).unwrap());
     if include_caller {
         entry
             .members
-            .insert(arkret_identifiers::Did::new(ROSTER_CALLER.to_owned()).unwrap());
+            .insert(arkret_identifiers::DidCoreId::new(ROSTER_CALLER.to_owned()).unwrap());
     }
     entry
 }

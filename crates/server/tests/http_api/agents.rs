@@ -19,7 +19,7 @@ pub(crate) fn genesis_projector(
 }
 
 fn controller_founding_authorize_payload(
-    actor: &arkret_identifiers::Did,
+    actor: &arkret_identifiers::DidFullId,
     created_at: chrono::DateTime<chrono::Utc>,
     signing_key: &SigningKey,
 ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
@@ -29,7 +29,7 @@ fn controller_founding_authorize_payload(
     };
 
     let mut payload = DeviceAuthorizePayload {
-        principal_id: actor.clone(),
+        principal_id: arkret_wire::project_full_id_to_core_id(actor).unwrap(),
         device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
         device_public_key: arkret_wire::NonEmptyString::new(format!(
             "did:key:{}",
@@ -41,7 +41,9 @@ fn controller_founding_authorize_payload(
             arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
         ],
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-        authorized_by: DeviceOrPrincipalRef::Did(actor.clone()),
+        authorized_by: DeviceOrPrincipalRef::Principal(
+            arkret_wire::project_full_id_to_core_id(actor).unwrap(),
+        ),
         scopes: None,
         not_before: created_at,
         expires_at: None,
@@ -181,12 +183,13 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
 
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
-    let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let actor = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
     let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
-            principal_id: actor.clone(),
+            principal_id: arkret_wire::project_full_id_to_core_id(&actor).unwrap(),
+            principal_full_id: actor.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -232,7 +235,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm { realm_id: realm },
-        actor.clone(),
+        arkret_wire::project_full_id_to_core_id(&actor).unwrap(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -369,9 +372,12 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         "Principal Control",
         soland_services::events::DirectoryProvenance::LocalOnly,
     );
-    entry
-        .members
-        .insert(arkret_identifiers::Did::new(controller.to_owned()).unwrap());
+    entry.members.insert(
+        arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap(),
+        )
+        .unwrap(),
+    );
     state.test_realms().lock().upsert(entry);
     state
         .test_persistence()
@@ -482,7 +488,8 @@ async fn provision_agent_sdk_commit_attempt(
     if prepare_status != StatusCode::OK {
         return (prepare_status, preparation, Value::Null);
     }
-    let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_full_id = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
     let preparation = serde_json::from_value::<
         arkret_models_collaboration::agent_operations::AgentProvisionOutcome,
     >(preparation)
@@ -525,13 +532,19 @@ async fn provision_agent_sdk_commit_attempt(
             .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
-        controller_id,
+        controller_full_id.clone(),
         verification_method.clone(),
     );
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
-            controller_id: arkret_identifiers::Did::new(controller.to_owned()).unwrap(),
+            agent_full_id: arkret_identifiers::DidFullId::new(agent_id.as_str().replacen(
+                "ak:did_core:",
+                "did:",
+                1,
+            ))
+            .unwrap(),
+            controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
             trust_domain: arkret_identifiers::TypedTrustDomainId::new(
                 state.config().trust_domain.clone(),
@@ -553,8 +566,8 @@ async fn provision_agent_sdk_commit_attempt(
     )
     .unwrap();
     pcr_genesis.created_at = now;
-    pcr_genesis.executed_by = Some(arkret_identifiers::Did::new(controller.to_owned()).unwrap());
-    pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone());
+    pcr_genesis.executed_by = Some(controller_id.clone());
+    pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
     pcr_genesis.refresh_content_bound_identity().unwrap();
     arkret_signatures::sign_event(
@@ -588,7 +601,7 @@ async fn provision_agent_sdk_commit_attempt(
         panic!("controller Realm frontier must materialize a Seal view");
     };
     let mut event = arkret_bootstrap::build_agent_provision_event_draft(
-        signer.signer_did(),
+        &controller_id,
         &controller_realm_id,
         &agent_id,
         &principal_control_realm_id,
@@ -641,12 +654,12 @@ async fn provision_agent_sdk_commit_attempt(
         .send(&app)
         .await;
     let status = committed.status_code.expect("commit status");
-    let body = committed.take_json().await.expect("commit body");
+    let body: serde_json::Value = committed.take_json().await.expect("commit body");
     if status != StatusCode::OK || body["status"] != "awaiting_pcr_genesis" {
         return (status, body, commit_body);
     }
 
-    let genesis_body = arkret_sdk::EventsSubmitBatchRequestBody {
+    let genesis_body = arkret_wire::EventsSubmitBatchRequestBody {
         events: vec![arkret_wire::EventInitialSubmission::online(pcr_genesis)],
     };
     let mut genesis_response = TestClient::post("http://server/_arkret/self/events")
@@ -654,11 +667,12 @@ async fn provision_agent_sdk_commit_attempt(
         .json(&genesis_body)
         .send(&app)
         .await;
+    let genesis_status = genesis_response.status_code;
+    let genesis_response_body = genesis_response.take_string().await.unwrap_or_default();
     assert_eq!(
-        genesis_response.status_code,
+        genesis_status,
         Some(StatusCode::OK),
-        "{}",
-        genesis_response.take_string().await.unwrap_or_default()
+        "{genesis_response_body}"
     );
     let mut completed = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -890,7 +904,8 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
 
-    let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_full_id = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
     let controller_realm_id = arkret_identifiers::RealmId::new(
         soland_test_support::fixture_principal_control_realm(controller),
     )
@@ -931,7 +946,10 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             )
             .unwrap(),
             idempotency_key: arkret_wire::IdempotencyKey::new("unallocated-commit-001").unwrap(),
-            agent_id: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
+            agent_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:unallocated-agent.example",
+            )
+            .unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             )

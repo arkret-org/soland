@@ -120,7 +120,7 @@ pub(crate) async fn get_invite_receive_policy(
     // tombstones and invite receive policy are independent state machines.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let actor_id = Did::new(session.actor.clone())
+    let actor_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
     let policy = state
         .contacts()
@@ -228,13 +228,15 @@ async fn contact_list_rows(
             .map_err(|error| AppError::internal(error.to_string()))?
         {
             ContactPeer::Agent {
-                agent_id: Did::new(peer.clone()).expect("contact peer DID is validated"),
-                controller_id: Did::new(agent.controller_id)
+                agent_id: arkret_identifiers::DidCoreId::new(peer.clone())
+                    .expect("contact peer DID is validated"),
+                controller_id: arkret_identifiers::DidCoreId::new(agent.controller_id)
                     .expect("stored Agent controller DID is validated"),
             }
         } else {
             ContactPeer::Human {
-                principal_id: Did::new(peer.clone()).expect("contact peer DID is validated"),
+                principal_id: arkret_identifiers::DidCoreId::new(peer.clone())
+                    .expect("contact peer DID is validated"),
             }
         };
         let request_receipt = if row_state == ContactState::PendingIncoming {
@@ -315,7 +317,7 @@ async fn contact_list_rows(
             peer_service_id: record
                 .peer_service_id
                 .as_deref()
-                .and_then(|did| Did::new(did.to_owned()).ok()),
+                .and_then(|did| arkret_identifiers::DidCoreId::new(did.to_owned()).ok()),
             direct_conversation: None,
             agents: Vec::new(),
         };
@@ -334,24 +336,28 @@ async fn contact_list_rows(
             row.bidirectional_scopes =
                 intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
             row.effective_scopes = Some(row.bidirectional_scopes.clone());
-            row.direct_conversation = direct_pair_key(state, actor, row.peer.subject_id().as_str())
-                .ok()
-                .and_then(|pair_key| {
-                    // §5.7 — a pair holding two distinct endorsements is frozen,
-                    // and neither side may be presented as the conversation.
-                    if direct_binding_conflict(state, &pair_key) {
-                        return state
-                            .contacts()
-                            .direct_bindings_for_pair(&pair_key)
-                            .and_then(|bindings| bindings.any_endorsed())
-                            .map(|binding| {
-                                direct_summary(binding, DirectConversationSummaryState::Suspended)
-                            });
-                    }
-                    active_direct_binding(state, &pair_key).map(|binding| {
-                        direct_summary(binding, DirectConversationSummaryState::Found)
-                    })
-                });
+            row.direct_conversation =
+                direct_pair_key(state, actor, row.peer.contact_actor_id().as_str())
+                    .ok()
+                    .and_then(|pair_key| {
+                        // §5.7 — a pair holding two distinct endorsements is frozen,
+                        // and neither side may be presented as the conversation.
+                        if direct_binding_conflict(state, &pair_key) {
+                            return state
+                                .contacts()
+                                .direct_bindings_for_pair(&pair_key)
+                                .and_then(|bindings| bindings.any_endorsed())
+                                .map(|binding| {
+                                    direct_summary(
+                                        binding,
+                                        DirectConversationSummaryState::Suspended,
+                                    )
+                                });
+                        }
+                        active_direct_binding(state, &pair_key).map(|binding| {
+                            direct_summary(binding, DirectConversationSummaryState::Found)
+                        })
+                    });
             row
         })
         .collect::<Vec<_>>();
@@ -369,7 +375,7 @@ async fn contact_list_rows(
         }
         let Some(record) = state
             .agent_pairings()
-            .agent(row.peer.subject_id().as_str())
+            .agent(row.peer.contact_actor_id().as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         else {
@@ -381,7 +387,9 @@ async fn contact_list_rows(
         if record.controller_id == actor {
             continue;
         }
-        let Some(controller) = Did::new(record.controller_id.clone()).ok() else {
+        let Some(controller) =
+            arkret_identifiers::DidCoreId::new(record.controller_id.clone()).ok()
+        else {
             continue;
         };
         let display_name = record
@@ -402,12 +410,12 @@ async fn contact_list_rows(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .and_then(|value| BlobRef::new(value.to_owned()).ok());
-        agent_peers.insert(row.peer.subject_id().to_string());
+        agent_peers.insert(row.peer.contact_actor_id().to_string());
         agents_by_controller
             .entry(controller.to_string())
             .or_default()
             .push(ContactAgentProjection {
-                agent_id: row.peer.subject_id().clone(),
+                agent_id: row.peer.contact_actor_id().clone(),
                 controller_id: controller,
                 display_name,
                 agent_slug,
@@ -415,10 +423,10 @@ async fn contact_list_rows(
                 direct_conversation: row.direct_conversation.clone(),
             });
     }
-    out.retain(|row| !agent_peers.contains(row.peer.subject_id().as_str()));
+    out.retain(|row| !agent_peers.contains(row.peer.contact_actor_id().as_str()));
     for row in &mut out {
         row.agents = agents_by_controller
-            .remove(row.peer.subject_id().as_str())
+            .remove(row.peer.contact_actor_id().as_str())
             .unwrap_or_default();
         row.agents.sort_by(|left, right| {
             left.display_name
@@ -432,7 +440,11 @@ async fn contact_list_rows(
                 )
         });
     }
-    out.sort_by(|left, right| left.peer.subject_id().cmp(right.peer.subject_id()));
+    out.sort_by(|left, right| {
+        left.peer
+            .contact_actor_id()
+            .cmp(&right.peer.contact_actor_id())
+    });
     Ok(out)
 }
 

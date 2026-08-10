@@ -12,7 +12,7 @@
 //! fixtures and the standalone integration binaries stop each carrying a partial
 //! copy of it.
 
-use arkret_identifiers::{Did, Hlc, RealmId, SealId};
+use arkret_identifiers::{DidFullId, Hlc, RealmId, SealId};
 use arkret_wire::{DidUrl, Event, EventId, EventInitialSubmission, Precondition, ScopeRef};
 use serde_json::Value;
 
@@ -248,10 +248,10 @@ impl<'a> CallerSignedEvent<'a> {
     #[must_use]
     pub fn build(self) -> Event {
         let now = chrono::Utc::now();
-        let actor = Did::new(self.actor_id.to_owned()).expect("fixture actor DID");
-        let actor_id = arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(&actor).expect("fixture actor projection"),
-        );
+        let actor = arkret_identifiers::DidFullId::new(self.actor_id.to_owned())
+            .expect("fixture actor DID");
+        let actor_id =
+            arkret_wire::project_full_id_to_core_id(&actor).expect("fixture actor projection");
         let verification_method = self.verification_method();
         let mut event = arkret_wire::test_support::raw_event_at(
             self.kind,

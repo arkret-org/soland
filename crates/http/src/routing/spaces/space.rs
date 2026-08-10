@@ -11,7 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_identifiers::{Did, RealmId, SpaceId};
+use arkret_identifiers::{DidCoreId, DidFullId, RealmId, SpaceId};
 use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
@@ -471,7 +471,7 @@ pub async fn realm_lifecycle_response(
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
-    let members: Vec<Did> = {
+    let members: Vec<DidCoreId> = {
         let realms = state.realm_directory().snapshot();
         realms
             .get(&realm_id_value)
@@ -503,7 +503,7 @@ pub async fn realm_lifecycle_response(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let owner = Did::new(record.owner.clone()).map_err(|error| {
+    let owner = DidCoreId::new(record.owner.clone()).map_err(|error| {
         AppError::internal(format!("stored realm owner DID is invalid: {error}"))
     })?;
     Ok(RealmLifecycleView {
@@ -724,12 +724,14 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid realm_id shape");
         return false;
     };
-    let Ok(actor_typed) = Did::new(actor.to_owned()) else {
-        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
+    let Ok(actor_typed) = DidCoreId::new(actor.to_owned()) else {
+        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor core-id shape");
         return false;
     };
-    if crate::routing::identity::principal_control_realm_for_actor(state, actor)
-        .is_ok_and(|pcr| pcr.as_str() == realm_id)
+    if state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id, actor)
     {
         return true;
     }
@@ -776,7 +778,8 @@ pub async fn realm_visible_to_for_entry(
         return true;
     }
     session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
+        arkret_identifiers::DidCoreId::new(session.actor.clone())
+            .is_ok_and(|actor| realm.members.contains(&actor))
     })
 }
 
@@ -789,7 +792,8 @@ pub async fn realm_search_visible_to(
         return false;
     }
     if session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
+        arkret_identifiers::DidCoreId::new(session.actor.clone())
+            .is_ok_and(|actor| realm.members.contains(&actor))
     }) {
         return true;
     }
@@ -812,7 +816,8 @@ pub async fn realm_resolvable_to(
         return false;
     }
     if session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| realm.members.contains(&actor))
+        arkret_identifiers::DidCoreId::new(session.actor.clone())
+            .is_ok_and(|actor| realm.members.contains(&actor))
     }) {
         return true;
     }
@@ -891,7 +896,8 @@ pub async fn realm_id_accessible_for_id(
         return true;
     }
     session.is_some_and(|session| {
-        Did::new(session.actor.clone()).is_ok_and(|actor| members.contains(&actor))
+        arkret_identifiers::DidCoreId::new(session.actor.clone())
+            .is_ok_and(|actor| members.contains(&actor))
     })
 }
 

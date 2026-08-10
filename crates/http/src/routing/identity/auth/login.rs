@@ -88,13 +88,13 @@ pub(super) async fn dev_login(
         return Err(AppError::not_found("endpoint not available"));
     }
     let body = body.into_inner();
-    let actor = validate_did(&body.actor);
+    let actor = arkret_wire::DidCoreId::new(body.actor.clone());
     let device_id = validate_device_id(&body.device_id);
     let (actor, device_id) = match (actor, device_id) {
         (Ok(actor), Ok(device_id)) => (actor, device_id),
         _ => {
             return Err(AppError::invalid_param(
-                "actor must be a DID and device_id is required",
+                "actor must be a DID core id and device_id is required",
             ));
         }
     };
@@ -102,10 +102,9 @@ pub(super) async fn dev_login(
     let device_id_str = device_id.as_str();
     if device_id_str.trim().is_empty() {
         return Err(AppError::invalid_param(
-            "actor must be a DID and device_id is required",
+            "actor must be a DID core id and device_id is required",
         ));
     }
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, actor_str)?;
     // Spec: A.3 — auth handlers consult the in-memory failed-login
     // counter before doing anything else. An actor that crossed the
     // threshold gets a 403 `policy_denied` (lockout) until the lockout window

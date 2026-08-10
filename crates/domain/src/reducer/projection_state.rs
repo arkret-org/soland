@@ -310,7 +310,7 @@ pub struct ProjectionState {
     /// not shared Event history, owns application/review/cancel receipts and
     /// bodies.
     pub member_applications: BTreeMap<(String, String), MemberApplicationState>,
-    /// Per-`(realm_id, applicant_did)` reject cooldown anchor. Spec
+    /// Per-`(realm_id, applicant_actor_id)` reject cooldown anchor. Spec
     /// `governance/join-policy.md` §3 `cooldown_after_reject` / §12:
     /// after a review reject the reducer MUST refuse a fresh
     /// `member.application` from the same actor until the window elapses.
@@ -1527,21 +1527,19 @@ impl ProjectionState {
         })
     }
 
-    /// Resolve the accepted principal-control Realm owned by `principal_id`.
+    /// Whether this explicitly selected Realm is a principal-control Realm
+    /// owned by `principal_id`.
     ///
-    /// PCR addresses are Event-derived, so callers must discover the address
-    /// from accepted Realm state instead of recomputing it from the DID. More
-    /// than one match is an invariant violation and deliberately resolves to
-    /// `None` so authorization paths fail closed.
-    pub fn principal_control_realm_for_actor(&self, principal_id: &str) -> Option<&str> {
-        let mut matches = self.realm_states.values().filter(|realm| {
+    /// This is intentionally a two-coordinate lookup. A principal core may
+    /// own multiple independent PCR authority instances, so authorization
+    /// must never discover a globally unique PCR from the principal alone.
+    pub fn realm_is_principal_control_for_actor(&self, realm_id: &str, principal_id: &str) -> bool {
+        self.realm_states.get(realm_id).is_some_and(|realm| {
             realm.owner.as_deref() == Some(principal_id)
                 && realm
                     .active_profiles
                     .iter()
                     .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
-        });
-        let realm_id = matches.next()?.realm_id.as_str();
-        matches.next().is_none().then_some(realm_id)
+        })
     }
 }

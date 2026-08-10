@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_identifiers::{Did, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{DidFullId, Hash, Hlc, RealmId, SealId};
 use arkret_wire::{PartialSignature, Seal, ThresholdAggregator, WireError};
 use base64::Engine as _;
 use chrono::Utc;
@@ -314,7 +314,7 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
         let sig_bytes = STANDARD
             .decode(sig_b64)
             .map_err(|e| format!("partial signature decode failed: {e}"))?;
-        let did = Did::new(signer_did.clone())
+        let did = DidFullId::new(signer_did.clone())
             .map_err(|e| format!("invalid signer_did {signer_did}: {e}"))?;
         // §2.2 — the partial `kid` is a concrete verification method; a bare
         // DID or malformed value fails closed instead of being aggregated.

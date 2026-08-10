@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_models_collaboration::governance::join_policy::JoinApplicationAuditAction;
-use arkret_wire::{Did, Hash};
+use arkret_wire::{DidCoreId, Hash};
 use parking_lot::Mutex;
 use soland_storage::{
     JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationIdempotencyRecord,
@@ -136,7 +136,7 @@ impl JoinApplicationStore for MemoryJoinApplicationStore {
             .records
             .get_mut(&(realm_id.to_owned(), application_ref.to_owned()))
             .ok_or_else(|| PersistenceError::NotFound("join application".to_owned()))?;
-        let actor_id = Did::new(actor_id.to_owned())
+        let actor_id = DidCoreId::new(actor_id.to_owned())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         let receipt_ref = Hash::new(application_ref.to_owned())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
@@ -188,7 +188,7 @@ impl JoinApplicationStore for MemoryJoinApplicationStore {
         {
             return Ok(false);
         }
-        let actor_id = Did::new(actor_id.to_owned())
+        let actor_id = DidCoreId::new(actor_id.to_owned())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         record.invite_consumed = true;
         record.status =
@@ -239,7 +239,7 @@ mod tests {
             "receipt": {
                 "candidate_kind": "member.application",
                 "realm_id": REALM,
-                "applicant_did": APPLICANT,
+                "applicant_actor_id": APPLICANT,
                 "knock_ref": KNOCK,
                 "policy_version_digest": hash('b'),
                 "application_revision_digest": hash('c'),
@@ -283,7 +283,7 @@ mod tests {
             "realm_id": REALM,
             "application_ref": hash('a'),
             "application_revision_digest": hash('c'),
-            "reviewer_did": reviewer,
+            "reviewer_actor_id": reviewer,
             "decision": "accept",
             "evidence_refs": [],
             "reviewer_capability_proof": {

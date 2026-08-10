@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_wire::PlaintextDataClassKind;
 use serde_json::Value;
@@ -97,9 +97,10 @@ pub(super) async fn project_invite_accept_operation(
     }
     // Cascade membership: activate the invitee's join in the target Realm
     // member index so subsequent realm-scoped reads include them.
-    if let (Ok(realm_id_typed), Ok(member_did)) =
-        (RealmId::new(realm_id.clone()), Did::new(accepter.clone()))
-    {
+    if let (Ok(realm_id_typed), Ok(member_did)) = (
+        RealmId::new(realm_id.clone()),
+        DidCoreId::new(accepter.clone()),
+    ) {
         state
             .realm_directory()
             .add_member(&realm_id_typed, member_did);
@@ -956,7 +957,7 @@ fn claim_binding_matches(
             .is_none_or(|invite_expiry| expires_at <= invite_expiry)
 }
 
-fn invitee_for_operation(operation: &Operation) -> Option<Did> {
+fn invitee_for_operation(operation: &Operation) -> Option<DidFullId> {
     operation
         .payload
         .get("invitee")
@@ -965,14 +966,14 @@ fn invitee_for_operation(operation: &Operation) -> Option<Did> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .and_then(|value| Did::new(value.to_owned()).ok())
+        .and_then(|value| DidFullId::new(value.to_owned()).ok())
 }
 
 fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
     let target = operation.payload.get("invite_delivery_target")?;
     let object = target.as_object()?;
     let service_id = object.get("recipient_service_id").and_then(Value::as_str)?;
-    if Did::new(service_id.to_owned()).is_err() {
+    if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
         tracing::warn!(
             operation_id = %operation.operation_id,
             "ak.invite.create supplied invalid invite_delivery_target.recipient_service_id"

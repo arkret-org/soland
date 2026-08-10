@@ -314,7 +314,10 @@ fn membership_join_leave() {
     let (_, join_writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &join_payload);
     let mut join = make_operation(arkret_wire::EventKind::MemberState, realm_id, join_payload);
-    join.context.sender = arkret_identifiers::Did::new("did:web:bob").unwrap();
+    join.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new("did:web:bob").unwrap(),
+    )
+    .unwrap();
     state.apply_projected(&join, &join_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
@@ -328,7 +331,10 @@ fn membership_join_leave() {
         &leave_payload,
     );
     let mut leave = make_operation(arkret_wire::EventKind::MemberState, realm_id, leave_payload);
-    leave.context.sender = arkret_identifiers::Did::new("did:web:bob").unwrap();
+    leave.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new("did:web:bob").unwrap(),
+    )
+    .unwrap();
     state.apply_projected(&leave, &leave_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }

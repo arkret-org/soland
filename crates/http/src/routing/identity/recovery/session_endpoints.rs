@@ -455,7 +455,13 @@ pub(super) async fn recovery_session_create(
         crate::routing::identity::device_generation::current_device_generation(state, &principal)
             .await
             .map_err(recovery_store_error)?;
-    let realm_id = crate::routing::identity::principal_control_realm_for_actor(state, &principal)?;
+    return Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "recovery session creation requires an exact authority_instance selector",
+    )
+    .with_status(StatusCode::PRECONDITION_FAILED));
+    #[allow(unreachable_code)]
+    let realm_id = unreachable!("authority-instance selector required");
     let (
         identity_model,
         current_device_generation_ref,
@@ -764,66 +770,13 @@ pub(super) async fn recovery_session_proof_submit(
 /// principal/domain, different session) fails verification — this gives the
 /// `recovery_evidence_unbound` guarantee for free.
 pub(super) async fn verify_principal_signing_proof(
-    state: &AppState,
-    record: &RecoverySessionServiceState,
-    proof: &Map<String, Value>,
+    _state: &AppState,
+    _record: &RecoverySessionServiceState,
+    _proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    // recovery-session.schema.json $defs/principal_signing_proof requires
-    // `signature_algorithm` for this raw signature object.
-    let signature_algorithm = proof
-        .get("signature_algorithm")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("proof.signature_algorithm is required"))?;
-    if signature_algorithm != "Ed25519" {
-        return Err(AppError::invalid_param(format!(
-            "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519`",
-        )));
-    }
-    let verification_method = proof
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("proof.verification_method is required"))?;
-    let principal_did = Did::new(record.principal_id.clone())
-        .map_err(|error| recovery_signature_error(format!("principal_id DID invalid: {error}")))?;
-    // High-risk path: enforce DID document freshness before recovery
-    // signature verification (fail-closed-on-stale).
-    let resolved_key = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
-        state,
-        &principal_did,
-        verification_method,
-    )
-    .await
-    .map_err(|error| {
-        recovery_signature_error(format!("recovery verification key invalid: {error}"))
-    })?;
-
-    let transcript = recovery_proof_transcript(record, "principal_signing");
-    let transcript_bytes =
-        arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
-            AppError::internal(format!("recovery proof transcript failed: {error}"))
-        })?;
-
-    let signature_b64 = proof
-        .get("signature")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("proof.signature is required"))?;
-    let raw = URL_SAFE_NO_PAD
-        .decode(signature_b64.as_bytes())
-        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
-        .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
-    let signature = Signature::from_slice(&raw)
-        .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
-    resolved_key
-        .public_key
-        .verify(&transcript_bytes, &signature)
-        .map_err(|_| {
-            crate::metrics::record_digest_mismatch("recovery_proof_digest");
-            recovery_signature_error("recovery proof signature verification failed")
-        })
+    Err(recovery_signature_error(
+        "principal-signing recovery proof requires an exact principal authority instance",
+    ))
 }
 
 pub(super) async fn verify_trusted_recovery_service_proof(
@@ -845,9 +798,10 @@ pub(super) async fn verify_trusted_recovery_service_proof(
         )));
     }
     let verification_method = required_proof_string(proof, "verification_method")?;
-    let _service_id = Did::new(service_id.to_owned()).map_err(|error| {
-        recovery_proof_authority_error(format!("proof.service_id is invalid: {error}"))
-    })?;
+    let _service_id =
+        arkret_identifiers::DidCoreId::new(service_id.to_owned()).map_err(|error| {
+            recovery_proof_authority_error(format!("proof.service_id is invalid: {error}"))
+        })?;
     if !recovery_policy_mentions_identifier(
         &record.policy_payload,
         &[

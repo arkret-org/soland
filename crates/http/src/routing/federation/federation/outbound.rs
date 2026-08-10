@@ -67,9 +67,7 @@ pub(crate) fn peer_url_for_service_id(state: &AppState, service_id: &str) -> Opt
         .map(|peer| peer.url)
 }
 
-/// Resolve a production destination. Core service ids always go through the
-/// shared verified resolver; the stored/configured URL branch exists only for
-/// pre-core migration rows whose peer id is still a full DID.
+/// Resolve a service destination through the shared verified resolver.
 pub(crate) async fn resolved_peer_base_url(
     state: &AppState,
     service_id: &str,
@@ -93,26 +91,10 @@ pub(crate) async fn resolved_peer_target(
     service_kind: &str,
     force_refresh: bool,
 ) -> Result<ResolvedFederationPeerTarget, String> {
-    if arkret_wire::ServiceId::new(service_id.to_owned()).is_ok() {
-        let route = resolved_peer_route(state, service_id, service_kind, force_refresh).await?;
-        return Ok(ResolvedFederationPeerTarget {
-            base_url: route.cache_entry.base_url.trim_end_matches('/').to_owned(),
-            trust_domain: route.trust_domain.to_string(),
-        });
-    }
-    if !state.config().development_mode {
-        return Err("non-core federation peer ids are rejected in production".to_owned());
-    }
-    let configured = configured_peer_targets(state)
-        .into_iter()
-        .find(|peer| peer.did == service_id)
-        .ok_or_else(|| "development full-DID peer has no configured test target".to_owned())?;
-    let trust_domain = configured.trust_domain.ok_or_else(|| {
-        "development full-DID peer requires an explicit configured trust_domain".to_owned()
-    })?;
+    let route = resolved_peer_route(state, service_id, service_kind, force_refresh).await?;
     Ok(ResolvedFederationPeerTarget {
-        base_url: configured.url.trim_end_matches('/').to_owned(),
-        trust_domain,
+        base_url: route.cache_entry.base_url.trim_end_matches('/').to_owned(),
+        trust_domain: route.trust_domain.to_string(),
     })
 }
 
@@ -125,7 +107,7 @@ pub(crate) async fn resolved_peer_route(
     service_kind: &str,
     force_refresh: bool,
 ) -> Result<soland_services::service_route::ResolvedServiceRoute, String> {
-    let core = arkret_wire::ServiceId::new(service_id.to_owned())
+    let core = arkret_wire::DidCoreId::new(service_id.to_owned())
         .map_err(|error| format!("federation destination is not a service core id: {error}"))?;
     let route = state
         .service_route_resolver()
@@ -165,9 +147,10 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
         .iter()
         .copied()
         .find(|part| part.starts_with("https://") || part.starts_with("http://"))?;
-    let did = parts.iter().copied().find(|part| {
-        part.starts_with("did:") || arkret_wire::ServiceId::new((*part).to_owned()).is_ok()
-    })?;
+    let did = parts
+        .iter()
+        .copied()
+        .find(|part| arkret_wire::DidCoreId::new((*part).to_owned()).is_ok())?;
     let trust_domain = parts
         .iter()
         .copied()
@@ -175,9 +158,7 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
     if parts.len() == 3 && trust_domain.is_none() {
         return None;
     }
-    if arkret_identifiers::Did::new(did.to_owned()).is_err()
-        && arkret_wire::ServiceId::new(did.to_owned()).is_err()
-    {
+    if arkret_wire::DidCoreId::new(did.to_owned()).is_err() {
         return None;
     }
     if let Some(trust_domain) = trust_domain {
@@ -197,17 +178,19 @@ mod tests {
     #[test]
     fn peer_target_preserves_verified_trust_domain_binding() {
         let target = parse_peer_target(
-            "https://peer.example|did:web:peer.example|ak:trust_domain:partner.example",
+            "https://peer.example|ak:did_core:web:peer.example|ak:trust_domain:partner.example",
         )
         .expect("three-part peer target");
-        assert_eq!(target.did, "did:web:peer.example");
+        assert_eq!(target.did, "ak:did_core:web:peer.example");
         assert_eq!(
             target.trust_domain.as_deref(),
             Some("ak:trust_domain:partner.example")
         );
         assert!(
-            parse_peer_target("https://peer.example|did:web:peer.example|not-a-trust-domain")
-                .is_none()
+            parse_peer_target(
+                "https://peer.example|ak:did_core:web:peer.example|not-a-trust-domain"
+            )
+            .is_none()
         );
         let core = parse_peer_target(
             "https://peer.example|ak:did_core:webvh:z6mkpeer|ak:trust_domain:partner.example",

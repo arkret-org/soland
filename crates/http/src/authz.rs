@@ -35,13 +35,10 @@ pub use arkret_policy::authz::authority::{
 };
 use parking_lot::Mutex;
 use serde::Serialize;
+pub(crate) use soland_domain::capability::resource_matches;
+use soland_domain::capability::validate_resource_pattern;
 use soland_services::authorization::{AuthorizationDecision, AuthorizationService};
 
-const SELECTOR_SHORTHAND_MAX_BYTES: usize = 4096;
-const SELECTOR_TOKEN_MAX: usize = 256;
-const SELECTOR_DISJUNCTION_MAX: usize = 16;
-const SELECTOR_CONJUNCTION_MAX: usize = 64;
-const SELECTOR_TERM_MAX_BYTES: usize = 1024;
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
 pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
     "capability_action_registry_unavailable";
@@ -435,95 +432,6 @@ fn matching_request_has_revoked_upstream_grant(
     })
 }
 
-/// Check if a grant resource pattern matches the requested resource.
-///
-/// AKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
-/// the spec resource-selector enum admits `realm`, `space`, `strand`,
-/// `morph`, `circle`, `actor`. soland's resource matcher accepts the
-/// complete event-derived `ak:circle:<44-char token>` form alongside the existing space /
-/// realm forms, plus a `circle` keyword selector that resolves to
-/// "any ak:circle:<event token>" so policy-authoring tools can express
-/// circle-wide grants without enumerating each circle.
-pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
-    if pattern == "*" {
-        return false;
-    }
-    let resources = resource
-        .split(',')
-        .map(str::trim)
-        .filter(|resource| !resource.is_empty())
-        .collect::<Vec<_>>();
-    if resources.is_empty() {
-        return false;
-    }
-    pattern.split(',').any(|alternative| {
-        let alternative = alternative.trim();
-        !alternative.is_empty()
-            && alternative.split('+').map(str::trim).all(|term| {
-                !term.is_empty()
-                    && resources
-                        .iter()
-                        .any(|resource| resource_term_matches(term, resource))
-            })
-    })
-}
-
-fn resource_term_matches(pattern: &str, resource: &str) -> bool {
-    if pattern == "*" {
-        return false;
-    }
-    if pattern == resource {
-        return true;
-    }
-    match pattern {
-        "realm" => return resource.starts_with("ak:realm:"),
-        "space" => return resource.starts_with("ak:space:"),
-        "circle" => return resource.starts_with("ak:circle:"),
-        "strand" => return resource.starts_with("ak:strand:"),
-        "message" => {
-            return resource.starts_with("ak:message:") || resource.starts_with("ak:event:");
-        }
-        "morph" => return resource.starts_with("ak:morph:"),
-        "object" => return is_canonical_object_ref(resource),
-        "relation" => return resource.starts_with("ak:relation:"),
-        "view" => return resource.starts_with("ak:view:"),
-        "event" => return resource.starts_with("ak:event:"),
-        "actor" => return resource.starts_with("did:") || resource.starts_with("ak:actor:"),
-        "schema" => {
-            return resource.starts_with("ak:schema:") || resource.starts_with("ak.schema.");
-        }
-        "policy" => return resource.starts_with("ak:policy:"),
-        "invite" => return resource.starts_with("ak:invite:"),
-        "notification" => return resource.starts_with("ak:notification:"),
-        "read_cursor" => return resource.starts_with("ak:read_cursor:"),
-        "blob" => return resource.starts_with("ak:blob:"),
-        _ => {}
-    }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return resource.starts_with(prefix);
-    }
-    false
-}
-
-fn is_canonical_object_ref(value: &str) -> bool {
-    [
-        "ak:realm:",
-        "ak:space:",
-        "ak:circle:",
-        "ak:strand:",
-        "ak:message:",
-        "ak:morph:",
-        "ak:relation:",
-        "ak:view:",
-        "ak:event:",
-        "ak:policy:",
-        "ak:invite:",
-        "ak:blob:",
-    ]
-    .iter()
-    .any(|prefix| value.starts_with(prefix))
-}
-
 pub(crate) fn grant_scope_valid(grant: &Grant) -> Result<(), &'static str> {
     validate_capability_actions(&grant.actions)?;
     validate_resource_pattern(&grant.resource)
@@ -595,92 +503,6 @@ fn validate_registered_capability_action(
         Ok(None) => Err(unknown_reason),
         Err(_) => Err(REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE),
     }
-}
-
-pub(crate) fn validate_resource_pattern(pattern: &str) -> Result<(), &'static str> {
-    let pattern = pattern.trim();
-    if pattern == "*" {
-        return Err("capability_grant_resource_wildcard_forbidden");
-    }
-    if pattern.len() > SELECTOR_SHORTHAND_MAX_BYTES {
-        return Err("selector_too_complex");
-    }
-    if pattern.is_empty() {
-        return Err("capability_grant_resource_invalid");
-    }
-
-    let alternatives: Vec<&str> = pattern.split(',').collect();
-    if alternatives.len() > SELECTOR_DISJUNCTION_MAX {
-        return Err("selector_too_complex");
-    }
-
-    let mut token_count = 0usize;
-    let mut term_count = 0usize;
-    for alternative in alternatives {
-        let terms: Vec<&str> = alternative.split('+').collect();
-        for term in terms {
-            let term = term.trim();
-            if term.is_empty() {
-                return Err("capability_grant_resource_invalid");
-            }
-            if term.len() > SELECTOR_TERM_MAX_BYTES {
-                return Err("selector_too_complex");
-            }
-            validate_resource_selector_term(term)?;
-            term_count += 1;
-        }
-    }
-    token_count += term_count;
-    if term_count > 0 {
-        token_count += pattern.matches(',').count() + pattern.matches('+').count();
-    }
-    if token_count > SELECTOR_TOKEN_MAX || term_count > SELECTOR_CONJUNCTION_MAX {
-        return Err("selector_too_complex");
-    }
-
-    Ok(())
-}
-
-fn validate_resource_selector_term(term: &str) -> Result<(), &'static str> {
-    if term == "*" {
-        return Err("capability_grant_resource_wildcard_forbidden");
-    }
-    if term == "actor:*" {
-        return Err("selector_actor_wildcard_forbidden");
-    }
-    if selector_term_uses_governance_wildcard(term) {
-        return Err("selector_governance_wildcard_forbidden");
-    }
-    Ok(())
-}
-
-fn selector_term_uses_governance_wildcard(term: &str) -> bool {
-    if term == "policy:*" || (term.starts_with("policy:") && term.ends_with(":*")) {
-        return true;
-    }
-    if term == "schema:*" || (term.starts_with("schema:") && term.ends_with(":*")) {
-        return true;
-    }
-    let Some(tail) = object_selector_tail(term) else {
-        return false;
-    };
-    matches!(tail.as_str(), "policy" | "schema")
-}
-
-fn object_selector_tail(term: &str) -> Option<String> {
-    let remainder = term.strip_prefix("object:")?;
-    if remainder == "*" {
-        return None;
-    }
-    if let Some(tail) = remainder.strip_prefix("*:") {
-        return (!tail.is_empty()).then(|| tail.to_owned());
-    }
-    let parts = remainder.split(':').collect::<Vec<_>>();
-    if parts.len() <= 3 || parts[0] != "ak" || parts[1] != "realm" || parts[2].is_empty() {
-        return None;
-    }
-    let tail = parts[3..].join(":");
-    (!tail.is_empty()).then_some(tail)
 }
 
 /// Pick the resulting decision over a set of satisfied grants.

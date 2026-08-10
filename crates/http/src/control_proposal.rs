@@ -174,9 +174,11 @@ pub(crate) async fn verify_control_proposal_ack(
 
     let mut signers = BTreeSet::new();
     for member in &ack.authority_acks {
-        let signer =
+        let signer_full_id =
             arkret_identity::verification_method_did(&member.signature.verification_method)
                 .map_err(|error| error.to_string())?;
+        let signer = arkret_wire::project_full_id_to_core_id(&signer_full_id)
+            .map_err(|error| error.to_string())?;
         if !signers.insert(signer.clone()) {
             return Err("Control Proposal Ack repeats an authority member".to_owned());
         }
@@ -186,7 +188,7 @@ pub(crate) async fn verify_control_proposal_ack(
         let device_method = member
             .signature
             .verification_method
-            .strip_prefix(&format!("{signer}#"))
+            .strip_prefix(&format!("{signer_full_id}#"))
             .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
         if device_method {
             crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
@@ -203,7 +205,7 @@ pub(crate) async fn verify_control_proposal_ack(
                 &bytes,
                 &member.signature.jws,
                 &member.signature.verification_method,
-                signer.as_str(),
+                signer_full_id.as_str(),
                 state,
             )
             .await?;
@@ -212,11 +214,7 @@ pub(crate) async fn verify_control_proposal_ack(
 
     if !profile.proposal_quorum_met(&signers) {
         let delegated_controller = event.executed_by.as_ref().filter(|controller| {
-            signers.len() == 1
-                && signers.iter().any(|signer| {
-                    arkret_wire::project_full_id_to_core_id(signer)
-                        .is_ok_and(|core| &arkret_wire::ActorId::from(core) == *controller)
-                })
+            signers.len() == 1 && signers.iter().any(|signer| signer == *controller)
         });
         let delegated_quorum = if let Some(controller) = delegated_controller {
             let envelope = serde_json::to_value(event)
@@ -237,12 +235,10 @@ pub(crate) async fn verify_control_proposal_ack(
                         .iter()
                         .filter_map(|proof| {
                             let (controller, _) = proof.verification_method.rsplit_once('#')?;
-                            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
-                            (arkret_wire::project_full_id_to_core_id(&full_id)
-                                .map(arkret_wire::ActorId::from)
-                                .ok()
-                                == Some(event.actor_id.clone()))
-                            .then_some(full_id)
+                            let full_id =
+                                arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
+                            let core_id = arkret_wire::project_full_id_to_core_id(&full_id).ok()?;
+                            (core_id == event.actor_id).then_some(core_id)
                         })
                         .collect(),
                 )
@@ -264,11 +260,15 @@ mod control_proposal_ack_quorum_tests {
 
     use super::*;
 
-    fn did(name: &str) -> arkret_wire::Did {
-        arkret_wire::Did::new(format!("did:web:{name}.example")).unwrap()
+    fn did(name: &str) -> arkret_wire::DidCoreId {
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
     }
 
-    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::Did> {
+    fn full_did(name: &str) -> arkret_wire::DidFullId {
+        arkret_wire::DidFullId::new(format!("did:web:{name}.example")).unwrap()
+    }
+
+    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidCoreId> {
         values.iter().map(|value| did(value)).collect()
     }
 
@@ -297,7 +297,7 @@ mod control_proposal_ack_quorum_tests {
     #[test]
     fn mixed_accepts_primary_or_complete_recovery_set_only() {
         let profile = NotaryValue::Mixed {
-            did: did("primary"),
+            did: full_did("primary"),
             recovery_members: vec![did("recovery-a"), did("recovery-b")],
         };
         assert!(profile.proposal_quorum_met(&signers(&["primary"])));

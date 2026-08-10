@@ -56,8 +56,8 @@ pub(crate) fn push_target_privacy_derivation_claim(
             salt_epoch_id: push_target_salt_epoch_id_at(now),
             salt_rotation_seconds: PUSH_TARGET_SALT_ROTATION_SECONDS as u64,
             input_binding: Some(vec![
-                arkret_models_discovery::service_description::PushTargetInputBinding::RecipientServiceId,
-                arkret_models_discovery::service_description::PushTargetInputBinding::PrincipalId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::RecipientDidCoreId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::DidCoreId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::DeviceId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::PushRouteId,
                 arkret_models_discovery::service_description::PushTargetInputBinding::SaltEpochId,
@@ -553,16 +553,12 @@ async fn push_register_session_grant_bridge(
             "X-Arkret-Principal-Id is required when using X-Arkret-Session-Grant",
         ));
     };
-    let principal_id = arkret_wire::CoreId::new(principal_identity.to_owned())
-        .or_else(|_| {
-            arkret_wire::FullId::new(principal_identity.to_owned())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-        })
-        .map_err(|_| {
+    let principal_id =
+        arkret_wire::DidCoreId::new(principal_identity.to_owned()).map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "principal_id must be a core id or a projectable full id",
+                "principal_id must be a core id",
             )
         })?;
     let challenge = optional_ascii_header(

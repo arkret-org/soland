@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::events_payloads::agent::{
     AgentProvisionAccountabilityScope, AgentProvisionPayload,
 };
@@ -23,7 +23,7 @@ use crate::ServiceResult;
 pub struct RealmDirectoryQuery {
     pub text: Option<String>,
     pub tags: BTreeSet<String>,
-    pub members: BTreeSet<Did>,
+    pub members: BTreeSet<DidCoreId>,
     pub public_only: bool,
     pub limit: Option<usize>,
 }
@@ -136,7 +136,7 @@ pub struct RealmDirectoryEntry {
     pub title: String,
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
-    pub members: BTreeSet<Did>,
+    pub members: BTreeSet<DidCoreId>,
     pub public: bool,
     pub category: Option<String>,
     pub realm_class: Option<String>,
@@ -301,12 +301,12 @@ impl RealmDirectoryService {
         self.index.lock().get_mut(realm_id).map(update)
     }
 
-    pub fn add_member(&self, realm_id: &RealmId, member: Did) -> bool {
+    pub fn add_member(&self, realm_id: &RealmId, member: DidCoreId) -> bool {
         self.update_entry(realm_id, |entry| entry.members.insert(member))
             .unwrap_or(false)
     }
 
-    pub fn remove_member_from_all(&self, member: &Did) -> usize {
+    pub fn remove_member_from_all(&self, member: &DidCoreId) -> usize {
         let mut index = self.index.lock();
         let mut removed = 0;
         for entry in index.entries.values_mut() {
@@ -842,8 +842,8 @@ pub struct IdentityAnchorFrontierState {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorState {
     pub actor_id: String,
-    pub version_number: u64,
-    pub did_version_id: String,
+    pub authority_instance_digest: String,
+    pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,
 }

@@ -1,5 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, RealmId};
 use serde_json::{Value, json};
 use soland_services::events::RealmMetadata as RealmMetaRecord;
 use soland_services::operation_semantics as kinds;
@@ -62,7 +62,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 "invite_only"
             });
             entry.public = discoverability == "public";
-            if let Ok(origin) = Did::new(origin.to_owned()) {
+            if let Ok(origin) = DidCoreId::new(origin.to_owned()) {
                 entry.members.insert(origin);
             }
             let entry_public = entry.public;
@@ -291,11 +291,11 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     };
 
     let updated = state.realm_directory().update_entry(&realm_id, |entry| {
-        if let Ok(member) = Did::new(member) {
+        if let Ok(member) = DidCoreId::new(member) {
             if matches!(membership, Some("leave" | "ban")) {
                 entry.members.remove(&member);
                 for agent_id in &cascaded_agent_ids {
-                    if let Ok(agent_id) = Did::new(agent_id.clone()) {
+                    if let Ok(agent_id) = DidCoreId::new(agent_id.clone()) {
                         entry.members.remove(&agent_id);
                     }
                 }

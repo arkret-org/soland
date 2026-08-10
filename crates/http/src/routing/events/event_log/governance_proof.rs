@@ -42,8 +42,10 @@ pub(super) async fn mls_governance_proof(
     }
 
     let realm_value = request.realm_id.as_str();
-    let own_pcr =
-        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
+    let own_pcr = state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_value, &session.actor);
     let managed_agent_pcr =
         crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
             state,
@@ -51,7 +53,7 @@ pub(super) async fn mls_governance_proof(
             realm_value,
         )
         .await?;
-    let realm_accessible = realm_value == own_pcr.as_str()
+    let realm_accessible = own_pcr
         || managed_agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(state, realm_value, Some(&session))
             .await;
@@ -1689,7 +1691,7 @@ mod tests {
     fn managed_agent_pcr_create() -> Event {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
-        let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
+        let actor_id = arkret_identifiers::DidFullId::new("did:web:agent.example").unwrap();
         arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
@@ -1768,7 +1770,7 @@ mod tests {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap();
-        let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
+        let actor_id = arkret_identifiers::DidFullId::new("did:web:invitee.example").unwrap();
         let event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::InviteAccept.as_str(),
             arkret_wire::ScopeRef::Realm {

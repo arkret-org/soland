@@ -250,7 +250,7 @@ impl OrganizationStore for PgOrganizationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT organization_id, organization_did, handle, display_name, source_refs, \
+            "SELECT organization_id, organization_principal_id, handle, display_name, source_refs, \
                     policy_revision, verified, members, member_count, created_by, created_at, \
                     updated_at \
              FROM organizations WHERE organization_id = $1",
@@ -272,12 +272,12 @@ impl OrganizationStore for PgOrganizationStore {
         let member_count = i64::try_from(record.member_count).unwrap_or(i64::MAX);
         sql_query(
             "INSERT INTO organizations \
-             (organization_id, organization_did, handle, display_name, source_refs, \
+             (organization_id, organization_principal_id, handle, display_name, source_refs, \
               policy_revision, verified, members, member_count, created_by, created_at, \
               updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (organization_id) DO UPDATE SET \
-               organization_did = EXCLUDED.organization_did, \
+               organization_principal_id = EXCLUDED.organization_principal_id, \
                handle = EXCLUDED.handle, \
                display_name = EXCLUDED.display_name, \
                source_refs = EXCLUDED.source_refs, \
@@ -288,7 +288,7 @@ impl OrganizationStore for PgOrganizationStore {
                updated_at = EXCLUDED.updated_at",
         )
         .bind::<Text, _>(&record.organization_id)
-        .bind::<Text, _>(&record.organization_did)
+        .bind::<Text, _>(&record.organization_principal_id)
         .bind::<Nullable<Text>, _>(&record.handle)
         .bind::<Text, _>(&record.display_name)
         .bind::<Jsonb, _>(
@@ -312,7 +312,7 @@ impl OrganizationStore for PgOrganizationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT organization_id, organization_did, handle, display_name, source_refs, \
+            "SELECT organization_id, organization_principal_id, handle, display_name, source_refs, \
                     policy_revision, verified, members, member_count, created_by, created_at, \
                     updated_at \
              FROM organizations ORDER BY organization_id",
@@ -328,7 +328,7 @@ struct OrganizationRow {
     #[diesel(sql_type = Text)]
     organization_id: String,
     #[diesel(sql_type = Text)]
-    organization_did: String,
+    organization_principal_id: String,
     #[diesel(sql_type = Nullable<Text>)]
     handle: Option<String>,
     #[diesel(sql_type = Text)]
@@ -357,7 +357,7 @@ impl From<OrganizationRow> for OrganizationRecord {
             .collect::<BTreeSet<_>>();
         Self {
             organization_id: row.organization_id,
-            organization_did: row.organization_did,
+            organization_principal_id: row.organization_principal_id,
             handle: row.handle,
             display_name: row.display_name,
             source_refs: json_string_array(row.source_refs),

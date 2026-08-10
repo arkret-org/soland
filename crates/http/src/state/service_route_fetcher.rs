@@ -4,7 +4,7 @@ use arkret_models_identity::{
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence, ServiceResolutionCarrier,
 };
-use arkret_wire::{BindingKind, Did, Hash, ServiceId, ServiceKind};
+use arkret_wire::{BindingKind, DidCoreId, DidFullId, Hash, ServiceKind};
 use async_trait::async_trait;
 use chrono::Utc;
 use soland_services::identity::{DidService, PinnedDidVersionStatus};
@@ -45,7 +45,7 @@ impl VerifiedBindingRouteFetcher {
 
     fn current_member_carriers(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> Vec<ServiceResolutionCarrier> {
         if service_kind != "principal_server" {
@@ -77,7 +77,7 @@ impl VerifiedBindingRouteFetcher {
     async fn verify_carrier(
         &self,
         carrier: &ServiceResolutionCarrier,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<VerifiedRouteCandidate> {
         let materialized = self
@@ -92,7 +92,7 @@ impl VerifiedBindingRouteFetcher {
             ));
         }
         validate_route_binding(&record, self.development_mode)?;
-        let full_id = Did::new(record.record.full_id.to_string())
+        let full_id = DidFullId::new(record.record.full_id.to_string())
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let (document, method_history_evidence) = match full_id.method() {
             "webvh" => {
@@ -281,7 +281,7 @@ fn validate_service_describe(
     }
     #[derive(serde::Serialize)]
     struct RouteBindingProjection<'a> {
-        service_id: &'a ServiceId,
+        service_id: &'a DidCoreId,
         service_kind: ServiceKind,
         service_resolution: &'a arkret_models_identity::ResolutionCommitment,
         http_json_base_url: &'a str,
@@ -351,7 +351,7 @@ fn validate_route_binding(
     }
     #[derive(serde::Serialize)]
     struct RouteBindingProjection<'a> {
-        service_id: &'a ServiceId,
+        service_id: &'a DidCoreId,
         service_kind: &'a str,
         service_resolution: arkret_models_identity::ResolutionCommitment,
         http_json_base_url: &'a str,
@@ -474,7 +474,7 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
     async fn fetch_carrier(
         &self,
         carrier: &ServiceResolutionCarrier,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         self.verify_carrier(carrier, service_id, service_kind)
@@ -484,7 +484,7 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
     async fn fetch_current(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         let carriers = self.current_member_carriers(service_id, service_kind);
@@ -506,7 +506,7 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
     async fn fetch_notice_candidate(
         &self,
-        _service_id: &ServiceId,
+        _service_id: &DidCoreId,
         _service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
@@ -514,7 +514,7 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
     async fn fetch_realm_peer_mirror(
         &self,
-        _service_id: &ServiceId,
+        _service_id: &DidCoreId,
         _service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
@@ -522,7 +522,7 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
     async fn fetch_configured_mirror(
         &self,
-        _service_id: &ServiceId,
+        _service_id: &DidCoreId,
         _service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
@@ -535,15 +535,15 @@ mod tests {
     use arkret_models_identity::{
         ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
     };
-    use arkret_wire::{Base64UrlString, DidUrl, FullId, ProtocolSignature, TypedTrustDomainId};
+    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature, TypedTrustDomainId};
     use chrono::{Duration, TimeZone as _};
 
     use super::*;
 
     fn fixture() -> (ServiceResolutionRecord, ServiceDescribe) {
-        let full_id = FullId::new("did:webvh:z6mkdescribe:route.example").unwrap();
+        let full_id = DidFullId::new("did:webvh:z6mkdescribe:route.example").unwrap();
         let service_id =
-            ServiceId::from(arkret_wire::project_full_id_to_core_id(&full_id).unwrap());
+            DidCoreId::from(arkret_wire::project_full_id_to_core_id(&full_id).unwrap());
         let base_url = "https://route.example/";
         let commitment = ResolutionCommitment {
             full_id: full_id.clone(),
@@ -560,7 +560,7 @@ mod tests {
             vec![SupportedBinding::new(BindingKind::HttpJson).with_base_url(base_url)];
         #[derive(serde::Serialize)]
         struct Projection<'a> {
-            service_id: &'a ServiceId,
+            service_id: &'a DidCoreId,
             service_kind: ServiceKind,
             service_resolution: &'a ResolutionCommitment,
             http_json_base_url: &'a str,

@@ -5,7 +5,7 @@
 //! Exactly one mode is required:
 //!
 //! 1. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
-//!    referenced by an SDK `ServiceIdentityBundle` and writes a single-key JSON snapshot to
+//!    referenced by an SDK `DidCoreIdentityBundle` and writes a single-key JSON snapshot to
 //!    `--output`.
 //!
 //! 2. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
@@ -87,7 +87,7 @@ fn parse_args() -> anyhow::Result<Args> {
                        --import-only    read seed from --input and write to KeyStore\n\
                      \n\
                      options:\n\
-                       --identity-bundle <path>  validated SDK ServiceIdentityBundle (required)\n\
+                       --identity-bundle <path>  validated SDK DidCoreIdentityBundle (required)\n\
                        --output <path>         destination JSON for --export-only\n\
                        --input <path>          source JSON for --import-only\n\
                     "
@@ -178,7 +178,7 @@ struct ResolvedServiceIdentity {
 fn load_service_identity(path: &str) -> anyhow::Result<ResolvedServiceIdentity> {
     let bytes = std::fs::read(path)
         .map_err(|error| anyhow::anyhow!("read identity bundle {path}: {error}"))?;
-    let bundle: arkret_identity::service_identity::ServiceIdentityBundle =
+    let bundle: arkret_identity::service_identity::DidCoreIdentityBundle =
         serde_json::from_slice(&bytes)
             .map_err(|error| anyhow::anyhow!("parse identity bundle {path}: {error}"))?;
     bundle

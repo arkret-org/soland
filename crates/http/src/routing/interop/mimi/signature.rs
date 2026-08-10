@@ -19,7 +19,7 @@ pub(super) async fn verify_mimi_write_service_proof(
         .map_err(|error| AppError::bad_json(format!("unable to read MIMI request body: {error}")))?
         .to_vec();
     let source_service_id = mimi_required_header(req, "source-service-id")?;
-    let source_service_id = arkret_wire::CoreId::new(source_service_id)
+    let source_service_id = arkret_wire::DidCoreId::new(source_service_id)
         .map_err(|_| mimi_signature_error_invalid("Source-Service-ID must be a core id"))?;
     let destination_service_id = mimi_required_header(req, "destination-service-id")?;
     if destination_service_id != state.service_id().as_str() {
@@ -85,7 +85,7 @@ pub(super) fn mimi_required_header(req: &Request, name: &str) -> Result<String, 
 
 pub(super) fn mimi_validate_signature_input(
     signature_input: &SignatureInput,
-    source_service_id: &arkret_wire::CoreId,
+    source_service_id: &arkret_wire::DidCoreId,
 ) -> Result<String, AppError> {
     if signature_input.label != "sig1" {
         return Err(mimi_signature_error_invalid(
@@ -98,7 +98,7 @@ pub(super) fn mimi_validate_signature_input(
         .map_or(verification_method.as_str(), |(head, _)| head)
         .split_once('#')
         .map_or(verification_method.as_str(), |(head, _)| head);
-    let controller_matches = arkret_wire::FullId::new(controller.to_owned())
+    let controller_matches = arkret_wire::DidFullId::new(controller.to_owned())
         .ok()
         .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
         .as_ref()

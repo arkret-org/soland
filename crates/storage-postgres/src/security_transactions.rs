@@ -1,5 +1,5 @@
 use arkret_wire::{
-    Did, Hash, SecurityTransaction, SecurityTransactionBinding, SecurityTransactionKind,
+    DidCoreId, Hash, SecurityTransaction, SecurityTransactionBinding, SecurityTransactionKind,
     SecurityTransactionState, SecurityTransactionStep, TransactionId,
 };
 
@@ -129,9 +129,9 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             transaction_id: TransactionId::new(ids::format_typed_uuid("transaction", &row.id))
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             kind: parse_stored("kind", Value::String(row.kind))?,
-            principal_id: Did::new(row.principal_id)
+            principal_id: DidCoreId::new(row.principal_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            coordinator_service_id: Did::new(row.coordinator_service_id)
+            coordinator_service_id: DidCoreId::new(row.coordinator_service_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             expires_at: row.expires_at,
             created_at: row.created_at,

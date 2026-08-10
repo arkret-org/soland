@@ -151,10 +151,9 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     if let Some(evidence) = signer_key_evidence {
         let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
             .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-        if arkret_wire::project_full_id_to_core_id(&replayed.principal_id)
-            .map_or(true, |core| core != envelope.requester_did)
+        if replayed.principal_id != envelope.requester_actor_id
             || replayed.device_id.as_str() != requester_device_id
-            || evidence.actor_id.as_str() != envelope.requester_did.as_str()
+            || evidence.actor_id.as_str() != envelope.requester_actor_id.as_str()
             || evidence.device_id.as_str() != requester_device_id
             || evidence.verification_method != envelope.signature.kid.as_str()
         {
@@ -170,7 +169,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     let record = state
         .identities()
         .find_device(FindDeviceQuery {
-            actor_id: envelope.requester_did.as_str().to_owned(),
+            actor_id: envelope.requester_actor_id.as_str().to_owned(),
             device_id: requester_device_id.to_owned(),
         })
         .await
@@ -188,7 +187,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
         .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     if !device_signature_kid_points_to_device_key(
         envelope.signature.kid.as_str(),
-        envelope.requester_did.as_str(),
+        envelope.requester_actor_id.as_str(),
         device_public_key,
     ) {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
@@ -227,12 +226,12 @@ fn device_signature_kid_points_to_device_key(
     actor: &str,
     device_public_key: &str,
 ) -> bool {
-    let expected_did_key = device_public_key
+    let expected_principal_id_key = device_public_key
         .strip_prefix("did:key:")
         .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
-    kid == expected_did_key
+    kid == expected_principal_id_key
         || kid
-            .strip_prefix(&expected_did_key)
+            .strip_prefix(&expected_principal_id_key)
             .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
         || verification_method_controller(kid) == actor
 }

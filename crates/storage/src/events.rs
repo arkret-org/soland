@@ -156,8 +156,8 @@ pub struct IdentityAnchorAccountSlot {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorSlot {
     pub actor_id: String,
-    pub version_number: u64,
-    pub did_version_id: String,
+    pub authority_instance_digest: String,
+    pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,
 }
@@ -250,19 +250,20 @@ pub fn identity_anchor_slot_conflicts(
         if record.actor_id != slot.actor_id || record.kind != "ak.device.reanchor" {
             return false;
         }
-        let Some(candidate_version) = record
+        let Some(candidate_generation) = record
             .envelope
-            .pointer("/payload/did_version_id")
-            .and_then(Value::as_str)
+            .pointer("/payload/new_device_generation")
+            .and_then(Value::as_u64)
         else {
             return false;
         };
-        let same_slot = candidate_version
-            .split_once('-')
-            .and_then(|(number, _)| number.parse::<u64>().ok())
-            == Some(slot.version_number);
+        let candidate_authority_digest = record
+            .envelope
+            .pointer("/payload/authority_instance/authority_instance_digest")
+            .and_then(Value::as_str);
+        let same_slot = candidate_generation == slot.new_device_generation;
         same_slot
-            && (candidate_version != slot.did_version_id
+            && (candidate_authority_digest != Some(slot.authority_instance_digest.as_str())
                 || record.canonical_digest != slot.reanchor_digest
                 || paired_replacement_authorize(record, records.iter().copied())
                     .map(|paired| paired.canonical_digest.as_str())

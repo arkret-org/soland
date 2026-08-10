@@ -65,7 +65,7 @@ pub(crate) fn is_ephemeral_pairwise_author(
 ) -> bool {
     context.is_some()
         && actor_id.starts_with("ak:did_core:key:")
-        && arkret_wire::ActorId::new(actor_id.to_owned()).is_ok()
+        && arkret_wire::DidCoreId::new(actor_id.to_owned()).is_ok()
 }
 
 /// Extract the encrypted-content coordinates from a content payload. `None`
@@ -299,7 +299,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     .ed25519_bytes()
     .map_err(|error| author_credential_invalid(format!("proof key decode: {error}")))?;
 
-    let actor = arkret_wire::ActorId::new(actor_id.to_owned())
+    let actor = arkret_wire::DidCoreId::new(actor_id.to_owned())
         .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
     let proof_verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| {
@@ -356,7 +356,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 #[cfg(test)]
 mod tests {
     use arkret_policy::{AuthorLeaf, AuthorLeafCredential};
-    use arkret_wire::{ActorId, DidUrl, FullId, project_full_id_to_core_id};
+    use arkret_wire::{DidCoreId, DidFullId, DidUrl, project_full_id_to_core_id};
 
     use super::*;
 
@@ -389,8 +389,9 @@ mod tests {
                 group_state_ref: "ak:event:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9".to_owned(),
             },
         };
-        let pairwise = ActorId::from(
-            project_full_id_to_core_id(&FullId::new("did:key:z6MkpairwiseAlice").unwrap()).unwrap(),
+        let pairwise = DidCoreId::from(
+            project_full_id_to_core_id(&DidFullId::new("did:key:z6MkpairwiseAlice").unwrap())
+                .unwrap(),
         );
         assert!(is_ephemeral_pairwise_author(
             pairwise.as_str(),
@@ -411,8 +412,8 @@ mod tests {
     // no resolver or directory parameter to call.
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
-        let full_id = FullId::new("did:key:z6MkpairwiseAlice").unwrap();
-        let actor = ActorId::from(project_full_id_to_core_id(&full_id).unwrap());
+        let full_id = DidFullId::new("did:key:z6MkpairwiseAlice").unwrap();
+        let actor = DidCoreId::from(project_full_id_to_core_id(&full_id).unwrap());
         let proof_method = DidUrl::new(format!("{full_id}#z6MkpairwiseAlice")).unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {

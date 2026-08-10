@@ -15,7 +15,9 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{CallId, CellRef, DeviceId, Did, Hash, OperationId, RealmId};
+use arkret_identifiers::{
+    CallId, CellRef, DeviceId, DidCoreId, DidFullId, Hash, OperationId, RealmId,
+};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
@@ -66,7 +68,7 @@ pub(super) fn protocol_router() -> Router {
 struct IceConfigRequestContext {
     pub realm_id: RealmId,
     pub call_id: String,
-    pub actor_id: Did,
+    pub actor_id: DidCoreId,
     pub device_id: DeviceId,
     pub turn_required: bool,
 }
@@ -118,7 +120,7 @@ async fn issue_ice_config(
     if !is_valid_webrtc_session_id(call_id) {
         return Err(AppError::invalid_param("invalid call_id"));
     }
-    if validate_did(actor_id).is_err() || actor_id != session.actor {
+    if DidCoreId::new(actor_id.to_owned()).is_err() || actor_id != session.actor {
         return Err(AppError::invalid_param(
             "actor_id must match the authenticated actor",
         ));

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, Did, Hash, Hlc, RealmId};
+use arkret_identifiers::{CellRef, DidCoreId, DidFullId, Hash, Hlc, RealmId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
 use arkret_wire::Seal;
@@ -105,7 +105,7 @@ pub fn build_realm_basis(
         fixture_id_domain,
     } = options;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
-    let issuer = Did::new(subject.to_owned()).map_err(|error| error.to_string())?;
+    let issuer = DidCoreId::new(subject.to_owned()).map_err(|error| error.to_string())?;
     let genesis_move = fixture_move_id(
         fixture_id_domain,
         realm_id,
@@ -243,7 +243,7 @@ pub fn build_realm_basis(
     ));
     if let Some(notary_authority) = notary_authority {
         let notary_authority =
-            Did::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
+            DidFullId::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
         ops.push((
             CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
                 .map_err(|error| error.to_string())?,
@@ -303,7 +303,7 @@ pub fn build_realm_basis(
 
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
-        Did::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
+        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .map_err(|error| error.to_string())?,
     );
@@ -429,12 +429,9 @@ fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
     }
 }
 
-fn issued_op(issuer: &Did, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
+fn issued_op(issuer: &DidCoreId, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
     IssuedOp {
-        issuer: arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(issuer)
-                .expect("embedded conformance issuer projects through a registered adapter"),
-        ),
+        issuer: issuer.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
     }
 }

@@ -1,4 +1,4 @@
-use arkret_identity::service_identity::StoredServiceIdentity;
+use arkret_identity::service_identity::StoredDidCoreIdentity;
 use arkret_models_identity::ServiceResolutionRecord;
 use arkret_wire::Hash;
 
@@ -10,8 +10,8 @@ use super::{PersistenceResult, async_trait};
 /// never be copied into PostgreSQL.
 #[async_trait]
 pub trait ServiceIdentityStore: Send + Sync {
-    async fn get(&self) -> PersistenceResult<Option<StoredServiceIdentity>>;
-    async fn put(&self, identity: StoredServiceIdentity) -> PersistenceResult<()>;
+    async fn get(&self) -> PersistenceResult<Option<StoredDidCoreIdentity>>;
+    async fn put(&self, identity: StoredDidCoreIdentity) -> PersistenceResult<()>;
     async fn get_resolution(&self) -> PersistenceResult<Option<ServiceResolutionRecord>>;
     /// Atomically replace the singleton signed record only when its durable
     /// predecessor digest is the caller's snapshot. `None` creates generation

@@ -158,9 +158,9 @@ pub struct RealmLinkState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmPolicyServerConfig {
     pub realm_id: String,
-    /// DID of the policy decision service. Used to resolve the
+    /// Stable identity core of the policy decision service. Used to resolve the
     /// signature verification key and match against `bound_to.policy_server_id`.
-    pub policy_server_did: String,
+    pub policy_server_service_id: arkret_wire::DidCoreId,
     /// HTTPS endpoint that accepts `POST /_arkret/self/policy/check`.
     pub policy_server_url: String,
     /// Decision cache TTL. Spec §2 default `300`. The outbound client

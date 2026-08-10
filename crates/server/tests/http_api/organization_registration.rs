@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arkret_identifiers::{CoreId, Did, FullId, Hash, project_full_id_to_core_id};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash, project_full_id_to_core_id};
 use arkret_models_identity::{
     OrganizationControlProof, OrganizationControlProofKind, OrganizationRegistrationChallenge,
     OrganizationRegistrationEnsureRequestBody, OrganizationRegistrationOutcome,
@@ -31,7 +31,7 @@ struct StaticOrganizationResolver {
 impl OrganizationDidResolutionPort for StaticOrganizationResolver {
     async fn resolve_current_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<PinnedDidDocumentState, String> {
         let state = self.state.read().clone();
         (state.did == *did)
@@ -41,7 +41,7 @@ impl OrganizationDidResolutionPort for StaticOrganizationResolver {
 
     async fn resolve_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<PinnedDidDocumentState, String> {
@@ -55,15 +55,15 @@ impl OrganizationDidResolutionPort for StaticOrganizationResolver {
 }
 
 fn organization_fixture() -> (
-    CoreId,
-    FullId,
-    CoreId,
+    DidCoreId,
+    DidFullId,
+    DidCoreId,
     PinnedDidDocumentState,
     Ed25519DetachedJwsSigner,
 ) {
-    let full_id = FullId::new("did:webvh:z6mkfixture:http-org.example".to_owned()).unwrap();
+    let full_id = DidFullId::new("did:webvh:z6mkfixture:http-org.example".to_owned()).unwrap();
     let organization_id = project_full_id_to_core_id(&full_id).unwrap();
-    let admin_full_id = FullId::new("did:web:alice.example".to_owned()).unwrap();
+    let admin_full_id = DidFullId::new("did:web:alice.example".to_owned()).unwrap();
     let admin_id = project_full_id_to_core_id(&admin_full_id).unwrap();
     let verification_method = format!("{full_id}#org-control-key-1");
     let signer = Ed25519DetachedJwsSigner::from_seed([51; 32], verification_method.clone());
@@ -237,7 +237,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
         version_id: pinned.version_id.clone(),
         log_head_digest: pinned.log_head_digest.clone(),
         control_proof: signed_control_proof(&challenge, &pinned, &control_signer),
-        local_admin_subject: admin_id,
+        local_admin_subject: admin_id.clone(),
         requested_scopes: vec![OrganizationRegistrationScope::OrganizationProfileManage],
         handle_attestation: None,
     };

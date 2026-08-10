@@ -1,3 +1,4 @@
+use arkret_identifiers::DidCoreId;
 use arkret_wire::SchemaId;
 
 use super::*;
@@ -139,7 +140,7 @@ pub(super) async fn membership_builder_resolve_allowed(
     ) {
         return false;
     }
-    match request.requester.as_ref().map(Did::as_str) {
+    match request.requester.as_ref().map(DidCoreId::as_str) {
         Some(requester) if requester == session.actor => {}
         _ => return false,
     }
@@ -160,7 +161,7 @@ pub(super) async fn contact_request_resolve_allowed(
         return false;
     }
     matches!(
-        request.requester.as_ref().map(Did::as_str),
+        request.requester.as_ref().map(DidCoreId::as_str),
         Some(requester) if requester == session.actor
     )
 }
@@ -209,8 +210,9 @@ pub(super) fn local_handle_resolution_outcome(
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
-        did: Did::new(did.clone())
-            .map_err(|err| AppError::invalid_param(format!("invalid resolved actor DID: {err}")))?,
+        principal_id: DidCoreId::new(did.clone()).map_err(|err| {
+            AppError::invalid_param(format!("invalid resolved actor principal id: {err}"))
+        })?,
         handle: canonical_handle,
         verified: true,
         claims: Some(vec![handle_claim.clone()]),
@@ -367,17 +369,17 @@ async fn validate_remote_handle_resolution(
     if outcome.audience.as_deref() != Some(audience.as_str()) {
         return Err("remote handle resolution audience mismatch".to_owned());
     }
-    if let Some(expected_did) = body.expected_did.as_ref()
-        && outcome.did != *expected_did
+    if let Some(expected_principal_id) = body.expected_principal_id.as_ref()
+        && outcome.principal_id != *expected_principal_id
     {
-        return Err("remote handle resolution expected_did mismatch".to_owned());
+        return Err("remote handle resolution expected_principal_id mismatch".to_owned());
     }
     let claim = outcome
         .handle_claim
         .as_ref()
         .ok_or_else(|| "remote handle resolution requires handle_claim".to_owned())?;
-    let expected_peer_did =
-        Did::new(peer_did.to_owned()).map_err(|error| format!("invalid peer DID: {error}"))?;
+    let expected_peer_did = DidCoreId::new(peer_did.to_owned())
+        .map_err(|error| format!("invalid peer DID: {error}"))?;
     claim
         .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_did), now())
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
@@ -385,13 +387,13 @@ async fn validate_remote_handle_resolution(
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
-    if claim.subject.as_ref() != Some(&outcome.did) {
+    if claim.subject.as_ref() != Some(&outcome.principal_id) {
         return Err("remote handle claim subject mismatch".to_owned());
     }
     if claim
         .issuer_service_id
         .as_ref()
-        .map(Did::as_str)
+        .map(DidCoreId::as_str)
         .unwrap_or_default()
         != peer_did
     {
@@ -530,7 +532,7 @@ pub(super) async fn resolve_handle(
                 .as_ref()
                 .map(|binding| binding.recipient_service_id.as_str())
                 .unwrap_or(state.service_id().as_str());
-            let resolved_by = Did::new(state.service_id().clone()).ok();
+            let resolved_by = arkret_identifiers::DidCoreId::new(state.service_id().clone()).ok();
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
                 state,
                 body.intent,
@@ -626,12 +628,13 @@ pub(super) async fn signed_handle_claim(
         AppError::internal(format!("handle claim handle construction failed: {err}"))
     })?;
     let handle_alias = handle.to_acct();
-    let subject = Did::new(did.to_owned()).map_err(|err| {
+    let subject = DidCoreId::new(did.to_owned()).map_err(|err| {
         AppError::internal(format!("invalid subject DID for handle claim: {err}"))
     })?;
-    let signer_did = Did::new(service_id.clone()).map_err(|err| {
+    let signer_did = arkret_identifiers::DidCoreId::new(service_id.clone()).map_err(|err| {
         AppError::internal(format!("invalid service DID for handle claim: {err}"))
     })?;
+    let signer_full_id = state.service_resolution_commitment().full_id.clone();
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
@@ -653,7 +656,7 @@ pub(super) async fn signed_handle_claim(
         handle: Some(handle),
         handle_aliases: vec![handle_alias],
         subject: Some(subject),
-        issuer: Some(service_id.clone()),
+        issuer: Some(signer_did.clone()),
         issuer_service_id: Some(signer_did.clone()),
         binding_state: Some(HandleBindingState::Verified),
         claim_kind: Some(HandleClaimKind::HandleBinding),
@@ -674,8 +677,8 @@ pub(super) async fn signed_handle_claim(
     })?;
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
-        signer_did,
-        arkret_wire::DidUrl::new(format!("{service_id}#directory-handle-claim")).map_err(
+        signer_full_id.clone(),
+        arkret_wire::DidUrl::new(format!("{signer_full_id}#directory-handle-claim")).map_err(
             |error| {
                 AppError::internal(format!(
                     "directory claim verification method is invalid: {error}"
@@ -766,7 +769,7 @@ pub(super) async fn list_handles_for_subject(
                 .realm_id
                 .as_ref()
                 .map(RealmId::as_str)
-                .or_else(|| body.requester.as_ref().map(Did::as_str))
+                .or_else(|| body.requester.as_ref().map(DidCoreId::as_str))
                 .unwrap_or(state.service_id().as_str());
             generated_claim =
                 Some(signed_handle_claim(state, handle, &subject, audience, false).await?);
@@ -790,7 +793,7 @@ pub(super) async fn list_handles_for_subject(
                 .realm_id
                 .as_ref()
                 .map(RealmId::as_str)
-                .or_else(|| body.requester.as_ref().map(Did::as_str))
+                .or_else(|| body.requester.as_ref().map(DidCoreId::as_str))
                 .unwrap_or(state.service_id().as_str());
             crate::routing::identity::account::local_account_primary_handle_claim(
                 state, &subject, audience,

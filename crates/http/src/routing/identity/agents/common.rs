@@ -306,14 +306,16 @@ pub(super) fn verification_method_agent_endpoint(
 /// Mint a `did:webvh` principal DID for a server-provisioned agent.
 ///
 /// did:webvh-only red line: agent principals MUST NOT use `did:web` (no
-/// key-log history). The DID host is the deployment's real service host
-/// (derived from the configured `service_id`), never a `.agents.example`
-/// placeholder. The SCID is a self-certifying multihash derived from a
+/// key-log history). The DID host is the deployment's explicitly configured
+/// public endpoint, never reverse-derived from the stable service core id and never a
+/// `.agents.example` placeholder. The SCID is a self-certifying multihash derived from a
 /// per-agent genesis skeleton so the identifier is bound to its inception
 /// material rather than being an opaque random string.
-pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
-    let host = crate::config::did_host_from_service_id(service_id)
-        .unwrap_or_else(|| "soland.local".to_owned());
+pub(super) fn generate_agent_principal_did(public_base_url: &str) -> Result<String, AppError> {
+    let host = reqwest::Url::parse(public_base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .ok_or_else(|| AppError::internal("configured public_base_url has no host"))?;
     let agent_uuid = uuid::Uuid::now_v7();
     // Genesis skeleton: the SCID is the multihash of this canonical structure
     // with the SCID field left as the placeholder, matching the did:webvh SCID
@@ -326,7 +328,7 @@ pub(super) fn generate_agent_principal_did(service_id: &str) -> String {
     let scid =
         crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
             .unwrap_or_else(|_| agent_uuid.simple().to_string());
-    format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}")
+    Ok(format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}"))
 }
 
 #[cfg(test)]
@@ -587,8 +589,8 @@ pub(super) fn agent_projection_from_record(
     };
     let observed_at = chrono::Utc::now();
     AgentProjection {
-        agent_id: Did::new(record.id.clone())
-            .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
+        agent_id: arkret_wire::DidCoreId::new(record.id.clone())
+            .expect("persisted Agent id is a validated core id"),
         display_name: record
             .display_name
             .clone()
@@ -667,33 +669,22 @@ pub(super) fn agent_key_state_from_record(
         .active_binding
         .as_ref()
         .map(|binding| binding.authorized_event_ref.clone());
-    let agent_full_id = Did::new(record.id.clone())
+    let agent_id = arkret_wire::DidCoreId::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
-    let controller_full_id = Did::new(record.controller_id.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "persisted Agent controller DID is invalid: {error}"
-        ))
-    })?;
+    let controller_id =
+        arkret_identifiers::DidCoreId::new(record.controller_id.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "persisted Agent controller DID is invalid: {error}"
+            ))
+        })?;
     let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-        &agent_full_id,
-        &controller_full_id,
+        &agent_id,
+        &controller_id,
         &requested_scope,
     )
     .map_err(|error| {
         AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
     })?;
-    let agent_id = arkret_wire::ActorId::from(
-        arkret_wire::project_full_id_to_core_id(&agent_full_id).map_err(|error| {
-            AppError::internal(format!("persisted Agent DID cannot be projected: {error}"))
-        })?,
-    );
-    let controller_id = arkret_wire::ActorId::from(
-        arkret_wire::project_full_id_to_core_id(&controller_full_id).map_err(|error| {
-            AppError::internal(format!(
-                "persisted Agent controller DID cannot be projected: {error}"
-            ))
-        })?,
-    );
     // pairing handle presence and its branch are a projection of the single
     // derived runtime_state (key-management.md §3.6.1): an open handle appears
     // exactly for pending_runtime_key (bootstrap) and replacing (replacement).

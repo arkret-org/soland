@@ -55,7 +55,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
         },
-        arkret_identifiers::Did::new("did:web:join-policy-test.example").unwrap(),
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:join-policy-test.example").unwrap(),
         0,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),

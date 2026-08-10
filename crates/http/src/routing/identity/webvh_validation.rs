@@ -179,7 +179,7 @@ impl From<WebvhValidationError> for AppError {
     }
 }
 
-fn did_from_log(log: &[WebvhLogEntry]) -> Result<arkret_wire::Did, WebvhValidationError> {
+fn did_from_log(log: &[WebvhLogEntry]) -> Result<arkret_wire::DidFullId, WebvhValidationError> {
     let first = log.first().ok_or(WebvhValidationError::EmptyLog)?;
     let did = first
         .payload
@@ -189,7 +189,7 @@ fn did_from_log(log: &[WebvhLogEntry]) -> Result<arkret_wire::Did, WebvhValidati
             at_index: 0,
             reason: "state.id is required".to_owned(),
         })?;
-    arkret_wire::Did::new(did).map_err(|error| WebvhValidationError::MalformedEntry {
+    arkret_wire::DidFullId::new(did).map_err(|error| WebvhValidationError::MalformedEntry {
         at_index: 0,
         reason: error.to_string(),
     })
@@ -200,7 +200,7 @@ fn raw_log(log: &[WebvhLogEntry]) -> Vec<Value> {
 }
 
 pub fn verify_log_and_witness_bytes(
-    did: &arkret_wire::Did,
+    did: &arkret_wire::DidFullId,
     did_jsonl: &[u8],
     did_witness_json: &[u8],
 ) -> Result<arkret_identity::VerifiedDidWebvhWitnessLog, WebvhValidationError> {
@@ -412,7 +412,7 @@ mod tests {
             "../../../tests/fixtures/did-webvh-witness-official.json"
         ))
         .expect("official fixture must decode");
-        let did = arkret_wire::Did::new(
+        let did = arkret_wire::DidFullId::new(
             fixture["did"]
                 .as_str()
                 .expect("official fixture contains the DID"),
@@ -442,7 +442,7 @@ mod tests {
             "../../../tests/fixtures/did-webvh-witness-official.json"
         ))
         .expect("official fixture must decode");
-        let did = arkret_wire::Did::new(
+        let did = arkret_wire::DidFullId::new(
             fixture["did"]
                 .as_str()
                 .expect("official fixture contains the DID"),

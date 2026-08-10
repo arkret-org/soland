@@ -232,16 +232,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
 ) -> Result<String, AppError> {
     let accountability = &provision.accountability_grant_event;
     let profile = &provision.profile_event;
-    let service_actor_id = arkret_wire::ActorId::from(
-        arkret_wire::project_full_id_to_core_id(&provision.service_id).map_err(|error| {
-            AppError::invalid_param(format!("service_id cannot be projected: {error}"))
-        })?,
-    );
-    let ghost_actor_id = arkret_wire::ActorId::from(
-        arkret_wire::project_full_id_to_core_id(&provision.ghost_actor_id).map_err(|error| {
-            AppError::invalid_param(format!("ghost_actor_id cannot be projected: {error}"))
-        })?,
-    );
+    let service_actor_id = provision.service_id.clone();
+    let ghost_actor_id = provision.ghost_actor_id.clone();
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let registration_verification_method =
         super::signature::applet_registration_verification_method(

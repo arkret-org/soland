@@ -1,6 +1,6 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use arkret_identifiers::{AppletId, Did, RealmId};
+use arkret_identifiers::{AppletId, DidFullId, RealmId};
 use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_integration::{
@@ -116,9 +116,10 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.read.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!("configured service_id is invalid: {error}"))
-    })?;
+    let service_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("configured service_id is invalid: {error}"))
+        })?;
     json_ok(AppletPingOutcome {
         ok: true,
         applet_id: SOLAND_EDGE_APPLET_ID.to_owned(),
@@ -826,7 +827,7 @@ async fn provision_ghost_actor_endpoint(
         return json_ok(outcome);
     }
 
-    // Wire ids are validated at deserialization (typed AppletId/Did/RealmId).
+    // Wire ids are validated at deserialization (typed AppletId/DidFullId/RealmId).
     let service_id = provision.service_id.clone();
     let ghost_actor_id = provision.ghost_actor_id.clone();
     // G3.S9 — ghost actor DID recorded against the applet MUST be a
@@ -1016,7 +1017,7 @@ async fn resolve_actor_endpoint(
         .param::<String>("actor_id")
         .ok_or_else(|| AppError::missing_param("actor_id path segment required"))?;
     if let Some(doc) = super::ghost::did_document_for_extension_actor(state, &actor_id).await? {
-        let actor_id = Did::new(actor_id)
+        let actor_id = arkret_identifiers::DidCoreId::new(actor_id)
             .map_err(|error| AppError::invalid_param(format!("actor_id is invalid: {error}")))?;
         return json_ok(AppletActorView {
             exists: true,
@@ -1162,9 +1163,10 @@ async fn third_party_users_endpoint(
                 .iter()
                 .find(|ghost| ghost.external_id == external_id)
             {
-                let actor_id = Did::new(ghost.ghost_actor_id.clone()).map_err(|error| {
-                    AppError::internal(format!("stored ghost actor id is invalid: {error}"))
-                })?;
+                let actor_id = arkret_identifiers::DidCoreId::new(ghost.ghost_actor_id.clone())
+                    .map_err(|error| {
+                        AppError::internal(format!("stored ghost actor id is invalid: {error}"))
+                    })?;
                 return json_ok(AppletActorView {
                     exists: true,
                     actor_id: Some(actor_id),

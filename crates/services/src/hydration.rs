@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::EventPayloadExt as _;
-use arkret_identifiers::{CircleId, Did, RealmId};
+use arkret_identifiers::{CircleId, DidCoreId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_wire::{Event, PlaintextDataClassKind};
@@ -85,7 +85,7 @@ fn merge_typed_plaintext_services(
             .get("service_id")
             .or_else(|| object.get("did"))
             .and_then(Value::as_str)
-            .filter(|value| Did::new((*value).to_owned()).is_ok())
+            .filter(|value| DidCoreId::new((*value).to_owned()).is_ok())
         else {
             continue;
         };
@@ -1115,7 +1115,7 @@ pub fn hydrate_realm_member_state_event(
     let Ok(realm_id) = RealmId::new(realm_id) else {
         return;
     };
-    let Ok(member) = Did::new(member) else {
+    let Ok(member) = DidCoreId::new(member) else {
         return;
     };
     let Some(entry) = realms.get_mut(&realm_id) else {
@@ -1161,7 +1161,7 @@ pub async fn hydrate_realm_create_event(
         tracing::warn!(realm_id = %realm_id, "skipping persisted realm.create with invalid realm_id");
         return;
     };
-    let Ok(actor) = Did::new(record.actor_id.clone()) else {
+    let Ok(actor) = DidCoreId::new(record.actor_id.clone()) else {
         tracing::warn!(actor = %record.actor_id, "skipping persisted realm.create with invalid actor");
         return;
     };

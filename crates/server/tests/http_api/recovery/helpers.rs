@@ -47,7 +47,7 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
         .cloned()
         .expect("notary fixture Seal covers a Control Move");
     let op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: Did::new(state.service_id().to_owned()).unwrap(),
+        issuer: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
         op: arkret_state::lattice::SealedOp::new(
             move_id,
             arkret_wire::LatticeOp {
@@ -769,7 +769,7 @@ pub(crate) async fn post_recovery_policy(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        Did::new(principal_id.to_owned()).unwrap(),
+        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-{logical:04x}-a11ce101",
@@ -792,7 +792,7 @@ pub(crate) async fn post_recovery_policy(
     );
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         event_signing_key.clone(),
-        event.actor_id.clone(),
+        arkret_identity::verification_method_did(verification_method.as_str()).unwrap(),
         event_verification_method.clone(),
     );
     let event_created_at = event.created_at;
@@ -911,7 +911,7 @@ pub(crate) async fn post_recovery_policy(
             arkret_state::control_event_set_root(&covered).expect("recovery policy control root");
         let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
             [0x62; 32],
-            Did::new(principal_id.to_owned()).unwrap(),
+            arkret_identifiers::DidFullId::new(principal_id.to_owned()).unwrap(),
             arkret_wire::DidUrl::new(format!("{principal_id}#recovery-policy-notary")).unwrap(),
         );
         let successor = arkret_wire::Seal::sign_single_kind_with_control_root(

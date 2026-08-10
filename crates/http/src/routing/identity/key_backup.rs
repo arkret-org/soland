@@ -1,6 +1,6 @@
 //! Encrypted key-backup CRUD.
 
-use arkret_identifiers::{BackupId, Did, EventId};
+use arkret_identifiers::{BackupId, DidCoreId, DidFullId, EventId};
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod, KeyBackupUnlockProof,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
@@ -400,10 +400,10 @@ mod tests {
             challenge: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWJ5dGVz").unwrap(),
             nonce: arkret_wire::Base64UrlString::new("bm9uY2UtYnl0ZXM").unwrap(),
             operation: "ak.self.keys.backups.resource.delete".to_owned(),
-            principal_id: Did::new(ACTOR.to_owned()).unwrap(),
+            principal_id: DidCoreId::new(ACTOR.to_owned()).unwrap(),
             backup_id: BackupId::new(BACKUP_ID.to_owned()).unwrap(),
             audience: arkret_wire::NonEmptyString::new("https://soland.test").unwrap(),
-            service_id: Did::new("did:web:soland.test".to_owned()).unwrap(),
+            service_id: DidCoreId::new("ak:did_core:web:soland.test".to_owned()).unwrap(),
             request_id: arkret_wire::Base64UrlString::new("cmVxdWVzdC1pZA").unwrap(),
             issued_at: "2026-08-01T00:00:00.000Z".parse().unwrap(),
             expires_at: "2026-08-01T00:05:00.000Z".parse().unwrap(),
@@ -483,7 +483,8 @@ mod tests {
         assert_ne!(baseline, tampered_nonce.delete_intent_digest(None).unwrap());
 
         let mut tampered_service = base.clone();
-        tampered_service.service_id = Did::new("did:web:other.test".to_owned()).unwrap();
+        tampered_service.service_id =
+            DidCoreId::new("ak:did_core:web:other.test".to_owned()).unwrap();
         assert_ne!(
             baseline,
             tampered_service.delete_intent_digest(None).unwrap()

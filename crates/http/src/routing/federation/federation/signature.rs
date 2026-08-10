@@ -272,9 +272,12 @@ pub(super) fn validate_signature_input(
                 "{label} Signature-Input keyid is not a DID verification method"
             ))
         })?;
-    let expected_controller = arkret_identifiers::Did::new(expected_service_id.to_owned())
+    let expected_controller = arkret_identifiers::DidCoreId::new(expected_service_id.to_owned())
         .map_err(|_| signature_error(format!("{label} source service DID is invalid")))?;
-    if controller != expected_controller {
+    let controller_core = arkret_wire::project_full_id_to_core_id(&controller)
+        .map(arkret_wire::DidCoreId::from)
+        .map_err(|_| signature_error(format!("{label} keyid controller cannot project")))?;
+    if controller_core != expected_controller {
         return Err(signature_error(format!(
             "{label} Signature-Input keyid mismatch; key_rotation_hint=refresh_origin_service_id"
         )));
@@ -418,19 +421,6 @@ fn public_base_url_authority(state: &AppState) -> Option<String> {
     )
 }
 
-pub(crate) fn trust_domain_from_service_id(service_id: &str) -> String {
-    // Single canonical host parser lives in `crate::config`; delegate rather
-    // than keep a second (previously casing-drifted) copy.
-    let scope = crate::config::did_host_from_service_id(service_id).unwrap_or_else(|| {
-        service_id
-            .strip_prefix("did:key:")
-            .unwrap_or(service_id)
-            .to_ascii_lowercase()
-            .replace(':', ".")
-    });
-    format!("ak:trust_domain:{scope}")
-}
-
 fn signature_error(message: impl Into<String>) -> AppError {
     let detail = message.into();
     tracing::warn!(
@@ -452,16 +442,6 @@ fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn trust_domain_derives_webvh_host_not_scid() {
-        assert_eq!(
-            trust_domain_from_service_id(
-                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service"
-            ),
-            "ak:trust_domain:local.host"
-        );
-    }
 
     #[test]
     fn federation_auth_errors_share_public_message() {

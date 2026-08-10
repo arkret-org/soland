@@ -207,7 +207,7 @@ async fn issue_intent_leases(
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AuthorizationLease>, AppError> {
-    let actor_id = arkret_wire::Did::new(session.actor.clone()).map_err(|error| {
+    let actor_id = arkret_identifiers::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::PolicyViolation,
             format!("session actor DID is invalid: {error}"),
@@ -221,8 +221,6 @@ async fn issue_intent_leases(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let expected_realm =
-        crate::routing::identity::principal_control_realm_for_actor(state, actor_id.as_str())?;
     let mut leases = Vec::with_capacity(intents.len());
     for intent in intents {
         let descriptor = arkret_schema::capability_action(&intent.action).ok_or_else(|| {
@@ -240,7 +238,13 @@ async fn issue_intent_leases(
         if !descriptor.target_event_kinds.is_empty()
             || intent.risk_tier != expected_risk
             || intent.authorization_rule_id != "realm_admission"
-            || intent.scope_ref.realm_id() != &expected_realm
+            || !state
+                .projections()
+                .snapshot()
+                .realm_is_principal_control_for_actor(
+                    intent.scope_ref.realm_id().as_str(),
+                    actor_id.as_str(),
+                )
         {
             return Err(AppError::new(
                 ErrorCode::CapabilityDenied,
@@ -600,12 +604,12 @@ fn sign_lease(
         .iter()
         .find_map(|proof| {
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
-            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+            let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
             (arkret_wire::project_full_id_to_core_id(&full_id)
-                .map(arkret_wire::ActorId::from)
+                .map(arkret_wire::DidCoreId::from)
                 .ok()
                 == Some(event.actor_id.clone()))
-            .then_some(full_id)
+            .then_some(event.actor_id.clone())
         })
         .ok_or_else(|| {
             AppError::new(
@@ -639,7 +643,7 @@ fn sign_lease(
 #[allow(clippy::too_many_arguments)]
 fn sign_lease_fields(
     state: &AppState,
-    actor_id: arkret_wire::Did,
+    actor_id: arkret_wire::DidCoreId,
     device_id: arkret_wire::DeviceId,
     scope_ref: arkret_wire::ScopeRef,
     basis_ref: LeaseBasisRef,
@@ -711,7 +715,7 @@ fn lease_internal_error(error: impl std::fmt::Display) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{Did, Event, EventKind, Hlc, RealmId, ScopeRef};
+    use arkret_wire::{DidFullId, Event, EventKind, Hlc, RealmId, ScopeRef};
     use serde_json::json;
 
     use super::*;

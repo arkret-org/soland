@@ -25,7 +25,7 @@ fn sign_contact_draft(
 ) -> arkret_wire::Event {
     use arkret_wire::PayloadSigner as _;
 
-    let actor = Did::new(actor).unwrap();
+    let actor = DidFullId::new(actor).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}")).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         signing_key,
@@ -83,7 +83,8 @@ async fn create_contact_request(
         operation_id: operation_id.clone(),
         idempotency_key: idempotency_key.clone(),
         peer: ContactPeer::Human {
-            principal_id: Did::new("did:web:bob.example").unwrap(),
+            principal_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example")
+                .unwrap(),
         },
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
         introduction_evidence:

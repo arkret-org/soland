@@ -414,7 +414,7 @@ fn effective_set_digest(
     entries: &[EffectiveIdentityEntry],
 ) -> Option<String> {
     let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
+    let actor_id = arkret_identifiers::DidCoreId::new(actor_id.to_owned()).ok()?;
     arkret_models_identity::member_identity::member_identity_effective_set_digest(
         &realm_id,
         &actor_id,
@@ -462,7 +462,7 @@ pub(crate) fn display_state_digest(
             })
             .collect::<Option<Vec<_>>>()?;
     let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
+    let actor_id = arkret_identifiers::DidCoreId::new(actor_id.to_owned()).ok()?;
     arkret_models_identity::member_identity::member_display_state_digest(
         &realm_id,
         &actor_id,

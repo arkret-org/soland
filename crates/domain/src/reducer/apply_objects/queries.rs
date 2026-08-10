@@ -482,7 +482,12 @@ impl ProjectionState {
             };
             match gate.get("kind").and_then(Value::as_str) {
                 Some("principal_admission") => {
-                    if !principal_admission_gate_allows(gate, member) {
+                    // DID-method admission must be evaluated from the frozen
+                    // registration/accepted-at authority evidence selected by
+                    // the caller. A projection's current full_id is neither
+                    // that evidence nor a substitute for an exact PCR
+                    // authority instance.
+                    if !principal_admission_gate_allows(gate, member, None) {
                         return Err("gate_check_failed");
                     }
                 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arkret_models_collaboration::governance::join_policy::JoinApplicationAuditAction;
-use arkret_wire::{Did, Hash};
+use arkret_wire::{DidCoreId, Hash};
 
 use super::{
     AsyncConnection, JoinApplicationCommand, JoinApplicationCommandOutcome,
@@ -245,7 +245,7 @@ impl JoinApplicationStore for PgJoinApplicationStore {
                 .ok_or_else(|| PersistenceError::NotFound("join application".to_owned()))?;
             record.append_audit(
                 JoinApplicationAuditAction::Read,
-                Did::new(actor_id.to_owned())
+                DidCoreId::new(actor_id.to_owned())
                     .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
                 occurred_at,
                 Hash::new(application_ref.to_owned())
@@ -314,7 +314,7 @@ impl JoinApplicationStore for PgJoinApplicationStore {
             record.invite_consumed = true;
             record.status =
                 arkret_models_collaboration::governance::join_policy::JoinApplicationStatus::Consumed;
-            let actor_id = Did::new(actor_id.to_owned())
+            let actor_id = DidCoreId::new(actor_id.to_owned())
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             for digest in review_receipt_digests {
                 record.append_audit(

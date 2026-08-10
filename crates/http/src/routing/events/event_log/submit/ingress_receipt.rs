@@ -151,7 +151,15 @@ pub(super) async fn validate_ingress_receipt_proofs(
                         format!("ingress receipt issuer is invalid: {error}"),
                     )
                 })?;
-            if issuer != receipt.service_id {
+            let issuer_service_id =
+                arkret_wire::project_full_id_to_core_id(&issuer).map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        format!("ingress receipt issuer cannot be projected: {error}"),
+                    )
+                })?;
+            if issuer_service_id != receipt.service_id {
                 return Err(SubmitOneError::new(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
@@ -291,7 +299,7 @@ fn sign_ingress_receipt(
 ) -> Result<IngressReceipt, SubmitOneError> {
     let receipt_id = arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt"))
         .map_err(|error| publication_reject(format!("minted receipt_id is invalid: {error}")))?;
-    let service_id = arkret_identifiers::Did::new(state.service_id().clone())
+    let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| publication_reject(format!("service_id is not a DID: {error}")))?;
     let verification_method =
         arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(

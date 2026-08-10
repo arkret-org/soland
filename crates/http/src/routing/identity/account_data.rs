@@ -381,9 +381,12 @@ async fn admit_caller_signed_account_data_set(
             "account data revision high-water mark is exhausted",
         )
     })?;
-    let realm_id =
-        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
-    if event.realm_id.as_str() != realm_id.as_str() {
+    let realm_id = event.realm_id.clone();
+    if !state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &session.actor)
+    {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "set_event.event.realm_id must be the holder's principal-control Realm",

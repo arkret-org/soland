@@ -225,19 +225,24 @@ async fn keys_query(
     let mut result = BTreeMap::new();
     let mut device_generations = BTreeMap::new();
     for (actor, devices) in body.device_keys {
-        if !keys_query_actor_visible_to_requester(state, &session.actor, actor.as_str()) {
+        let actor_core = arkret_wire::project_full_id_to_core_id(&actor)
+            .map(arkret_wire::DidCoreId::from)
+            .map_err(|error| {
+                AppError::invalid_param(format!("query actor cannot project: {error}"))
+            })?;
+        if !keys_query_actor_visible_to_requester(state, &session.actor, actor_core.as_str()) {
             continue;
         }
         if let Some(generation) =
             crate::routing::identity::device_generation::current_device_generation(
                 state,
-                actor.as_str(),
+                actor_core.as_str(),
             )
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         {
             device_generations.insert(
-                actor.clone(),
+                actor_core.clone(),
                 arkret_models_crypto::keys::DeviceGenerationState {
                     current_device_generation_ref: arkret_wire::NonEmptyString::new(
                         generation.current_ref,
@@ -261,7 +266,7 @@ async fn keys_query(
             let device_record = state
                 .identities()
                 .find_device(FindDeviceQuery {
-                    actor_id: actor.as_str().to_owned(),
+                    actor_id: actor_core.as_str().to_owned(),
                     device_id: device_id.as_str().to_owned(),
                 })
                 .await
@@ -278,7 +283,7 @@ async fn keys_query(
             // key_records; the directory facet below is the real signing-key data.
             let mut algorithms = match state
                 .key_material()
-                .bundle(actor.as_str(), device_id.as_str())
+                .bundle(actor_core.as_str(), device_id.as_str())
                 .await
             {
                 Ok(Some(value)) => value
@@ -295,7 +300,7 @@ async fn keys_query(
             let facet =
                 crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
                     state,
-                    actor.as_str(),
+                    actor_core.as_str(),
                     device_id.as_str(),
                 )
                 .await;
@@ -342,7 +347,7 @@ async fn keys_query(
                 },
             );
         }
-        result.insert(actor, actor_keys);
+        result.insert(actor_core, actor_keys);
     }
     json_ok(KeysQueryOutcome {
         device_keys: result,
@@ -355,16 +360,16 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     if requester == actor {
         return true;
     }
-    let Ok(requester_did) = arkret_identifiers::Did::new(requester.to_owned()) else {
+    let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester.to_owned()) else {
         return false;
     };
-    let Ok(actor_did) = arkret_identifiers::Did::new(actor.to_owned()) else {
+    let Ok(actor_did) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
         return false;
     };
     let realms = state.realm_directory().snapshot();
     let projection = state.projections().snapshot();
     realms.entries_iter().any(|(realm_id, entry)| {
-        if !entry.members.contains(&requester_did) {
+        if !entry.members.contains(&requester_actor_id) {
             return false;
         }
         if entry.members.contains(&actor_did) {
@@ -392,12 +397,12 @@ pub(crate) fn device_signature_kid_points_to_device_key(
     actor: &str,
     device_public_key: &str,
 ) -> bool {
-    let expected_did_key = device_public_key
+    let expected_principal_id_key = device_public_key
         .strip_prefix("did:key:")
         .map_or_else(|| format!("did:key:{device_public_key}"), str::to_owned);
-    kid == expected_did_key
+    kid == expected_principal_id_key
         || kid
-            .strip_prefix(&expected_did_key)
+            .strip_prefix(&expected_principal_id_key)
             .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
         || verification_method_controller(kid) == actor
 }

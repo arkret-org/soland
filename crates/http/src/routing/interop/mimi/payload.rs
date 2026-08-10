@@ -47,7 +47,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .transpose()?
         .unwrap_or(0);
     let service_did = state.service_resolution_commitment().full_id.clone();
-    let service_actor_id = arkret_wire::ActorId::from(
+    let service_actor_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
             AppError::internal(format!("service DID cannot be projected: {error}"))
         })?,
@@ -92,7 +92,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
         })?;
     event.seal_ref = Some(seal.id);
     event.auth_context = Some(arkret_wire::AuthContext {
-        did: service_did.clone(),
+        actor_id: event.actor_id.clone(),
         key_id: "notary-key".to_owned(),
         key_epoch: 0,
         credential_epoch: None,
@@ -258,9 +258,13 @@ pub(super) fn mimi_provider_directory_value(
     // service's stable core id is used in transport headers; obtain the full
     // controller from the verified local resolution commitment instead of
     // trying to reconstruct a DID from the core id.
-    let service_id = state.service_resolution_commitment().full_id.clone();
-    let verification_method = arkret_wire::DidUrl::new(format!("{}#notary-key", service_id))
-        .map_err(|error| AppError::internal(format!("service notary key id invalid: {error}")))?;
+    let service_full_id = state.service_resolution_commitment().full_id.clone();
+    let service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service core id invalid: {error}")))?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#notary-key", service_full_id))
+        .map_err(|error| {
+        AppError::internal(format!("service notary key id invalid: {error}"))
+    })?;
     let placeholder = arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
         verification_method: verification_method.clone(),
@@ -348,7 +352,7 @@ pub(super) fn mimi_provider_directory_value(
     })?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
-        service_id,
+        service_full_id,
         verification_method,
     );
     let signature = signer.sign_payload(&projection).map_err(|error| {

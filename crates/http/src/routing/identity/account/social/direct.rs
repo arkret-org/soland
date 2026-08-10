@@ -29,31 +29,13 @@ pub(super) fn direct_pair_key_participant(
     arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant,
     AppError,
 > {
-    let core_id = if let Ok(core_id) = CoreId::new(identity.to_owned()) {
-        core_id
-    } else {
-        let full_id = FullId::new(identity.to_owned()).map_err(|error| {
-            AppError::internal(format!(
-                "stored direct conversation {role} identity invalid: {error}"
-            ))
-        })?;
-        if DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES
-            .iter()
-            .any(|prefix| full_id.as_str().starts_with(prefix))
-        {
-            return Err(direct_resolve_precondition(
-                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-                "direct conversation pairwise DID requires a verified stable-subject identity link",
-            ));
-        }
-        arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
-            AppError::internal(format!(
-                "stored direct conversation {role} full identity cannot be projected: {error}"
-            ))
-        })?
-    };
+    let core_id = DidCoreId::new(identity.to_owned()).map_err(|error| {
+        AppError::internal(format!(
+            "stored direct conversation {role} core identity invalid: {error}"
+        ))
+    })?;
     Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-        arkret_wire::ActorId::from(core_id),
+        arkret_wire::DidCoreId::from(core_id),
     ))
 }
 
@@ -558,7 +540,7 @@ async fn validate_direct_binding_event_refs(
     let participants: Vec<&str> = payload
         .participants_unordered
         .iter()
-        .map(arkret_identifiers::Did::as_str)
+        .map(arkret_identifiers::DidCoreId::as_str)
         .collect();
     if participants.len() != 2 || !participants.contains(&creator) {
         return Err("creator_participant");
@@ -746,7 +728,7 @@ async fn validate_direct_founder(
         // an Agent runtime key never needs Direct Conversation founding scope.
         DirectConversationAuthorizationKind::ManagedAgentController => {
             DirectConversationFounderBasis::ControllerOwnedAgent {
-                controller_id: arkret_identifiers::Did::new(creator.to_owned())
+                controller_id: arkret_identifiers::DidCoreId::new(creator.to_owned())
                     .map_err(|_| "direct_conversation_binding_invalid")?,
             }
         }
@@ -759,7 +741,7 @@ async fn validate_direct_founder(
         }
     };
 
-    let [left, right]: [arkret_identifiers::Did; 2] = payload
+    let [left, right]: [arkret_identifiers::DidCoreId; 2] = payload
         .participants_unordered
         .clone()
         .try_into()
@@ -1042,7 +1024,7 @@ pub(crate) fn direct_founder_basis_from_contact(
             }
             return Ok(
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Glare {
-                    first_request_issuer: receipt.core.holder.subject_id().clone(),
+                    first_request_issuer: receipt.core.holder.contact_actor_id().clone(),
                 },
             );
         }
@@ -1057,7 +1039,7 @@ pub(crate) fn direct_founder_basis_from_contact(
             .request_receipts
             .iter()
             .find(|receipt| &receipt.core.request_event_ref == request_event_ref)
-            .map(|receipt| receipt.core.holder.subject_id().clone())
+            .map(|receipt| receipt.core.holder.contact_actor_id().clone())
             .ok_or("direct_conversation_founder_basis_unavailable")?;
         return Ok(
             arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Normal {
@@ -1098,7 +1080,7 @@ pub(crate) async fn direct_founder_for_pair(
             peer
         };
         DirectConversationFounderBasis::ControllerOwnedAgent {
-            controller_id: arkret_identifiers::Did::new(controller.to_owned())
+            controller_id: arkret_identifiers::DidCoreId::new(controller.to_owned())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
         }
     } else {
@@ -1111,9 +1093,9 @@ pub(crate) async fn direct_founder_for_pair(
         }
     };
 
-    let left = arkret_identifiers::Did::new(actor.to_owned())
+    let left = arkret_identifiers::DidCoreId::new(actor.to_owned())
         .map_err(|error| AppError::internal(format!("actor DID invalid: {error}")))?;
-    let right = arkret_identifiers::Did::new(peer.to_owned())
+    let right = arkret_identifiers::DidCoreId::new(peer.to_owned())
         .map_err(|error| AppError::internal(format!("peer DID invalid: {error}")))?;
     Ok(direct_conversation_founder([left, right], &basis)
         .ok()

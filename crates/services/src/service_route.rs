@@ -5,7 +5,7 @@ use arkret_models_identity::{
     ServiceResolutionCarrier, ServiceResolutionLastSeenFloor, ServiceResolutionRecord,
     ServiceRouteCacheEntry,
 };
-use arkret_wire::{Hash, ServiceId, TypedTrustDomainId};
+use arkret_wire::{DidCoreId, Hash, TypedTrustDomainId};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use soland_storage::{MonotonicRouteWrite, ServiceResolutionForkEvidence, ServiceRouteStore};
@@ -33,7 +33,7 @@ pub struct VerifiedRouteCandidate {
 
 #[derive(Clone, Debug)]
 pub struct VerifiedServiceDescribeMetadata {
-    pub service_id: ServiceId,
+    pub service_id: DidCoreId,
     pub service_kind: String,
     pub service_resolution: arkret_models_identity::ResolutionCommitment,
     pub http_json_base_url: String,
@@ -77,7 +77,7 @@ pub trait ServiceRouteFetcher: Send + Sync {
     async fn fetch_carrier(
         &self,
         _carrier: &ServiceResolutionCarrier,
-        _service_id: &ServiceId,
+        _service_id: &DidCoreId,
         _service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok(None)
@@ -85,25 +85,25 @@ pub trait ServiceRouteFetcher: Send + Sync {
 
     async fn fetch_current(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
 
     async fn fetch_notice_candidate(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
 
     async fn fetch_realm_peer_mirror(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
 
     async fn fetch_configured_mirror(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>>;
 }
@@ -131,7 +131,7 @@ impl ServiceRouteResolver {
     /// role-scoped ServiceDescribe confirmation.
     pub async fn resolve_route(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         now: DateTime<Utc>,
         force_refresh: bool,
@@ -182,7 +182,7 @@ impl ServiceRouteResolver {
 
     pub async fn resolve(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         now: DateTime<Utc>,
         force_refresh: bool,
@@ -253,7 +253,7 @@ impl ServiceRouteResolver {
     pub async fn resolve_carrier(
         &self,
         carrier: &ServiceResolutionCarrier,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         now: DateTime<Utc>,
     ) -> ServiceResult<ServiceRouteCacheEntry> {
@@ -270,7 +270,7 @@ impl ServiceRouteResolver {
     pub async fn resolve_carrier_route(
         &self,
         carrier: &ServiceResolutionCarrier,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         now: DateTime<Utc>,
     ) -> ServiceResult<ResolvedServiceRoute> {
@@ -297,7 +297,7 @@ impl ServiceRouteResolver {
 
     async fn accept(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         candidate: VerifiedRouteCandidate,
         now: DateTime<Utc>,
@@ -310,7 +310,7 @@ impl ServiceRouteResolver {
         let description = candidate.description;
         let record = candidate.record;
         let projected = arkret_wire::project_full_id_to_core_id(&record.record.full_id)
-            .map(ServiceId::from)
+            .map(DidCoreId::from)
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         if &projected != service_id
             || &record.record.service_id != service_id
@@ -426,7 +426,7 @@ impl ServiceRouteResolver {
 fn validate_describe_metadata(
     record: &ServiceResolutionRecord,
     description: &VerifiedServiceDescribeMetadata,
-    service_id: &ServiceId,
+    service_id: &DidCoreId,
     service_kind: &str,
 ) -> ServiceResult<()> {
     if &description.service_id != service_id
@@ -448,7 +448,7 @@ fn validate_describe_metadata(
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::ServiceResolutionRecordCore;
-    use arkret_wire::{Base64UrlString, DidUrl, FullId, ProtocolSignature};
+    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, ProtocolSignature};
     use chrono::TimeZone as _;
     use parking_lot::Mutex;
     use soland_storage_memory::MemoryServiceRouteStore;
@@ -482,28 +482,28 @@ mod tests {
     impl ServiceRouteFetcher for FakeFetcher {
         async fn fetch_current(
             &self,
-            _: &ServiceId,
+            _: &DidCoreId,
             _: &str,
         ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
             Ok(self.candidate(RouteSource::CurrentRecord, &self.current))
         }
         async fn fetch_notice_candidate(
             &self,
-            _: &ServiceId,
+            _: &DidCoreId,
             _: &str,
         ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
             Ok(self.candidate(RouteSource::ScheduledNotice, &self.notice))
         }
         async fn fetch_realm_peer_mirror(
             &self,
-            _: &ServiceId,
+            _: &DidCoreId,
             _: &str,
         ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
             Ok(self.candidate(RouteSource::RealmPeerMirror, &self.peer))
         }
         async fn fetch_configured_mirror(
             &self,
-            _: &ServiceId,
+            _: &DidCoreId,
             _: &str,
         ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
             Ok(self.candidate(RouteSource::ConfiguredMirror, &self.configured))
@@ -516,10 +516,10 @@ mod tests {
 
     fn record(full: &str, sequence: u64, previous: Option<Hash>) -> ServiceResolutionRecord {
         let issued_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
-        let full_id = FullId::new(full).unwrap();
+        let full_id = DidFullId::new(full).unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: ServiceId::from(
+                service_id: DidCoreId::from(
                     arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
                 ),
                 service_kind: "principal_server".to_owned(),

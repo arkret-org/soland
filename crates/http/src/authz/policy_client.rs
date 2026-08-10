@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_identifiers::{DidCoreId, Hash, RealmId};
 use arkret_identity::DidResolver;
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
@@ -85,9 +85,9 @@ impl PolicyFrontierSnapshot {
 pub struct PolicyCheckRequestInput {
     pub request_id: String,
     pub realm_id: RealmId,
-    pub actor_id: Did,
+    pub actor_id: DidCoreId,
     pub action: String,
-    pub source_service_id: Did,
+    pub source_service_id: DidCoreId,
     pub source_service_kind: String,
     pub source_ip_digest: Hash,
     pub signed_transport: bool,
@@ -439,8 +439,8 @@ impl PolicyClient {
         expected_frontiers: &PolicyFrontierSnapshot,
         reason_code: &str,
     ) -> PolicyCheckOutcome {
-        let policy_server_id =
-            Did::new(self.local_service_id.clone()).unwrap_or_else(|_| request.actor_id.clone());
+        let policy_server_id = DidCoreId::new(self.local_service_id.clone())
+            .unwrap_or_else(|_| request.actor_id.clone());
         let bound_to = PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
             actor_id: request.actor_id.clone(),
@@ -513,8 +513,8 @@ impl PolicyClient {
         request: &PolicyCheckRequestBody,
         reason_code: &str,
     ) -> PolicyCheckOutcome {
-        let policy_server_id =
-            Did::new(self.local_service_id.clone()).unwrap_or_else(|_| request.actor_id.clone());
+        let policy_server_id = DidCoreId::new(self.local_service_id.clone())
+            .unwrap_or_else(|_| request.actor_id.clone());
         let bound_to = PolicyCheckBoundTo {
             realm_id: request.realm_id.clone(),
             actor_id: request.actor_id.clone(),
@@ -553,7 +553,7 @@ impl PolicyClient {
 
     /// Verify the signature on a genuine `PolicyCheckOutcome`. The
     /// `kid` MUST be a verification method owned by the declared
-    /// `policy_server_did`; the signature MUST verify over the canonical
+    /// `policy_server_service_id`; the signature MUST verify over the canonical
     /// policy-check transcript reconstructed from the original request
     /// and the response.
     fn verify_signature(
@@ -576,19 +576,23 @@ impl PolicyClient {
                 "kid has empty DID or fragment: {kid}"
             )));
         }
-        // kid MUST be controlled by the declared policy_server_did.
-        if kid_did_part != config.policy_server_did {
+        // The kid's resolvable controller MUST project to the declared stable
+        // policy-server service identity.
+        let kid_full_id = arkret_identifiers::DidFullId::new(kid_did_part.to_owned())
+            .map_err(|error| PolicyClientError::SignatureInvalid(error.to_string()))?;
+        let kid_service_id = arkret_wire::project_full_id_to_core_id(&kid_full_id)
+            .map_err(|error| PolicyClientError::SignatureInvalid(error.to_string()))?;
+        if kid_service_id != config.policy_server_service_id {
             return Err(PolicyClientError::SignatureInvalid(format!(
-                "kid {kid_did_part} not under policy_server_did {server}",
-                server = config.policy_server_did
+                "kid {kid_did_part} does not project to policy_server_service_id {server}",
+                server = config.policy_server_service_id
             )));
         }
-        // bound_to.policy_server_id MUST also match the declared DID.
-        if response.bound_to.policy_server_id.as_str() != config.policy_server_did {
+        if response.bound_to.policy_server_id != config.policy_server_service_id {
             return Err(PolicyClientError::SignatureInvalid(format!(
                 "bound_to.policy_server_id {bt} != config {cfg}",
                 bt = response.bound_to.policy_server_id.as_str(),
-                cfg = config.policy_server_did
+                cfg = config.policy_server_service_id
             )));
         }
         if response.bound_to.realm_id != request.realm_id {
@@ -680,7 +684,7 @@ mod tests {
     fn realm_config(url: &str) -> RealmPolicyServerConfig {
         RealmPolicyServerConfig {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            policy_server_did: "did:web:policy.example.com".to_owned(),
+            policy_server_service_id: DidCoreId::new("ak:did_core:web:policy.example.com").unwrap(),
             policy_server_url: url.to_owned(),
             cache_ttl_seconds: 60,
             timeout_ms: 250,
@@ -700,10 +704,14 @@ mod tests {
     fn sample_input(bypass_cache: bool) -> PolicyCheckRequestInput {
         PolicyCheckRequestInput {
             request_id: "req-1".to_owned(),
-            realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K").unwrap(),
-            actor_id: Did::new("did:web:alice.example").unwrap(),
+            realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
+            actor_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             action: "ak.message.create".to_owned(),
-            source_service_id: Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
+            source_service_id: DidCoreId::new(
+                "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
+            )
+            .unwrap(),
             source_service_kind: "principal_server".to_owned(),
             source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
             signed_transport: true,
@@ -722,10 +730,10 @@ mod tests {
             bound_to: PolicyCheckBoundTo {
                 realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
                     .unwrap(),
-                actor_id: Did::new("did:web:alice.example").unwrap(),
+                actor_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                 action: "ak.message.create".to_owned(),
                 request_canonical_digest: zero.clone(),
-                policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
+                policy_server_id: DidCoreId::new("ak:did_core:web:policy.example.com").unwrap(),
             },
             freshness_state: FreshnessState::Fresh,
             auth_state_digest: zero.clone(),
@@ -754,7 +762,7 @@ mod tests {
         let mut resolver = DidWebResolver::new();
         resolver
             .insert(DidDocument::new(
-                Did::new("did:web:policy.example.com").unwrap(),
+                arkret_identifiers::DidFullId::new("did:web:policy.example.com").unwrap(),
                 "did:web:policy.example.com#key-1",
                 ed25519_public_multibase(signing),
             ))
@@ -790,7 +798,7 @@ mod tests {
                 actor_id: wire_request.actor_id.clone(),
                 action: wire_request.action.clone(),
                 request_canonical_digest: wire_request.request_canonical_digest.clone(),
-                policy_server_id: Did::new("did:web:policy.example.com").unwrap(),
+                policy_server_id: DidCoreId::new("ak:did_core:web:policy.example.com").unwrap(),
             },
             freshness_state: FreshnessState::Fresh,
             auth_state_digest: input.expected_frontiers.auth_state_digest.clone(),
@@ -1009,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn check_signature_invalid_rejected() {
         // Spin up a mock that returns a response whose kid does NOT
-        // match the declared policy_server_did.
+        // match the declared policy_server_service_id.
         let signing = signing_key();
         let input = sample_input(true);
         let mut bad_response = signed_sample_response(&input, &signing);

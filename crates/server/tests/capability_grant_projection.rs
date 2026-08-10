@@ -117,7 +117,10 @@ fn seed_realm_owner(state: &mut ProjectionState) {
         arkret_state::lattice::CellState::Value(
             serde_json::to_value(
                 arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                    arkret_identifiers::Did::new(ISSUER).unwrap(),
+                    arkret_wire::project_full_id_to_core_id(
+                        &arkret_identifiers::DidFullId::new(ISSUER).unwrap(),
+                    )
+                    .unwrap(),
                     arkret_policy::current_capability_action_registry_digest().unwrap(),
                 ),
             )

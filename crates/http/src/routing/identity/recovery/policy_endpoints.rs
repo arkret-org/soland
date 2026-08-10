@@ -69,7 +69,7 @@ fn recovery_policy_publish_outcome(
         ok: true,
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
-        principal_id: Did::new(record.principal_id.clone())
+        principal_id: arkret_identifiers::DidCoreId::new(record.principal_id.clone())
             .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
         version: u64::from(record.version),
         acceptance_basis: record.acceptance_basis.clone(),
@@ -158,7 +158,7 @@ pub(super) async fn recovery_policy_get(
     let recovery_policy_ref = active_policy.as_ref().map(recovery_policy_ref_from_summary);
     json_ok(RecoveryPolicyActiveOutcome {
         principal_id: Some(
-            Did::new(principal)
+            arkret_identifiers::DidCoreId::new(principal)
                 .map_err(|error| stored_recovery_type_error("principal_id", error))?,
         ),
         active_policy,
@@ -235,11 +235,11 @@ pub(super) async fn recovery_policy_put(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    let realm_id = crate::routing::identity::principal_control_realm_for_actor(
-        state,
-        &validated.principal_id,
-    )?;
-    if request.event.realm_id != realm_id
+    let realm_id = request.event.realm_id.clone();
+    if !state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &validated.principal_id)
         || request.event.scope_ref
             != (arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),

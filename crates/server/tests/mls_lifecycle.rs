@@ -184,15 +184,16 @@ fn signed_event(
     seal_basis: Option<arkret_wire::SealBasis>,
 ) -> Value {
     let now = Utc::now();
-    let actor = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
-    let verification_method = arkret_wire::DidUrl::new(format!("{}#{device_id}", actor.as_str()))
-        .expect("fixture verification method is a DID URL");
+    let actor_full_id = arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap();
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#{device_id}", actor_full_id.as_str()))
+            .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::test_support::raw_event_at(
         kind.as_ref(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         },
-        actor.clone(),
+        arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -206,7 +207,7 @@ fn signed_event(
     event.seal_basis = seal_basis;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
-        actor,
+        actor_full_id,
         verification_method.clone(),
     );
     arkret_signatures::sign_event(
@@ -235,7 +236,7 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
     typed.proofs.clear();
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
-        typed.actor_id.clone(),
+        arkret_identity::verification_method_did(verification_method.as_str()).unwrap(),
         verification_method.clone(),
     );
     let created_at = typed.created_at;
@@ -749,7 +750,7 @@ async fn mls_lifecycle_end_to_end() {
         "keypackage_digest": claimed_keypackage_digest,
         "intended_realm_id": realm_id,
         "claim_id": claim_id,
-        "requester_did": alice_did,
+        "requester_actor_id": alice_did,
         "requester_device_id": alice_device,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),

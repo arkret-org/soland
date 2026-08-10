@@ -2,9 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use ed25519_dalek::Signer as _;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::CanonicalEventRecord;
 use soland_services::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
@@ -155,41 +152,13 @@ impl FrontierExchangeWorker {
         );
         let query_method = reqwest::Method::from_bytes(b"QUERY")
             .map_err(|error| format!("invalid_query_method:{error}"))?;
-        let mut response = client
+        let response = client
             .request(query_method, parsed_url)
             .headers(headers)
             .body(body)
             .send()
             .await
             .map_err(|error| format!("network_error:{error}"))?;
-        if matches!(response.status().as_u16(), 405 | 501) {
-            let mut fallback_url = reqwest::Url::parse(&canonical_target)
-                .map_err(|error| format!("invalid_peer_url:{error}"))?;
-            fallback_url
-                .query_pairs_mut()
-                .append_pair("realm_id", realm_id);
-            let fallback_target = fallback_url.as_str().to_owned();
-            let (parsed_url, fallback_client) =
-                crate::security::validate_http_url_for_egress_with_pinned_client(
-                    &fallback_target,
-                    "federation frontier exchange compatibility GET",
-                    self.state.config().development_mode,
-                    REQUEST_TIMEOUT,
-                )
-                .map_err(|error| format!("egress_policy_denied:{error}"))?;
-            let headers = signed_get_headers(
-                &self.state,
-                peer_did,
-                route.trust_domain.as_str(),
-                &fallback_target,
-            );
-            response = fallback_client
-                .get(parsed_url)
-                .headers(headers)
-                .send()
-                .await
-                .map_err(|error| format!("network_error:{error}"))?;
-        }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -262,66 +231,6 @@ fn signed_query_headers(
     super::outbox::rfc9421_sign(state, headers, "QUERY", target_url)
 }
 
-fn signed_get_headers(
-    state: &AppState,
-    peer_did: &str,
-    peer_trust_domain: &str,
-    target_url: &str,
-) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    insert_header(&mut headers, "source-service-id", state.service_id());
-    insert_destination_binding(&mut headers, peer_did, peer_trust_domain);
-    insert_header(
-        &mut headers,
-        "source-trust-domain",
-        &state.config().trust_domain,
-    );
-
-    let created = chrono::Utc::now().timestamp();
-    let expires = created + 300;
-    let keyid = super::federation_service_signature_key_id(state.service_id());
-    let covered = [
-        "\"@method\"",
-        "\"@target-uri\"",
-        "\"@authority\"",
-        "\"source-service-id\"",
-        "\"destination-service-id\"",
-        "\"source-trust-domain\"",
-        "\"destination-trust-domain\"",
-    ]
-    .join(" ");
-    let signature_params = format!(
-        "({covered});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
-    );
-    let authority = authority_from_target_url(target_url);
-    let signature_base = format!(
-        "\"@method\": GET\n\
-         \"@target-uri\": {target_url}\n\
-         \"@authority\": {authority}\n\
-         \"source-service-id\": {}\n\
-         \"destination-service-id\": {}\n\
-         \"source-trust-domain\": {}\n\
-         \"destination-trust-domain\": {}\n\
-         \"@signature-params\": {signature_params}",
-        header_value(&headers, "source-service-id").unwrap_or_default(),
-        header_value(&headers, "destination-service-id").unwrap_or_default(),
-        header_value(&headers, "source-trust-domain").unwrap_or_default(),
-        header_value(&headers, "destination-trust-domain").unwrap_or_default(),
-    );
-    let signature = state.notary_signing_key().sign(signature_base.as_bytes());
-    insert_header(
-        &mut headers,
-        "signature-input",
-        &format!("sig1={signature_params}"),
-    );
-    insert_header(
-        &mut headers,
-        "signature",
-        &format!("sig1=:{}:", STANDARD.encode(signature.to_bytes())),
-    );
-    headers
-}
-
 fn insert_destination_binding(
     headers: &mut HeaderMap,
     peer_service_id: &str,
@@ -337,23 +246,12 @@ fn insert_header(headers: &mut HeaderMap, name: &'static str, value: &str) {
     }
 }
 
+#[cfg(test)]
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned)
-}
-
-fn authority_from_target_url(target_url: &str) -> String {
-    let Ok(url) = reqwest::Url::parse(target_url) else {
-        return String::new();
-    };
-    let Some(host) = url.host_str() else {
-        return String::new();
-    };
-    url.port()
-        .map(|port| format!("{host}:{port}"))
-        .unwrap_or_else(|| host.to_owned())
 }
 
 fn federation_visible_realms(records: &[CanonicalEventRecord]) -> BTreeSet<String> {

@@ -3,7 +3,7 @@ use arkret_models_identity::{
     ServiceResolutionRecord, ServiceRouteCacheEntry, ServiceRouteHandoverNotice,
     ServiceRouteNoticeState,
 };
-use arkret_wire::{Hash, RealmId, ServiceId};
+use arkret_wire::{DidCoreId, Hash, RealmId};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -97,7 +97,7 @@ fn key_json(key: &ServiceResolutionArtifactKey) -> PersistenceResult<String> {
 impl MirrorRow {
     fn decode(self) -> PersistenceResult<ServiceResolutionMirrorEntry> {
         Ok(ServiceResolutionMirrorEntry {
-            source_service_id: ServiceId::new(self.source_service_id)
+            source_service_id: DidCoreId::new(self.source_service_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             realm_id: RealmId::new(self.realm_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
@@ -118,7 +118,7 @@ impl MirrorRow {
 
 async fn lock_route_sequence(
     conn: &mut AsyncPgConnection,
-    service_id: &ServiceId,
+    service_id: &DidCoreId,
     service_kind: &str,
 ) -> Result<(), PgTransactionError> {
     let key = format!("service-route-sequence:{service_id}:{service_kind}");
@@ -301,7 +301,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         rows.into_iter()
             .map(|row| {
                 Ok(ServiceRouteStoredKey {
-                    service_id: ServiceId::new(row.service_id)
+                    service_id: DidCoreId::new(row.service_id)
                         .map_err(|error| PersistenceError::Internal(error.to_string()))?,
                     service_kind: row.service_kind,
                 })
@@ -311,7 +311,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn notice_states(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceRouteNoticeState>> {
@@ -327,7 +327,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn handover_mirror_entries(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>> {
@@ -343,7 +343,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn quarantine_evidence(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>> {
@@ -357,7 +357,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
         rows.into_iter()
             .map(|row| {
                 Ok(ServiceResolutionForkEvidence {
-                    service_id: ServiceId::new(row.service_id)
+                    service_id: DidCoreId::new(row.service_id)
                         .map_err(|error| PersistenceError::Internal(error.to_string()))?,
                     service_kind: row.service_kind,
                     artifact_family: row.artifact_family,
@@ -375,7 +375,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn last_seen_floor(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceResolutionLastSeenFloor>> {
         let mut conn = pg_conn(&self.pool)
@@ -420,7 +420,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn notice_state(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         handover_id: &str,
     ) -> PersistenceResult<Option<ServiceRouteNoticeState>> {
@@ -553,9 +553,9 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn successor_records(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -584,9 +584,9 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn latest_notice(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>> {
         let mut conn = pg_conn(&self.pool)
@@ -628,7 +628,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn is_quarantined(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool)
@@ -640,7 +640,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteCacheEntry>> {
         let mut conn = pg_conn(&self.pool)
@@ -663,7 +663,7 @@ impl ServiceRouteStore for PgServiceRouteStore {
 
     async fn evict_route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)

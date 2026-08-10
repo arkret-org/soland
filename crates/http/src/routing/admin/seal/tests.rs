@@ -9,11 +9,11 @@ use super::notary_cell_for;
 
 #[test]
 fn notary_value_from_cell_defaults_to_service_id_when_absent() {
-    let resp = notary_value_from_cell(
-        None,
+    let service_id = arkret_identifiers::DidFullId::new(
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
     )
     .unwrap();
+    let resp = notary_value_from_cell(None, &service_id).unwrap();
     assert_eq!(resp.kind_raw, "single_did");
     assert_eq!(
         resp.single_did.as_deref(),
@@ -32,7 +32,8 @@ fn notary_value_from_cell_reads_authoritative_single_did_form() {
         "revocation_freshness_window_ms": 60000,
         "paused": false,
     });
-    let resp = notary_value_from_cell(Some(&v), "did:web:server").unwrap();
+    let service_id = arkret_identifiers::DidFullId::new("did:web:server").unwrap();
+    let resp = notary_value_from_cell(Some(&v), &service_id).unwrap();
     assert_eq!(resp.kind_raw, "single_did");
     assert_eq!(resp.single_did.as_deref(), Some("did:web:alice.example"));
     assert_eq!(resp.revocation_freshness_window_ms, Some(60000));
@@ -52,7 +53,8 @@ fn notary_value_from_cell_reads_authoritative_threshold_form() {
         "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
         "forensic_attribution": "quorum_intersection",
     });
-    let resp = notary_value_from_cell(Some(&v), "did:web:s").unwrap();
+    let service_id = arkret_identifiers::DidFullId::new("did:web:s").unwrap();
+    let resp = notary_value_from_cell(Some(&v), &service_id).unwrap();
     assert_eq!(resp.kind_raw, "threshold");
     assert_eq!(resp.threshold_k, Some(2));
     // `n` is derived from the committee size now (no wire `n`).

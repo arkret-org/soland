@@ -1,16 +1,16 @@
-use arkret_identity::service_identity::StoredServiceIdentity;
+use arkret_identity::service_identity::StoredDidCoreIdentity;
 use arkret_models_identity::ServiceResolutionRecord;
 use arkret_wire::Hash;
 
 use super::{Mutex, PersistenceResult, ServiceIdentityStore, async_trait};
 #[derive(Default)]
 pub(crate) struct MemoryServiceIdentityStore {
-    row: Mutex<MemoryServiceIdentityState>,
+    row: Mutex<MemoryDidCoreIdentityState>,
 }
 
 #[derive(Default)]
-struct MemoryServiceIdentityState {
-    identity: Option<StoredServiceIdentity>,
+struct MemoryDidCoreIdentityState {
+    identity: Option<StoredDidCoreIdentity>,
     resolution: Option<ServiceResolutionRecord>,
 }
 impl MemoryServiceIdentityStore {
@@ -20,11 +20,11 @@ impl MemoryServiceIdentityStore {
 }
 #[async_trait]
 impl ServiceIdentityStore for MemoryServiceIdentityStore {
-    async fn get(&self) -> PersistenceResult<Option<StoredServiceIdentity>> {
+    async fn get(&self) -> PersistenceResult<Option<StoredDidCoreIdentity>> {
         Ok(self.row.lock().identity.clone())
     }
 
-    async fn put(&self, identity: StoredServiceIdentity) -> PersistenceResult<()> {
+    async fn put(&self, identity: StoredDidCoreIdentity) -> PersistenceResult<()> {
         self.row.lock().identity = Some(identity);
         Ok(())
     }

@@ -571,7 +571,7 @@ async fn verify_mimi_consent_update_authority(
 
 fn mimi_consent_target_kind(kind: MimiConsentTargetKind) -> &'static str {
     match kind {
-        MimiConsentTargetKind::Did => "did",
+        MimiConsentTargetKind::DidFullId => "did",
         MimiConsentTargetKind::MimiUri => "mimi_uri",
         MimiConsentTargetKind::Handle => "handle",
         MimiConsentTargetKind::ProviderUser => "provider_user",
@@ -939,7 +939,10 @@ pub(super) async fn mimi_report_abuse(
         tracing::error!(%error, "failed to persist mimi abuse report");
     }
 
-    let routed_to = vec![state.service_resolution_commitment().full_id.clone()];
+    let routed_to = vec![
+        arkret_wire::DidCoreId::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?,
+    ];
     let _receipt = mimi_receipt(
         state,
         "ak.open.mimi.command.report_abuse",
@@ -965,7 +968,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
     reporter: &str,
     body: &Value,
 ) -> Result<(), AppError> {
-    Did::new(reporter.to_owned())
+    DidFullId::new(reporter.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid reporter DID: {error}")))?;
     if state
         .identities()
@@ -1103,7 +1106,7 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 }
 #[cfg(test)]
 mod consent_proof_tests {
-    use arkret_identifiers::{ConsentId, Did, Hash, Hlc, RealmId};
+    use arkret_identifiers::{ConsentId, DidFullId, Hash, Hlc, RealmId};
     use arkret_models_collaboration::http_bodies::MimiConsentDecision;
     use arkret_wire::{
         Audience, Event, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
@@ -1120,8 +1123,9 @@ mod consent_proof_tests {
     }
 
     fn request(state: &AppState) -> MimiUpdateConsentRequestBody {
-        let actor_id = Did::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
-        let verification_method = format!("{actor_id}#cotest");
+        let actor_full_id = DidFullId::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
+        let verification_method = format!("{actor_full_id}#cotest");
         let consent_id =
             ConsentId::new("ak:consent:01964137-0000-7000-8000-000000000777".to_owned()).unwrap();
         let realm_id =
@@ -1130,7 +1134,7 @@ mod consent_proof_tests {
         let consent_event = arkret_wire::test_support::raw_event_at(
             EventKind::ConsentGrant.as_str(),
             ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&actor_id),
+            crate::test_actor_id(&actor_full_id),
             1,
             Hlc::new(state.hlc().now()).unwrap(),
             json!({

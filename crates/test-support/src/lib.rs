@@ -9,9 +9,9 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
+use arkret_identifiers::{CellRef, DidFullId, Hash, RealmId, SealId};
 use arkret_identity::service_identity::{
-    LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
+    DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity,
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_state::lattice::CellState;
@@ -20,7 +20,7 @@ use arkret_state::state::{
     CellRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
     MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
 };
-use arkret_wire::{Seal, ServiceId, ServiceKind, project_full_id_to_core_id};
+use arkret_wire::{DidCoreId, Seal, ServiceKind, project_full_id_to_core_id};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -103,7 +103,7 @@ pub fn fixture_content_bound_id(prefix: &str) -> String {
     arkret_identifiers::encode_event_token(prefix, event_id.token_bytes())
 }
 
-pub fn fixture_signing_seed(config: &AppConfig, identity: &ServiceIdentityState) -> [u8; 32] {
+pub fn fixture_signing_seed(config: &AppConfig, identity: &DidCoreIdentityState) -> [u8; 32] {
     config.notary_signing_key_seed.unwrap_or_else(|| {
         let mut hasher = Sha256::new();
         hasher.update(b"soland:test-fixture-notary:");
@@ -122,7 +122,7 @@ pub fn fixture_signing_seed(config: &AppConfig, identity: &ServiceIdentityState)
 pub fn app_state_with_identity(
     config: AppConfig,
     persistence: Arc<dyn PersistenceStore>,
-    service_identity: ServiceIdentityState,
+    service_identity: DidCoreIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> AppState {
     let cell_registry = ProjectionService::sdk_cell_registry();
@@ -313,7 +313,7 @@ fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> 
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-pub fn fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
+pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
         ServiceKind::PrincipalServer,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
@@ -321,14 +321,14 @@ pub fn fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
     )
     .expect("principal-server registration key");
     let signing_key_ref =
-        ServiceIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
-    let full_id = Did::new(
+        DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
+    let full_id = DidFullId::new(
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
     )
     .expect("fixture service DID");
-    ServiceIdentityState::Ready {
-        identity: LocalServiceIdentity {
-            service_id: ServiceId::from(
+    DidCoreIdentityState::Ready {
+        identity: LocalDidCoreIdentity {
+            service_id: DidCoreId::from(
                 project_full_id_to_core_id(&full_id).expect("fixture service projection"),
             ),
             full_id,
@@ -336,7 +336,7 @@ pub fn fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],
             active_signing_key_ref: signing_key_ref,
-            control_key_ref: ServiceIdentityKeyRef::new("fixture:soland:webvh-control-key")
+            control_key_ref: DidCoreIdentityKeyRef::new("fixture:soland:webvh-control-key")
                 .expect("fixture control key ref"),
             version_id: "fixture-v1".to_owned(),
             last_verified_at: chrono::Utc::now(),

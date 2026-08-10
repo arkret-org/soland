@@ -27,7 +27,7 @@ const MESSAGE_ID_DOMAIN: &[u8] = b"ak.member-repair-message-id-v1\n";
 #[serde(deny_unknown_fields)]
 struct FrozenSourceIntent {
     state: String,
-    destination_service_id: arkret_wire::ServiceId,
+    destination_service_id: arkret_wire::DidCoreId,
     destination_trust_domain: String,
     destination_service_resolution:
         arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
@@ -173,7 +173,7 @@ async fn source_peer_delivery_binding(
     peer: &str,
 ) -> Result<
     (
-        arkret_wire::ServiceId,
+        arkret_wire::DidCoreId,
         arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
     ),
     AppError,
@@ -213,7 +213,7 @@ fn contact_delivery_binding(
     contact: &ContactRecord,
 ) -> Result<
     Option<(
-        arkret_wire::ServiceId,
+        arkret_wire::DidCoreId,
         arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
     )>,
     AppError,
@@ -224,7 +224,7 @@ fn contact_delivery_binding(
     ) else {
         return Ok(None);
     };
-    let service_id = arkret_wire::ServiceId::new(service_id.to_owned()).map_err(|error| {
+    let service_id = arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(|error| {
         delivery_binding_unresolvable(format!("peer service core_id is invalid: {error}"))
     })?;
     let carrier = serde_json::from_value::<
@@ -296,7 +296,7 @@ async fn validate_exact_requester_keypackage(
 async fn requester_evidence(
     state: &AppState,
     request: &DirectConversationRepairDispatchRequest,
-    destination_service_id: &arkret_wire::ServiceId,
+    destination_service_id: &arkret_wire::DidCoreId,
 ) -> Result<DirectConversationRepairRequesterEvidence, AppError> {
     match &request.requester_authorization {
         DirectConversationRepairAuthorization::Device {
@@ -307,7 +307,7 @@ async fn requester_evidence(
             device_authorization_evidence:
                 crate::jws_verify::federated_device_signing_key_evidence(
                     state,
-                    &arkret_wire::ActorId::from(request.content.requester_principal_id.clone()),
+                    &arkret_wire::DidCoreId::from(request.content.requester_principal_id.clone()),
                     requester_device_id,
                     verification_method.as_str(),
                 )
@@ -333,7 +333,7 @@ async fn requester_evidence(
 
 async fn source_outcome(
     state: &AppState,
-    requester: &CoreId,
+    requester: &DidCoreId,
     request: &DirectConversationRepairDispatchRequest,
     digest: &str,
 ) -> Result<Option<DirectConversationRepairEnqueueOutcome>, AppError> {
@@ -456,7 +456,7 @@ async fn relay_to_destination(
 
 async fn resolve_repair_route(
     state: &AppState,
-    service_id: &arkret_wire::ServiceId,
+    service_id: &arkret_wire::DidCoreId,
     carrier: &arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
     expected_trust_domain: Option<&str>,
 ) -> Result<soland_services::service_route::ResolvedServiceRoute, AppError> {
@@ -661,62 +661,14 @@ pub(in crate::routing) async fn accept_peer_relay(
 }
 
 async fn validate_peer_service_bindings(
-    state: &AppState,
-    source_service_id: &str,
-    requester: &str,
-    recipient: &str,
+    _state: &AppState,
+    _source_service_id: &str,
+    _requester: &str,
+    _recipient: &str,
 ) -> Result<(), AppError> {
-    let requester_binding = current_principal_service_binding(state, requester).await?;
-    let contact_binds_source = {
-        let mut matched = false;
-        for (left, right) in [(requester, recipient), (recipient, requester)] {
-            if state
-                .contacts()
-                .contact_any(left, right)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .is_some_and(|contact| {
-                    contact.status == "accepted"
-                        && contact.peer_service_id.as_deref() == Some(source_service_id)
-                })
-            {
-                matched = true;
-            }
-        }
-        matched
-    };
-    if !requester_binding
-        .as_ref()
-        .is_some_and(|binding| binding.service_id.as_str() == source_service_id)
-        && !contact_binds_source
-    {
-        return Err(AppError::capability_denied(
-            "repair relay source is not the requester's accepted Principal Server",
-        ));
-    }
-    let local = local_service_core(state)?;
-    let recipient_binding = current_principal_service_binding(state, recipient).await?;
-    if !recipient_binding_is_current_local(recipient_binding.as_ref(), &local, now()) {
-        return Err(direct_repair_precondition(
-            "repair recipient is no longer bound to this Principal Server",
-        ));
-    }
-    Ok(())
-}
-
-fn recipient_binding_is_current_local(
-    binding: Option<
-        &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
-    >,
-    local: &CoreId,
-    observed_at: DateTime<Utc>,
-) -> bool {
-    binding.is_some_and(|binding| {
-        binding.service_id.as_str() == local.as_str()
-            && binding.service_kind
-                == arkret_models_collaboration::direct_conversation_ops::PrincipalServiceKind::PrincipalServer
-            && binding.expires_at.is_none_or(|expires| expires > observed_at)
-    })
+    Err(direct_repair_precondition(
+        "repair relay requires exact requester and recipient authority instances",
+    ))
 }
 
 async fn verify_peer_requester(
@@ -773,7 +725,7 @@ async fn verify_peer_requester(
                 agent_signer_evidence,
             },
         ) => {
-            let local = arkret_wire::ServiceId::from(local_service_core(state)?);
+            let local = arkret_wire::DidCoreId::from(local_service_core(state)?);
             let selector = repair_agent_evidence_selector(&request.dispatch_request(), &local)?;
             let arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
                 operation_id,
@@ -792,7 +744,7 @@ async fn verify_peer_requester(
             let key = crate::routing::identity::agents::evidence::verify_current_agent_signer_evidence_for_request(
                 state,
                 &portable,
-                &arkret_wire::ActorId::from(requester_agent_id.clone()),
+                &arkret_wire::DidCoreId::from(requester_agent_id.clone()),
                 verification_method,
                 agent_key_authorize_event_id,
                 &operation_id,
@@ -908,7 +860,7 @@ async fn accept_agent_relay(
 
 fn repair_agent_evidence_selector(
     request: &DirectConversationRepairDispatchRequest,
-    destination_service_id: &arkret_wire::ServiceId,
+    destination_service_id: &arkret_wire::DidCoreId,
 ) -> Result<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector, AppError>
 {
     let DirectConversationRepairAuthorization::NativeAgent {
@@ -931,7 +883,7 @@ fn repair_agent_evidence_selector(
     .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(
         arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            agent_id: arkret_wire::ActorId::from(requester_agent_id.clone()),
+            agent_id: arkret_wire::DidCoreId::from(requester_agent_id.clone()),
             verification_method: verification_method.clone(),
             operation_id,
             request_digest,
@@ -961,7 +913,7 @@ fn stable_repair_operation_id(
 async fn repair_peer(
     state: &AppState,
     request: &DirectConversationRepairDispatchRequest,
-) -> Result<CoreId, AppError> {
+) -> Result<DidCoreId, AppError> {
     let binding = state
         .contacts()
         .settled_direct_binding_for_realm(request.content.realm_id.as_str())
@@ -972,7 +924,7 @@ async fn repair_peer(
         .iter()
         .find(|participant| participant.as_str() != request.content.requester_principal_id.as_str())
         .ok_or_else(|| direct_repair_precondition("Direct Conversation peer unavailable"))?;
-    CoreId::new(peer.clone())
+    DidCoreId::new(peer.clone())
         .map_err(|_| direct_repair_precondition("Direct Conversation peer core_id is invalid"))
 }
 
@@ -1071,7 +1023,7 @@ fn canonical_digest(value: &impl Serialize, label: &str) -> Result<String, AppEr
         .map_err(|error| AppError::invalid_param(format!("{label} is not canonical: {error}")))
 }
 
-fn local_service_core(state: &AppState) -> Result<CoreId, AppError> {
+fn local_service_core(state: &AppState) -> Result<DidCoreId, AppError> {
     arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
         .map_err(|error| AppError::internal(format!("local service identity invalid: {error}")))
 }
@@ -1126,17 +1078,6 @@ fn delivery_binding_unresolvable(message: impl Into<String>) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn missing_recipient_service_binding_fails_closed() {
-        let local =
-            CoreId::new("ak:did_core:webvh:z6mkfixture".to_owned()).expect("service core id");
-        assert!(!recipient_binding_is_current_local(
-            None,
-            &local,
-            Utc::now()
-        ));
-    }
 
     #[test]
     fn accepted_contact_supplies_cross_service_resolution_carrier() {

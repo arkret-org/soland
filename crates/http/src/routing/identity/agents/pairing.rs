@@ -51,10 +51,10 @@ pub(super) async fn resolve_agent_pairing(
             .public_base_url
             .trim_end_matches('/')
             .to_owned(),
-        service_id: Did::new(state.service_id().clone()).map_err(|error| {
-            AppError::internal(format!("configured service_id invalid: {error}"))
-        })?,
-        agent_id: Did::new(agent_id)
+        service_id: arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(
+            |error| AppError::internal(format!("configured service_id invalid: {error}")),
+        )?,
+        agent_id: arkret_wire::DidCoreId::new(agent_id)
             .map_err(|error| AppError::internal(format!("agent principal DID invalid: {error}")))?,
         pairing_request_id: arkret_wire::OpaqueLocalId::new(pairing_request_id.to_owned())
             .map_err(|error| {
@@ -115,7 +115,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         agent_id,
         state.service_id(),
     )?;
-    let agent_did = Did::new(agent_id.to_owned())
+    let agent_did = arkret_wire::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_signatures::agent::validate_agent_runtime_public_key(
         &body.public_key,
@@ -249,19 +249,22 @@ pub(super) async fn submit_agent_runtime_key_request(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
-                    recipient_id: Did::new(controller_id).map_err(|error| {
-                        AppError::internal(format!(
-                            "approval notification recipient is invalid: {error}"
-                        ))
-                    })?,
-                    controller_account_id: account.account_id.clone(),
-                    recipient_service_id: Did::new(state.service_id().clone()).map_err(
+                    recipient_id: arkret_identifiers::DidCoreId::new(controller_id).map_err(
                         |error| {
                             AppError::internal(format!(
-                                "approval notification service is invalid: {error}"
+                                "approval notification recipient is invalid: {error}"
                             ))
                         },
                     )?,
+                    controller_account_id: account.account_id.clone(),
+                    recipient_service_id: arkret_identifiers::DidCoreId::new(
+                        state.service_id().clone(),
+                    )
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "approval notification service is invalid: {error}"
+                        ))
+                    })?,
                     source_account_artifact_id: approval_request_id.to_string(),
                 },
             },
@@ -446,7 +449,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
                 "accepted Agent authorization Event is invalid: {error}"
             ))
         })?;
-    let typed_agent_id = Did::new(agent_id.clone())
+    let typed_agent_id = arkret_wire::DidCoreId::new(agent_id.clone())
         .map_err(|error| AppError::internal(format!("stored Agent DID is invalid: {error}")))?;
     let typed_verification_method =
         arkret_wire::DidUrl::new(verification_method.clone()).map_err(AppError::internal)?;
@@ -617,7 +620,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
         approval_request_id,
         authorized_event_ref,
         authorized_verification_method: completed_binding
-            .map(|binding| binding.verification_method.to_string()),
+            .map(|binding| binding.verification_method.clone()),
         authorized_public_key_digest: completed_binding
             .map(|binding| binding.public_key_digest.to_string()),
         authorized_signing_key_binding,
@@ -839,17 +842,12 @@ pub(super) fn service_pairing_controller_device_id(
     controller_id: &str,
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
-    let agent_core = arkret_wire::project_full_id_to_core_id(&body.agent_id).map_err(|error| {
-        AppError::invalid_param(format!("agent_id cannot be projected: {error}"))
-    })?;
-    if submission.event.actor_id != arkret_wire::ActorId::from(agent_core.clone())
+    let agent_core = body.agent_id.clone();
+    if submission.event.actor_id != agent_core
         || submission
             .authorization_lease
             .as_ref()
-            .is_some_and(|lease| {
-                arkret_wire::project_full_id_to_core_id(&lease.actor_id)
-                    .map_or(true, |core| core != agent_core)
-            })
+            .is_some_and(|lease| lease.actor_id != agent_core)
     {
         return Err(AppError::capability_denied(
             "delegated pairing Event and any delayed authorization lease must name the managed Agent",
@@ -859,7 +857,7 @@ pub(super) fn service_pairing_controller_device_id(
         .event
         .executed_by
         .as_ref()
-        .map(arkret_wire::ActorId::as_str)
+        .map(arkret_wire::DidCoreId::as_str)
         != Some(controller_id)
     {
         return Err(AppError::capability_denied(
@@ -904,7 +902,7 @@ pub(super) fn service_pairing_controller_device_id(
 /// The canonical `ak.component.agent.key.v1` cell for one `(agent_id, key_id)`
 /// pair, matching the registry's composite `cell_subject` derivation.
 pub(super) fn agent_key_cell_ref(
-    agent_id: &arkret_identifiers::Did,
+    agent_id: &arkret_identifiers::DidCoreId,
     key_id: &str,
 ) -> Result<arkret_identifiers::CellRef, AppError> {
     let subject = arkret_wire::composite_subject(&[agent_id.as_str(), key_id])
@@ -967,16 +965,13 @@ async fn validate_agent_signing_key_binding(
 async fn validate_agent_signing_key_binding_parts(
     binding: &arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
     authorize_event: &arkret_wire::Event,
-    agent_id: &Did,
+    agent_id: &arkret_wire::DidCoreId,
     verification_method: &arkret_wire::DidUrl,
     controller_id: &str,
     runtime_public_key_digest: &str,
     state: &AppState,
 ) -> Result<(), AppError> {
-    let agent_core = arkret_wire::project_full_id_to_core_id(agent_id).map_err(|error| {
-        AppError::invalid_param(format!("agent_id cannot be projected: {error}"))
-    })?;
-    let agent_actor_id = arkret_wire::ActorId::from(agent_core);
+    let agent_actor_id = agent_id.clone();
     let payload = &authorize_event.payload;
     let expected_binding_digest = payload
         .get("signing_key_binding_digest")
@@ -1096,7 +1091,7 @@ async fn validate_requested_scope_disclosure(
             "requested_scope_disclosure principal binding does not match the Agent record",
         ));
     }
-    if disclosure.verifier_did.as_str() != state.service_id()
+    if disclosure.verifier_service_id.as_str() != state.service_id()
         || disclosure.audience.as_str()
             != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
     {
@@ -1131,11 +1126,12 @@ async fn validate_requested_scope_disclosure(
         serde_json::from_value(stored_scope.clone()).map_err(|error| {
             AppError::internal(format!("stored Agent requested_scope is invalid: {error}"))
         })?;
-    let agent_id = Did::new(agent_record.id.clone())
+    let agent_id = arkret_wire::DidCoreId::new(agent_record.id.clone())
         .map_err(|error| AppError::internal(format!("stored Agent DID is invalid: {error}")))?;
-    let controller_id = Did::new(agent_record.controller_id.clone()).map_err(|error| {
-        AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
-    })?;
+    let controller_id = arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
+        .map_err(|error| {
+            AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
+        })?;
     let stored_digest = arkret_signatures::agent::agent_requested_scope_digest(
         &agent_id,
         &controller_id,
@@ -1218,7 +1214,7 @@ fn ensure_current_runtime_key_request_matches(
             "controller approval does not match the current runtime key request",
         ));
     }
-    let agent_id = Did::new(body.agent_id.as_str().to_owned())
+    let agent_id = arkret_wire::DidCoreId::new(body.agent_id.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let current_binding = arkret_signatures::agent::agent_runtime_key_binding_digest(
         &agent_id,
@@ -1238,9 +1234,9 @@ fn ensure_current_runtime_key_request_matches(
 
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
-    recipient_id: Did,
+    recipient_id: arkret_wire::DidCoreId,
     controller_account_id: String,
-    recipient_service_id: Did,
+    recipient_service_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
 }
 
@@ -1253,12 +1249,16 @@ pub(super) fn account_notification_context(
             &agent_record.approval_notification_id?,
         ))
         .ok()?,
-        recipient_id: Did::new(agent_record.controller_id.clone()).ok()?,
+        recipient_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
+            .ok()?,
         controller_account_id: ids::format_typed_uuid(
             "account",
             &agent_record.controller_account_id?,
         ),
-        recipient_service_id: Did::new(agent_record.recipient_service_id.clone()?).ok()?,
+        recipient_service_id: arkret_identifiers::DidCoreId::new(
+            agent_record.recipient_service_id.clone()?,
+        )
+        .ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
     })
 }
@@ -1685,9 +1685,9 @@ fn verify_runtime_key_proof_of_possession(
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
-    let agent_id = Did::new(agent_id.to_owned())
+    let agent_id = arkret_wire::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let service_id = arkret_wire::ServiceId::new(service_id.to_owned())
+    let service_id = arkret_wire::DidCoreId::new(service_id.to_owned())
         .map_err(|error| AppError::internal(format!("configured service_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
     if proof_of_possession.audience != service_id {
@@ -1824,11 +1824,11 @@ pub(super) fn pairing_request_binding_digest(
             })?;
     let pairing_code = required_pairing_code(agent_record)?;
     let expires_at = required_pairing_expires_at(agent_record)?;
-    let controller = Did::new(controller.to_owned())
+    let controller = arkret_wire::DidCoreId::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
-    let agent_id = Did::new(agent_id.to_owned())
+    let agent_id = arkret_wire::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
-    let audience = arkret_wire::ServiceId::new(service_id.to_owned()).map_err(|error| {
+    let audience = arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(|error| {
         AppError::internal(format!("configured service core_id invalid: {error}"))
     })?;
     let runtime_key_binding_digest = Hash::new(

@@ -4,7 +4,7 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_models_collaboration::sync_frames::account_sync::{NotificationData, NotificationDelta};
 use arkret_wire::events::EventKind;
-use arkret_wire::{Did, EventId, NotificationId, RealmId, StrandId};
+use arkret_wire::{DidCoreId, EventId, NotificationId, RealmId, StrandId};
 use soland_storage::{
     AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
 };
@@ -116,7 +116,7 @@ impl NotificationRow {
                 PersistenceError::Internal(format!("recipient notification id is invalid: {error}"))
             })?,
             schema: NotificationSchema::V1,
-            actor_id: Did::new(self.recipient_id).map_err(|error| {
+            actor_id: DidCoreId::new(self.recipient_id).map_err(|error| {
                 PersistenceError::Internal(format!(
                     "recipient notification actor_id is invalid: {error}"
                 ))
@@ -159,7 +159,7 @@ impl NotificationRow {
             })?;
         let source_actor_id = self
             .source_actor_id
-            .map(Did::new)
+            .map(DidCoreId::new)
             .transpose()
             .map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -227,13 +227,13 @@ impl NotificationRow {
         Ok(StoredAccountNotificationDelta {
             record: AccountNotificationDeltaWrite {
                 delta,
-                recipient_id: Did::new(self.recipient_id).map_err(|error| {
+                recipient_id: DidCoreId::new(self.recipient_id).map_err(|error| {
                     PersistenceError::Internal(format!(
                         "account notification recipient_id is invalid: {error}"
                     ))
                 })?,
                 controller_account_id: ids::format_typed_uuid("account", &controller_account_id),
-                recipient_service_id: Did::new(recipient_service_id).map_err(|error| {
+                recipient_service_id: DidCoreId::new(recipient_service_id).map_err(|error| {
                     PersistenceError::Internal(format!(
                         "account notification recipient_service_id is invalid: {error}"
                     ))
@@ -321,7 +321,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<Nullable<Text>, _>(source.track_name.as_deref())
         .bind::<Text, _>(&notification_kind)
         .bind::<Nullable<Text>, _>(Some(record.event_kind.as_str()))
-        .bind::<Nullable<Text>, _>(record.source_actor_id.as_ref().map(Did::as_str))
+        .bind::<Nullable<Text>, _>(record.source_actor_id.as_ref().map(DidCoreId::as_str))
         .bind::<Text, _>(&priority)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(preview.as_ref())

@@ -20,7 +20,7 @@ fn agent_pairing_is_abandoned(record: &soland_services::identity::AgentPairingSt
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentProvisioningAbandonmentChallengeRequestBody {
     request_id: arkret_wire::ProtocolOperationId,
-    agent_id: CoreId,
+    agent_id: DidCoreId,
     principal_control_realm_id: RealmId,
     allocation_handle: arkret_wire::ProtocolOpaqueId,
 }
@@ -33,13 +33,13 @@ pub(super) struct AgentProvisioningAbandonmentChallengeOutcome {
     challenge: arkret_wire::Base64UrlString,
     purpose: String,
     account_subject: Hash,
-    agent_id: CoreId,
+    agent_id: DidCoreId,
     agent_slug: String,
     principal_control_realm_id: RealmId,
     allocation_handle: arkret_wire::ProtocolOpaqueId,
     consequence_disclosure: Vec<String>,
     dpop_jkt: String,
-    audience: Did,
+    audience: DidFullId,
     origin: String,
     trust_domain: String,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
@@ -54,7 +54,7 @@ pub(super) struct AgentProvisioningAbandonmentRequestBody {
     request_id: arkret_wire::ProtocolOperationId,
     challenge_id: arkret_wire::ProtocolOpaqueId,
     challenge: arkret_wire::Base64UrlString,
-    agent_id: CoreId,
+    agent_id: DidCoreId,
     principal_control_realm_id: RealmId,
     allocation_handle: arkret_wire::ProtocolOpaqueId,
 }
@@ -64,7 +64,7 @@ pub(super) struct AgentProvisioningAbandonmentRequestBody {
 pub(super) struct AgentProvisioningAbandonmentOutcome {
     request_id: arkret_wire::ProtocolOperationId,
     status: String,
-    agent_id: CoreId,
+    agent_id: DidCoreId,
     principal_control_realm_id: RealmId,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     abandoned_at: chrono::DateTime<chrono::Utc>,
@@ -359,11 +359,16 @@ pub(super) async fn provision_agent(
                 ));
             }
 
-            let agent_id =
-                Did::new(generate_agent_principal_did(state.service_id())).map_err(|error| {
-                    AppError::internal(format!("generated Agent DID invalid: {error}"))
+            let agent_full_id = DidFullId::new(generate_agent_principal_did(
+                &state.config().public_base_url,
+            )?)
+            .map_err(|error| AppError::internal(format!("generated Agent DID invalid: {error}")))?;
+            let agent_id = arkret_wire::project_full_id_to_core_id(&agent_full_id)
+                .map(arkret_wire::DidCoreId::from)
+                .map_err(|error| {
+                    AppError::internal(format!("generated Agent core id invalid: {error}"))
                 })?;
-            let controller_did = Did::new(controller_id.clone())
+            let controller_did = arkret_identifiers::DidCoreId::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
                 &agent_id,
@@ -909,8 +914,7 @@ pub(super) async fn issue_provisioning_abandonment_challenge(
     let challenge =
         arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>()))
             .map_err(|error| AppError::internal(format!("generated challenge invalid: {error}")))?;
-    let service_id = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let service_id = state.service_resolution_commitment().full_id.clone();
     let origin = reqwest::Url::parse(&state.config().public_base_url)
         .map_err(|error| AppError::internal(format!("public base URL invalid: {error}")))?
         .origin()
@@ -1174,7 +1178,7 @@ pub(super) async fn renew_agent_pairing(
         "accepted",
     )
     .await;
-    let agent_principal_did = arkret_identifiers::Did::new(agent_id)
+    let agent_principal_did = arkret_identifiers::DidCoreId::new(agent_id)
         .map_err(|err| AppError::internal(format!("persisted agent DID invalid: {err}")))?;
     let principal_control_realm_id = RealmId::new(record.principal_control_realm_id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;

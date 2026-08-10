@@ -12,7 +12,7 @@ pub struct RawDidDocumentJson(pub serde_json::Value);
 pub struct IdentityRegistryDescription {
     pub protocol_version: String,
     pub service_kind: String,
-    pub service_id: Did,
+    pub service_id: DidFullId,
     pub trust_domain: String,
     pub registry_mode: String,
     pub supported_receipts: Vec<String>,
@@ -118,8 +118,7 @@ pub(crate) async fn identity_describe(
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ak.identity.webvh.provider.v1".to_owned());
     }
-    let service_id = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
+    let service_id = state.service_resolution_commitment().full_id.clone();
     let supported_did_methods = state
         .config()
         .did_resolver_allow_methods
@@ -833,7 +832,8 @@ pub(crate) async fn identity_document(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let typed_did = Did::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
+    let typed_did =
+        DidFullId::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
     let record = identity_document_record(state, &did).await;
     let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
     let mut did_document = serde_json::from_value::<BTreeMap<String, Value>>(record.did_document)
@@ -864,7 +864,7 @@ fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
 }
 
 fn identity_resolve_outcome(
-    did: Did,
+    did: DidFullId,
     document: Value,
     key_log_head: Option<Hash>,
     seq: Option<u64>,
@@ -952,7 +952,7 @@ pub(crate) async fn identity_log(
         }
     };
     json_ok(IdentityLogListOutcome {
-        did: Did::new(did).map_err(|error| AppError::internal(error.to_string()))?,
+        did: DidFullId::new(did).map_err(|error| AppError::internal(error.to_string()))?,
         method,
         native_history,
         entries,
@@ -1199,7 +1199,7 @@ pub(crate) async fn identity_submit_did_operation(
 
 fn did_operation_submit_outcome(
     status: arkret_models_identity::identity::DidOperationSubmitStatus,
-    did: Did,
+    did: DidFullId,
     seq: u64,
     version_id: &str,
     event_digest: &str,

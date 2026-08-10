@@ -10,7 +10,7 @@ use arkret_models_identity::{
     OrganizationRegistrationStatus, next_organization_registration_generation,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_wire::{CoreId, Did, DidUrl, FullId, Hash, PayloadProof, ProofContextId, ServiceId};
+use arkret_wire::{DidCoreId, DidFullId, DidUrl, Hash, PayloadProof, ProofContextId};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use soland_storage::{
@@ -67,7 +67,7 @@ impl OrganizationRegistrationError {
 }
 
 pub trait OrganizationRegistrationReceiptSigner: Send + Sync {
-    fn issuer_service_id(&self) -> &ServiceId;
+    fn issuer_service_id(&self) -> &DidCoreId;
     /// `did-usage-and-verification.md` §2.2 / §6: a receipt-signing key is a
     /// concrete verification method, so the identifier is a typed DID URL and
     /// a bare DID cannot be handed in.
@@ -79,12 +79,12 @@ pub trait OrganizationRegistrationReceiptSigner: Send + Sync {
 pub trait OrganizationDidResolutionPort: Send + Sync {
     async fn resolve_current_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<PinnedDidDocumentState, String>;
 
     async fn resolve_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<PinnedDidDocumentState, String>;
@@ -94,7 +94,7 @@ pub trait OrganizationDidResolutionPort: Send + Sync {
 impl OrganizationDidResolutionPort for DidService {
     async fn resolve_current_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<PinnedDidDocumentState, String> {
         DidService::resolve_current_webvh_state(self, did)
             .await
@@ -103,7 +103,7 @@ impl OrganizationDidResolutionPort for DidService {
 
     async fn resolve_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<PinnedDidDocumentState, String> {
@@ -144,7 +144,7 @@ impl OrganizationRegistrationService {
         request: OrganizationRegistrationChallengeRequestBody,
         origin: &str,
         trust_domain: &str,
-        issuer_service_id: &ServiceId,
+        issuer_service_id: &DidCoreId,
         now: DateTime<Utc>,
     ) -> Result<OrganizationRegistrationChallenge, OrganizationRegistrationError> {
         request
@@ -314,7 +314,7 @@ impl OrganizationRegistrationService {
 
     pub async fn current(
         &self,
-        organization_id: &CoreId,
+        organization_id: &DidCoreId,
     ) -> Result<Option<OrganizationRegistrationCurrent>, OrganizationRegistrationError> {
         self.store()
             .get_current(organization_id)
@@ -324,7 +324,7 @@ impl OrganizationRegistrationService {
 
     pub async fn get(
         &self,
-        organization_id: &CoreId,
+        organization_id: &DidCoreId,
     ) -> Result<OrganizationRegistrationOutcome, OrganizationRegistrationError> {
         let mut outcome = self
             .current(organization_id)
@@ -832,9 +832,9 @@ fn validate_refresh_challenge_binding(
 fn validate_control_proof_challenge_binding(
     proof: &OrganizationControlProof,
     challenge_id: &str,
-    organization_id: &CoreId,
-    full_id: &FullId,
-    local_admin_subject: &CoreId,
+    organization_id: &DidCoreId,
+    full_id: &DidFullId,
+    local_admin_subject: &DidCoreId,
     version_id: &str,
     log_head_digest: &Hash,
     challenge: &OrganizationRegistrationChallenge,
@@ -877,9 +877,9 @@ fn control_proof_error(
 fn verify_control_proof_inner(
     proof: &OrganizationControlProof,
     challenge_id: &str,
-    organization_id: &CoreId,
-    full_id: &FullId,
-    local_admin_subject: &CoreId,
+    organization_id: &DidCoreId,
+    full_id: &DidFullId,
+    local_admin_subject: &DidCoreId,
     version_id: &str,
     log_head_digest: &Hash,
     pinned: &PinnedDidDocumentState,
@@ -1017,7 +1017,7 @@ fn verify_control_proof_inner(
 fn resolved_control_methods(
     document: &Map<String, Value>,
     pinned: &PinnedDidDocumentState,
-    full_id: &FullId,
+    full_id: &DidFullId,
 ) -> Result<BTreeSet<String>, OrganizationRegistrationError> {
     let mut methods = BTreeSet::new();
     for relationship in ["authentication", "assertionMethod", "capabilityInvocation"] {
@@ -1130,7 +1130,7 @@ fn governance_policy(
 
 fn verification_methods(
     document: &Map<String, Value>,
-    full_id: &FullId,
+    full_id: &DidFullId,
 ) -> Result<BTreeMap<String, PublicKeyMaterial>, OrganizationRegistrationError> {
     let mut methods = BTreeMap::new();
     for method in document
@@ -1217,9 +1217,9 @@ fn canonical_public_key_bytes(
 
 fn control_transcript_bytes(
     challenge_id: &str,
-    organization_id: &CoreId,
-    full_id: &FullId,
-    local_admin_subject: &CoreId,
+    organization_id: &DidCoreId,
+    full_id: &DidFullId,
+    local_admin_subject: &DidCoreId,
     version_id: &str,
     log_head_digest: &Hash,
     proof: &PayloadProof,
@@ -1241,14 +1241,14 @@ fn control_transcript_bytes(
 #[allow(clippy::too_many_arguments)]
 fn sign_outcome(
     signer: &dyn OrganizationRegistrationReceiptSigner,
-    organization_id: &CoreId,
-    full_id: &FullId,
+    organization_id: &DidCoreId,
+    full_id: &DidFullId,
     registration_generation: u64,
     version_id: &str,
     log_head_digest: &Hash,
     control_proof_kind: OrganizationControlProofKind,
     control_key_digest: &Hash,
-    local_admin_subject: &CoreId,
+    local_admin_subject: &DidCoreId,
     delegated_scopes: &[arkret_models_identity::OrganizationRegistrationScope],
     status: OrganizationRegistrationStatus,
     now: DateTime<Utc>,
@@ -1416,7 +1416,7 @@ mod tests {
     impl OrganizationDidResolutionPort for StaticResolver {
         async fn resolve_current_webvh_state(
             &self,
-            did: &Did,
+            did: &DidFullId,
         ) -> Result<PinnedDidDocumentState, String> {
             let state = self.state.read().clone();
             (state.did == *did)
@@ -1426,7 +1426,7 @@ mod tests {
 
         async fn resolve_pinned_webvh_state(
             &self,
-            did: &Did,
+            did: &DidFullId,
             version_id: &str,
             log_head_digest: &Hash,
         ) -> Result<PinnedDidDocumentState, String> {
@@ -1440,13 +1440,13 @@ mod tests {
     }
 
     struct TestReceiptSigner {
-        issuer: ServiceId,
+        issuer: DidCoreId,
         verification_method: DidUrl,
         signer: Ed25519DetachedJwsSigner,
     }
 
     impl OrganizationRegistrationReceiptSigner for TestReceiptSigner {
-        fn issuer_service_id(&self) -> &ServiceId {
+        fn issuer_service_id(&self) -> &DidCoreId {
             &self.issuer
         }
 
@@ -1462,9 +1462,9 @@ mod tests {
     struct SemanticFixture {
         service: OrganizationRegistrationService,
         resolver: Arc<StaticResolver>,
-        organization_id: CoreId,
-        full_id: FullId,
-        admin_id: CoreId,
+        organization_id: DidCoreId,
+        full_id: DidFullId,
+        admin_id: DidCoreId,
         pinned: PinnedDidDocumentState,
         control_signer: Ed25519DetachedJwsSigner,
         governance_signers: Vec<Ed25519DetachedJwsSigner>,
@@ -1476,13 +1476,14 @@ mod tests {
         persistence: Arc<dyn PersistenceStore>,
         namespace: &str,
     ) -> SemanticFixture {
-        let full_id = FullId::new(format!("did:webvh:z{namespace}:acme.example:semantic")).unwrap();
+        let full_id =
+            DidFullId::new(format!("did:webvh:z{namespace}:acme.example:semantic")).unwrap();
         let organization_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
-        let admin_id = CoreId::new("ak:did_core:webvh:z6mkadminfixture".to_owned()).unwrap();
+        let admin_id = DidCoreId::new("ak:did_core:webvh:z6mkadminfixture".to_owned()).unwrap();
         let issuer_full_id =
-            FullId::new("did:webvh:z6mkregistryfixture:registry.example".to_owned()).unwrap();
+            DidFullId::new("did:webvh:z6mkregistryfixture:registry.example".to_owned()).unwrap();
         let issuer =
-            ServiceId::from(arkret_wire::project_full_id_to_core_id(&issuer_full_id).unwrap());
+            DidCoreId::from(arkret_wire::project_full_id_to_core_id(&issuer_full_id).unwrap());
         let control_key =
             Ed25519DetachedJwsSigner::from_seed([31; 32], format!("{full_id}#org-control-key-1"));
         let governance_key_1 = Ed25519DetachedJwsSigner::from_seed(
@@ -1586,7 +1587,7 @@ mod tests {
     fn signed_proof(
         challenge: &OrganizationRegistrationChallenge,
         pinned: &PinnedDidDocumentState,
-        local_admin_subject: &CoreId,
+        local_admin_subject: &DidCoreId,
         proof_kind: OrganizationControlProofKind,
         signers: &[&Ed25519DetachedJwsSigner],
         created_at: DateTime<Utc>,
@@ -1997,7 +1998,7 @@ mod tests {
             ),
         );
         redirected.local_admin_subject =
-            CoreId::new("ak:did_core:webvh:z6mkattackerfixture".to_owned()).unwrap();
+            DidCoreId::new("ak:did_core:webvh:z6mkattackerfixture".to_owned()).unwrap();
         let redirect_result = fixture
             .service
             .ensure(

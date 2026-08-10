@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{Did, EventId, Hash, RealmId};
+use arkret_identifiers::{DidFullId, EventId, Hash, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -31,13 +31,13 @@ pub(crate) fn typed_realm_frontier(
 }
 
 /// Convert the actor -> seq upper bound table to the typed
-/// `BTreeMap<Did, u64>` shape.
+/// `BTreeMap<DidFullId, u64>` shape.
 pub(crate) fn typed_actor_upper_bounds(
     actor_to_seq: impl IntoIterator<Item = (String, u64)>,
-) -> BTreeMap<Did, u64> {
+) -> BTreeMap<DidFullId, u64> {
     let mut out = BTreeMap::new();
     for (actor, seq) in actor_to_seq {
-        if let Ok(did) = Did::new(actor) {
+        if let Ok(did) = DidFullId::new(actor) {
             out.insert(did, seq);
         }
     }
@@ -49,7 +49,7 @@ pub(crate) fn typed_actor_upper_bounds(
 /// being folded into a binary Merkle tree.
 pub(crate) fn frontier_root(
     realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
-    actor_upper_bounds: &BTreeMap<Did, u64>,
+    actor_upper_bounds: &BTreeMap<DidFullId, u64>,
 ) -> Result<Hash, String> {
     let mut heads = BTreeSet::new();
     for events in realm_frontier.values() {
@@ -103,7 +103,7 @@ pub(crate) fn frontier_root(
 /// frontier body.
 pub(crate) fn frontier_signature_payload(
     realm_id: Option<&RealmId>,
-    issuer: &Did,
+    issuer: &DidFullId,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
 ) -> Value {
@@ -119,7 +119,7 @@ pub(crate) fn frontier_signature_payload(
 /// Build an Ed25519 detached-JWS signature envelope for the canonical
 /// frontier signature payload.
 pub(crate) fn sign_frontier_root(
-    service_id: &Did,
+    service_id: &DidFullId,
     realm_id: Option<&RealmId>,
     observed_at: DateTime<Utc>,
     frontier_root: &Hash,
@@ -157,12 +157,12 @@ mod tests {
         RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K").unwrap()
     }
 
-    fn alice() -> Did {
-        Did::new("did:web:alice.example").unwrap()
+    fn alice() -> DidFullId {
+        DidFullId::new("did:web:alice.example").unwrap()
     }
 
-    fn bob() -> Did {
-        Did::new("did:web:bob.example").unwrap()
+    fn bob() -> DidFullId {
+        DidFullId::new("did:web:bob.example").unwrap()
     }
 
     fn event(id: &str) -> EventId {

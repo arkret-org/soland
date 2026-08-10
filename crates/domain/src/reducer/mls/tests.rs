@@ -106,7 +106,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "keypackage_digest": keypackage_digest,
             "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
             "claim_id": "claim-01",
-            "requester_did": "did:web:alice.example",
+            "requester_actor_id": "did:web:alice.example",
             "requester_device_id": "ak:device:alice-desktop",
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
             "welcome_digest": arkret_canonical::sha256_digest(b"opaque-welcome-bytes"),

@@ -136,7 +136,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
 ) -> Result<Option<String>, EventValidationError> {
-    let actor_core_id = arkret_wire::CoreId::new(actor_id.to_owned()).map_err(|error| {
+    let actor_core_id = arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
@@ -207,7 +207,7 @@ pub(super) async fn resolve_event_root_anchor_method(
                     "principal-control genesis must carry its full notary DID",
                 )
             })?;
-        let full_id = arkret_wire::FullId::new(value.to_owned()).map_err(|error| {
+        let full_id = arkret_wire::DidFullId::new(value.to_owned()).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
@@ -227,23 +227,28 @@ pub(super) async fn resolve_event_root_anchor_method(
         }
         full_id
     } else {
-        state
-            .persistence()
-            .current_principal_resolution(&actor_core_id)
-            .await
-            .map_err(|error| {
+        let realm_id = object
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
                 event_validation_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "stale_did_document",
-                    format!("principal resolution is unavailable: {error}"),
+                    StatusCode::BAD_REQUEST,
+                    "missing_param",
+                    "root-anchored Event must carry realm_id",
                 )
-            })?
-            .map(|record| record.projection.full_id)
+            })?;
+        state
+            .projections()
+            .snapshot()
+            .principal_resolution_for_realm(realm_id)
+            .and_then(|resolution| resolution.get("full_id"))
+            .and_then(Value::as_str)
+            .and_then(|full_id| arkret_wire::DidFullId::new(full_id.to_owned()).ok())
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "stale_did_document",
-                    "principal full-id resolution is unavailable",
+                    "selected PCR full-id resolution is unavailable",
                 )
             })?
     };

@@ -32,7 +32,7 @@ pub(crate) async fn validate_device_authorization_binding(
         ));
     }
     match (&payload.authorization_binding_kind, &payload.authorized_by) {
-        (DeviceAuthorizationBindingKind::RootAnchored, DeviceOrPrincipalRef::Did(root)) => {
+        (DeviceAuthorizationBindingKind::RootAnchored, DeviceOrPrincipalRef::Principal(root)) => {
             let staged = realm_bootstrap_contexts.iter().any(|context| {
                 context.actor_id == actor_id
                     && context.identity_anchor_event_id.is_some()
@@ -326,7 +326,9 @@ async fn verify_federated_genesis_receipt(
         }
         let signer = arkret_identity::verification_method_did(&proof.verification_method)
             .map_err(|error| format!("PCR genesis receipt signer is invalid: {error}"))?;
-        if signer != receipt.issuer {
+        if arkret_wire::project_full_id_to_core_id(&signer)
+            .map_or(true, |signer| signer != receipt.issuer)
+        {
             return Err("PCR genesis receipt signer does not match issuer".to_owned());
         }
         let binding = json!({
@@ -371,10 +373,10 @@ fn verify_federated_accepted_seal(
         .as_str()
         .strip_prefix("did:key:")
         .ok_or_else(|| "PCR device signing key is not did:key".to_owned())?;
-    let expected_did_key_method = format!("{}#{multibase}", evidence.device_signing_key);
+    let expected_principal_id_key_method = format!("{}#{multibase}", evidence.device_signing_key);
     if signature.payload_digest != digest
         || (signature.verification_method != evidence.verification_method
-            && signature.verification_method.as_str() != expected_did_key_method)
+            && signature.verification_method.as_str() != expected_principal_id_key_method)
     {
         return Err("PCR accepted Seal is not signed by the evidenced device".to_owned());
     }
@@ -394,15 +396,12 @@ fn verify_federated_accepted_seal(
 async fn verify_federated_range_attestation(
     state: &AppState,
     event: &arkret_wire::Event,
-    expected_issuer: &arkret_identifiers::Did,
+    expected_issuer: &arkret_identifiers::DidCoreId,
 ) -> Result<(), String> {
     event
         .validate_proof_bindings()
         .map_err(|error| format!("PCR range Event proof binding failed: {error}"))?;
-    let expected_issuer_core = arkret_wire::project_full_id_to_core_id(expected_issuer)
-        .map(arkret_wire::ActorId::from)
-        .map_err(|error| format!("PCR range issuer cannot be projected: {error}"))?;
-    if event.proofs.is_empty() || event.actor_id != expected_issuer_core {
+    if event.proofs.is_empty() || &event.actor_id != expected_issuer {
         return Err("PCR range attestation actor does not match receipt issuer".to_owned());
     }
     let digest_payload = event
@@ -460,7 +459,7 @@ async fn verify_federated_range_attestation(
             return Err("PCR range payload proof digest is invalid".to_owned());
         }
         let binding = proof
-            .canonical_binding_bytes(&expected_issuer_core)
+            .canonical_binding_bytes(expected_issuer)
             .map_err(|error| format!("PCR range payload proof transcript failed: {error}"))?;
         verify_federated_service_jws(
             state,
@@ -481,7 +480,13 @@ async fn verify_federated_service_jws(
     verification_method: &str,
     issuer: &str,
 ) -> Result<(), String> {
-    crate::jws_verify::validate_verification_method_controller(issuer, verification_method)?;
+    let controller = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let controller_core =
+        arkret_wire::project_full_id_to_core_id(&controller).map_err(|error| error.to_string())?;
+    if controller_core.as_str() != issuer {
+        return Err("verification method controller does not match issuer core-id".to_owned());
+    }
     if let Some(key) = state
         .federation_peer_verification_method_key(verification_method)
         .or_else(|| state.federation_peer_verifying_key(issuer))
@@ -500,7 +505,7 @@ async fn verify_federated_service_jws(
         binding,
         jws,
         verification_method,
-        issuer,
+        controller.as_str(),
         state,
     )
     .await
@@ -512,7 +517,7 @@ pub(super) async fn did_document_at(
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, String> {
     let typed_did =
-        arkret_identifiers::Did::new(did.to_owned()).map_err(|error| error.to_string())?;
+        arkret_identifiers::DidFullId::new(did.to_owned()).map_err(|error| error.to_string())?;
     if typed_did.method() == "key" {
         let document = crate::jws_verify::resolve_did_document_async(state, &typed_did).await?;
         return serde_json::to_value(document)
@@ -549,7 +554,7 @@ pub(super) async fn did_document_at(
 
 async fn resolve_remote_webvh_document_at(
     state: &AppState,
-    did: &arkret_identifiers::Did,
+    did: &arkret_identifiers::DidFullId,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, String> {
     let verified = resolve_remote_webvh_history(state, did).await?;
@@ -560,7 +565,7 @@ async fn resolve_remote_webvh_document_at(
 
 async fn resolve_remote_webvh_generation_at(
     state: &AppState,
-    did: &arkret_identifiers::Did,
+    did: &arkret_identifiers::DidFullId,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, String> {
     let verified = resolve_remote_webvh_history(state, did).await?;
@@ -577,7 +582,7 @@ async fn resolve_remote_webvh_generation_at(
 
 async fn resolve_remote_webvh_history(
     state: &AppState,
-    did: &arkret_identifiers::Did,
+    did: &arkret_identifiers::DidFullId,
 ) -> Result<arkret_identity::VerifiedDidWebvhLog, String> {
     let raw_url = remote_webvh_history_url(state, did)?;
     let mut url = reqwest::Url::parse(&raw_url)
@@ -633,7 +638,7 @@ async fn resolve_remote_webvh_history(
 
 fn remote_webvh_history_url(
     state: &AppState,
-    did: &arkret_identifiers::Did,
+    did: &arkret_identifiers::DidFullId,
 ) -> Result<String, String> {
     if let Ok(url) = arkret_identity::DidWebvhResolver::log_url(did) {
         return Ok(url);

@@ -21,7 +21,7 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };
-use arkret_wire::{Did, Hash};
+use arkret_wire::{DidCoreId, DidFullId, Hash};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -139,7 +139,7 @@ async fn list_realm_organizations_impl(
     // SOL-ORG-05 declared `owning_organizations` hints (display surface only),
     // minus any organization that already has a currently-verified statement so
     // a hint never duplicates a verified row.
-    let mut declared_organization_hints: Vec<Did> = Vec::new();
+    let mut declared_organization_hints: Vec<DidCoreId> = Vec::new();
     for did in super::organizations::realm_organization_ids(state, &realm_id)
         .iter()
         .filter(|did| !verified_org_ids.contains(*did))

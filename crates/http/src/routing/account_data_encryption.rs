@@ -1,5 +1,5 @@
 use arkret_crypto::account_data_crypto::AccountDataEncryptedValue;
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_wire::AccountDataKey;
 use serde_json::{Map, Value};
 
@@ -262,9 +262,10 @@ fn validate_agent_private_key_tail(rest: &str) -> Result<(), AccountDataEncrypti
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
     }
     if let Some(actor_id) = tail.split(':').next()
-        && actor_id.starts_with("did:")
+        && actor_id.starts_with("ak:did_core:")
     {
-        Did::new(actor_id.to_owned()).map_err(|_| AccountDataEncryptionError::InvalidKeyPattern)?;
+        arkret_identifiers::DidCoreId::new(actor_id.to_owned())
+            .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern)?;
     }
     Ok(())
 }

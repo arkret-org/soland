@@ -4,7 +4,7 @@ use arkret_models_identity::{
     ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionRecord,
     ServiceRouteCacheEntry, ServiceRouteHandoverNotice, ServiceRouteNoticeState,
 };
-use arkret_wire::{Hash, RealmId, ServiceId};
+use arkret_wire::{DidCoreId, Hash, RealmId};
 use soland_storage::{
     MonotonicRouteWrite, PersistenceError, PersistenceResult, ServiceResolutionForkEvidence,
     ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry, ServiceRouteStore,
@@ -39,7 +39,7 @@ impl MemoryServiceRouteStore {
     }
 }
 
-fn service_key(service_id: &ServiceId, service_kind: &str) -> ServiceKey {
+fn service_key(service_id: &DidCoreId, service_kind: &str) -> ServiceKey {
     (service_id.as_str().to_owned(), service_kind.to_owned())
 }
 
@@ -192,7 +192,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             .take(limit.clamp(1, 256))
             .map(|(service_id, service_kind)| {
                 Ok(ServiceRouteStoredKey {
-                    service_id: ServiceId::new(service_id)
+                    service_id: DidCoreId::new(service_id)
                         .map_err(|error| PersistenceError::Internal(error.to_string()))?,
                     service_kind,
                 })
@@ -202,7 +202,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn notice_states(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceRouteNoticeState>> {
@@ -226,7 +226,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn handover_mirror_entries(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>> {
@@ -254,7 +254,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn quarantine_evidence(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>> {
@@ -273,7 +273,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn last_seen_floor(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceResolutionLastSeenFloor>> {
         Ok(self
@@ -315,7 +315,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn notice_state(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         handover_id: &str,
     ) -> PersistenceResult<Option<ServiceRouteNoticeState>> {
@@ -408,9 +408,9 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn successor_records(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -437,9 +437,9 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn latest_notice(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>> {
         Ok(self
@@ -476,7 +476,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn is_quarantined(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<bool> {
         Ok(self.state.lock().quarantine.values().any(|evidence| {
@@ -486,7 +486,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteCacheEntry>> {
         Ok(self
@@ -507,7 +507,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 
     async fn evict_route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<()> {
         self.state
@@ -521,7 +521,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::{ServiceResolutionPublishAckCore, ServiceResolutionRecordCore};
-    use arkret_wire::{Base64UrlString, DidUrl, FullId, Hash, ProtocolSignature, RequestId};
+    use arkret_wire::{Base64UrlString, DidFullId, DidUrl, Hash, ProtocolSignature, RequestId};
     use chrono::{Duration, TimeZone as _, Utc};
 
     use super::*;
@@ -532,10 +532,10 @@ mod tests {
 
     fn record() -> ServiceResolutionRecord {
         let issued_at = Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap();
-        let full_id = FullId::new("did:web:route.example").unwrap();
+        let full_id = DidFullId::new("did:web:route.example").unwrap();
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
-                service_id: ServiceId::from(
+                service_id: DidCoreId::from(
                     arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
                 ),
                 service_kind: "principal_server".to_owned(),
@@ -562,7 +562,7 @@ mod tests {
     }
 
     fn mirror(request_id: &str, artifact_digest: Hash) -> ServiceResolutionMirrorEntry {
-        let source = ServiceId::new("ak:did_core:web:source.example").unwrap();
+        let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let realm_id =
             RealmId::new("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1").unwrap();
         let request = arkret_models_identity::ServiceResolutionPublishRequest {
@@ -579,7 +579,7 @@ mod tests {
             ack: ServiceResolutionPublishAckCore {
                 request_id: request.request_id.clone(),
                 source_service_id: source.clone(),
-                receiver_service_id: ServiceId::new("ak:did_core:web:mirror.example").unwrap(),
+                receiver_service_id: DidCoreId::new("ak:did_core:web:mirror.example").unwrap(),
                 realm_id: realm_id.clone(),
                 request_digest: request_digest.clone(),
                 artifact_key: artifact_key.clone(),

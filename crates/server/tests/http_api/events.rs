@@ -5,7 +5,7 @@
 use super::common::*;
 
 struct ControllerSealSigner {
-    did: arkret_identifiers::Did,
+    did: arkret_identifiers::DidFullId,
     verification_method: arkret_wire::DidUrl,
     signing_key: SigningKey,
 }
@@ -17,7 +17,7 @@ struct ControllerSealSigner {
 // name that same device key in canonical `did:key` form; keep those two typed
 // signers explicit instead of rewriting either proof after signing.
 impl arkret_wire::PayloadSigner for ControllerSealSigner {
-    fn signer_did(&self) -> &arkret_identifiers::Did {
+    fn signer_did(&self) -> &arkret_identifiers::DidFullId {
         &self.did
     }
 
@@ -683,9 +683,9 @@ async fn events_describe_and_single_event_submit_work() {
         "Frontier Seal View Realm",
         soland_services::events::DirectoryProvenance::LocalOnly,
     );
-    projection_only_entry
-        .members
-        .insert(Did::new("did:web:alice.example".to_owned()).unwrap());
+    projection_only_entry.members.insert(
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+    );
     state.test_realms().lock().upsert(projection_only_entry);
     let mut seal_view_response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"realm_id": projection_only_realm}))
@@ -1114,7 +1114,10 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     };
     let leaves = vec![arkret_models_crypto::MlsSecurityFrontierLeaf {
         leaf_index: 0,
-        principal_id: arkret_identifiers::Did::new(actor.clone()).unwrap(),
+        principal_id: arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new(actor.clone()).unwrap(),
+        )
+        .unwrap(),
         credential_ref: arkret_wire::NonEmptyString::new(format!(
             "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000001"
         ))
@@ -1306,7 +1309,10 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         serde_json::from_value(valid_request_value).expect("typed proof request");
     let leaves = vec![arkret_models_crypto::MlsSecurityFrontierLeaf {
         leaf_index: 0,
-        principal_id: arkret_identifiers::Did::new(actor.clone()).unwrap(),
+        principal_id: arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new(actor.clone()).unwrap(),
+        )
+        .unwrap(),
         credential_ref: arkret_wire::NonEmptyString::new(format!("{actor}#{device_id}")).unwrap(),
     }];
     let materialized =
@@ -1489,8 +1495,9 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     .with_timezone(&chrono::Utc);
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
-            agent_id: Did::new(agent_id.clone()).unwrap(),
-            controller_id: Did::new(controller_id).unwrap(),
+            agent_id: arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
+            agent_full_id: DidFullId::new(agent_id.replacen("ak:did_core:", "did:", 1)).unwrap(),
+            controller_id: arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -1508,14 +1515,14 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         // A genesis carries the closed `realm_genesis` scope and no id: the
         // Realm id is derived from the exact create Event.
         arkret_wire::ScopeRef::RealmGenesis,
-        Did::new(agent_id.clone()).unwrap(),
+        arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
         0,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::to_value(create_payload).unwrap(),
     )
     .unwrap();
     create.created_at = created_at;
-    create.executed_by = Some(Did::new(controller_id).unwrap());
+    create.executed_by = Some(arkret_identifiers::DidCoreId::new(controller_id).unwrap());
     create.authorization_ref = Some(
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),
@@ -1535,7 +1542,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let signing_key = SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED);
     let device_key = test_ed25519_multibase_public(&signing_key);
     let signer = ControllerSealSigner {
-        did: Did::new(controller_id).unwrap(),
+        did: arkret_identifiers::DidFullId::new(controller_id).unwrap(),
         verification_method: arkret_wire::DidUrl::new(format!(
             "{controller_id}#{}",
             super::agents::CONTROLLER_DEVICE_ID
@@ -1544,7 +1551,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         signing_key: signing_key.clone(),
     };
     let seal_signer = ControllerSealSigner {
-        did: Did::new(controller_id).unwrap(),
+        did: arkret_identifiers::DidFullId::new(controller_id).unwrap(),
         verification_method: arkret_wire::DidUrl::new(format!("did:key:{device_key}#{device_key}"))
             .unwrap(),
         signing_key,
@@ -1738,7 +1745,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
         },
-        Did::new(agent_id.clone()).unwrap(),
+        arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
         2,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
         serde_json::json!({
@@ -1763,7 +1770,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     )
     .unwrap();
     pending.created_at = created_at;
-    pending.executed_by = Some(Did::new(controller_id).unwrap());
+    pending.executed_by = Some(arkret_identifiers::DidCoreId::new(controller_id).unwrap());
     pending.authorization_ref = Some(
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),

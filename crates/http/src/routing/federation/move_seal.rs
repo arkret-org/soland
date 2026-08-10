@@ -195,9 +195,11 @@ async fn device_generation_event_seal_context(
     }
     let bootstrap = bootstrap[0];
     let principal_id = bootstrap.actor_id.clone();
-    let expected_realm =
-        crate::routing::identity::principal_control_realm_for_actor(state, &principal_id)?;
-    if expected_realm != *realm_id {
+    if !state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &principal_id)
+    {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored outside the accepted actor PCR",
         ));
@@ -1332,7 +1334,10 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                     format!("Seal signer DID is invalid: {error}"),
                 )
             })?;
-            if !members.contains(&signer) {
+            let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
+                .map(arkret_wire::DidCoreId::from)
+                .map_err(|error| AppError::new(ErrorCode::SignatureInvalid, error.to_string()))?;
+            if !members.contains(&signer_core) {
                 return Err(AppError::new(
                     ErrorCode::SignatureInvalid,
                     "Seal signer is outside the current open notary set".to_owned(),
@@ -1351,7 +1356,12 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                                 format!("Seal signer DID is invalid: {error}"),
                             )
                         })?;
-                if !members.contains(&signer) {
+                let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
+                    .map(arkret_wire::DidCoreId::from)
+                    .map_err(|error| {
+                        AppError::new(ErrorCode::SignatureInvalid, error.to_string())
+                    })?;
+                if !members.contains(&signer_core) {
                     return Err(AppError::new(
                         ErrorCode::SignatureInvalid,
                         "Seal signer is outside the current open notary set".to_owned(),
@@ -1378,7 +1388,12 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                                 format!("Seal signer DID is invalid: {error}"),
                             )
                         })?;
-                if !members.contains(&signer) {
+                let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
+                    .map(arkret_wire::DidCoreId::from)
+                    .map_err(|error| {
+                        AppError::new(ErrorCode::SignatureInvalid, error.to_string())
+                    })?;
+                if !members.contains(&signer_core) {
                     return Err(AppError::new(
                         ErrorCode::SignatureInvalid,
                         "threshold Seal signer is outside the current committee".to_owned(),
@@ -1774,7 +1789,7 @@ mod seal_delta_tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+        let actor_id = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
         let realm_id =
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();

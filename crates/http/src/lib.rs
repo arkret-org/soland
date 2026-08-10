@@ -59,16 +59,18 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
 }
 
 #[cfg(test)]
-pub(crate) fn test_actor_id(full_id: &arkret_identifiers::FullId) -> arkret_identifiers::ActorId {
-    arkret_identifiers::ActorId::from(
+pub(crate) fn test_actor_id(
+    full_id: &arkret_identifiers::DidFullId,
+) -> arkret_identifiers::DidCoreId {
+    arkret_identifiers::DidCoreId::from(
         arkret_identifiers::project_full_id_to_core_id(full_id)
             .expect("test full_id must project to an Actor core_id"),
     )
 }
 
 #[cfg(test)]
-pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::ActorId {
-    let full_id = arkret_identifiers::FullId::new(full_id.to_owned())
+pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::DidCoreId {
+    let full_id = arkret_identifiers::DidFullId::new(full_id.to_owned())
         .expect("test actor must be an explicit bare full_id");
     test_actor_id(&full_id)
 }

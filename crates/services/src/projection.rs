@@ -1263,7 +1263,7 @@ impl ProjectionService {
         Ok(Some(RealmPolicyServerConfigView {
             config: RealmPolicyServerConfig {
                 realm_id: config.realm_id.clone(),
-                policy_server_did: config.policy_server_did.clone(),
+                policy_server_service_id: config.policy_server_service_id.clone(),
                 policy_server_url: config.policy_server_url.clone(),
                 cache_ttl_seconds: config.cache_ttl_seconds,
                 timeout_ms: config.timeout_ms,
@@ -2049,7 +2049,7 @@ impl ProjectionService {
         Some(
             arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
                 schema: "ak.schema.key_backup_active_series.v1".to_owned(),
-                actor_id: arkret_identifiers::Did::new(row.actor_id.clone()).ok()?,
+                actor_id: arkret_identifiers::DidCoreId::new(row.actor_id.clone()).ok()?,
                 backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
                     .ok()?,
                 active_series_id: arkret_identifiers::BackupSeriesId::new(
@@ -2583,7 +2583,7 @@ mod control_governance_health_tests {
     use arkret_state::state::{
         MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
-    use arkret_wire::{ActorId, Did, Hlc, ScopeRef, project_full_id_to_core_id};
+    use arkret_wire::{DidCoreId, DidFullId, Hlc, ScopeRef, project_full_id_to_core_id};
 
     use super::*;
 
@@ -2621,9 +2621,11 @@ mod control_governance_health_tests {
             ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            ActorId::from(
-                project_full_id_to_core_id(&Did::new("did:web:alice.example".to_owned()).unwrap())
-                    .unwrap(),
+            DidCoreId::from(
+                project_full_id_to_core_id(
+                    &DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+                )
+                .unwrap(),
             ),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),

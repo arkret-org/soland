@@ -16,7 +16,7 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use arkret_identity::service_identity::ServiceIdentityState;
+use arkret_identity::service_identity::DidCoreIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
 use arkret_wire::ProfileId;
@@ -212,9 +212,9 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     })
 }
 
-fn service_identity_health(state: &ServiceIdentityState) -> Value {
+fn service_identity_health(state: &DidCoreIdentityState) -> Value {
     match state {
-        ServiceIdentityState::Ready { identity } => json!({
+        DidCoreIdentityState::Ready { identity } => json!({
             "state": "ready",
             "service_id": identity.service_id,
             "provider_endpoint": identity.provider.as_ref().map(|provider| provider.endpoint.as_str()),
@@ -222,7 +222,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
             "retry_at": null,
             "next_action": null,
         }),
-        ServiceIdentityState::DegradedStored {
+        DidCoreIdentityState::DegradedStored {
             identity,
             retry_at,
             last_error,
@@ -235,7 +235,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
             "last_error": last_error,
             "next_action": null,
         }),
-        ServiceIdentityState::WaitingProvider {
+        DidCoreIdentityState::WaitingProvider {
             registration_key,
             retry_at,
         } => json!({
@@ -247,7 +247,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
             "retry_at": retry_at,
             "next_action": null,
         }),
-        ServiceIdentityState::RegistrationKeyDrift {
+        DidCoreIdentityState::RegistrationKeyDrift {
             identity,
             stored_key,
             computed_key,
@@ -261,7 +261,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
             "retry_at": null,
             "next_action": "run `soland service-identity migrate-base` after verifying the computed registration key",
         }),
-        ServiceIdentityState::Conflict {
+        DidCoreIdentityState::Conflict {
             stored_service_id,
             provider_service_id,
         } => json!({
@@ -273,7 +273,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
             "retry_at": null,
             "next_action": "run `soland service-identity doctor` and restore the authoritative identity",
         }),
-        ServiceIdentityState::Faulted {
+        DidCoreIdentityState::Faulted {
             diagnostic,
             next_action,
         } => json!({
@@ -661,7 +661,7 @@ pub(crate) fn apply_claim_level_partition(
                     verification_run_id: entry.verification_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
-                    verifier_did: entry.verifier_did.clone(),
+                    verifier_service_id: entry.verifier_service_id.clone(),
                     signature: entry.signature.clone(),
                     timestamp: entry.timestamp,
                     expires_at: entry.expires_at,
@@ -850,14 +850,14 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
 #[cfg(test)]
 mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
-    use arkret_wire::{Did, ProfileId, ServiceKind, TypedTrustDomainId};
+    use arkret_wire::{DidFullId, ProfileId, ServiceKind, TypedTrustDomainId};
 
     use super::apply_claim_level_partition;
 
     #[test]
     fn candidate_join_policy_claim_is_complete_and_flag_gated() {
         let mut description = ServiceDescribe::development(
-            Did::new("did:web:soland.example".to_owned()).unwrap(),
+            DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
             TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
         );
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn advertised_profiles_include_sdk_generated_discovery_requirements() {
         let mut description = ServiceDescribe::development(
-            Did::new("did:web:soland.example".to_owned()).unwrap(),
+            DidFullId::new("did:web:soland.example".to_owned()).unwrap(),
             TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
         );

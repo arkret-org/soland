@@ -4,7 +4,7 @@ use arkret_models_identity::{
     OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
 use arkret_wire::{
-    CoreId, Did, FullId, Hash, PayloadProof, ProofContextId, ServiceId, project_full_id_to_core_id,
+    DidCoreId, DidFullId, Hash, PayloadProof, ProofContextId, project_full_id_to_core_id,
 };
 use chrono::{Duration, Utc};
 
@@ -660,15 +660,15 @@ fn test_hash_hex(seed: &str) -> String {
         .to_owned()
 }
 
-fn test_full_id(label: &str, namespace: &str) -> FullId {
-    FullId::new(format!(
+fn test_full_id(label: &str, namespace: &str) -> DidFullId {
+    DidFullId::new(format!(
         "did:webvh:{label}:{}.example",
         &test_hash_hex(namespace)[..20]
     ))
     .expect("contract test full DID is valid")
 }
 
-fn test_did(label: &str, namespace: &str) -> CoreId {
+fn test_did(label: &str, namespace: &str) -> DidCoreId {
     project_full_id_to_core_id(&test_full_id(label, namespace))
         .expect("contract test full DID projects to a core id")
 }
@@ -676,9 +676,9 @@ fn test_did(label: &str, namespace: &str) -> CoreId {
 fn registration_challenge(
     namespace: &str,
     label: &str,
-    organization_id: &CoreId,
-    organization_full_id: &FullId,
-    local_admin_subject: &CoreId,
+    organization_id: &DidCoreId,
+    organization_full_id: &DidFullId,
+    local_admin_subject: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     created_at: chrono::DateTime<Utc>,
 ) -> OrganizationRegistrationChallenge {
@@ -689,7 +689,7 @@ fn registration_challenge(
         full_id: organization_full_id.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
-        audience: ServiceId::new("ak:did_core:webvh:zService").expect("valid service core id"),
+        audience: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
         origin: "https://service.example/".to_owned(),
         trust_domain: "service.example".to_owned(),
         local_admin_subject: local_admin_subject.clone(),
@@ -701,9 +701,9 @@ fn registration_challenge(
 
 #[allow(clippy::too_many_arguments)]
 fn registration_outcome(
-    organization_id: &CoreId,
-    organization_full_id: &FullId,
-    local_admin_subject: &CoreId,
+    organization_id: &DidCoreId,
+    organization_full_id: &DidFullId,
+    local_admin_subject: &DidCoreId,
     scopes: &[OrganizationRegistrationScope],
     generation: u64,
     status: OrganizationRegistrationStatus,
@@ -711,8 +711,9 @@ fn registration_outcome(
     issued_at: chrono::DateTime<Utc>,
     created: bool,
 ) -> OrganizationRegistrationOutcome {
-    let issuer = ServiceId::new("ak:did_core:webvh:zService").expect("valid service core id");
-    let issuer_full = FullId::new("did:webvh:zService:service.example").expect("valid service DID");
+    let issuer = DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id");
+    let issuer_full =
+        DidFullId::new("did:webvh:zService:service.example").expect("valid service DID");
     let mut receipt = OrganizationRegistrationReceipt {
         registration_receipt_id: "ak:organization-registration-receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
@@ -912,12 +913,7 @@ fn canonical_wire_event_record(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("contract realm id"),
         },
-        arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &Did::new(actor_id.to_owned()).expect("contract actor DID"),
-            )
-            .expect("contract actor DID projects through a registered adapter"),
-        ),
+        arkret_identifiers::DidCoreId::new(actor_id.to_owned()).expect("contract actor core id"),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

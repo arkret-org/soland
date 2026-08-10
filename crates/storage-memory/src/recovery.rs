@@ -426,8 +426,8 @@ mod tests {
         AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
         AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-        BackupSeriesId, CanonicalPublicMaterial, DeviceId, Did, DidUrl, Event, EventId,
-        EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
+        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidCoreId, DidFullId, DidUrl, Event,
+        EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
         SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
@@ -503,7 +503,10 @@ mod tests {
             basis_ref: LeaseBasisRef::Seal(
                 SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ),
-            actor_id: Did::new("did:web:alice.example").unwrap(),
+            actor_id: arkret_wire::project_full_id_to_core_id(
+                &DidFullId::new("did:web:alice.example").unwrap(),
+            )
+            .unwrap(),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
             scope_ref,
             action: "ak.keys.backup_series.erase".to_owned(),
@@ -587,7 +590,7 @@ mod tests {
     }
 
     fn event_unit(
-        service_id: &Did,
+        service_id: &DidCoreId,
         kind: impl AsRef<str>,
         seed: &str,
     ) -> (EventId, PreparedEventUnit) {
@@ -595,9 +598,7 @@ mod tests {
         let event = arkret_wire::test_support::raw_event_at(
             kind.as_ref(),
             authorization_lease.scope_ref.clone(),
-            arkret_wire::ActorId::from(
-                arkret_wire::project_full_id_to_core_id(&authorization_lease.actor_id).unwrap(),
-            ),
+            authorization_lease.actor_id.clone(),
             1,
             Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({"fixture": seed}),
@@ -621,7 +622,10 @@ mod tests {
     }
 
     fn initial_rotation() -> SecurityTransactionRecord {
-        let service_id = Did::new("did:web:principal.example").unwrap();
+        let service_id = arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new("did:web:principal.example").unwrap(),
+        )
+        .unwrap();
         let (revoke_event_id, revoke_unit) = event_unit(&service_id, "ak.device.revoke", "revoke");
         let (secret_active_series_event_id, secret_active_series_unit) =
             event_unit(&service_id, "ak.key_backup.active_series", "secret-storage");
@@ -688,7 +692,10 @@ mod tests {
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
-                Did::new("did:web:alice.example").unwrap(),
+                arkret_wire::project_full_id_to_core_id(
+                    &DidFullId::new("did:web:alice.example").unwrap(),
+                )
+                .unwrap(),
                 Utc::now() + Duration::hours(1),
                 revoke_event_id.clone(),
                 revoke_unit,

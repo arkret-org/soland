@@ -95,7 +95,7 @@ async fn run() -> anyhow::Result<()> {
     let bootstrap = crate::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let bootstrap = if matches!(
         bootstrap.state,
-        arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
+        arkret_identity::service_identity::DidCoreIdentityState::WaitingProvider { .. }
     ) {
         tracing::warn!(
             retry_seconds = 5,
@@ -129,7 +129,7 @@ async fn run() -> anyhow::Result<()> {
     } else {
         bootstrap
     };
-    let service_id = bootstrap
+    let _service_id = bootstrap
         .state
         .identity()
         .ok_or_else(|| {
@@ -140,7 +140,6 @@ async fn run() -> anyhow::Result<()> {
         })?
         .service_id
         .to_string();
-    config.trust_domain = soland_http::config::derive_trust_domain(&service_id)?;
     // Probe the optional external webvh provider before advertising it as
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
@@ -523,7 +522,7 @@ where
                 Ok(bootstrap)
                     if matches!(
                         bootstrap.state,
-                        arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_identity::service_identity::DidCoreIdentityState::WaitingProvider { .. }
                     ) =>
                 {
                     tracing::warn!("service identity Provider remains unavailable; retrying");
@@ -584,7 +583,7 @@ fn spawn_service_identity_supervisor(
 ) {
     if !matches!(
         state.service_identity_state().as_ref(),
-        arkret_identity::service_identity::ServiceIdentityState::DegradedStored { .. }
+        arkret_identity::service_identity::DidCoreIdentityState::DegradedStored { .. }
     ) {
         return;
     }
@@ -603,8 +602,8 @@ fn spawn_service_identity_supervisor(
                 Ok(bootstrap) => {
                     let keep_retrying = matches!(
                         bootstrap.state,
-                        arkret_identity::service_identity::ServiceIdentityState::DegradedStored { .. }
-                            | arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_identity::service_identity::DidCoreIdentityState::DegradedStored { .. }
+                            | arkret_identity::service_identity::DidCoreIdentityState::WaitingProvider { .. }
                     );
                     if let Some(identity) = bootstrap.state.identity()
                         && identity.service_id.as_str() != state.service_id()
@@ -900,7 +899,7 @@ fn federation_peer_service_id(entry: &str) -> Option<String> {
     entry
         .split('|')
         .map(str::trim)
-        .find(|candidate| candidate.starts_with("did:"))
+        .find(|candidate| arkret_identifiers::DidCoreId::new((*candidate).to_owned()).is_ok())
         .map(ToOwned::to_owned)
 }
 
@@ -927,15 +926,11 @@ mod federation_peer_discovery_tests {
             Some("https://peer.example".to_owned())
         );
         assert_eq!(
-            unresolved_federation_peer_endpoint(
-                "https://peer.example|did:webvh:zPeer:peer.example:webvh:service"
-            ),
+            unresolved_federation_peer_endpoint("https://peer.example|ak:did_core:webvh:zPeer"),
             None
         );
         assert_eq!(
-            federation_peer_endpoint(
-                "https://peer.example|did:webvh:zPeer:peer.example:webvh:service"
-            ),
+            federation_peer_endpoint("https://peer.example|ak:did_core:webvh:zPeer"),
             Some("https://peer.example".to_owned())
         );
     }

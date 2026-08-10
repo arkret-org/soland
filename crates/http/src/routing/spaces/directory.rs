@@ -26,7 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_hlc::CursorPurpose;
-use arkret_identifiers::{BlobRef, Did, EventId, MessageId, RealmId, StrandId, SubscriptionId};
+use arkret_identifiers::{
+    BlobRef, DidFullId, EventId, MessageId, RealmId, StrandId, SubscriptionId,
+};
 use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
     DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome,
@@ -162,7 +164,7 @@ pub(crate) fn protocol_router() -> Router {
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let service_resolution = state.service_resolution_commitment();
-    let service_id = arkret_wire::ServiceId::from(
+    let service_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_resolution.full_id).map_err(|error| {
             AppError::internal(format!("service resolution projection failed: {error}"))
         })?,

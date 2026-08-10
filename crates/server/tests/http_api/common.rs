@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_identifiers::{Did, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_identifiers::{DidFullId, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -254,14 +254,14 @@ pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: arkret_wire::FullId::new(
+        full_id: arkret_wire::DidFullId::new(
             identity
                 .identity()
                 .expect("fixture serving identity")
                 .service_id
                 .to_string(),
         )
-        .expect("fixture service FullId"),
+        .expect("fixture service DidFullId"),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };
@@ -621,7 +621,9 @@ pub(crate) async fn seed_test_realm(
         soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
             .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner_did = Did::new(owner.to_owned()).unwrap();
+    let owner_did =
+        arkret_wire::project_full_id_to_core_id(&DidFullId::new(owner.to_owned()).unwrap())
+            .unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
@@ -687,7 +689,7 @@ pub(crate) async fn seed_test_realm(
         .unwrap();
     let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
-        Did::new(owner.to_owned()).unwrap(),
+        DidFullId::new(owner.to_owned()).unwrap(),
         arkret_wire::DidUrl::new(format!("{owner}#test-realm-notary")).unwrap(),
     );
     let bootstrap_seal = arkret_wire::Seal::sign_single(
@@ -747,14 +749,15 @@ pub(crate) async fn seed_test_realm(
 
 pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = Did::new(member.to_owned()).unwrap();
+    let member_did = DidFullId::new(member.to_owned()).unwrap();
+    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
     .unwrap();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
-        entry.members.insert(member_did);
+        entry.members.insert(member_core);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         drop(realms);
@@ -767,6 +770,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
                 role: "member".to_owned(),
                 delivery_status: None,
                 recipient_service_id: None,
+                recipient_service_resolution: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
                 invited_at: None,
@@ -788,10 +792,11 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
 
 pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member: &str) -> Value {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = Did::new(member.to_owned()).unwrap();
+    let member_did = DidFullId::new(member.to_owned()).unwrap();
+    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
-        entry.members.remove(&member_did);
+        entry.members.remove(&member_core);
         let members = realm_member_roster(&entry);
         realms.upsert(entry);
         drop(realms);
@@ -1011,7 +1016,7 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
     typed.proofs.clear();
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
-        typed.actor_id.clone(),
+        arkret_identity::verification_method_did(verification_method.as_str()).unwrap(),
         verification_method.clone(),
     );
     let created_at = typed.created_at;
@@ -1667,7 +1672,7 @@ pub(crate) fn test_realm_uncovered_basis_seal(realm_id: &str) -> arkret_wire::Se
         .or_insert_with(|| {
             let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
                 [0x53; 32],
-                Did::new("did:web:alice.example").unwrap(),
+                DidFullId::new("did:web:alice.example").unwrap(),
                 arkret_wire::DidUrl::new("did:web:alice.example#fixture-notary").unwrap(),
             );
             arkret_wire::Seal::sign_single(
@@ -1857,7 +1862,7 @@ pub(crate) fn signed_signal_envelope(
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
         scope_ref,
-        sender_actor_id: Did::new(sender_actor.to_owned()).unwrap(),
+        sender_actor_id: arkret_identifiers::DidCoreId::new(sender_actor.to_owned()).unwrap(),
         sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         seal_ref: seal_ref.clone(),
         signal_class,

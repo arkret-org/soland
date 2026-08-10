@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{AppletId, Did, EventId, GrantId, RealmId};
+use arkret_identifiers::{AppletId, DidCoreId, DidFullId, EventId, GrantId, RealmId};
 use arkret_identity::DidDocument;
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilitySubject, GrantConstraintKind, GrantConstraintSubkind,
@@ -947,12 +947,16 @@ fn validated_registration_epoch_evidence(
     state: &AppState,
     package: &AppletPackage,
 ) -> Result<arkret_models_integration::AppletRegistrationEpochEvidence, AppError> {
-    let document =
-        crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
-            AppError::invalid_param("applet service DID document could not be resolved")
-                .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                .with_reason_detail(reason)
-        })?;
+    let full_id = package
+        .registration_epoch_evidence
+        .as_ref()
+        .map(|evidence| &evidence.full_id)
+        .ok_or_else(|| AppError::invalid_param("applet registration epoch evidence is required"))?;
+    let document = crate::jws_verify::resolve_did_document(state, full_id).map_err(|reason| {
+        AppError::invalid_param("applet service DID document could not be resolved")
+            .with_wire_code("applet_registration_epoch_evidence_mismatch")
+            .with_reason_detail(reason)
+    })?;
     validate_registration_epoch_evidence_for_document(package, &document)
 }
 
@@ -1107,8 +1111,8 @@ pub(super) async fn build_install_plan(
 }
 
 fn applet_install_plan_applet_id(value: &str) -> Result<AppletInstallAppletId, AppError> {
-    if let Ok(did) = Did::new(value.to_owned()) {
-        return Ok(AppletInstallAppletId::Did(did));
+    if let Ok(did) = DidCoreId::new(value.to_owned()) {
+        return Ok(AppletInstallAppletId::Service(did));
     }
     AppletId::new(value.to_owned())
         .map(AppletInstallAppletId::AppletId)
@@ -1377,7 +1381,7 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::{Did, Hash};
+    use arkret_identifiers::{DidFullId, Hash};
     use arkret_models_integration::{
         AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     };
@@ -1406,13 +1410,13 @@ mod tests {
     /// Derive a `did:key` DID + its `#`-fragment verification method for an
     /// Ed25519 seed, using the SDK's canonical multibase encoder so the
     /// built-in `DidKeyResolver` resolves the embedded public key.
-    fn did_key_for_seed(seed: [u8; 32]) -> (Did, String) {
+    fn did_key_for_seed(seed: [u8; 32]) -> (DidFullId, String) {
         let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
         let multibase =
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(&verifying.to_bytes());
         let did_str = format!("did:key:{multibase}");
         let vm = format!("{did_str}#{multibase}");
-        (Did::new(did_str).unwrap(), vm)
+        (DidFullId::new(did_str).unwrap(), vm)
     }
 
     /// Build a sealed package whose `controller_id` is a `did:key` and whose
@@ -1425,14 +1429,18 @@ mod tests {
         signer_seed: [u8; 32],
         verification_method: &str,
     ) -> AppletPackage {
-        let (controller_id, _) = did_key_for_seed(controller_seed);
+        let (controller_full_id, _) = did_key_for_seed(controller_seed);
+        let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap();
+        let service_full_id = DidFullId::new("did:web:test-applet.example".to_owned()).unwrap();
+        let service_id = arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            service_id,
+            service_full_id.clone(),
             controller_id.clone(),
             "https://test-applet.example".to_owned(),
-            Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
+            DidCoreId::new("ak:did_core:web:bot-test-applet.soland.local".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
@@ -1450,7 +1458,7 @@ mod tests {
         package
             .seal_registration_epoch(
                 arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
-                    package.service_id.clone(),
+                    service_full_id,
                     Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
                     arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
                         "did:web",
@@ -1458,7 +1466,7 @@ mod tests {
                     .unwrap(),
                     vec![
                         arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
-                            key_ref: package.webhook_auth.key_ref.clone(),
+                            key_ref: package.webhook_auth.key_ref.to_string(),
                             public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32)))
                                 .unwrap(),
                         },
@@ -1469,7 +1477,7 @@ mod tests {
         package.seal().unwrap();
         let signer = Ed25519PayloadSigner::from_did_key_seed(
             signer_seed,
-            controller_id,
+            controller_full_id,
             arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
         );
         package
@@ -1564,13 +1572,15 @@ mod tests {
     }
 
     fn sample_package() -> AppletPackage {
+        let service_full_id = DidFullId::new("did:web:test-applet.example".to_owned()).unwrap();
         AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             "ak:applet:01974100-0000-7000-8000-000000000001".to_owned(),
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
-            Did::new("did:web:test-registry.example".to_owned()).unwrap(),
+            arkret_wire::project_full_id_to_core_id(&service_full_id).unwrap(),
+            service_full_id,
+            DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
-            Did::new("did:web:bot-test-applet.soland.local".to_owned()).unwrap(),
+            DidCoreId::new("ak:did_core:web:bot-test-applet.soland.local".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
@@ -1652,7 +1662,7 @@ mod tests {
         let scope_ref = ScopeRef::Realm {
             realm_id: realm_id.clone(),
         };
-        let actor_id = Did::new("did:web:alice.example".to_owned()).unwrap();
+        let actor_id = DidFullId::new("did:web:alice.example".to_owned()).unwrap();
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -1727,7 +1737,7 @@ mod tests {
         let mut package = sample_package();
         package.registration_epoch_evidence = Some(
             arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
-                package.service_id.clone(),
+                DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
                 Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
                 arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
                     "did:web",
@@ -1735,7 +1745,7 @@ mod tests {
                 .unwrap(),
                 vec![
                     arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
-                        key_ref: package.webhook_auth.key_ref.clone(),
+                        key_ref: package.webhook_auth.key_ref.to_string(),
                         public_key_digest: Hash::new(format!("sha256:{}", "33".repeat(32)))
                             .unwrap(),
                     },
@@ -1767,8 +1777,8 @@ mod tests {
     fn registration_epoch_validation_preserves_supplied_version_evidence() {
         let mut package = sample_package();
         let document = DidDocument::new(
-            package.service_id.clone(),
-            package.webhook_auth.key_ref.clone(),
+            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
         let version_time = chrono::DateTime::parse_from_rfc3339("2026-07-18T00:00:00.000Z")
@@ -1796,8 +1806,8 @@ mod tests {
     fn registration_epoch_validation_rejects_missing_supplied_evidence() {
         let package = sample_package();
         let document = DidDocument::new(
-            package.service_id.clone(),
-            package.webhook_auth.key_ref.clone(),
+            DidFullId::new("did:web:test-applet.example".to_owned()).unwrap(),
+            package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
 

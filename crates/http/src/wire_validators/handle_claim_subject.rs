@@ -1,7 +1,7 @@
 //! Handle-claim subject validation.
 //!
-//! The claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
-//!   (`ak:actor:`), a server-local `account_id` (`ak:account:`), a service DID, or a generic
+//! The claim `subject` MUST be a holder/principal `DidCoreId`, not a
+//! server-local `account_id` (`ak:account:`), a full DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
 //!   cotest agree on the exact rejection surface.
 
@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::WireRejection;
 
-/// Reject a non-principal-DID `subject`. Delegates to the SDK
+/// Reject a non-principal-core `subject`. Delegates to the SDK
 /// `validate_handle_claim_subject` (the authoritative rejection rule).
 pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
     let Some(subject) = claim.get("subject").and_then(Value::as_str) else {
@@ -17,9 +17,9 @@ pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
         // violation (other schema layers enforce presence where required).
         return Ok(());
     };
-    let did = arkret_identifiers::Did::new(subject.to_owned()).map_err(|_| {
+    let did = arkret_identifiers::DidCoreId::new(subject.to_owned()).map_err(|_| {
         WireRejection::new(format!(
-            "handle claim subject must be a holder/principal DID ({subject})"
+            "handle claim subject must be a holder/principal core id ({subject})"
         ))
     })?;
     arkret_models_identity::handle::validate_handle_claim_subject(&did)
@@ -33,18 +33,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_principal_did_subject() {
+    fn accepts_principal_core_subject() {
         let claim = json!({
-            "subject": "did:web:alice-principal.example",
+            "subject": "ak:did_core:web:alice-principal.example",
         });
         assert!(validate_subject(&claim).is_ok());
     }
 
     #[test]
-    fn rejects_actor_id_subject() {
+    fn rejects_non_core_typed_subject() {
         let claim = json!({
             "claim_kind": "handle_binding",
-            "subject": "ak:actor:01904100-0000-7000-8000-000000000001"
+            "subject": "ak:member:01904100-0000-7000-8000-000000000001"
         });
         assert!(validate_subject(&claim).is_err());
     }

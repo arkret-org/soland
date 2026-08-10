@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{Did, EventId, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, EventId, RealmId};
 use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueOutcome, DirectConversationRepairRelayRequest,
 };
@@ -39,7 +39,7 @@ const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct PeerEventsDescribeOutcome {
-    service_id: Did,
+    service_id: DidCoreId,
     protocol_version: String,
     primary_write_path: String,
     supported_operations: Vec<String>,
@@ -180,9 +180,9 @@ async fn peer_principal_genesis(
         .and_then(json_ok)
 }
 
-async fn trusted_account_authority_service_id(state: &AppState) -> Result<Did, AppError> {
+async fn trusted_account_authority_service_id(state: &AppState) -> Result<DidCoreId, AppError> {
     if let Some(service_id) = state.config().account_authority_service_id.as_deref() {
-        return Did::new(service_id.to_owned()).map_err(|error| {
+        return arkret_identifiers::DidCoreId::new(service_id.to_owned()).map_err(|error| {
             AppError::internal(format!(
                 "configured Account Authority service identity is invalid: {error}"
             ))
@@ -224,7 +224,11 @@ async fn trusted_account_authority_service_id(state: &AppState) -> Result<Did, A
                 "Account Authority service identity registration is invalid: {error}"
             ))
         })?;
-    Ok(registration.full_id)
+    arkret_wire::project_full_id_to_core_id(&registration.full_id).map_err(|error| {
+        AppError::internal(format!(
+            "registered Account Authority full-id cannot be projected: {error}"
+        ))
+    })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]
@@ -290,7 +294,7 @@ async fn peer_events_describe(
         .await?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.service_id().clone())
+    let service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
     json_ok(PeerEventsDescribeOutcome {
         service_id,
@@ -613,7 +617,7 @@ async fn peer_events_frontier(
         .iter()
         .map(|(actor_id, seq)| {
             Ok((
-                Did::new(actor_id.clone())
+                arkret_identifiers::DidCoreId::new(actor_id.clone())
                     .map_err(|_| AppError::internal("stored frontier actor_id is invalid"))?,
                 *seq,
             ))
@@ -624,11 +628,12 @@ async fn peer_events_frontier(
     let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
     let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
         .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
-    let service_id = Did::new(state.service_id().clone())
+    let service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("service_id is invalid"))?;
+    let service_full_id = state.service_resolution_commitment().full_id.clone();
     let observed_at = now();
     let signature = super::frontier::sign_frontier_root(
-        &service_id,
+        &service_full_id,
         Some(&realm_id),
         observed_at,
         &frontier_root,
@@ -1719,7 +1724,7 @@ pub(in crate::routing) async fn validate_peer_request(
     }
     let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
     if validate_did(&source_service_id).is_err()
-        && arkret_wire::ServiceId::new(source_service_id.clone()).is_err()
+        && arkret_wire::DidCoreId::new(source_service_id.clone()).is_err()
     {
         return Err(schema_violation(
             "source-service-id must be a service core_id",
@@ -1727,7 +1732,7 @@ pub(in crate::routing) async fn validate_peer_request(
     }
     let destination_service_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
     if validate_did(&destination_service_id).is_err()
-        && arkret_wire::ServiceId::new(destination_service_id.clone()).is_err()
+        && arkret_wire::DidCoreId::new(destination_service_id.clone()).is_err()
     {
         return Err(schema_violation(
             "destination-service-id must be a service core_id",

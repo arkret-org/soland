@@ -33,7 +33,7 @@ pub(super) fn install_realm_authority_root(
     controller_id: &str,
 ) {
     let value = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-        arkret_identifiers::Did::new(controller_id).unwrap(),
+        arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
     );
     state.realm_null_subject_cells.insert(
@@ -118,7 +118,10 @@ pub(super) fn projected_cell_writes_at_seq(
         arkret_wire::event_envelope::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id).unwrap(),
         },
-        arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
+        arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new("did:web:reducer-test.example").unwrap(),
+        )
+        .unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),

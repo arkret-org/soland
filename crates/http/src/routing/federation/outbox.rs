@@ -1028,8 +1028,10 @@ impl FederationDispatcher {
                     "outbound_request_mirror_receipt",
                 )
                 .map_err(|error| error.to_string())?;
-                let holder = request_receipt.core.holder.subject_id().as_str();
-                let peer = request_receipt.core.peer.subject_id().as_str();
+                let holder_actor_id = request_receipt.core.holder.contact_actor_id();
+                let peer_actor_id = request_receipt.core.peer.contact_actor_id();
+                let holder = holder_actor_id.as_str();
+                let peer = peer_actor_id.as_str();
                 crate::routing::identity::contact_federation::persist_request_mirror_receipt(
                     &self.state,
                     holder,
@@ -1606,7 +1608,8 @@ mod tests {
             "ak:realm:Ad45OVvW8PvF-UFqAF8ApvgyX0o6xBWwpg8UvABbuY40",
         )
         .unwrap();
-        let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+        let actor_full_id = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
         let scope_ref = arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         };
@@ -1649,7 +1652,7 @@ mod tests {
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),
                 },
-                crate::test_actor_id(&actor_id),
+                crate::test_actor_id(&actor_full_id),
                 1,
                 arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
                 serde_json::json!({"fixture_suffix": suffix}),
@@ -1663,7 +1666,7 @@ mod tests {
                     .unwrap(),
             );
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
-                did: actor_id.clone(),
+                actor_id: crate::test_actor_id(&actor_full_id),
                 key_id: "did:web:alice.example#device-1".to_owned(),
                 key_epoch: 0,
                 credential_epoch: None,
@@ -1732,7 +1735,8 @@ mod tests {
                 event_digest,
                 authorization_lease_id: lease.authorization_lease_id.clone(),
                 received_at,
-                service_id: arkret_identifiers::Did::new("did:web:alpha.example").unwrap(),
+                service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:alpha.example")
+                    .unwrap(),
                 authority_set_ref: authority_set_ref.clone(),
                 proofs: Vec::new(),
             };

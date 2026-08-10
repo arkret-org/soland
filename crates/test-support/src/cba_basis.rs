@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use arkret_identifiers::{Did, Hlc, RealmId, SealId};
+use arkret_identifiers::{DidFullId, Hlc, RealmId, SealId};
 use arkret_wire::{Seal, SealBasis};
 use soland_http::state::AppState;
 
@@ -158,7 +158,7 @@ fn fixture_notary_did() -> String {
 }
 
 fn fixture_pcr_founding_device_descriptor(
-    principal: &Did,
+    principal: &arkret_identifiers::DidCoreId,
     created_at: chrono::DateTime<chrono::Utc>,
 ) -> arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
     use arkret_models_collaboration::events_payloads::device_identity::{
@@ -191,7 +191,7 @@ fn fixture_pcr_founding_device_descriptor(
         hpke_key: hpke_key.clone(),
         algorithms: algorithms.clone(),
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-        authorized_by: DeviceOrPrincipalRef::Did(principal.clone()),
+        authorized_by: DeviceOrPrincipalRef::Principal(principal.clone()),
         scopes: None,
         not_before: created_at,
         expires_at: None,
@@ -233,10 +233,27 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let principal = Did::new(principal_id.to_owned()).expect("fixture PCR principal DID");
+    let (principal, principal_full_id) =
+        if let Ok(full_id) = DidFullId::new(principal_id.to_owned()) {
+            (
+                arkret_wire::project_full_id_to_core_id(&full_id)
+                    .expect("fixture principal projection"),
+                full_id,
+            )
+        } else {
+            let core_id = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
+                .expect("fixture PCR principal core id");
+            let method_specific = principal_id
+                .strip_prefix("ak:did_core:")
+                .expect("fixture core id has typed prefix");
+            let full_id = DidFullId::new(format!("did:{method_specific}"))
+                .expect("fixture principal full id");
+            (core_id, full_id)
+        };
     arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
+            principal_full_id,
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -436,9 +453,9 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::ActorId::from(
+        arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+                &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
             )
             .expect("fixture genesis actor projection"),
         ),
@@ -556,9 +573,9 @@ pub async fn seed_event_derived_realm_genesis_event(
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::ActorId::from(
+        arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+                &DidFullId::new(subject.to_owned()).expect("fixture genesis actor DID"),
             )
             .expect("fixture genesis actor projection"),
         ),
@@ -636,9 +653,9 @@ async fn persist_and_project_realm_genesis_event(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            arkret_wire::ActorId::from(
+            arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(
-                    &Did::new(subject.to_owned()).expect("fixture bootstrap actor DID"),
+                    &DidFullId::new(subject.to_owned()).expect("fixture bootstrap actor DID"),
                 )
                 .expect("fixture bootstrap actor projection"),
             ),
@@ -747,13 +764,16 @@ pub fn apply_registered_cba_plane_seal(
         Some("data") => {
             event.seal_ref = Some(seal_id);
             event.auth_context = Some(arkret_wire::AuthContext {
-                did: Did::new(
-                    verification_method
-                        .split_once('#')
-                        .map_or(verification_method, |(did, _)| did)
-                        .to_owned(),
+                actor_id: arkret_wire::project_full_id_to_core_id(
+                    &DidFullId::new(
+                        verification_method
+                            .split_once('#')
+                            .map_or(verification_method, |(did, _)| did)
+                            .to_owned(),
+                    )
+                    .expect("fixture verification method DID"),
                 )
-                .expect("fixture verification method DID"),
+                .expect("fixture verification method projection"),
                 key_id: verification_method
                     .split_once('#')
                     .map_or_else(|| verification_method.to_owned(), |(_, key)| key.to_owned()),

@@ -393,7 +393,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .and_then(Value::as_str)
         .ok_or_else(|| StoreError::Backend("sealed op missing issuer".to_owned()))
         .and_then(|actor_id| {
-            arkret_wire::ActorId::new(actor_id.to_owned())
+            arkret_wire::DidCoreId::new(actor_id.to_owned())
                 .map_err(|error| StoreError::Backend(error.to_string()))
         })?;
     let move_id = value
@@ -1890,9 +1890,9 @@ mod event_seal_commit_tests {
     /// fsm cells, where the issuer travels but is not part of the slot key.
     fn test_issued(op: super::SealedOp) -> super::IssuedOp {
         super::IssuedOp {
-            issuer: arkret_wire::ActorId::from(
+            issuer: arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example".to_owned())
+                    &arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned())
                         .unwrap(),
                 )
                 .unwrap(),
@@ -1966,9 +1966,9 @@ mod event_seal_commit_tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            arkret_wire::ActorId::from(
+            arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(
-                    &arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                    &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
                 )
                 .unwrap(),
             ),

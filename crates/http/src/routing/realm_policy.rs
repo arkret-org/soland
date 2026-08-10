@@ -17,7 +17,7 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{DidFullId, RealmId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmPolicyServerDeleteRequestBody, RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
     RealmPolicyServerReplaceRequestBody, RealmPolicyServerView,
@@ -296,9 +296,7 @@ fn policy_server_view(
     Ok(RealmPolicyServerView {
         realm_id: RealmId::new(cfg.realm_id)
             .map_err(|error| AppError::internal(format!("stored realm_id is invalid: {error}")))?,
-        policy_server_did: Did::new(cfg.policy_server_did).map_err(|error| {
-            AppError::internal(format!("stored policy_server_did is invalid: {error}"))
-        })?,
+        policy_server_service_id: cfg.policy_server_service_id,
         policy_server_url: cfg.policy_server_url,
         cache_ttl_seconds: cfg.cache_ttl_seconds,
         timeout_ms: cfg.timeout_ms,
@@ -456,7 +454,7 @@ mod caller_signed_policy_server_tests {
 
     fn declaration() -> Value {
         json!({
-            "policy_server_did": "did:web:policy.example",
+            "policy_server_service_id": "ak:did_core:web:policy.example",
             "policy_server_url": "https://policy.example/_arkret/self/policy/check",
         })
     }
@@ -483,8 +481,8 @@ mod caller_signed_policy_server_tests {
             panic!("a declaration payload must not parse as the value tombstone");
         };
         assert_eq!(
-            declaration.policy_server_did.as_str(),
-            "did:web:policy.example"
+            declaration.policy_server_service_id.as_str(),
+            "ak:did_core:web:policy.example"
         );
     }
 

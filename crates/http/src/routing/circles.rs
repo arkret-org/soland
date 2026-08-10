@@ -32,7 +32,7 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use arkret_identifiers::{CircleId, Did, EventId, RealmId};
+use arkret_identifiers::{CircleId, DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberRequestBody,
     CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval, CircleRestoreRequestBody,
@@ -146,7 +146,7 @@ fn circle_view_from_with_pending(
         members: if include_member_details {
             c.members
                 .iter()
-                .map(|member| parse_sdk_field::<Did>("member", member))
+                .map(|member| parse_sdk_field::<DidCoreId>("member", member))
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             Vec::new()
@@ -156,7 +156,7 @@ fn circle_view_from_with_pending(
         updated_by: c
             .updated_by
             .as_ref()
-            .map(|actor| parse_sdk_field::<Did>("updated_by", actor))
+            .map(|actor| parse_sdk_field::<DidCoreId>("updated_by", actor))
             .transpose()?,
         updated_at: c.updated_at,
     })
@@ -211,7 +211,7 @@ fn pending_mls_removals_from_projection(
 fn circle_pending_mls_removal_from_obligation(
     obligation: &MlsRemoveObligation,
 ) -> Option<CirclePendingMlsRemoval> {
-    let principal_id = Did::new(obligation.actor_id.clone()).ok()?;
+    let principal_id = arkret_identifiers::DidCoreId::new(obligation.actor_id.clone()).ok()?;
     let membership_frontier = obligation
         .membership_frontier
         .iter()
@@ -537,7 +537,7 @@ async fn post_circle_member(
 /// What a caller-signed `ak.circle.member.state` Event says it is acting on.
 #[derive(Debug)]
 struct CircleMemberTarget {
-    actor_id: Did,
+    actor_id: DidCoreId,
     membership: CircleMembership,
 }
 

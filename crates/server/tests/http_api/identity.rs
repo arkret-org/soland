@@ -259,7 +259,10 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     let created: arkret_models_identity::service_identity::ServiceRegistrationOutcome =
         serde_json::from_value(created_body).unwrap();
     assert!(created.created);
-    assert_eq!(created.service_id, request.inception_operation.state.id);
+    assert_eq!(
+        created.service_id,
+        arkret_wire::project_full_id_to_core_id(&request.inception_operation.state.id).unwrap()
+    );
     created.validate_for(&key).unwrap();
 
     let existing: arkret_models_identity::service_identity::ServiceRegistrationOutcome =

@@ -470,7 +470,7 @@ fn application_organization(
 ) -> crate::governance::OrganizationRecord {
     crate::governance::OrganizationRecord {
         organization_id: row.organization_id,
-        organization_did: row.organization_did,
+        organization_principal_id: row.organization_principal_id,
         handle: row.handle,
         display_name: row.display_name,
         source_refs: row.source_refs,
@@ -489,7 +489,7 @@ fn persistence_organization(
 ) -> soland_storage::OrganizationRecord {
     soland_storage::OrganizationRecord {
         organization_id: row.organization_id.clone(),
-        organization_did: row.organization_did.clone(),
+        organization_principal_id: row.organization_principal_id.clone(),
         handle: row.handle.clone(),
         display_name: row.display_name.clone(),
         source_refs: row.source_refs.clone(),

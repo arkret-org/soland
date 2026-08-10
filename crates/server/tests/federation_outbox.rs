@@ -768,14 +768,14 @@ async fn pg_restart() -> Option<AppState> {
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        full_id: arkret_wire::FullId::new(
+        full_id: arkret_wire::DidFullId::new(
             identity
                 .identity()
                 .expect("fixture serving identity")
                 .service_id
                 .to_string(),
         )
-        .expect("fixture service FullId"),
+        .expect("fixture service DidFullId"),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };

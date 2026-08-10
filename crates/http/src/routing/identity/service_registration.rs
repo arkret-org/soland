@@ -4,7 +4,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{PayloadProof, ServiceId, ServiceKind, project_full_id_to_core_id, proof_kind};
+use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_full_id_to_core_id, proof_kind};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -158,7 +158,7 @@ async fn sign_registration_receipt(
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ServiceRegistrationReceipt, AppError> {
     let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
-    let provider_service_id = ServiceId::new(state.service_id().clone())
+    let provider_service_id = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("provider service id invalid: {error}")))?;
     let log_head_digest = request
         .inception_operation
@@ -169,7 +169,7 @@ async fn sign_registration_receipt(
         .control_key_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
     let full_id = request.inception_operation.state.id.clone();
-    let service_id = ServiceId::from(
+    let service_id = DidCoreId::from(
         project_full_id_to_core_id(&full_id)
             .map_err(|error| AppError::internal(error.to_string()))?,
     );

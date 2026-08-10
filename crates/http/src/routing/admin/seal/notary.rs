@@ -1,6 +1,6 @@
 //! Read-only Notary cell admin endpoint.
 
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use arkret_wire::NotaryValue as SdkNotaryValue;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -15,13 +15,11 @@ use crate::{JsonResult, app_error, json_ok};
 /// Project a JSON cell value into the admin DTO [`AdminNotaryValue`].
 pub(super) fn notary_value_from_cell(
     value: Option<&Value>,
-    service_id: &str,
+    service_id: &arkret_identifiers::DidFullId,
 ) -> Result<AdminNotaryValue, AppError> {
     let Some(value) = value else {
-        let did = Did::new(service_id.to_owned())
-            .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
         return Ok(admin_notary_value_from_sdk(
-            SdkNotaryValue::single_did(did),
+            SdkNotaryValue::single_did(service_id.clone()),
             None,
         ));
     };
@@ -121,5 +119,8 @@ pub(crate) async fn admin_get_notary(
         let projection = state.projections().snapshot();
         projection.cell_value(&cell).cloned()
     };
-    json_ok(notary_value_from_cell(value.as_ref(), state.service_id())?)
+    json_ok(notary_value_from_cell(
+        value.as_ref(),
+        &state.service_resolution_commitment().full_id,
+    )?)
 }

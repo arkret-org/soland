@@ -19,8 +19,7 @@ use arkret_models_identity::agent_signer_evidence::{
 };
 use arkret_signatures::proof::PublicKeyMaterial;
 use arkret_wire::{
-    ActorId, CellRef, Event, EventId, Hash, NonEmptyString, NotarySig, RealmId, SchemaId, Seal,
-    ServiceId,
+    CellRef, DidCoreId, Event, EventId, Hash, NonEmptyString, NotarySig, RealmId, SchemaId, Seal,
 };
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -121,160 +120,13 @@ async fn reserve_evidence_challenge(
 /// Seal/state witness assembly still fails closed below until all exact
 /// projection inputs are present.
 async fn preflight_controller_gate(
-    state: &AppState,
-    selector: &AgentSignerEvidenceQuerySelector,
+    _state: &AppState,
+    _selector: &AgentSignerEvidenceQuerySelector,
 ) -> Result<ControllerAccountGateAttestation, AgentSignerEvidenceQueryFailureReason> {
-    let AgentSignerEvidenceQuerySelector::CurrentAdmission { agent_id, .. } = selector else {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    };
-    let agent = state
-        .agent_pairings()
-        .agent(agent_id.as_str())
-        .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if agent.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
-        || agent.authorized_signing_key_binding.is_none()
-    {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive);
-    }
-    let service_id =
-        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
-            .map(arkret_identifiers::ServiceId::from)
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let current_binding = crate::routing::identity::account::current_principal_service_binding(
-        state,
-        &agent.controller_id,
-    )
-    .await
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
-    .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if current_binding.service_id != service_id {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    }
-    let principal_id = arkret_identifiers::PrincipalId::new(agent.controller_id.clone())
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let expected_authority = state
-        .config()
-        .account_authority_service_id
-        .as_deref()
-        .and_then(|value| {
-            arkret_identifiers::ServiceId::new(value.to_owned())
-                .ok()
-                .or_else(|| {
-                    arkret_wire::FullId::new(value.to_owned())
-                        .ok()
-                        .and_then(|full| arkret_wire::project_full_id_to_core_id(&full).ok())
-                        .map(arkret_identifiers::ServiceId::from)
-                })
-        })
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let request = ControllerAccountGateAttestationIssueRequestBody {
-        request_id: arkret_identifiers::RequestId::from_uuid(uuid::Uuid::now_v7()),
-        principal_id: principal_id.clone(),
-        agent_authority_service_id: service_id.clone(),
-        agent_authority_service_resolution:
-            crate::routing::system::service_resolution::authenticated_current_resolution(
-                state,
-                &crate::routing::system::describe::build_server_description(state),
-            )
-            .await
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
-    };
-    let authority_url = state
-        .config()
-        .account_authority_url
-        .as_deref()
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let bearer = state
-        .config()
-        .session_grant_introspection_bearer
-        .as_deref()
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let endpoint = format!(
-        "{}/_arkret/gate/account/controller-gate-attestations",
-        authority_url.trim_end_matches('/')
-    );
-    let (endpoint, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &endpoint,
-        "controller account gate attestation",
-        state.config().development_mode,
-        std::time::Duration::from_secs(10),
-    )
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let body = arkret_canonical::canonical_json_bytes(&request)
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "content-digest",
-        &crate::routing::federation::outbox::content_digest_header_value(&body),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-service-id",
-        service_id.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-service-id",
-        expected_authority.as_str(),
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "source-trust-domain",
-        &state.config().trust_domain,
-    );
-    crate::routing::federation::outbox::insert_header_if_valid(
-        &mut headers,
-        "destination-trust-domain",
-        &state.config().trust_domain,
-    );
-    let headers =
-        crate::routing::federation::outbox::rfc9421_sign(state, headers, "POST", endpoint.as_str());
-    let response = client
-        .post(endpoint)
-        .bearer_auth(bearer)
-        .headers(headers)
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if !response.status().is_success() {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    }
-    let outcome = response
-        .json::<ControllerAccountGateAttestationIssueOutcome>()
-        .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if outcome.request_id != request.request_id {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    }
-    let gate = outcome.controller_account_gate_attestation;
-    let key = state
-        .federation_peer_verification_method_key(gate.verification_method.as_str())
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let material = PublicKeyMaterial::Ed25519Raw {
-        bytes: key.to_bytes().to_vec(),
-    };
-    arkret_signatures::agent_evidence::verify_controller_account_gate_attestation(
-        &gate,
-        &principal_id,
-        &expected_authority,
-        &material,
-        chrono::Utc::now(),
-    )
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if gate.eligibility
-        != arkret_models_identity::agent_signer_evidence::ControllerAccountEligibility::Active
-    {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive);
-    }
-    Ok(gate)
+    // The selector currently lacks the controller's exact
+    // PrincipalAuthorityInstance. A core-id lookup would allow a same-core
+    // PCR substitution, so the gate cannot be issued from this contract.
+    Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
 
 async fn produce_current_agent_signer_evidence(
@@ -390,7 +242,7 @@ async fn produce_current_agent_signer_evidence(
         .collect::<Result<Vec<_>, _>>()?;
     seal_lineage.sort_by_key(|seal| seal.notary_seq);
 
-    let service_id = ServiceId::from(
+    let service_id = DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
     );
@@ -627,7 +479,7 @@ fn witnessed_cell(
 }
 
 fn lifecycle_cell_ref(
-    agent_id: &ActorId,
+    agent_id: &DidCoreId,
 ) -> Result<NonEmptyString, AgentSignerEvidenceQueryFailureReason> {
     let subject = arkret_wire::composite_subject(&[agent_id.as_str()])
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
@@ -637,7 +489,7 @@ fn lifecycle_cell_ref(
 async fn accepted_current_lifecycle(
     state: &AppState,
     agent: &soland_services::identity::AgentPairingState,
-    agent_id: &ActorId,
+    agent_id: &DidCoreId,
     realm_id: &RealmId,
 ) -> Result<AcceptedLifecycle, AgentSignerEvidenceQueryFailureReason> {
     let records = state
@@ -848,7 +700,9 @@ async fn verify_current_evidence(
         Some(evidence),
         &context,
     ) {
-        arkret_signatures::agent_evidence::AgentSignerEvidenceVerdict::Verified(key) => Ok(key.key),
+        arkret_signatures::agent_evidence::AgentSignerEvidenceVerdict::Verified(key) => {
+            Ok(*key.key())
+        }
         arkret_signatures::agent_evidence::AgentSignerEvidenceVerdict::Unresolved(_)
         | arkret_signatures::agent_evidence::AgentSignerEvidenceVerdict::Rejected(_) => {
             Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
@@ -940,7 +794,7 @@ pub(crate) async fn signer_evidence_bundle_for_events(
     state: &AppState,
     events: &[arkret_wire::Event],
 ) -> Option<AgentSignerEvidenceBundle> {
-    let service_id = ServiceId::from(
+    let service_id = DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
             .ok()?,
     );
@@ -1027,13 +881,13 @@ pub(crate) async fn verify_federated_signer_evidence(
 pub(crate) async fn verify_current_agent_signer_evidence_for_request(
     state: &AppState,
     evidence: &AgentSignerEvidence,
-    expected_agent_id: &ActorId,
+    expected_agent_id: &DidCoreId,
     expected_verification_method: &arkret_wire::DidUrl,
     expected_authorize_event_id: &EventId,
     operation_id: &arkret_wire::ProtocolOperationId,
     request_digest: &Hash,
-    verifier_id: &ServiceId,
-    audience: &ServiceId,
+    verifier_id: &DidCoreId,
+    audience: &DidCoreId,
     challenge: &NonEmptyString,
     observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<[u8; 32], AppError> {
@@ -1070,7 +924,7 @@ pub(crate) async fn verify_current_agent_signer_evidence_for_request(
 
 fn event_current_selector(
     event: &Event,
-    service_id: &ServiceId,
+    service_id: &DidCoreId,
     verification_method: &arkret_wire::DidUrl,
 ) -> Option<AgentSignerEvidenceQuerySelector> {
     let event_digest = Hash::new(event.event_digest().ok()?).ok()?;

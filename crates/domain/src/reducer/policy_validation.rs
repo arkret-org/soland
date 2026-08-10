@@ -390,7 +390,7 @@ pub(crate) fn validate_challenge_response_gate(
     let Some(provider_did) = gate.get("provider_did").and_then(Value::as_str) else {
         return Err("challenge_response_provider_invalid");
     };
-    if arkret_identifiers::Did::new(provider_did.to_owned()).is_err() {
+    if arkret_identifiers::DidCoreId::new(provider_did.to_owned()).is_err() {
         return Err("challenge_response_provider_invalid");
     }
     let Some(kinds) = gate.get("challenge_kinds").and_then(Value::as_array) else {
@@ -483,7 +483,7 @@ fn validate_reviewer_quorum(join_policy: &Value) -> Result<(), &'static str> {
         let Some(reviewer) = reviewer.as_str() else {
             return Err("join_policy_reviewer_quorum_invalid");
         };
-        if arkret_identifiers::Did::new(reviewer.to_owned()).is_err() {
+        if arkret_identifiers::DidCoreId::new(reviewer.to_owned()).is_err() {
             return Err("join_policy_reviewer_quorum_invalid");
         }
         unique_reviewers.insert(reviewer.to_owned());
@@ -529,7 +529,7 @@ pub(crate) fn validate_did_list(
         let Some(did) = value.as_str() else {
             return Err("principal_admission_dids_invalid");
         };
-        if arkret_identifiers::Did::new(did.to_owned()).is_err() {
+        if arkret_identifiers::DidCoreId::new(did.to_owned()).is_err() {
             return Err("principal_admission_dids_invalid");
         }
     }
@@ -548,11 +548,12 @@ pub(crate) fn normalize_policy_did_method(value: &str) -> Option<&str> {
 pub(crate) fn principal_admission_gate_allows(
     gate: &serde_json::Map<String, Value>,
     member: &str,
+    resolved_full_id: Option<&arkret_identifiers::DidFullId>,
 ) -> bool {
     if !principal_admission_gate_has_selector(gate) {
         return false;
     }
-    let Ok(member_did) = arkret_identifiers::Did::new(member.to_owned()) else {
+    let Ok(member_id) = arkret_identifiers::DidCoreId::new(member.to_owned()) else {
         return false;
     };
     if did_list_contains(gate, "denied_principal_dids", member) {
@@ -563,17 +564,23 @@ pub(crate) fn principal_admission_gate_allows(
     {
         return false;
     }
-    let method = member_did.method();
     if let Some(methods) = gate.get("allowed_did_methods").and_then(Value::as_array)
         && !methods.is_empty()
-        && !methods.iter().any(|value| {
+    {
+        let Some(full_id) = resolved_full_id.filter(|full_id| {
+            arkret_wire::project_full_id_to_core_id(full_id)
+                .is_ok_and(|projected| projected.as_str() == member_id.as_str())
+        }) else {
+            return false;
+        };
+        if !methods.iter().any(|value| {
             value
                 .as_str()
                 .and_then(normalize_policy_did_method)
-                .is_some_and(|allowed| allowed == method)
-        })
-    {
-        return false;
+                .is_some_and(|allowed| allowed == full_id.method())
+        }) {
+            return false;
+        }
     }
     true
 }

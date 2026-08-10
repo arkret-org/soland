@@ -1,4 +1,4 @@
-use arkret_identifiers::{Did, RealmId};
+use arkret_identifiers::{DidFullId, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -183,7 +183,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
     )
     .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner = Did::new(owner.to_owned()).unwrap();
+    let owner = DidFullId::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
 
     let mut entry = RealmDirectoryEntry::new(
@@ -192,7 +192,9 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
         soland_services::events::DirectoryProvenance::LocalOnly,
     );
     entry.description = Some("G3.S6 account-private sync fixture".to_owned());
-    entry.members.insert(owner.clone());
+    entry
+        .members
+        .insert(arkret_wire::project_full_id_to_core_id(&owner).unwrap());
     state.test_realms().lock().upsert(entry);
     state
         .test_persistence()
@@ -233,15 +235,16 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
 
 async fn add_realm_member(state: AppState, _token: &str, realm_id: &str, member: &str) {
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
-    let member_did = Did::new(member.to_owned()).unwrap();
+    let member_did = DidFullId::new(member.to_owned()).unwrap();
     let mut realms = state.test_realms().lock();
     let entry = realms
         .get(&typed_realm_id)
         .cloned()
         .expect("seeded test realm exists before member add");
     let mut updated = entry;
-    updated.members.insert(member_did);
-    assert!(updated.members.iter().any(|did| did.as_str() == member));
+    let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    updated.members.insert(member_core.clone());
+    assert!(updated.members.contains(&member_core));
     realms.upsert(updated);
 }
 
@@ -256,7 +259,7 @@ fn signed_actor_private_event_envelope(
 ) -> Value {
     let kind = kind.as_ref();
     let now = chrono::Utc::now();
-    let actor_id = arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let actor_id = arkret_identifiers::DidFullId::new(actor.to_owned()).expect("fixture actor DID");
     let verification_method = arkret_wire::DidUrl::new(actor.strip_prefix("did:key:").map_or_else(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
@@ -268,7 +271,7 @@ fn signed_actor_private_event_envelope(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("fixture Realm id"),
         },
-        actor_id.clone(),
+        arkret_wire::project_full_id_to_core_id(&actor_id).unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

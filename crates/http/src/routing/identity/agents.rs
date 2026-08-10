@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{BlobRef, CoreId, Did, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairActivationState, AgentKeyPairOutcome,
@@ -240,7 +240,7 @@ mod tests {
 
     fn initial_submission(
         event: arkret_wire::Event,
-        actor_full_id: arkret_identifiers::FullId,
+        actor_id: arkret_identifiers::DidCoreId,
     ) -> arkret_wire::EventInitialSubmission {
         use arkret_wire::{
             AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
@@ -281,7 +281,7 @@ mod tests {
                 basis_ref: LeaseBasisRef::Seal(
                     SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
                 ),
-                actor_id: actor_full_id,
+                actor_id,
                 device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap(),
                 scope_ref: event.scope_ref.clone(),
                 action: event.kind.as_str().to_owned(),
@@ -395,7 +395,8 @@ mod tests {
             key: arkret_wire::Base64UrlString::new(encoded_public_key).unwrap(),
             key_digest: None,
         };
-        let agent_id = Did::new(agent.to_owned()).expect("agent did");
+        let agent_full_id = DidFullId::new(agent.to_owned()).expect("agent DID");
+        let agent_id = arkret_wire::project_full_id_to_core_id(&agent_full_id).unwrap();
         let pairing_request_id = arkret_wire::OpaqueLocalId::new(
             "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
         )
@@ -418,7 +419,7 @@ mod tests {
                 verification_method: verification_method.clone(),
                 signature_algorithm: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::Ed25519,
                 challenge: pairing_request_id.clone(),
-                audience: arkret_wire::ServiceId::new(service_id).unwrap(),
+                audience: arkret_wire::DidCoreId::new(service_id).unwrap(),
                 created_at,
                 expires_at,
                 runtime_key_binding_digest,
@@ -435,7 +436,8 @@ mod tests {
                 .encode(signing_key.sign(&transcript).to_bytes()),
         )
         .unwrap();
-        let controller_id = Did::new("did:web:controller.example".to_owned()).unwrap();
+        let controller_id =
+            DidCoreId::new("ak:did_core:web:controller.example".to_owned()).unwrap();
         let requested_scope: AgentKeyScope =
             serde_json::from_value(requested_agent_scope()).unwrap();
         let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
@@ -451,7 +453,7 @@ mod tests {
             "controller_id": controller_id.as_str(),
             "requested_scope": requested_scope,
             "requested_scope_digest": requested_scope_digest.as_str(),
-            "verifier_did": service_id,
+            "verifier_service_id": service_id,
             "audience": "ak.gate.account.command.pair_agent_key",
             "challenge": "pairing-challenge-0001",
             "issued_at": "2026-07-06T00:00:00.000Z",
@@ -473,7 +475,7 @@ mod tests {
                 )
                 .unwrap(),
             },
-            crate::test_actor_id(&agent_id),
+            crate::test_actor_id(&agent_full_id),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({}),
@@ -911,7 +913,7 @@ mod tests {
             )
             .unwrap(),
             pairing_code: pairing_code.to_owned(),
-            agent_id: Did::new(agent_id.to_owned()).unwrap(),
+            agent_id: DidCoreId::new(agent_id.to_owned()).unwrap(),
         }
     }
 

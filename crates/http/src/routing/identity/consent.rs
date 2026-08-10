@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{ConsentId, Did};
+use arkret_identifiers::{ConsentId, DidFullId};
 use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestOutcome,
     ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
@@ -46,9 +46,9 @@ const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 pub(super) fn router() -> Router {
     Router::with_path("consent")
         .push(Router::with_path("cells").get(list_consent_cells))
-        .push(Router::with_path("cells/{holder_did}").get(get_consent_cell))
-        .push(Router::with_path("cells/{holder_did}/grant").post(grant_consent_cell))
-        .push(Router::with_path("cells/{holder_did}/revoke").post(revoke_consent_cell))
+        .push(Router::with_path("cells/{holder_principal_id}").get(get_consent_cell))
+        .push(Router::with_path("cells/{holder_principal_id}/grant").post(grant_consent_cell))
+        .push(Router::with_path("cells/{holder_principal_id}/revoke").post(revoke_consent_cell))
         .push(Router::with_path("request").post(request_consent_cell))
 }
 
@@ -145,9 +145,9 @@ async fn list_consent_cells(
         .map(|cell| consent_response(cell, now))
         .collect::<Result<Vec<_>, _>>()?;
     cells.sort_by(|a, b| {
-        a.holder_did
-            .cmp(&b.holder_did)
-            .then_with(|| a.peer_did.cmp(&b.peer_did))
+        a.holder_principal_id
+            .cmp(&b.holder_principal_id)
+            .then_with(|| a.peer_principal_id.cmp(&b.peer_principal_id))
             .then_with(|| a.consent_scope.cmp(&b.consent_scope))
     });
     json_ok(ConsentCellList { ok: true, cells })
@@ -163,11 +163,11 @@ async fn get_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    holder_did: PathParam<String>,
+    holder_principal_id: PathParam<String>,
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = holder_did.into_inner();
+    let holder = holder_principal_id.into_inner();
     if validate_did(&holder).is_err() {
         return Err(AppError::invalid_param("invalid holder DID"));
     }
@@ -198,12 +198,12 @@ async fn grant_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    holder_did: PathParam<String>,
+    holder_principal_id: PathParam<String>,
     body: JsonBody<ConsentGrantRequestBody>,
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = holder_did.into_inner();
+    let holder = holder_principal_id.into_inner();
     let submission = body.into_inner().grant_event;
     let target = caller_signed_consent_target(
         &session.actor,
@@ -226,8 +226,8 @@ async fn grant_consent_cell(
         Some(&holder),
         "consent.grant",
         json!({
-            "holder_did": holder,
-            "peer_did": target.peer,
+            "holder_principal_id": holder,
+            "peer_principal_id": target.peer,
             "consent_scope": target.scope,
             "consent_id": target.consent_id,
             "grant_event_id": target.event_id,
@@ -248,12 +248,12 @@ async fn revoke_consent_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    holder_did: PathParam<String>,
+    holder_principal_id: PathParam<String>,
     body: JsonBody<ConsentRevokeRequestBody>,
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = holder_did.into_inner();
+    let holder = holder_principal_id.into_inner();
     let submission = body.into_inner().revoke_event;
     let target = caller_signed_consent_target(
         &session.actor,
@@ -277,8 +277,8 @@ async fn revoke_consent_cell(
         Some(&holder),
         "consent.revoke",
         json!({
-            "holder_did": holder,
-            "peer_did": target.peer,
+            "holder_principal_id": holder,
+            "peer_principal_id": target.peer,
             "consent_scope": target.scope,
             "consent_id": target.consent_id,
             "revoke_event_id": target.event_id,
@@ -375,10 +375,10 @@ async fn request_consent_cell(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let peer = match body.peer_did {
+    let peer = match body.peer_principal_id {
         Some(peer) => peer,
-        None => Did::new(session.actor.clone())
-            .map_err(|e| AppError::invalid_param(format!("peer_did: {e}")))?,
+        None => arkret_identifiers::DidCoreId::new(session.actor.clone())
+            .map_err(|e| AppError::invalid_param(format!("peer_principal_id: {e}")))?,
     };
     if peer.as_str() != session.actor {
         return Err(AppError::capability_denied(
@@ -389,7 +389,7 @@ async fn request_consent_cell(
     // silent drop and quarantine admission are intentionally indistinguishable.
     // This operation never creates a consent cell or a pending consent state.
     let _ = normalize_scope(body.consent_scope.as_deref())?;
-    let _ = body.holder_did;
+    let _ = body.holder_principal_id;
     json_ok(ConsentRequestOutcome {
         ok: true,
         accepted_for_processing: true,
@@ -754,7 +754,7 @@ fn consent_holder(operation: &Operation) -> Result<String, AppError> {
     let sender = operation.context.sender.as_str();
     let holder = first_payload_string(
         &operation.payload,
-        &["holder_did", "holder", "consenter", "issuer"],
+        &["holder_principal_id", "holder", "consenter", "issuer"],
     )
     .unwrap_or_else(|| sender.to_owned());
     if holder != sender {
@@ -768,7 +768,13 @@ fn consent_holder(operation: &Operation) -> Result<String, AppError> {
 fn consent_peer(payload: &Value) -> Result<String, AppError> {
     first_payload_string(
         payload,
-        &["peer", "peer_did", "grantee_did", "target_did", "target"],
+        &[
+            "peer",
+            "peer_principal_id",
+            "grantee_did",
+            "target_did",
+            "target",
+        ],
     )
     .or_else(|| {
         payload
@@ -776,7 +782,7 @@ fn consent_peer(payload: &Value) -> Result<String, AppError> {
             .and_then(Value::as_object)
             .and_then(|tag| {
                 tag.get("peer")
-                    .or_else(|| tag.get("peer_did"))
+                    .or_else(|| tag.get("peer_principal_id"))
                     .and_then(Value::as_str)
             })
             .map(ToOwned::to_owned)
@@ -896,10 +902,10 @@ fn consent_response(
     Ok(ConsentCellView {
         ok: true,
         cell_id: cell.cell_id.clone(),
-        holder_did: Did::new(cell.holder.clone())
-            .map_err(|e| AppError::internal(format!("stored consent holder_did: {e}")))?,
-        peer_did: Did::new(cell.peer.clone())
-            .map_err(|e| AppError::internal(format!("stored consent peer_did: {e}")))?,
+        holder_principal_id: arkret_identifiers::DidCoreId::new(cell.holder.clone())
+            .map_err(|e| AppError::internal(format!("stored consent holder_principal_id: {e}")))?,
+        peer_principal_id: arkret_identifiers::DidCoreId::new(cell.peer.clone())
+            .map_err(|e| AppError::internal(format!("stored consent peer_principal_id: {e}")))?,
         consent_scope: normalize_scope(Some(&cell.scope))?,
         state: consent_response_state(cell, at),
         expires_at: response_expires_at(cell),
@@ -1014,8 +1020,8 @@ pub(super) async fn emit_consent_revoke_invalidation(
         .collect::<Vec<_>>();
     let payload = json!({
         "schema": "ak.vector.consent.cache_invalidation.v1",
-        "holder_did": holder,
-        "peer_did": peer,
+        "holder_principal_id": holder,
+        "peer_principal_id": peer,
         "consent_scope": scope,
         "invalidated_action_scopes": invalidated_action_scopes,
         "invalidated_cache_scopes": CONSENT_SCOPE_CASCADE,
@@ -1131,7 +1137,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         "last_invalidation".to_owned(),
         json!({
             "reason": "consent_revoke",
-            "peer_did": peer,
+            "peer_principal_id": peer,
             "consent_scope": scope,
             "revoked_at": revoked_at,
             "removed_entries": removed,
@@ -1178,8 +1184,8 @@ async fn invalidate_quarantined_invites_for_revoke(
         Some(holder),
         "consent.revoke.invite_quarantine_invalidation",
         json!({
-            "holder_did": holder,
-            "peer_did": peer,
+            "holder_principal_id": holder,
+            "peer_principal_id": peer,
             "consent_scope": scope,
             "removed_entries": removed,
             "revoked_at": revoked_at,
@@ -1200,7 +1206,7 @@ fn quarantine_entry_matches_consent_revoke(entry: &Value, peer: &str) -> bool {
         .and_then(Value::as_str)
         .is_none_or(|scope| scope == "invite");
     let peer_matches = entry
-        .get("source_peer_did")
+        .get("source_peer_principal_id")
         .or_else(|| entry.get("inviter"))
         .and_then(Value::as_str)
         == Some(peer);

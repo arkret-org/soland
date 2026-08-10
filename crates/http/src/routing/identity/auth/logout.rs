@@ -183,7 +183,7 @@ async fn introspect_session_grant_for_logout(
         ));
     };
     let audience =
-        arkret_identifiers::ServiceId::new(state.service_id().clone()).map_err(|error| {
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!(
                 "runtime principal service_id is not a core_id: {error}"
             ))
@@ -456,7 +456,9 @@ async fn verify_cross_session_revoke_proof(
             "unsupported session revoke lifecycle proof kind",
         ));
     }
-    if proof.audience != *state.service_id() {
+    let service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
+    if proof.audience != service_id {
         return Err(session_revoke_proof_invalid(
             "session revoke lifecycle proof audience does not match this service",
         ));
@@ -477,11 +479,12 @@ async fn verify_cross_session_revoke_proof(
         ));
     }
 
-    let actor = arkret_identifiers::Did::new(session.actor.clone())
+    let actor = arkret_identifiers::DidCoreId::new(session.actor.clone())
         .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
-    let service_id = arkret_identifiers::Did::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!("configured service_id is not a valid DID: {error}"))
-    })?;
+    let service_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("configured service_id is not a valid DID: {error}"))
+        })?;
     let session_device = DeviceId::new(session.device_id.clone())
         .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
     let expected_digest = arkret_models_collaboration::account_lifecycle::AccountLifecycleProof::session_revoke_request_digest(

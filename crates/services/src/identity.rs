@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, Did, EventId, Hash};
+use arkret_identifiers::{BlobRef, DidFullId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::contact_operations::{
     ContactBasisEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
@@ -2446,7 +2446,7 @@ pub enum PinnedDidVersionStatus {
 /// and the canonical digest of that exact log entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedDidDocumentState {
-    pub did: Did,
+    pub did: DidFullId,
     pub version_id: String,
     pub log_head_digest: Hash,
     pub document: Value,
@@ -2475,7 +2475,7 @@ pub enum PinnedDidResolutionError {
 /// complete history. This deliberately never accepts a separately resolved
 /// current document as evidence for a historical version.
 pub fn select_pinned_did_webvh_state(
-    did: &Did,
+    did: &DidFullId,
     history: &arkret_identity::VerifiedDidWebvhLog,
     version_id: &str,
     log_head_digest: &Hash,
@@ -2581,14 +2581,17 @@ pub trait DidDocumentPort: Send + Sync {
 
 #[async_trait]
 pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
-    async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    async fn resolve_did_async(
+        &self,
+        did: &DidFullId,
+    ) -> Result<arkret_identity::DidDocument, String>;
     async fn resolve_current_external_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError>;
     async fn resolve_external_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError>;
@@ -2620,7 +2623,10 @@ impl DidService {
         self.resolver.clone()
     }
 
-    pub async fn resolve_did(&self, did: &Did) -> Result<arkret_identity::DidDocument, String> {
+    pub async fn resolve_did(
+        &self,
+        did: &DidFullId,
+    ) -> Result<arkret_identity::DidDocument, String> {
         if let Some(document) = self
             .documents
             .document(did.as_str())
@@ -2637,7 +2643,7 @@ impl DidService {
     /// resolution is used only when no local log exists.
     pub async fn resolve_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
@@ -2698,7 +2704,7 @@ impl DidService {
     /// challenge that no valid control proof can satisfy.
     pub async fn resolve_current_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
         if did.method() != "webvh" {
             return Err(PinnedDidResolutionError::UnsupportedMethod);
@@ -2935,11 +2941,14 @@ mod tests {
     struct NoDidResolver;
 
     impl arkret_identity::DidResolver for NoDidResolver {
-        fn supports(&self, _did: &Did) -> bool {
+        fn supports(&self, _did: &DidFullId) -> bool {
             false
         }
 
-        fn resolve_did(&self, _did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+        fn resolve_did(
+            &self,
+            _did: &DidFullId,
+        ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
             Err(arkret_identity::IdentityError::Protocol(
                 "DID resolver is unused in this test".to_owned(),
             ))
@@ -2950,21 +2959,21 @@ mod tests {
     impl DidResolverPort for NoDidResolver {
         async fn resolve_did_async(
             &self,
-            _did: &Did,
+            _did: &DidFullId,
         ) -> Result<arkret_identity::DidDocument, String> {
             Err("DID resolver is unused in this test".to_owned())
         }
 
         async fn resolve_current_external_webvh_state(
             &self,
-            _did: &Did,
+            _did: &DidFullId,
         ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
             Err(PinnedDidResolutionError::HistoryUnavailable)
         }
 
         async fn resolve_external_pinned_webvh_state(
             &self,
-            _did: &Did,
+            _did: &DidFullId,
             _version_id: &str,
             _log_head_digest: &Hash,
         ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
@@ -2983,8 +2992,8 @@ mod tests {
 
     struct CurrentRecoveryPolicy;
 
-    fn pinned_history_fixture() -> (Did, arkret_identity::VerifiedDidWebvhLog, Hash) {
-        let did = Did::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
+    fn pinned_history_fixture() -> (DidFullId, arkret_identity::VerifiedDidWebvhLog, Hash) {
+        let did = DidFullId::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
         let first_state = serde_json::json!({
             "id": did,
             "verificationMethod": [{

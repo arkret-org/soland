@@ -3,7 +3,7 @@
 //! These DTOs expose only state already verified and persisted by Soland.
 //! They are not Arkret discovery artifacts and carry no authorization.
 
-use arkret_wire::ServiceId;
+use arkret_wire::DidCoreId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,7 +12,7 @@ use serde_json::Value;
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteSummary {
-    pub service_id: ServiceId,
+    pub service_id: DidCoreId,
     pub service_kind: String,
     pub known: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,7 +119,7 @@ pub struct AdminServiceRouteQuarantine {
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminServiceRouteDetail {
-    pub service_id: ServiceId,
+    pub service_id: DidCoreId,
     pub service_kind: String,
     /// False means no locally persisted verified state exists for this key.
     pub known: bool,

@@ -302,7 +302,10 @@ fn signal_record() -> soland_services::delivery::SignalRelayState {
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
-        sender_actor_id: arkret_identifiers::Did::new("did:web:bob.example".to_owned()).unwrap(),
+        sender_actor_id: arkret_identifiers::DidCoreId::new(
+            "ak:did_core:web:bob.example".to_owned(),
+        )
+        .unwrap(),
         sender_device_id: arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
@@ -522,7 +525,8 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
                     arkret_identifiers::RealmId::new(REALM_ID.to_owned()).unwrap(),
                 ]),
                 actors: Some(vec![
-                    arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                    arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                        .unwrap(),
                 ]),
                 after: None,
                 catchup: Some(true),

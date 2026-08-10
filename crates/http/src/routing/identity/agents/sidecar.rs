@@ -119,7 +119,7 @@ pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str)
             .and_then(|id| realms.get(&id).cloned())
     }
     .and_then(|realm| {
-        Did::new(actor.to_owned())
+        arkret_wire::DidCoreId::new(actor.to_owned())
             .ok()
             .map(|did| realm.members.contains(&did))
     })
@@ -244,7 +244,7 @@ fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppE
         schema: AgentSidecarSchema::V1,
         realm_id: RealmId::new(record.realm_id.clone())
             .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?,
-        controller_id: Did::new(record.controller_id.clone())
+        controller_id: arkret_identifiers::DidCoreId::new(record.controller_id.clone())
             .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?,
         encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
         state,
@@ -281,11 +281,11 @@ fn sidecar_access_readiness(
     }
 }
 
-fn typed_desired_agents(desired: &[String]) -> Result<Vec<Did>, AppError> {
+fn typed_desired_agents(desired: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, AppError> {
     desired
         .iter()
         .cloned()
-        .map(Did::new)
+        .map(arkret_wire::DidCoreId::new)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
 }
@@ -332,7 +332,7 @@ pub(crate) async fn expected_sidecar_mls_binding(
         .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
     let realm_id = RealmId::new(record.realm_id.clone())
         .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
-    let controller_id = Did::new(record.controller_id.clone())
+    let controller_id = arkret_identifiers::DidCoreId::new(record.controller_id.clone())
         .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?;
     let projection = state.projections().snapshot();
     let control_frontier = sidecar_control_frontier(&projection, record)?;
@@ -575,7 +575,7 @@ async fn sidecar_view(
             .cloned()
             .map(|agent_id| {
                 Ok(PendingSidecarAccessReconciliationItem {
-                    agent_id: Did::new(agent_id)
+                    agent_id: arkret_wire::DidCoreId::new(agent_id)
                         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
                     provisioning_phase: if epoch_row.is_some() {
                         PendingSidecarAccessReconciliationStage::EpochRotation
@@ -604,7 +604,7 @@ async fn sidecar_view(
         expected_binding.sidecar_id.clone(),
         RealmId::new(record.realm_id.clone())
             .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?,
-        Did::new(record.controller_id.clone())
+        arkret_identifiers::DidCoreId::new(record.controller_id.clone())
             .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?,
         &owned_typed,
         &effective,
@@ -677,7 +677,7 @@ fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEven
 
 fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
-    actor_id: arkret_wire::ActorId,
+    actor_id: arkret_wire::DidCoreId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
@@ -824,7 +824,7 @@ async fn prepare_sidecar(
         });
     }
 
-    let controller_id = arkret_wire::ActorId::new(session.actor.clone())
+    let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
@@ -1408,7 +1408,8 @@ mod tests {
     #[test]
     fn welcome_pending_takes_precedence_over_key_material() {
         let pending = PendingSidecarAccessReconciliationItem {
-            agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
+            agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
+                .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsWelcome,
             reason: NonEmptyString::new("native_sidecar_mls_welcome_pending").unwrap(),
             membership_frontier: None,
@@ -1431,7 +1432,8 @@ mod tests {
     #[test]
     fn pending_sidecar_removal_requires_epoch_update() {
         let pending = PendingSidecarAccessReconciliationItem {
-            agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
+            agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
+                .unwrap(),
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
             reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
             membership_frontier: Some(vec![

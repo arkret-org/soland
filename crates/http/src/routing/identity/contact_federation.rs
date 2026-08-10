@@ -16,7 +16,7 @@
 //!   target holder's contact projection.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{ActorId, Did, Hash};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash};
 use arkret_models_collaboration::contact_operations::{
     ContactBasis, ContactBasisEvidenceBundle, ContactCurrentProof, ContactScope,
     ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
@@ -44,13 +44,20 @@ use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::ContactRecord;
 use uuid::Uuid;
 
-fn full_id_projects_to_actor(full_id: &Did, actor_id: &arkret_wire::ActorId) -> bool {
+fn full_id_projects_to_actor(full_id: &DidFullId, actor_id: &arkret_wire::DidCoreId) -> bool {
     arkret_wire::project_full_id_to_core_id(full_id)
-        .is_ok_and(|core| arkret_wire::ActorId::from(core) == *actor_id)
+        .is_ok_and(|core| arkret_wire::DidCoreId::from(core) == *actor_id)
 }
 
-fn full_id_str_projects_to_actor(full_id: &str, actor_id: &arkret_wire::ActorId) -> bool {
-    Did::new(full_id.to_owned()).is_ok_and(|full_id| full_id_projects_to_actor(&full_id, actor_id))
+fn core_id_matches_actor(
+    core_id: &arkret_wire::DidCoreId,
+    actor_id: &arkret_wire::DidCoreId,
+) -> bool {
+    core_id == actor_id
+}
+
+fn full_id_str_projects_to_actor(full_id: &str, actor_id: &arkret_wire::DidCoreId) -> bool {
+    arkret_wire::DidCoreId::new(full_id.to_owned()).is_ok_and(|core_id| core_id == *actor_id)
 }
 
 use super::now;
@@ -226,8 +233,8 @@ async fn peer_contacts_submit(
                 ))
             })?;
             if request_receipt.core.request_event_ref != signed_event.event_id
-                || !full_id_projects_to_actor(
-                    request_receipt.core.holder.subject_id(),
+                || !core_id_matches_actor(
+                    &request_receipt.core.holder.contact_actor_id(),
                     &signed_event.actor_id,
                 )
                 || request_receipt.core.issuer.as_str() != source_service_id
@@ -277,7 +284,7 @@ async fn peer_contacts_submit(
                     ))
                 })?;
             if response_receipt.response_event_ref != signed_event.event_id
-                || !full_id_projects_to_actor(&response_receipt.issuer, &signed_event.actor_id)
+                || !core_id_matches_actor(&response_receipt.issuer, &signed_event.actor_id)
                 || response_receipt.response_digest
                     != Hash::new(signed_event.event_digest().map_err(|error| {
                         AppError::internal(format!("Contact response Event digest: {error}"))
@@ -324,7 +331,7 @@ async fn peer_contacts_submit(
                     ))
                 })?;
             if reject_receipt.reject_event_ref != signed_event.event_id
-                || !full_id_projects_to_actor(&reject_receipt.issuer, &signed_event.actor_id)
+                || !core_id_matches_actor(&reject_receipt.issuer, &signed_event.actor_id)
                 || reject_receipt.reject_digest
                     != Hash::new(signed_event.event_digest().map_err(|error| {
                         AppError::internal(format!("Contact reject Event digest: {error}"))
@@ -397,14 +404,14 @@ async fn peer_contacts_submit(
             "Contact carrier branch does not match signed_event.kind",
         ));
     }
-    let issuer_full_id = contact_event_issuer_full_id(&delivery)
+    let issuer_core_id = contact_event_issuer_core_id(&delivery)
         .expect("Event branch excludes Contact control carriers");
-    if !full_id_projects_to_actor(issuer_full_id, &signed_event.actor_id) {
+    if !core_id_matches_actor(&issuer_core_id, &signed_event.actor_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "Contact carrier issuer does not match signed_event.actor_id",
         ));
     }
-    let issuer = issuer_full_id.as_str().to_owned();
+    let issuer = issuer_core_id.as_str().to_owned();
     let recipient_service_id = contact_address.recipient_service_id.as_str();
     if recipient_service_id != state.service_id() {
         return Err(super::super::events::peer::cross_domain_replay(
@@ -414,20 +421,20 @@ async fn peer_contacts_submit(
     let payload = signed_event.payload.clone();
     let payload_value = serde_json::to_value(&payload)
         .map_err(|error| AppError::internal(format!("contact payload encode failed: {error}")))?;
-    let subject_full_id = contact_event_subject_full_id(fact_kind, &payload_value)?;
-    if !full_id_projects_to_actor(&subject_full_id, &contact_address.subject_id) {
+    let subject_core_id = contact_event_subject_core_id(fact_kind, &payload_value)?;
+    if !core_id_matches_actor(&subject_core_id, &contact_address.subject_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "contact_address.subject_id does not match the signed Contact recipient",
         ));
     }
-    let subject_id = subject_full_id.as_str().to_owned();
+    let subject_id = subject_core_id.as_str().to_owned();
     if let Some(current_proof) = match &delivery {
         PeerContactSubmitRequestBody::Response { current_proof, .. } => current_proof.as_ref(),
         PeerContactSubmitRequestBody::ScopeUpdate { current_proof, .. }
         | PeerContactSubmitRequestBody::Tombstone { current_proof, .. } => Some(current_proof),
         _ => None,
     } {
-        if !full_id_projects_to_actor(&current_proof.issuer, &signed_event.actor_id)
+        if !core_id_matches_actor(&current_proof.issuer, &signed_event.actor_id)
             || current_proof.head_event_ref != signed_event.event_id
             || current_proof.head_digest
                 != Hash::new(signed_event.event_digest().map_err(|error| {
@@ -594,41 +601,48 @@ async fn peer_contacts_submit(
     json_ok(response)
 }
 
-fn contact_event_issuer_full_id(delivery: &PeerContactSubmitRequestBody) -> Option<&Did> {
+fn contact_event_issuer_core_id(
+    delivery: &PeerContactSubmitRequestBody,
+) -> Option<arkret_wire::DidCoreId> {
     match delivery {
         PeerContactSubmitRequestBody::Request {
             request_receipt, ..
-        } => Some(request_receipt.core.holder.subject_id()),
+        } => Some(request_receipt.core.holder.contact_actor_id()),
         PeerContactSubmitRequestBody::Response {
             response_receipt, ..
-        } => Some(&response_receipt.issuer),
-        PeerContactSubmitRequestBody::Reject { reject_receipt, .. } => Some(&reject_receipt.issuer),
+        } => Some(response_receipt.issuer.clone()),
+        PeerContactSubmitRequestBody::Reject { reject_receipt, .. } => {
+            Some(reject_receipt.issuer.clone())
+        }
         PeerContactSubmitRequestBody::ScopeUpdate { lineage, .. }
         | PeerContactSubmitRequestBody::Tombstone { lineage, .. } => {
-            Some(lineage.issuer.subject_id())
+            Some(lineage.issuer.contact_actor_id())
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => None,
     }
 }
 
-fn contact_event_subject_full_id(fact_kind: &str, payload: &Value) -> Result<Did, AppError> {
+fn contact_event_subject_core_id(
+    fact_kind: &str,
+    payload: &Value,
+) -> Result<arkret_wire::DidCoreId, AppError> {
     let subject = match fact_kind {
         "ak.contact.requested" => {
             serde_json::from_value::<ContactRequestedPayload>(payload.clone())
-                .map(|payload| payload.peer.subject_id().clone())
+                .map(|payload| payload.peer.contact_actor_id().clone())
         }
         "ak.contact.accepted" => serde_json::from_value::<ContactAcceptedPayload>(payload.clone())
-            .map(|payload| payload.peer.subject_id().clone()),
+            .map(|payload| payload.peer.contact_actor_id().clone()),
         "ak.contact.rejected" => serde_json::from_value::<ContactRejectedPayload>(payload.clone())
-            .map(|payload| payload.peer.subject_id().clone()),
+            .map(|payload| payload.peer.contact_actor_id().clone()),
         "ak.contact.scope.update" => {
             serde_json::from_value::<ContactScopeUpdatePayload>(payload.clone())
-                .map(|payload| payload.peer.subject_id().clone())
+                .map(|payload| payload.peer.contact_actor_id().clone())
         }
         "ak.contact.tombstoned" => {
             serde_json::from_value::<ContactTombstonedPayload>(payload.clone())
-                .map(|payload| payload.peer.subject_id().clone())
+                .map(|payload| payload.peer.contact_actor_id().clone())
         }
         _ => unreachable!("caller admits only Contact fact kinds"),
     }
@@ -805,7 +819,7 @@ async fn validate_proof_refresh_evidence(
         "current_proof",
     )?;
     if current_proof.terminal
-        || full_id_projects_to_actor(&current_proof.issuer, &contact_address.subject_id)
+        || core_id_matches_actor(&current_proof.issuer, &contact_address.subject_id)
         || current_proof.head_event_ref != prior_mirror_receipt.signed_event_ref
         || current_proof.head_digest != prior_mirror_receipt.signed_event_digest
         || !current_proof
@@ -989,8 +1003,8 @@ fn validate_glare_finalize_evidence(
             &format!("request_receipts[{index}]"),
         )?;
     }
-    if full_id_projects_to_actor(&attestation.issuer, &contact_address.subject_id)
-        || !full_id_projects_to_actor(&attestation.peer, &contact_address.subject_id)
+    if core_id_matches_actor(&attestation.issuer, &contact_address.subject_id)
+        || !core_id_matches_actor(&attestation.peer, &contact_address.subject_id)
     {
         return Err(super::super::events::peer::schema_violation(
             "glare_concurrency_attestation participant coordinates are invalid",
@@ -1026,13 +1040,13 @@ fn validate_glare_finalize_evidence(
     let local_subject_full_id = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer.as_str() == state.service_id())
-        .map(|receipt| receipt.core.holder.subject_id().clone())
+        .map(|receipt| receipt.core.holder.contact_actor_id().clone())
         .ok_or_else(|| {
             super::super::events::peer::schema_violation(
                 "glare request receipts have no local-service subject",
             )
         })?;
-    if !full_id_projects_to_actor(&local_subject_full_id, &contact_address.subject_id) {
+    if !core_id_matches_actor(&local_subject_full_id, &contact_address.subject_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "glare contact_address.subject_id does not match the local receipt holder",
         ));
@@ -1085,16 +1099,16 @@ fn validate_glare_finalize_evidence(
                 "glare request receipts have no local-service counterpart receipt",
             )
         })?;
-    if source_receipt.core.holder.subject_id() != &attestation.issuer
-        || !full_id_projects_to_actor(
-            source_receipt.core.peer.subject_id(),
+    if source_receipt.core.holder.contact_actor_id() != attestation.issuer
+        || !core_id_matches_actor(
+            &source_receipt.core.peer.contact_actor_id(),
             &contact_address.subject_id,
         )
-        || !full_id_projects_to_actor(
-            local_receipt.core.holder.subject_id(),
+        || !core_id_matches_actor(
+            &local_receipt.core.holder.contact_actor_id(),
             &contact_address.subject_id,
         )
-        || local_receipt.core.peer.subject_id() != &attestation.issuer
+        || local_receipt.core.peer.contact_actor_id() != attestation.issuer
         || remote_mirror_receipt.signed_event_ref != source_receipt.core.request_event_ref
         || remote_mirror_receipt.signed_event_digest != source_receipt.core.request_digest
     {
@@ -1141,7 +1155,7 @@ async fn finalize_glare_contact_basis(
     let local_holder = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer.as_str() == state.service_id())
-        .map(|receipt| receipt.core.holder.subject_id().as_str())
+        .map(|receipt| receipt.core.holder.contact_actor_id().to_string())
         .ok_or_else(|| {
             super::super::events::peer::schema_violation(
                 "glare request receipts have no local-service holder",
@@ -1150,7 +1164,7 @@ async fn finalize_glare_contact_basis(
     let remote_holder = remote_attestation.issuer.as_str();
     let contacts = state.contacts();
     let mut record = contacts
-        .contact_any(local_holder, remote_holder)
+        .contact_any(&local_holder, remote_holder)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
@@ -1200,7 +1214,7 @@ async fn finalize_glare_contact_basis(
     }
     let local_request = request_receipts
         .iter()
-        .find(|receipt| receipt.core.holder.subject_id().as_str() == local_holder)
+        .find(|receipt| receipt.core.holder.contact_actor_id().as_str() == local_holder)
         .ok_or_else(|| {
             super::super::events::peer::schema_violation(
                 "glare receipts have no local-holder request",
@@ -1277,9 +1291,9 @@ async fn finalize_glare_contact_basis(
         "slot_state": "pending_unconsumed"
     }))?;
     let observed_at = now();
-    let local_issuer = Did::new(local_holder.to_owned())
+    let local_issuer = arkret_identifiers::DidCoreId::new(local_holder.to_owned())
         .map_err(|error| AppError::internal(format!("local Contact holder invalid: {error}")))?;
-    let remote_peer = Did::new(remote_holder.to_owned())
+    let remote_peer = arkret_identifiers::DidCoreId::new(remote_holder.to_owned())
         .map_err(|error| AppError::internal(format!("remote Contact holder invalid: {error}")))?;
     let mut local_attestation = GlareConcurrencyAttestation {
         issuer: local_issuer.clone(),
@@ -1444,7 +1458,7 @@ fn sign_contact_evidence_bytes(
 
 fn mirrored_contact_current_proof(
     state: &AppState,
-    issuer: Did,
+    issuer: arkret_wire::DidCoreId,
     source: &ContactCurrentProof,
 ) -> Result<ContactCurrentProof, AppError> {
     let created_at = now();
@@ -1473,8 +1487,8 @@ fn normal_contact_basis(
     receipt: &RequestAcceptanceReceipt,
 ) -> Result<(ContactBasis, Hash), AppError> {
     let mut participants = [
-        receipt.core.holder.subject_id().clone(),
-        receipt.core.peer.subject_id().clone(),
+        receipt.core.holder.contact_actor_id().clone(),
+        receipt.core.peer.contact_actor_id().clone(),
     ];
     participants.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
     let basis = ContactBasis::Normal {
@@ -1501,7 +1515,7 @@ fn validate_contact_lineage_carrier(
     terminal: bool,
 ) -> Result<(), AppError> {
     if lineage.event_ref != event.event_id
-        || !full_id_projects_to_actor(lineage.issuer.subject_id(), &event.actor_id)
+        || !core_id_matches_actor(&lineage.issuer.contact_actor_id(), &event.actor_id)
         || lineage.basis_id != current_proof.basis_id
         || current_proof.head_event_ref != event.event_id
         || terminal != lineage.terminal.unwrap_or(false)
@@ -1597,7 +1611,7 @@ fn sign_contact_mirror_receipt(
     )
     .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))?;
     let received_at = now();
-    let issuer = Did::new(state.service_id().clone())
+    let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(state.service_id()),
@@ -1715,10 +1729,10 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
             .as_bytes()
             .cmp(right.core.request_event_ref.as_str().as_bytes())
     });
-    if receipts[0].core.holder.subject_id().as_str() != holder
-        || receipts[0].core.peer.subject_id().as_str() != peer
-        || receipts[1].core.holder.subject_id().as_str() != peer
-        || receipts[1].core.peer.subject_id().as_str() != holder
+    if receipts[0].core.holder.contact_actor_id().as_str() != holder
+        || receipts[0].core.peer.contact_actor_id().as_str() != peer
+        || receipts[1].core.holder.contact_actor_id().as_str() != peer
+        || receipts[1].core.peer.contact_actor_id().as_str() != holder
     {
         // The other holder is the unique canonical glare initiator, or the
         // retained receipts do not form the exact reverse-request pair.
@@ -1769,9 +1783,9 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         "slot_state": "pending_unconsumed"
     }))?;
     let mut attestation = GlareConcurrencyAttestation {
-        issuer: Did::new(holder.to_owned())
+        issuer: arkret_identifiers::DidCoreId::new(holder.to_owned())
             .map_err(|error| AppError::internal(format!("glare holder DID invalid: {error}")))?,
-        peer: Did::new(peer.to_owned())
+        peer: arkret_wire::DidCoreId::new(peer.to_owned())
             .map_err(|error| AppError::internal(format!("glare peer DID invalid: {error}")))?,
         request_receipt_digests: receipt_digests,
         observed_frontier,
@@ -1787,45 +1801,10 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
             AppError::internal(format!("glare attestation transcript failed: {error}"))
         })?,
     )?;
-    let idempotency_key = IdempotencyKey::new(format!("contact-glare-finalize:{basis_id}"))
-        .map_err(|error| AppError::internal(format!("glare idempotency key invalid: {error}")))?;
-    let Some(carried_resolution) = record.peer_service_resolution.as_ref() else {
-        return Ok(false);
-    };
-    let Ok(service_resolution) = serde_json::from_value::<
-        arkret_models_identity::ServiceResolutionCarrier,
-    >(carried_resolution.clone()) else {
-        return Ok(false);
-    };
-    let peer_full_id = Did::new(peer.to_owned())
-        .map_err(|error| AppError::internal(format!("glare recipient DID invalid: {error}")))?;
-    let peer_actor_id = ActorId::from(
-        arkret_wire::project_full_id_to_core_id(&peer_full_id).map_err(|error| {
-            AppError::internal(format!("glare recipient full_id cannot project: {error}"))
-        })?,
-    );
-    let recipient_service_id =
-        arkret_wire::ServiceId::new(peer_service_id.to_owned()).map_err(|error| {
-            AppError::internal(format!("glare recipient service core id invalid: {error}"))
-        })?;
-    let contact_address = PeerContactAddress::principal_server(
-        peer_actor_id,
-        recipient_service_id,
-        service_resolution,
-    );
-    if contact_address.validate_shape().is_err() {
-        return Ok(false);
-    }
-    let delivery = PeerContactSubmitRequestBody::GlareFinalize {
-        idempotency_key,
-        basis_id,
-        basis,
-        request_receipts,
-        remote_mirror_receipt,
-        glare_concurrency_attestation: attestation,
-        contact_address,
-    };
-    enqueue_peer_contact_carrier(state, peer_service_id, &delivery).await
+    // The retained Contact record has no exact PrincipalAuthorityInstance.
+    // A service route or same-core address cannot select a human PCR, so glare
+    // finalization remains local until the wire contract carries that instance.
+    Ok(false)
 }
 
 fn derive_glare_basis(
@@ -1836,8 +1815,8 @@ fn derive_glare_basis(
         super::account::canonical_contact_digest(&request_receipts[1])?,
     ];
     let mut pair = [
-        request_receipts[0].core.holder.subject_id().clone(),
-        request_receipts[1].core.holder.subject_id().clone(),
+        request_receipts[0].core.holder.contact_actor_id().clone(),
+        request_receipts[1].core.holder.contact_actor_id().clone(),
     ];
     pair.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
     let basis = ContactBasis::Glare {
@@ -1916,14 +1895,11 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     .map_err(|error| AppError::internal(format!("glare basis: {error}")))?
                     != serde_json::to_value(basis)
                         .map_err(|error| AppError::internal(format!("glare basis: {error}")))?
-                || !full_id_projects_to_actor(
-                    &remote_attestation.issuer,
-                    &contact_address.subject_id,
-                )
+                || !core_id_matches_actor(&remote_attestation.issuer, &contact_address.subject_id)
                 || remote_attestation.peer != local_attestation.issuer
                 || remote_attestation.request_receipt_digests != receipt_digests
                 || remote_proof.basis_id != *basis_id
-                || !full_id_projects_to_actor(&remote_proof.issuer, &contact_address.subject_id)
+                || !core_id_matches_actor(&remote_proof.issuer, &contact_address.subject_id)
                 || remote_proof.terminal
                 || remote_proof.fresh_until <= now()
             {
@@ -1934,8 +1910,8 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             let remote_request = request_receipts
                 .iter()
                 .find(|receipt| {
-                    full_id_projects_to_actor(
-                        receipt.core.holder.subject_id(),
+                    core_id_matches_actor(
+                        &receipt.core.holder.contact_actor_id(),
                         &contact_address.subject_id,
                     )
                 })
@@ -2004,7 +1980,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             }
             let local_request = request_receipts
                 .iter()
-                .find(|receipt| receipt.core.holder.subject_id().as_str() == local_holder)
+                .find(|receipt| receipt.core.holder.contact_actor_id().as_str() == local_holder)
                 .ok_or_else(|| {
                     super::super::events::peer::schema_violation(
                         "glare finalize has no local-holder request receipt",
@@ -2236,7 +2212,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
             "Contact Event carrier cannot absorb a proof without its source proof",
         )
     })?;
-    if !full_id_projects_to_actor(&returned_proof.issuer, &contact_address.subject_id)
+    if !core_id_matches_actor(&returned_proof.issuer, &contact_address.subject_id)
         || returned_proof.basis_id != sent_proof.basis_id
         || returned_proof.terminal != terminal
         || returned_proof.head_event_ref != signed_event.event_id
@@ -2260,19 +2236,19 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         })?,
         "outbound_contact_current_proof",
     )?;
-    let local_full_id = contact_event_issuer_full_id(request).ok_or_else(|| {
+    let local_core_id = contact_event_issuer_core_id(request).ok_or_else(|| {
         super::super::events::peer::schema_violation(
             "Contact Event outcome has no signed local issuer coordinate",
         )
     })?;
-    if !full_id_projects_to_actor(local_full_id, &signed_event.actor_id) {
+    if !core_id_matches_actor(&local_core_id, &signed_event.actor_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "Contact Event outcome local full id does not match signed_event.actor_id",
         ));
     }
     let contacts = state.contacts();
     let mut record = contacts
-        .contact_any(local_full_id.as_str(), returned_proof.issuer.as_str())
+        .contact_any(local_core_id.as_str(), returned_proof.issuer.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("outbound Contact projection disappeared"))?;
@@ -2306,7 +2282,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
             .as_bytes()
             .cmp(right.issuer.as_str().as_bytes())
     });
-    let expected_issuers = [local_full_id.as_str(), returned_proof.issuer.as_str()]
+    let expected_issuers = [local_core_id.as_str(), returned_proof.issuer.as_str()]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     if bundle.current_proofs.len() != 2
@@ -2429,10 +2405,10 @@ struct ContactControlReceiptSigningTranscript<'a> {
     disposition: PeerContactDisposition,
     #[serde(skip_serializing_if = "Option::is_none")]
     result_digest: Option<&'a Hash>,
-    recipient_service_id: &'a Did,
+    recipient_service_id: &'a arkret_wire::DidCoreId,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     received_at: chrono::DateTime<chrono::Utc>,
-    issuer: &'a Did,
+    issuer: &'a arkret_wire::DidCoreId,
 }
 
 fn contact_control_receipt_signing_bytes(
@@ -2504,7 +2480,7 @@ fn sign_contact_control_receipt(
     )
     .map_err(|error| AppError::internal(format!("Contact control digest invalid: {error}")))?;
     let received_at = now();
-    let issuer = Did::new(state.service_id().clone())
+    let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(state.service_id()),
@@ -2646,29 +2622,12 @@ async fn append_delivered_contact_fact_projection_event(
             Value::String(issuer.to_owned()),
         );
     }
-    let realm_id = match crate::routing::identity::principal_control_realm_for_actor(state, issuer)
-    {
-        Ok(realm_id) => realm_id.into_string(),
-        Err(error) => {
-            tracing::warn!(%error, issuer, "delivered contact fact issuer PCR unavailable");
-            return;
-        }
-    };
-    let _ = crate::routing::events::projection::append_projection_event(
-        state,
-        ProjectionEventRecord {
-            event_id: contact_event_id.to_owned(),
-            realm_id,
-            event_kind,
-            operation_kind: "delivered_contact_fact".to_owned(),
-            operation_id: None,
-            sender: Some(issuer.to_owned()),
-            payload,
-            created_at: now(),
-            received_at: now(),
-        },
-    )
-    .await;
+    let _ = (state, event_kind, payload);
+    tracing::warn!(
+        issuer,
+        contact_event_id,
+        "delivered contact fact omitted: transport does not select an exact issuer authority instance"
+    );
 }
 
 /// Project a delivered contact fact into the local `subject_id`'s contact
@@ -2705,7 +2664,7 @@ async fn project_delivered_contact_fact(
                         "invalid ak.contact.requested payload",
                     )
                 })?;
-            if request.peer.subject_id().as_str() != subject_id {
+            if request.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.requested peer does not match the addressed holder",
                 ));
@@ -2962,7 +2921,7 @@ async fn project_delivered_contact_fact(
                         "invalid ak.contact.accepted payload",
                     )
                 })?;
-            if accepted.peer.subject_id().as_str() != subject_id {
+            if accepted.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.accepted peer does not match the original requester",
                 ));
@@ -3047,7 +3006,7 @@ async fn project_delivered_contact_fact(
                 }
                 let local_proof = mirrored_contact_current_proof(
                     state,
-                    Did::new(subject_id.to_owned()).map_err(|error| {
+                    arkret_identifiers::DidCoreId::new(subject_id.to_owned()).map_err(|error| {
                         AppError::internal(format!("Contact subject DID invalid: {error}"))
                     })?,
                     remote_proof,
@@ -3090,7 +3049,7 @@ async fn project_delivered_contact_fact(
                         "invalid ak.contact.rejected payload",
                     )
                 })?;
-            if rejected.peer.subject_id().as_str() != subject_id {
+            if rejected.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.rejected peer does not match the original requester",
                 ));
@@ -3170,7 +3129,7 @@ async fn project_delivered_contact_fact(
                         "invalid ak.contact.scope.update payload",
                     )
                 })?;
-            if update.peer.subject_id().as_str() != subject_id {
+            if update.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.scope.update peer does not match the addressed holder",
                 ));
@@ -3225,7 +3184,7 @@ async fn project_delivered_contact_fact(
             }
             let local_proof = mirrored_contact_current_proof(
                 state,
-                Did::new(subject_id.to_owned()).map_err(|error| {
+                arkret_identifiers::DidCoreId::new(subject_id.to_owned()).map_err(|error| {
                     AppError::internal(format!("Contact subject DID invalid: {error}"))
                 })?,
                 remote_proof,
@@ -3253,7 +3212,7 @@ async fn project_delivered_contact_fact(
                         "invalid ak.contact.tombstoned payload",
                     )
                 })?;
-            if tombstone.peer.subject_id().as_str() != subject_id {
+            if tombstone.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.tombstoned peer does not match the addressed holder",
                 ));
@@ -3310,7 +3269,7 @@ async fn project_delivered_contact_fact(
             }
             let local_proof = mirrored_contact_current_proof(
                 state,
-                Did::new(subject_id.to_owned()).map_err(|error| {
+                arkret_identifiers::DidCoreId::new(subject_id.to_owned()).map_err(|error| {
                     AppError::internal(format!("Contact subject DID invalid: {error}"))
                 })?,
                 remote_proof,
@@ -3536,7 +3495,7 @@ mod tests {
             serde_json::to_value(right_basis).unwrap()
         );
         assert_eq!(
-            first_arrival[0].core.holder.subject_id().as_str(),
+            first_arrival[0].core.holder.contact_actor_id().as_str(),
             "did:web:alice.example",
             "requests[0] issuer is the sole mechanical glare initiator"
         );

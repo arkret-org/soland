@@ -12,7 +12,7 @@
 //! is enforced at write time but not at GC.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{BlobRef, Did, Hash, RealmId};
+use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, Hash, RealmId};
 use arkret_models_collaboration::objects::blob::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
     BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
@@ -59,7 +59,7 @@ pub(super) fn blob_upload_outcome(
     let content_digest = Hash::new(content_digest).map_err(|error| {
         AppError::internal(format!("content_digest construction failed: {error}"))
     })?;
-    let issuer_service_id = Did::new(state.service_id().clone())
+    let issuer_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let signing_payload = json!({
         "blob_ref": blob_ref.as_str(),
@@ -767,7 +767,7 @@ fn issue_presign_envelope(
 ) -> Result<IssuedBlobPresign, AppError> {
     let blob_ref = BlobRef::new(blob_ref.to_owned())
         .map_err(|error| AppError::internal(format!("blob_ref is invalid: {error}")))?;
-    let issuer_service_id = Did::new(state.service_id().clone())
+    let issuer_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let realm_id = realm_id
         .map(|value| {
@@ -775,7 +775,7 @@ fn issue_presign_envelope(
                 .map_err(|error| AppError::internal(format!("blob realm_id is invalid: {error}")))
         })
         .transpose()?;
-    let audience_hint = Did::new(actor.to_owned()).ok();
+    let audience_hint = DidCoreId::new(actor.to_owned()).ok();
     let mut nonce_bytes = [0u8; 16];
     {
         use rand::RngExt;

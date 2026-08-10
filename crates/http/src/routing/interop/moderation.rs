@@ -8,7 +8,7 @@
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
 //!   by the moderation projection preflight.
 
-use arkret_identifiers::{Did, EventId, Hash, RealmId};
+use arkret_identifiers::{DidFullId, EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingProofEventTimeAnchor,
 };
@@ -72,7 +72,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("moderation Realm id invalid: {error}")))?;
     let service_did = state.service_resolution_commitment().full_id.clone();
-    let service_actor_id = arkret_wire::ActorId::from(
+    let service_actor_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
             AppError::internal(format!("service DID cannot be projected: {error}"))
         })?,
@@ -122,7 +122,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         })?;
     event.seal_ref = Some(seal.id);
     event.auth_context = Some(arkret_wire::AuthContext {
-        did: service_did.clone(),
+        actor_id: event.actor_id.clone(),
         key_id: "notary-key".to_owned(),
         key_epoch: 0,
         credential_epoch: None,
@@ -602,7 +602,7 @@ async fn validate_franking_event_time_anchor(
         RealmId::new(record_realm_id.to_owned()).map_err(|error| {
             franking_proof_invalid(format!("invalid event anchor realm_id: {error}"))
         })?,
-        Did::new(state.service_id().clone()).map_err(|error| {
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             franking_proof_invalid(format!("invalid local franking service DID: {error}"))
         })?,
         record.received_at,
@@ -888,11 +888,11 @@ async fn moderation_report(
     .await;
     let mut routed_to = Vec::new();
     if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
-        match validate_did(state.service_id()) {
+        match arkret_wire::DidCoreId::new(state.service_id().clone()) {
             Ok(did) => routed_to.push(did),
             Err(_) => tracing::warn!(
                 service_id = %state.service_id(),
-                "service_id is not a valid bare DID; omitted from routed_to"
+                "service_id is not a valid DID core id; omitted from routed_to"
             ),
         }
     }

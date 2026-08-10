@@ -31,7 +31,7 @@ impl ProjectionState {
         };
         let realm_id = operation.realm_id.to_string();
         let inviter = operation.context.sender.to_string();
-        if arkret_identifiers::Did::new(inviter.clone()).is_err() {
+        if arkret_identifiers::DidFullId::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
         let Some(third_party_id) = payload.get("third_party_id") else {
@@ -124,7 +124,7 @@ impl ProjectionState {
         let Some(subject_id) = string_field(payload, "subject_id") else {
             return rejected("subject_id_required");
         };
-        if arkret_identifiers::Did::new(subject_id.clone()).is_err() {
+        if arkret_identifiers::DidCoreId::new(subject_id.clone()).is_err() {
             return rejected("subject_id_invalid");
         }
         let Some(token_commitment) = string_field(payload, "token_commitment") else {
@@ -291,7 +291,7 @@ fn validate_third_party_id(third_party_id: &Value) -> Result<(), &'static str> {
     else {
         return Err("verification_service_id_required");
     };
-    if arkret_identifiers::Did::new(service_id.to_owned()).is_err() {
+    if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
         return Err("verification_service_id_invalid");
     }
     if object

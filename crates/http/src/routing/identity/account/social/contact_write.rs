@@ -244,8 +244,8 @@ async fn validate_request_acceptance_receipt(
         ));
     }
     if record.status != "pending"
-        || record.requester != receipt.core.holder.subject_id().as_str()
-        || record.target != receipt.core.peer.subject_id().as_str()
+        || record.requester != receipt.core.holder.contact_actor_id().as_str()
+        || record.target != receipt.core.peer.contact_actor_id().as_str()
         || record.request_event_ref.as_deref() != Some(receipt.core.request_event_ref.as_str())
     {
         return Err(AppError::conflict(
@@ -296,14 +296,7 @@ async fn validate_request_acceptance_receipt(
     )?;
     if request_event.kind != arkret_wire::EventKind::ContactRequested
         || request_event.event_id != receipt.core.request_event_ref
-        || request_event.actor_id
-            != arkret_wire::ActorId::from(
-                arkret_wire::project_full_id_to_core_id(receipt.core.holder.subject_id()).map_err(
-                    |error| {
-                        AppError::internal(format!("receipt holder cannot be projected: {error}"))
-                    },
-                )?,
-            )
+        || request_event.actor_id != receipt.core.holder.contact_actor_id()
         || requested_payload.peer != receipt.core.peer
         || request_digest != receipt.core.request_digest
         || expected_checkpoint != receipt.core.source_checkpoint
@@ -318,7 +311,7 @@ async fn validate_request_acceptance_receipt(
 }
 
 async fn holder_peer(state: &AppState, holder: &str) -> Result<ContactPeer, AppError> {
-    let holder_id = Did::new(holder.to_owned())
+    let holder_id = arkret_identifiers::DidCoreId::new(holder.to_owned())
         .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
     if let Some(agent) = state
         .agent_pairings()
@@ -328,7 +321,7 @@ async fn holder_peer(state: &AppState, holder: &str) -> Result<ContactPeer, AppE
     {
         return Ok(ContactPeer::Agent {
             agent_id: holder_id,
-            controller_id: Did::new(agent.controller_id)
+            controller_id: arkret_identifiers::DidCoreId::new(agent.controller_id)
                 .map_err(|error| AppError::internal(format!("Agent controller DID: {error}")))?,
         });
     }
@@ -338,7 +331,7 @@ async fn holder_peer(state: &AppState, holder: &str) -> Result<ContactPeer, AppE
 }
 
 fn validate_distinct_peer(holder: &ContactPeer, peer: &ContactPeer) -> Result<(), AppError> {
-    if holder.subject_id() == peer.subject_id() {
+    if holder.contact_actor_id() == peer.contact_actor_id() {
         return Err(AppError::invalid_param(
             "Contact peer must differ from holder",
         ));
@@ -370,11 +363,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
 ) -> Result<Event, AppError> {
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
-        arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(holder.subject_id()).map_err(|error| {
-                AppError::internal(format!("Contact holder cannot be projected: {error}"))
-            })?,
-        ),
+        holder.contact_actor_id(),
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
@@ -562,18 +551,17 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
-    let realm_id =
-        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
+    return Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "Contact prepare requires an exact holder authority_instance selector",
+    )
+    .with_status(StatusCode::PRECONDITION_FAILED));
+    #[allow(unreachable_code)]
+    let realm_id: RealmId = unreachable!("authority-instance selector required");
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         realm_id.clone(),
-        arkret_wire::ActorId::from(
-            arkret_wire::project_full_id_to_core_id(holder.subject_id()).map_err(|error| {
-                AppError::internal(format!(
-                    "contact holder full_id cannot be projected: {error}"
-                ))
-            })?,
-        ),
+        holder.contact_actor_id(),
     )
     .await?;
     let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {
@@ -695,7 +683,7 @@ async fn reservation_for_commit(
     Ok(reservation)
 }
 
-fn sorted_pair(left: &Did, right: &Did) -> [Did; 2] {
+fn sorted_pair(left: &DidCoreId, right: &DidCoreId) -> [DidCoreId; 2] {
     if left.as_str().as_bytes() <= right.as_str().as_bytes() {
         [left.clone(), right.clone()]
     } else {
@@ -706,8 +694,8 @@ fn sorted_pair(left: &Did, right: &Did) -> [Did; 2] {
 fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactBasis, Hash), AppError> {
     let basis = ContactBasis::Normal {
         sorted_pair_members: sorted_pair(
-            receipt.core.holder.subject_id(),
-            receipt.core.peer.subject_id(),
+            &receipt.core.holder.contact_actor_id(),
+            &receipt.core.peer.contact_actor_id(),
         ),
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: canonical_contact_digest(receipt)?,
@@ -752,7 +740,7 @@ fn sign_request_receipt(
             &json!({"event_ref": event.event_id, "event_digest": request_digest}),
         )?,
         accepted_at: now(),
-        issuer: Did::new(state.service_id().clone())
+        issuer: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?,
     };
     let receipt_digest = contact_hash("ak.contact.request-acceptance-core.v1", &core)?;
@@ -806,14 +794,14 @@ fn signed_current_proof(
     basis_id: Hash,
     event: &Event,
 ) -> Result<ContactCurrentProof, AppError> {
-    let issuer = event
+    let _issuer_full_id = event
         .proofs
         .iter()
         .find_map(|proof| {
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
-            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+            let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
             (arkret_wire::project_full_id_to_core_id(&full_id)
-                .map(arkret_wire::ActorId::from)
+                .map(arkret_wire::DidCoreId::from)
                 .ok()
                 == Some(event.actor_id.clone()))
             .then_some(full_id)
@@ -821,6 +809,7 @@ fn signed_current_proof(
         .ok_or_else(|| {
             AppError::invalid_param("Contact Event has no actor-bound proof controller")
         })?;
+    let issuer = event.actor_id.clone();
     let terminal = event.kind == arkret_wire::EventKind::ContactTombstoned;
     let head_digest = Hash::new(
         event
@@ -870,7 +859,7 @@ async fn commit(
         return json_ok(outcome);
     }
     let reservation = reservation_for_commit(state, &session.actor, &body).await?;
-    if reservation.holder.subject_id().as_str() != session.actor {
+    if reservation.holder.contact_actor_id().as_str() != session.actor {
         return Err(AppError::capability_denied(
             "Contact reservation belongs to another holder",
         ));
@@ -887,7 +876,7 @@ async fn commit(
         } => {
             let record = state
                 .contacts()
-                .contact_any(peer.subject_id().as_str(), &session.actor)
+                .contact_any(peer.contact_actor_id().as_str(), &session.actor)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
@@ -970,8 +959,13 @@ async fn plan_contact_commit(
     ),
     AppError,
 > {
-    let holder = reservation.holder.subject_id().as_str().to_owned();
-    let peer = reservation.branch.peer().subject_id().as_str().to_owned();
+    let holder = reservation.holder.contact_actor_id().as_str().to_owned();
+    let peer = reservation
+        .branch
+        .peer()
+        .contact_actor_id()
+        .as_str()
+        .to_owned();
     let contacts = state.contacts();
     let mut projection = None;
     let outcome = match &reservation.branch {
@@ -984,8 +978,8 @@ async fn plan_contact_commit(
             let request_receipt = sign_request_receipt(state, reservation, event)?;
             let peer_service_id = contact_request_delivery_address(
                 state,
-                reservation.holder.subject_id(),
-                reservation.branch.peer().subject_id(),
+                reservation.holder.contact_actor_id(),
+                reservation.branch.peer().contact_actor_id(),
                 introduction_evidence,
             )
             .await?
@@ -1156,7 +1150,7 @@ async fn plan_contact_commit(
                 &json!({"holder": holder, "peer": peer, "observed_at": event.created_at}),
             )?;
             let accepted_at = now();
-            let issuer = Did::new(holder.clone())
+            let issuer = arkret_identifiers::DidCoreId::new(holder.clone())
                 .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
             let unsigned_receipt = json!({
                 "basis_id": basis_id,
@@ -1257,7 +1251,7 @@ async fn plan_contact_commit(
                 })?)
                 .map_err(|error| AppError::internal(format!("reject digest invalid: {error}")))?;
             let accepted_at = now();
-            let issuer = Did::new(holder)
+            let issuer = arkret_identifiers::DidCoreId::new(holder)
                 .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
             let unsigned = json!({
                 "request_receipt": request_receipt,
@@ -1402,60 +1396,21 @@ async fn prepare_contact_federation_delivery(
     reservation: &ContactReservation,
     event: &Event,
     outcome: &ContactOperationOutcome,
-    planned_record: Option<&ContactRecord>,
+    _planned_record: Option<&ContactRecord>,
 ) -> Result<Option<soland_services::events::FederationDelivery>, AppError> {
     let ContactOperationOutcome::Accepted { outcome } = outcome else {
         return Ok(None);
     };
-    let holder = reservation.holder.subject_id();
-    let peer = reservation.branch.peer().subject_id();
+    let holder = reservation.holder.contact_actor_id();
+    let peer = reservation.branch.peer().contact_actor_id();
     let address = match &reservation.branch {
         ContactReservationBranch::Request {
             introduction_evidence,
             ..
         } => contact_request_delivery_address(state, holder, peer, introduction_evidence).await?,
-        _ => {
-            let Some(recipient_service_id) =
-                planned_record.and_then(|record| record.peer_service_id.as_deref())
-            else {
-                // Later facts may only reuse a delivery coordinate retained
-                // from the verified request carrier. Never infer a Principal
-                // Server from the peer subject DID.
-                return Ok(None);
-            };
-            let Some(carried_resolution) =
-                planned_record.and_then(|record| record.peer_service_resolution.as_ref())
-            else {
-                return Ok(None);
-            };
-            let Ok(recipient_service_id) =
-                arkret_wire::ServiceId::new(recipient_service_id.to_owned())
-            else {
-                return Ok(None);
-            };
-            let Ok(service_resolution) =
-                serde_json::from_value::<ServiceResolutionCarrier>(carried_resolution.clone())
-            else {
-                return Ok(None);
-            };
-            let subject_id = arkret_wire::ActorId::from(
-                arkret_wire::project_full_id_to_core_id(peer).map_err(|error| {
-                    AppError::internal(format!("Contact recipient full_id cannot project: {error}"))
-                })?,
-            );
-            let address = PeerContactAddress::principal_server(
-                subject_id,
-                recipient_service_id,
-                service_resolution,
-            );
-            address.validate_shape().map_err(|error| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    format!("retained Contact delivery address is invalid: {error}"),
-                )
-            })?;
-            Some(address)
-        }
+        // Stored legacy delivery coordinates do not retain the exact authority
+        // instance and therefore cannot authorize a later human-PCR route.
+        _ => None,
     };
     let Some(contact_address) = address else {
         // Some introduction profiles intentionally carry no routable service
@@ -1562,99 +1517,16 @@ async fn prepare_contact_federation_delivery(
 }
 
 async fn contact_request_delivery_address(
-    state: &AppState,
-    holder: &Did,
-    peer: &Did,
-    evidence: &ContactIntroductionEvidence,
+    _state: &AppState,
+    _holder: arkret_wire::DidCoreId,
+    _peer: arkret_wire::DidCoreId,
+    _evidence: &ContactIntroductionEvidence,
 ) -> Result<Option<PeerContactAddress>, AppError> {
-    let (recipient_service_id, recipient_service_kind) = match evidence {
-        ContactIntroductionEvidence::LocatorRef { principal_locator } => {
-            principal_locator.validate_minimal().map_err(|error| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    format!("Contact principal locator invalid: {error}"),
-                )
-            })?;
-            if arkret_wire::project_full_id_to_core_id(peer)
-                .map_or(true, |core| core != principal_locator.subject_id)
-                || principal_locator.expires_at <= now()
-            {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    "Contact principal locator does not bind the current peer",
-                ));
-            }
-            (
-                principal_locator.recipient_service_id.clone(),
-                principal_locator.recipient_service_kind.clone(),
-            )
-        }
-        ContactIntroductionEvidence::SharedRealm {
-            realm_id,
-            requester_member_ref,
-            target_member_ref,
-        } => {
-            let snapshot = state.projections().snapshot();
-            let requester = snapshot.member(realm_id.as_str(), holder.as_str());
-            let target = snapshot.member(realm_id.as_str(), peer.as_str());
-            let (Some(requester), Some(target)) = (requester, target) else {
-                return Ok(None);
-            };
-            if requester.state != "join"
-                || requester.membership_event_ref.as_deref() != Some(requester_member_ref.as_str())
-                || target.state != "join"
-                || target.delivery_status.as_deref() != Some("routable")
-                || target.membership_event_ref.as_deref() != Some(target_member_ref.as_str())
-            {
-                return Ok(None);
-            }
-            let Some(service_id) = target.recipient_service_id.as_deref() else {
-                return Ok(None);
-            };
-            (
-                arkret_wire::ServiceId::new(service_id.to_owned()).map_err(|error| {
-                    AppError::internal(format!("Contact member delivery service invalid: {error}"))
-                })?,
-                Some("principal_server".to_owned()),
-            )
-        }
-        ContactIntroductionEvidence::HandleClaim { .. } => return Ok(None),
-        ContactIntroductionEvidence::SamePrincipalServer => (
-            arkret_wire::ServiceId::new(state.service_id().clone()).map_err(|error| {
-                AppError::internal(format!("local Contact service core id invalid: {error}"))
-            })?,
-            Some("principal_server".to_owned()),
-        ),
-        ContactIntroductionEvidence::ExplicitAddress => return Ok(None),
-    };
-    let Some(service_resolution) = contact_introduction_service_resolution(state, evidence).await?
-    else {
-        return Ok(None);
-    };
-    let subject_id = arkret_wire::ActorId::from(
-        arkret_wire::project_full_id_to_core_id(peer).map_err(|error| {
-            AppError::internal(format!("Contact recipient full_id cannot project: {error}"))
-        })?,
-    );
-    let address = PeerContactAddress {
-        subject_id,
-        recipient_service_id,
-        service_resolution,
-        route_assistance: match evidence {
-            ContactIntroductionEvidence::LocatorRef { principal_locator } => {
-                principal_locator.route_assistance.clone()
-            }
-            _ => None,
-        },
-        recipient_service_kind,
-    };
-    address.validate_shape().map_err(|error| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
-            format!("Contact delivery address is invalid: {error}"),
-        )
-    })?;
-    Ok(Some(address))
+    // The current Contact introduction DTOs do not carry the exact five-field
+    // PrincipalAuthorityInstance required to authorize a human PCR delivery
+    // target. Routing from a core id, a Realm membership, or a locator alone
+    // would permit same-core PCR substitution, so this producer fails closed.
+    Ok(None)
 }
 
 async fn contact_introduction_service_resolution(
@@ -1813,7 +1685,7 @@ pub(super) async fn request(
         ContactOperationRequestBody::Prepare(body) => {
             let prior = state
                 .contacts()
-                .contact_any(&session.actor, body.peer.subject_id().as_str())
+                .contact_any(&session.actor, body.peer.contact_actor_id().as_str())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let local_terminal_basis = prior.as_ref().and_then(|record| {
@@ -1868,7 +1740,7 @@ pub(super) async fn respond(
             let peer = body.request_receipt.core.holder.clone();
             let record = state
                 .contacts()
-                .contact_any(peer.subject_id().as_str(), &session.actor)
+                .contact_any(peer.contact_actor_id().as_str(), &session.actor)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
@@ -1877,7 +1749,7 @@ pub(super) async fn respond(
             let (_, basis_id) = normal_basis(&body.request_receipt)?;
             if state
                 .contacts()
-                .contact_any(&session.actor, peer.subject_id().as_str())
+                .contact_any(&session.actor, peer.contact_actor_id().as_str())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .is_some()
@@ -1929,7 +1801,7 @@ pub(super) async fn reject(
             let peer = body.request_receipt.core.holder.clone();
             let record = state
                 .contacts()
-                .contact_any(peer.subject_id().as_str(), &session.actor)
+                .contact_any(peer.contact_actor_id().as_str(), &session.actor)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;

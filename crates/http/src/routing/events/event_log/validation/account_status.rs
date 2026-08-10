@@ -16,10 +16,10 @@ pub(super) async fn validate_account_status_service_binding(
     )
     .map_err(|_| account_status_unauthorized())?;
     let actor_id = event_string_field(object, &["actor_id"])
-        .and_then(|value| arkret_identifiers::Did::new(value).ok())
+        .and_then(|value| arkret_identifiers::DidCoreId::new(value).ok())
         .ok_or_else(account_status_unauthorized)?;
     let executed_by = event_string_field(object, &["executed_by"])
-        .and_then(|value| arkret_identifiers::Did::new(value).ok())
+        .and_then(|value| arkret_identifiers::DidCoreId::new(value).ok())
         .ok_or_else(account_status_unauthorized)?;
     let verification_method = object
         .get("proofs")
@@ -31,7 +31,7 @@ pub(super) async fn validate_account_status_service_binding(
     let proof_controller = verification_method
         .split_once('#')
         .map_or(verification_method, |(controller, _)| controller);
-    let proof_controller = arkret_identifiers::Did::new(proof_controller.to_owned())
+    let proof_controller = arkret_identifiers::DidFullId::new(proof_controller.to_owned())
         .map_err(|_| account_status_unauthorized())?;
 
     let authoritative_service = state
@@ -39,8 +39,9 @@ pub(super) async fn validate_account_status_service_binding(
         .account_authority_service_id
         .as_deref()
         .unwrap_or_else(|| state.service_id().as_str());
-    let authoritative_service_id = arkret_identifiers::Did::new(authoritative_service.to_owned())
-        .map_err(|_| account_status_unauthorized())?;
+    let authoritative_service_id =
+        arkret_identifiers::DidCoreId::new(authoritative_service.to_owned())
+            .map_err(|_| account_status_unauthorized())?;
     let account = state
         .identities()
         .account(payload.principal_id.as_str())
@@ -48,13 +49,10 @@ pub(super) async fn validate_account_status_service_binding(
         .map_err(|_| account_status_unauthorized())?
         .ok_or_else(account_status_unauthorized)?;
 
-    let historical_document = super::enrollment::did_document_at(
-        state,
-        authoritative_service_id.as_str(),
-        payload.effective_at,
-    )
-    .await
-    .map_err(|_| account_status_unauthorized())?;
+    let historical_document =
+        super::enrollment::did_document_at(state, proof_controller.as_str(), payload.effective_at)
+            .await
+            .map_err(|_| account_status_unauthorized())?;
     let signing_key_valid = historical_document
         .get("verificationMethod")
         .or_else(|| historical_document.get("verification_method"))

@@ -1105,7 +1105,7 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let actor = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
+        let actor = arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
         let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x32; 32],

@@ -44,6 +44,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
             recipient_service_id: Some(SERVICE_ID.to_owned()),
+            recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
             delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
             invited_at: None,
@@ -91,11 +92,11 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
 fn resign_federation_event(event: Value) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
-    let verification_method = arkret_wire::DidUrl::new(format!("{}#cotest", event.actor_id))
+    let verification_method = arkret_wire::DidUrl::new("did:web:alice.example#cotest")
         .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(&verification_method),
-        event.actor_id.clone(),
+        arkret_identity::verification_method_did(verification_method.as_str()).unwrap(),
         verification_method.clone(),
     );
     let created_at = event.created_at;
@@ -801,7 +802,10 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         event_digest: event_digest.clone(),
         authorization_lease_id: lease.authorization_lease_id.clone(),
         received_at: issued_at,
-        service_id: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
+        service_id: arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new(PEER_SOURCE_DID.to_owned()).unwrap(),
+        )
+        .unwrap(),
         authority_set_ref: authority_set_ref.clone(),
         proofs: Vec::new(),
     };
@@ -1094,7 +1098,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "keypackage_digest": keypackage_digest,
             "intended_realm_id": TEST_REALM_ID,
             "claim_id": claim_id,
-            "requester_did": "did:web:alice.example",
+            "requester_actor_id": "did:web:alice.example",
             "requester_device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
             "welcome_digest": arkret_canonical::sha256_digest(ciphertext.as_bytes()),

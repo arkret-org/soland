@@ -33,7 +33,7 @@ use arkret_identity::{
     DidWebvhResolver, IdentityError, ResolverFailMode, ResolverPolicy,
     verify_did_webvh_v1_chain_and_witness_bytes,
 };
-use arkret_wire::{Did, Hash};
+use arkret_wire::{DidFullId, Hash};
 use parking_lot::RwLock;
 use serde_json::Value;
 
@@ -94,7 +94,7 @@ pub struct SolandDidResolver {
     external: Option<Arc<HttpDidResolver>>,
     allowed_methods: Vec<String>,
     development_mode: bool,
-    local_snapshot: RwLock<BTreeMap<Did, CachedDidDocument>>,
+    local_snapshot: RwLock<BTreeMap<DidFullId, CachedDidDocument>>,
 }
 
 const LOCAL_DID_SNAPSHOT_CAPACITY: usize = 4_096;
@@ -147,7 +147,7 @@ impl SolandDidResolver {
             .any(|allowed| allowed.eq_ignore_ascii_case(method))
     }
 
-    fn cached_document(&self, did: &Did) -> Option<DidDocument> {
+    fn cached_document(&self, did: &DidFullId) -> Option<DidDocument> {
         if !self.method_allowed(did.method()) {
             return None;
         }
@@ -159,7 +159,7 @@ impl SolandDidResolver {
 
     fn document_from_parts(
         &self,
-        did: &Did,
+        did: &DidFullId,
         did_document: Value,
         seq: u64,
     ) -> Result<DidDocument, IdentityError> {
@@ -200,11 +200,11 @@ impl SolandDidResolver {
         &self,
         record: soland_services::identity::DidDocumentState,
     ) -> Result<DidDocument, IdentityError> {
-        let did = Did::new(record.did).map_err(IdentityError::from)?;
+        let did = DidFullId::new(record.did).map_err(IdentityError::from)?;
         self.document_from_parts(&did, record.did_document, record.seq)
     }
 
-    pub async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, IdentityError> {
+    pub async fn resolve_did_async(&self, did: &DidFullId) -> Result<DidDocument, IdentityError> {
         if !self.method_allowed(did.method()) {
             return Err(IdentityError::Protocol("DID method not allowed".to_owned()));
         }
@@ -239,7 +239,7 @@ impl SolandDidResolver {
 
     async fn fetch_verified_webvh_history(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<arkret_identity::VerifiedDidWebvhLog, String> {
         if !self.method_allowed("webvh") {
             return Err("did:webvh method is disabled by resolver policy".to_owned());
@@ -375,11 +375,14 @@ impl SolandDidResolver {
 }
 
 impl DidResolver for SolandDidResolver {
-    fn supports(&self, did: &Did) -> bool {
+    fn supports(&self, did: &DidFullId) -> bool {
         self.cached_document(did).is_some() || self.fallback.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+    fn resolve_did(
+        &self,
+        did: &DidFullId,
+    ) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         if let Some(document) = self.cached_document(did) {
             // A snapshot hit carries no method evidence: the durable record is a
             // projection, not a resolution, so §5.2's degenerate form is honest
@@ -393,7 +396,7 @@ impl DidResolver for SolandDidResolver {
 
 #[async_trait::async_trait]
 impl soland_services::identity::DidResolverPort for SolandDidResolver {
-    async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, String> {
+    async fn resolve_did_async(&self, did: &DidFullId) -> Result<DidDocument, String> {
         SolandDidResolver::resolve_did_async(self, did)
             .await
             .map_err(|error| error.to_string())
@@ -401,7 +404,7 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
 
     async fn resolve_current_external_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
     ) -> Result<
         soland_services::identity::PinnedDidDocumentState,
         soland_services::identity::PinnedDidResolutionError,
@@ -433,7 +436,7 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
 
     async fn resolve_external_pinned_webvh_state(
         &self,
-        did: &Did,
+        did: &DidFullId,
         version_id: &str,
         log_head_digest: &Hash,
     ) -> Result<
@@ -537,7 +540,7 @@ fn validate_webvh_provider_describe(
         .get("service_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "webvh provider describe missing service_id".to_owned())?;
-    Did::new(service_id.to_owned())
+    arkret_identifiers::DidCoreId::new(service_id.to_owned())
         .map_err(|error| format!("webvh provider service_id is invalid: {error}"))?;
     if let Some(expected) = expected_service_id
         && service_id != expected
@@ -603,7 +606,7 @@ fn valid_trust_domain(value: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use arkret_identifiers::Did;
+    use arkret_identifiers::DidFullId;
     use arkret_identity::{DidResolver, VerifiedDidWebvhLog};
     use arkret_wire::{Hash, PayloadSigner};
     use serde_json::json;
@@ -632,17 +635,17 @@ mod tests {
 
     /// `did:webvh:<scid>:<host>:<path...>` — well-formed sample that
     /// `DidWebvhResolver::supports()` accepts after URL-shape validation.
-    fn sample_webvh_did() -> Did {
-        Did::new("did:webvh:zabc:webvh.example:users:alice").expect("valid did:webvh")
+    fn sample_webvh_did() -> DidFullId {
+        DidFullId::new("did:webvh:zabc:webvh.example:users:alice").expect("valid did:webvh")
     }
 
-    fn sample_web_did() -> Did {
-        Did::new("did:web:alice.example").expect("valid did:web")
+    fn sample_web_did() -> DidFullId {
+        DidFullId::new("did:web:alice.example").expect("valid did:web")
     }
 
     #[test]
     fn current_key_cannot_back_sign_a_proof_for_a_pinned_old_version() {
-        let did = Did::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
+        let did = DidFullId::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
         let verification_method = format!("{did}#control");
         let old_signing_key = ed25519_dalek::SigningKey::from_bytes(&[11; 32]);
         let current_signing_key = ed25519_dalek::SigningKey::from_bytes(&[22; 32]);
@@ -845,7 +848,7 @@ mod tests {
     fn resolver_snapshot_does_not_regress_to_an_older_did_sequence() {
         let config = base_config();
         let resolver = build_soland_did_resolver(&config);
-        let did = Did::new("did:web:cache.example".to_owned()).expect("valid DID");
+        let did = DidFullId::new("did:web:cache.example".to_owned()).expect("valid DID");
         let verification_method = format!("{did}#key-1");
         let record = |seq: u64, key_byte: u8| {
             let document = DidDocument {
@@ -894,7 +897,7 @@ mod tests {
         let now = chrono::Utc::now();
         let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
         for index in 0..=LOCAL_DID_SNAPSHOT_CAPACITY {
-            let did = Did::new(format!("did:web:cache-{index}.example")).expect("valid DID");
+            let did = DidFullId::new(format!("did:web:cache-{index}.example")).expect("valid DID");
             let document =
                 DidDocument::new(did.clone(), format!("{did}#key-1"), public_key.clone());
             resolver

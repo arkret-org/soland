@@ -130,7 +130,10 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_identifiers::Did::new("did:web:alice").unwrap();
+    operation.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new("did:web:alice").unwrap(),
+    )
+    .unwrap();
     state.apply_projected(&operation, &writes, &hlc);
 
     // Structured cache populated with state="join" and the default member
@@ -164,7 +167,10 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_identifiers::Did::new(actor).unwrap();
+    operation.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(actor).unwrap(),
+    )
+    .unwrap();
 
     let mut ordinary = ProjectionState::new();
     ordinary
@@ -193,7 +199,10 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     );
 
     let mut mismatched = operation;
-    mismatched.context.sender = arkret_identifiers::Did::new("did:web:mallory.example").unwrap();
+    mismatched.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new("did:web:mallory.example").unwrap(),
+    )
+    .unwrap();
     assert!(matches!(
         ProjectionState::new()
             .apply_validated_realm_bootstrap_membership(&mismatched, &writes),
@@ -320,7 +329,10 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
     });
     let (_, writes) = projected_cell_writes(arkret_wire::EventKind::MemberState, REALM_A, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, REALM_A, payload);
-    operation.context.sender = arkret_identifiers::Did::new(ACTOR).unwrap();
+    operation.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(ACTOR).unwrap(),
+    )
+    .unwrap();
     state.apply_projected(&operation, &writes, &hlc);
 
     let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
@@ -772,7 +784,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     let realm_id =
         arkret_identifiers::RealmId::new("ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW")
             .unwrap();
-    let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+    let creator = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
@@ -1360,7 +1372,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_wire::EncryptionProfile::MlsRfc9420,
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(
-                arkret_identifiers::Did::new(agent_id).unwrap(),
+                arkret_identifiers::DidFullId::new(agent_id).unwrap(),
             ),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
@@ -1377,7 +1389,10 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         realm_id,
         payload.clone(),
     );
-    operation.context.sender = arkret_identifiers::Did::new(agent_id).unwrap();
+    operation.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(agent_id).unwrap(),
+    )
+    .unwrap();
     let effect = state.apply_projected(&operation, &writes, &ServerHlc::new("test"));
     assert!(
         !matches!(effect, ProjectionEffect::Rejected { .. }),
@@ -1399,7 +1414,10 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
     let (_, replay_writes) =
         projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
     let mut replay = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-    replay.context.sender = arkret_identifiers::Did::new(agent_id).unwrap();
+    replay.context.sender = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(agent_id).unwrap(),
+    )
+    .unwrap();
     assert!(matches!(
         state.apply_projected(&replay, &replay_writes, &ServerHlc::new("test")),
         ProjectionEffect::Rejected { reason }
@@ -1425,7 +1443,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::EncryptionProfile::MlsRfc9420,
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(
-                arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
+                arkret_identifiers::DidFullId::new("did:web:reducer-test.example").unwrap(),
             ),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )

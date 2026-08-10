@@ -1,4 +1,4 @@
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
 pub use arkret_models_collaboration::http_bodies::{
     ContactListRow, ContactState, DirectConversationSummary, DirectConversationSummaryState,
@@ -853,9 +853,9 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
-    let service_id = arkret_wire::ServiceId::from(
+    let service_id = arkret_wire::DidCoreId::from(
         arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
-            .expect("service resolution FullId must project to a stable service id"),
+            .expect("service resolution DidFullId must project to a stable service id"),
     );
     let plaintext_visibility = arkret_models_discovery::service_description::PlaintextVisibility {
         data_classes: vec![
@@ -1325,7 +1325,7 @@ mod tests {
 
     fn fixture_service_resolution() -> arkret_models_identity::ResolutionCommitment {
         arkret_models_identity::ResolutionCommitment {
-            full_id: arkret_wire::FullId::new("did:web:soland.example").unwrap(),
+            full_id: arkret_wire::DidFullId::new("did:web:soland.example").unwrap(),
             method_history_head: "fixture-history-head".to_owned(),
             version_id: "fixture-v1".to_owned(),
         }

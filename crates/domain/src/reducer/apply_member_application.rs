@@ -23,7 +23,7 @@ const DEFAULT_COOLDOWN_AFTER_REJECT: &str = "PT72H";
 
 #[derive(Clone, Debug)]
 pub struct MemberApplicationView {
-    pub applicant_did: String,
+    pub applicant_actor_id: String,
     pub application_receipt_digest: String,
     pub status: String,
     pub submitted_at: String,
@@ -108,7 +108,7 @@ impl ProjectionState {
         private_body: &JoinApplicationPrivateBody,
     ) -> Result<JoinApplicationAdmission, &'static str> {
         let realm_id = receipt.realm_id.as_str();
-        let applicant = receipt.applicant_did.as_str();
+        let applicant = receipt.applicant_actor_id.as_str();
         let member = self
             .member(realm_id, applicant)
             .ok_or("failed_precondition")?;
@@ -214,7 +214,7 @@ impl ProjectionState {
         let action = join_policy_review_capability(join_policy);
         if !self.projected_capability_grant_matches(
             receipt.reviewer_capability_proof.grant_id.as_str(),
-            receipt.reviewer_did.as_str(),
+            receipt.reviewer_actor_id.as_str(),
             realm_id,
             &action,
             realm_id,
@@ -226,7 +226,7 @@ impl ProjectionState {
             self,
             realm_id,
             join_policy,
-            receipt.reviewer_did.as_str(),
+            receipt.reviewer_actor_id.as_str(),
             &action,
             receipt.reviewed_at,
         )
@@ -248,7 +248,7 @@ impl ProjectionState {
             for previous in self.member_applications.values_mut().filter(|state| {
                 state.receipt_digest != receipt.application_receipt_digest.as_str()
                     && state.realm_id == receipt.realm_id.as_str()
-                    && state.applicant == receipt.applicant_did.as_str()
+                    && state.applicant == receipt.applicant_actor_id.as_str()
                     && state.knock_ref == receipt.knock_ref.as_str()
                     && state.status == "changes_requested"
                     && !state.superseded
@@ -262,14 +262,14 @@ impl ProjectionState {
         });
         let state = MemberApplicationState {
             realm_id: receipt.realm_id.as_str().to_owned(),
-            applicant: receipt.applicant_did.as_str().to_owned(),
+            applicant: receipt.applicant_actor_id.as_str().to_owned(),
             receipt_digest: receipt.application_receipt_digest.as_str().to_owned(),
             knock_ref: receipt.knock_ref.as_str().to_owned(),
             policy_version_digest: receipt.policy_version_digest.as_str().to_owned(),
             application_revision_digest: receipt.application_revision_digest.as_str().to_owned(),
             private_body: serde_json::to_value(private_body).unwrap_or(Value::Null),
             status: status_name(status).to_owned(),
-            accepted_by: latest_accept.map(|review| review.reviewer_did.as_str().to_owned()),
+            accepted_by: latest_accept.map(|review| review.reviewer_actor_id.as_str().to_owned()),
             accepted_grant_id: latest_accept.map(|review| {
                 review
                     .reviewer_capability_proof
@@ -298,7 +298,7 @@ impl ProjectionState {
             self.member_application_reject_at.insert(
                 (
                     receipt.realm_id.as_str().to_owned(),
-                    receipt.applicant_did.as_str().to_owned(),
+                    receipt.applicant_actor_id.as_str().to_owned(),
                 ),
                 rejected_at,
             );

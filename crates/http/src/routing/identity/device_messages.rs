@@ -573,7 +573,7 @@ async fn active_agent_keypackage_endpoint(
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
-    let principal = arkret_identifiers::CoreId::new(principal_id.to_owned())
+    let principal = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
         .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?;
     for row in &rows {
         let lifecycle = row.lifecycle().map_err(|error| {
@@ -660,7 +660,7 @@ fn device_message_envelope_from_record(
         )
         .ok()?,
         kind,
-        sender_principal_id: arkret_identifiers::Did::new(message.sender.clone()).ok()?,
+        sender_principal_id: arkret_identifiers::DidCoreId::new(message.sender.clone()).ok()?,
         sender_device_id: arkret_identifiers::DeviceId::new(
             message
                 .content
@@ -669,7 +669,8 @@ fn device_message_envelope_from_record(
                 .to_owned(),
         )
         .ok()?,
-        recipient_principal_id: arkret_identifiers::Did::new(message.recipient.clone()).ok()?,
+        recipient_principal_id: arkret_identifiers::DidCoreId::new(message.recipient.clone())
+            .ok()?,
         recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
         sent_at: message.created_at,
         expires_at,

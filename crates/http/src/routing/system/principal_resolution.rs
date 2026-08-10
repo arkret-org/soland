@@ -6,7 +6,7 @@ use arkret_models_identity::{
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence,
 };
-use arkret_wire::{CellRef, CoreId, Did, Event, FullId, Hash};
+use arkret_wire::{CellRef, DidCoreId, DidFullId, Event, Hash};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
@@ -25,13 +25,16 @@ pub(super) fn open_router() -> Router {
 #[salvo::oapi::endpoint(operation_id = "ak.open.identity.read.resolution", tags("identity"))]
 async fn open_principal_resolution(
     principal_id: PathParam<String>,
+    authority_instance_digest: QueryParam<String, true>,
     history_depth: QueryParam<usize, false>,
     after_resolution_event_ref: QueryParam<String, false>,
     depot: &mut Depot,
 ) -> JsonResult<PrincipalResolutionEvidence> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let principal_id = CoreId::new(principal_id.into_inner())
+    let principal_id = DidCoreId::new(principal_id.into_inner())
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
+    let authority_instance_digest = Hash::new(authority_instance_digest.into_inner())
+        .map_err(|_| AppError::invalid_param("invalid authority_instance_digest"))?;
     let history_depth = history_depth.into_inner().unwrap_or(0);
     if history_depth > MAX_HISTORY_DEPTH {
         return Err(AppError::invalid_param(
@@ -40,10 +43,13 @@ async fn open_principal_resolution(
     }
     let record = state
         .persistence()
-        .current_principal_resolution(&principal_id)
+        .principal_resolution_by_authority_instance(&authority_instance_digest)
         .await
         .map_err(|error| AppError::internal(format!("principal resolution store failed: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution not found"))?;
+    if record.authority_instance.principal_id != principal_id {
+        return Err(AppError::not_found("principal resolution not found"));
+    }
     let event_digest = Hash::new(record.current_event.event_digest().map_err(|error| {
         AppError::internal(format!(
             "stored principal resolution Event is invalid: {error}"
@@ -61,7 +67,7 @@ async fn open_principal_resolution(
         .projections()
         .effective_state_at(
             std::slice::from_ref(&accepted_seal.id),
-            &record.principal_control_realm_id,
+            &record.authority_instance.pcr_realm_id,
         )
         .map_err(|error| {
             AppError::internal(format!("principal resolution state proof failed: {error}"))
@@ -99,7 +105,7 @@ async fn open_principal_resolution(
         // Event's immediate predecessor.
         state
             .persistence()
-            .principal_resolution_history(&principal_id, Some(cursor), 0)
+            .principal_resolution_history(&authority_instance_digest, Some(cursor), 0)
             .await
             .map_err(|error| {
                 if error.is_not_found() {
@@ -118,7 +124,7 @@ async fn open_principal_resolution(
         state
             .persistence()
             .principal_resolution_history(
-                &principal_id,
+                &authority_instance_digest,
                 Some(record.current_event.event_id.as_str()),
                 history_depth.saturating_add(1),
             )
@@ -171,8 +177,8 @@ async fn open_principal_resolution(
     .await?;
 
     json_ok(PrincipalResolutionEvidence {
-        principal_id: record.principal_id,
-        principal_control_realm_id: record.principal_control_realm_id,
+        principal_id: record.authority_instance.principal_id,
+        principal_control_realm_id: record.authority_instance.pcr_realm_id,
         principal_genesis_event: PrincipalGenesisEvent(record.genesis_event),
         current_resolution_event,
         predecessor_resolution_events: predecessors,
@@ -235,7 +241,7 @@ async fn principal_method_history_evidence(
     current_event: &Event,
     predecessors: &[PrincipalResolutionUpdateEvent],
 ) -> Result<ResolutionMethodHistoryEvidence, AppError> {
-    let full_id = Did::new(projection.full_id.to_string()).map_err(|error| {
+    let full_id = DidFullId::new(projection.full_id.to_string()).map_err(|error| {
         AppError::internal(format!("stored principal full_id is invalid: {error}"))
     })?;
     let boundary = method_evidence_boundary(
@@ -471,7 +477,7 @@ fn validate_did_web_coordinates(
 
 fn validate_did_key_coordinates(
     projection: &PrincipalResolutionProjection,
-    full_id: &FullId,
+    full_id: &DidFullId,
 ) -> Result<(), AppError> {
     let digest = Hash::new(arkret_canonical::sha256_digest(full_id.as_str().as_bytes()))
         .map_err(|error| AppError::internal(format!("did:key digest is invalid: {error}")))?;
@@ -501,14 +507,15 @@ fn validate_synthetic_coordinates(
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{ActorId, Hlc, ScopeRef};
+    use arkret_wire::{DidCoreId, Hlc, ScopeRef};
     use chrono::{TimeZone as _, Utc};
 
     use super::*;
 
     fn history_fixture() -> (Event, Event, Event) {
-        let actor =
-            ActorId::from(CoreId::new("ak:did_core:webvh:z6mkfixture").expect("principal core id"));
+        let actor = DidCoreId::from(
+            DidCoreId::new("ak:did_core:webvh:z6mkfixture").expect("principal core id"),
+        );
         let genesis = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,

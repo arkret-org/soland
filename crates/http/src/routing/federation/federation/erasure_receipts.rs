@@ -2,7 +2,7 @@ use arkret_models_collaboration::governance::erasure::{
     ErasureReceiptAcceptance, ErasureReceiptAcceptanceStatus, ErasureReceiptPackage,
     ErasureReceiptResource, ErasureReceiptSubmitOutcome, ErasureReceiptSubmitRequestBody,
 };
-use arkret_wire::{Base64UrlString, Did, ProtocolSignature};
+use arkret_wire::{Base64UrlString, DidFullId, ProtocolSignature};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -230,7 +230,7 @@ async fn signed_acceptance(
         receipt_id: package.receipt.receipt_id.clone(),
         receipt_digest: package.receipt_digest.clone(),
         issuer_service_id: package.receipt.issuer.clone(),
-        receiver_service_id: Did::new(state.service_id().clone())
+        receiver_service_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         accepted_at,
         proof: ProtocolSignature {

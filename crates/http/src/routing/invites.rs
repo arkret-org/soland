@@ -4,7 +4,7 @@
 //! online locator resolver from `sync/invite-addressing.md`.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{CoreId, Did, Hash, InviteLocatorId, ServiceId};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
     InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody, InviteLocatorIssueOutcome,
@@ -536,14 +536,14 @@ async fn resolve_invite_locator(
         .map_err(|error| AppError::internal(format!("invite locator resolve: {error}")))?
         .ok_or_else(invite_locator_not_found)?;
     let subject_id =
-        CoreId::new(locator_ref.subject_id.clone()).map_err(|_| invite_locator_not_found())?;
+        DidCoreId::new(locator_ref.subject_id.clone()).map_err(|_| invite_locator_not_found())?;
     let issued_at = locator_ref.issued_at;
     let expires_at = locator_ref.expires_at;
     let locator_ref_digest = Hash::new(locator_ref.token_digest.clone())
         .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
     let display_hint = locator_ref.display_hint;
     let recipient_service_id =
-        ServiceId::new(locator_ref.recipient_service_id).map_err(|error| {
+        DidCoreId::new(locator_ref.recipient_service_id).map_err(|error| {
             AppError::internal(format!(
                 "configured service DID invalid for principal locator: {error}"
             ))
@@ -837,7 +837,7 @@ pub(crate) struct ReceiveDecision {
 /// override store.
 pub(crate) fn resolve_invite_receive_policy(
     state: &AppState,
-    subject: &Did,
+    subject: &DidCoreId,
 ) -> InviteReceivePolicy {
     state
         .contacts()
@@ -847,38 +847,27 @@ pub(crate) fn resolve_invite_receive_policy(
 
 fn resolve_core_invite_receive_policy(
     state: &AppState,
-    subject: &CoreId,
+    subject: &DidCoreId,
 ) -> Result<InviteReceivePolicy, AppError> {
     if let Some(policy) = state.contacts().invite_policy(subject.as_str()) {
         return Ok(policy);
     }
-    let projection = state.projections().snapshot();
-    let full_id = projection
-        .principal_resolution_for_actor(subject.as_str())
-        .and_then(|value| value.get("full_id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "recipient principal resolution is unavailable",
-            )
-        })?;
-    let full_id = Did::new(full_id.to_owned()).map_err(|error| {
-        AppError::internal(format!("projected recipient full_id is invalid: {error}"))
-    })?;
-    Ok(InviteReceivePolicy::spec_default(full_id))
+    Err(AppError::new(
+        ErrorCode::FailedPrecondition,
+        "recipient invite policy is not bound to an exact principal authority instance",
+    ))
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
 pub(crate) fn directory_handle_claim_resolve_allowed(
     state: &AppState,
     intent: Option<DirectoryIntent>,
-    requester: Option<&Did>,
+    requester: Option<&DidCoreId>,
     subject: &str,
     recipient_service_id: &str,
     source_service_id: &str,
     handle_claim: &HandleClaim,
-    resolved_by: Option<Did>,
+    resolved_by: Option<DidCoreId>,
 ) -> bool {
     if !matches!(
         intent,
@@ -894,10 +883,12 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Some(handle) = handle_claim.handle.clone() else {
         return false;
     };
-    let Ok(subject_id) = Did::new(subject.to_owned()) else {
+    let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
-    let policy = resolve_invite_receive_policy(state, &subject_id);
+    let Ok(policy) = resolve_core_invite_receive_policy(state, &subject_id) else {
+        return false;
+    };
     let decision = match intent {
         Some(DirectoryIntent::ContactRequest) => {
             let evidence = ContactIntroductionEvidence::HandleClaim {
@@ -1361,7 +1352,7 @@ fn kind_permitted_by_constraints(
         .is_none_or(|kinds| kinds.iter().any(|kind| kind == effective_kind))
 }
 
-fn did_in_list(value: &str, list: &[Did]) -> bool {
+fn did_in_list(value: &str, list: &[DidCoreId]) -> bool {
     list.iter().any(|did| did.as_str() == value)
 }
 
@@ -1424,7 +1415,7 @@ fn handle_claim_evidence_valid(
     handle: &Handle,
     handle_claim: &HandleClaim,
     candidate: Option<&MemberDeliveryBindingCandidate>,
-    resolved_by: Option<&Did>,
+    resolved_by: Option<&DidCoreId>,
     subject: &str,
     recipient_service_id: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -1435,7 +1426,7 @@ fn handle_claim_evidence_valid(
     if handle_claim.handle.as_ref() != Some(handle) {
         return false;
     }
-    if handle_claim.subject.as_ref().map(Did::as_str) != Some(subject) {
+    if handle_claim.subject.as_ref().map(DidCoreId::as_str) != Some(subject) {
         return false;
     }
     if handle_claim.binding_state != Some(HandleBindingState::Verified) {
@@ -1517,7 +1508,7 @@ fn handle_claim_issuer_allowed(
         .is_none_or(|trusted| handle_claim_matches_did_list(handle_claim, trusted))
 }
 
-fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[Did]) -> bool {
+fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreId]) -> bool {
     if trusted.is_empty() {
         return false;
     }
@@ -1530,15 +1521,14 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[Did]) ->
     }
     handle_claim
         .issuer
-        .as_deref()
-        .and_then(|issuer| Did::new(issuer.to_owned()).ok())
-        .is_some_and(|issuer| trusted.iter().any(|did| did == &issuer))
+        .as_ref()
+        .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
 }
 
 fn resolved_by_allowed(
     policy: &InviteReceivePolicy,
     constraints: Option<&ReceivePolicyConstraints>,
-    resolved_by: Option<&Did>,
+    resolved_by: Option<&DidCoreId>,
 ) -> bool {
     if !policy.trusted_directory_services.is_empty()
         && !resolved_by
@@ -1578,7 +1568,7 @@ fn member_delivery_candidate_valid(
     {
         return false;
     }
-    let Ok(subject_did) = Did::new(subject.to_owned()) else {
+    let Ok(subject_did) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
     let context = CandidateValidationContext::new(candidate.audience.clone())

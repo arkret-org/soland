@@ -10,12 +10,10 @@ pub(super) async fn persist_principal_resolution_projection(
     {
         return Ok(());
     }
-    let principal_id = arkret_wire::CoreId::new(event.actor_id.to_string())
-        .map_err(|error| format!("accepted principal id is invalid: {error}"))?;
     let Some(projection_value) = state
         .projections()
         .snapshot()
-        .principal_resolution_for_actor(principal_id.as_str())
+        .principal_resolution_for_realm(event.realm_id.as_str())
         .cloned()
     else {
         // Ordinary Realm creation has no principal-resolution cell.
@@ -28,7 +26,7 @@ pub(super) async fn persist_principal_resolution_projection(
         .map_err(|error| format!("materialized principal resolution is invalid: {error}"))?;
     let existing = state
         .persistence()
-        .current_principal_resolution(&principal_id)
+        .principal_resolution_for_realm(&event.realm_id)
         .await
         .map_err(|error| format!("load principal resolution index: {error}"))?;
     let expected = if kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str() {
@@ -41,13 +39,45 @@ pub(super) async fn persist_principal_resolution_projection(
     } else {
         None
     };
-    let genesis_event = existing
-        .as_ref()
-        .map(|record| record.genesis_event.clone())
-        .unwrap_or_else(|| event.clone());
+    let (authority_instance, genesis_event) = if let Some(existing) = existing.as_ref() {
+        (
+            existing.authority_instance.clone(),
+            existing.genesis_event.clone(),
+        )
+    } else {
+        if kind != arkret_wire::EventKind::RealmCreate.as_str() {
+            return Err(
+                "principal resolution update has no exact PCR authority instance".to_owned(),
+            );
+        }
+        let receipt = state
+            .event_queries()
+            .canonical_batch_receipts_for_event(event.event_id.as_str())
+            .await
+            .map_err(|error| format!("load PCR genesis receipt: {error}"))?
+            .into_iter()
+            .find(|receipt| {
+                receipt.pcr_genesis_scope().is_ok_and(|scope| {
+                    scope.principal_id == event.actor_id && scope.realm_id == event.realm_id
+                })
+            })
+            .ok_or_else(|| "accepted PCR genesis receipt is unavailable".to_owned())?;
+        let receipt_digest = arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&receipt)
+                .map_err(|error| format!("digest PCR genesis receipt: {error}"))?,
+        )
+        .map_err(|error| format!("PCR genesis receipt digest is invalid: {error}"))?;
+        let authority_instance = arkret_wire::PrincipalAuthorityInstance::new(
+            event.actor_id.clone(),
+            receipt.issuer,
+            event.realm_id.clone(),
+            receipt_digest,
+        )
+        .map_err(|error| format!("build PCR authority instance: {error}"))?;
+        (authority_instance, event.clone())
+    };
     let record = soland_storage::PrincipalResolutionRecord {
-        principal_id,
-        principal_control_realm_id: event.realm_id.clone(),
+        authority_instance,
         genesis_event,
         current_event: event.clone(),
         projection,
@@ -1138,7 +1168,7 @@ async fn dynamic_peer_event_targets(
     // Realm-level `sync_endpoints` are the canonical replication binding for
     // mirrors and shared sync services. They are independent of member-level
     // delivery bindings and are carried by the current accepted policy bundle.
-    let mut endpoint_urls = BTreeMap::new();
+    let mut sync_endpoint_routes = BTreeMap::new();
     let mut realm_sync_endpoint_service_ids = BTreeSet::new();
     if let Ok(records) = state
         .event_queries()
@@ -1154,48 +1184,62 @@ async fn dynamic_peer_event_targets(
     {
         for endpoint in endpoints {
             let Some(service_id) = endpoint
-                .get("did")
+                .get("service_id")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             else {
                 continue;
             };
+            let Ok(service_id_typed) = arkret_wire::DidCoreId::new(service_id.to_owned()) else {
+                continue;
+            };
             if service_id == state.service_id() {
                 continue;
             }
-            let Some(url) = endpoint
-                .get("endpoint")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+            let Some(service_kind) = endpoint.get("service_kind").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(carrier) = endpoint
+                .get("service_resolution")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<
+                        arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
+                    >(value)
+                    .ok()
+                })
             else {
                 continue;
             };
             let entry = service_frontiers.entry(service_id.to_owned()).or_default();
             entry.0.insert(policy_bundle.event_id.clone());
             entry.1.insert(policy_bundle.event_id.clone());
-            endpoint_urls.insert(service_id.to_owned(), url.to_owned());
+            sync_endpoint_routes.insert(
+                service_id.to_owned(),
+                (service_id_typed, service_kind.to_owned(), carrier),
+            );
             realm_sync_endpoint_service_ids.insert(service_id.to_owned());
         }
     }
 
     let mut targets = Vec::new();
     for (service_id, (membership_frontier, delivery_binding_frontier)) in service_frontiers {
-        let url = if let Some(legacy_sync_url) = endpoint_urls.remove(&service_id) {
-            // `sync_endpoints` still carries the pre-core endpoint shape. It
-            // remains usable only while its identifier is also pre-core.
-            if arkret_wire::ServiceId::new(service_id.clone()).is_ok() {
-                crate::routing::federation::federation::resolved_peer_base_url(
-                    state,
-                    &service_id,
-                    "principal_server",
-                    false,
-                )
-                .await
-                .ok()
-            } else if state.config().development_mode {
-                Some(legacy_sync_url)
+        let url = if let Some((typed_service_id, service_kind, carrier)) =
+            sync_endpoint_routes.remove(&service_id)
+        {
+            let resolver = state.service_route_resolver().ok();
+            if let Some(resolver) = resolver {
+                resolver
+                    .resolve_carrier_route(
+                        &carrier,
+                        &typed_service_id,
+                        &service_kind,
+                        chrono::Utc::now(),
+                    )
+                    .await
+                    .ok()
+                    .map(|route| route.cache_entry.base_url.trim_end_matches('/').to_owned())
             } else {
                 None
             }

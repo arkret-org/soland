@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn delivery_binding_stale_response_carries_new_service_and_frontier() {
     let response = delivery_binding_stale_response(
-        &arkret_wire::ServiceId::new("ak:did_core:web:bob.example").unwrap(),
-        &arkret_wire::ActorId::new("ak:did_core:web:alice.example").unwrap(),
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+        &arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
         &arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url:
                 "https://bob.example/_arkret/open/services/ak:did_core:web:bob.example/resolution"
@@ -67,7 +67,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
 #[test]
 fn delivery_binding_handed_over_response_carries_new_service() {
     let response = delivery_binding_handed_over_response(
-        &arkret_wire::ServiceId::new("ak:did_core:web:bob.example").unwrap(),
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
     );
     assert_eq!(
         response.pointer("/error/code").and_then(Value::as_str),

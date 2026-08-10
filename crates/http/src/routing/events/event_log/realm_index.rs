@@ -253,7 +253,7 @@ pub(super) async fn bootstrap_realm_member_index(
         tracing::warn!(%realm_id, "bootstrap_realm_member_index: invalid realm_id shape");
         return;
     };
-    let Ok(actor_typed) = arkret_identifiers::Did::new(actor.to_owned()) else {
+    let Ok(actor_typed) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
         tracing::warn!(%actor, "bootstrap_realm_member_index: invalid actor DID");
         return;
     };

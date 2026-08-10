@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use arkret_identifiers::ServiceId;
+use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
 };
@@ -115,13 +115,14 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id = arkret_identifiers::Did::new(grant.subject.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::CapabilityDenied,
-            format!("admin scope introspection returned invalid subject DID: {error}"),
-        )
-        .with_status(StatusCode::FORBIDDEN)
-    })?;
+    let principal_id =
+        arkret_identifiers::DidCoreId::new(grant.subject.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::CapabilityDenied,
+                format!("admin scope introspection returned invalid subject DID: {error}"),
+            )
+            .with_status(StatusCode::FORBIDDEN)
+        })?;
 
     Ok(SessionGrantIntrospection {
         active: true,
@@ -164,12 +165,14 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         BOTTOM_REPAIR.to_owned(),
         ADMIN_READ.to_owned(),
     ];
-    let principal_id = arkret_identifiers::Did::new(session.actor.clone()).unwrap_or_else(|_| {
-        // Dev-login actors may be handles rather than full DIDs. Reuse the
-        // configured, verified service full_id; never reconstruct one from
-        // the service core_id.
-        state.service_resolution_commitment().full_id.clone()
-    });
+    let principal_id =
+        arkret_identifiers::DidCoreId::new(session.actor.clone()).unwrap_or_else(|_| {
+            // Dev-login actors may be handles rather than full DIDs. Reuse the
+            // configured, verified service full_id; never reconstruct one from
+            // the service core_id.
+            arkret_identifiers::DidCoreId::new(state.service_id().clone())
+                .expect("configured service id is a validated core id")
+        });
     SessionGrantIntrospection {
         active: true,
         status: SessionGrantAdminIntrospectionStatus::Active,
@@ -219,7 +222,7 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::UNAUTHORIZED)
     })?;
-    let audience = ServiceId::new(state.service_id().clone()).map_err(|error| {
+    let audience = DidCoreId::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!(
             "runtime principal service_id is not a core_id: {error}"
         ))

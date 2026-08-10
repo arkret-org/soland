@@ -124,9 +124,11 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
-    let expected_realm =
-        crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
-    let managed_agent = if seal.realm_id == expected_realm {
+    let own_pcr = state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(seal.realm_id.as_str(), &session.actor);
+    let managed_agent = if own_pcr {
         None
     } else {
         crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
@@ -136,7 +138,7 @@ async fn submit_event_seal(
         )
         .await?
     };
-    if seal.realm_id != expected_realm && managed_agent.is_none() {
+    if !own_pcr && managed_agent.is_none() {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
@@ -833,8 +835,10 @@ async fn events_frontier(
     {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-        let own_pcr =
-            crate::routing::identity::principal_control_realm_for_actor(state, &session.actor)?;
+        let own_pcr = state
+            .projections()
+            .snapshot()
+            .realm_is_principal_control_for_actor(realm_value, &session.actor);
         let managed_agent_pcr =
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
@@ -842,7 +846,7 @@ async fn events_frontier(
                 realm_value,
             )
             .await?;
-        let accessible = realm_value == own_pcr.as_str()
+        let accessible = own_pcr
             || managed_agent_pcr
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
@@ -967,15 +971,16 @@ async fn events_frontier(
     // Actor selectors are split deliberately: combined Realm+actor is the
     // only authoring surface; actor-only is a read-only per-Realm aggregate.
     let actor = actor_id.expect("selector presence checked above");
-    let actor_id = arkret_wire::ActorId::new(actor.clone())
+    let actor_id = arkret_wire::DidCoreId::new(actor.clone())
         .map_err(|_| AppError::invalid_param("actor_id must be a valid core identity"))?;
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
         let own_actor_pcr = actor == session.actor
-            && realm_value
-                == crate::routing::identity::principal_control_realm_for_actor(state, &actor)?
-                    .as_str();
+            && state
+                .projections()
+                .snapshot()
+                .realm_is_principal_control_for_actor(&realm_value, &actor);
         let managed_actor_pcr = state
             .agent_pairings()
             .agent(&actor)
@@ -1086,7 +1091,7 @@ async fn events_frontier(
 pub(crate) async fn load_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: arkret_wire::ActorId,
+    actor_id: arkret_wire::DidCoreId,
 ) -> Result<RealmActorFrontierView, AppError> {
     let records = state
         .event_queries()
@@ -1128,7 +1133,7 @@ pub(crate) async fn load_realm_actor_frontier(
 pub(super) fn build_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: arkret_wire::ActorId,
+    actor_id: arkret_wire::DidCoreId,
     next_actor_seq: u64,
     frontier_event_ids: Vec<EventId>,
 ) -> Result<RealmActorFrontierView, AppError> {

@@ -12,7 +12,7 @@ use soland_services::identity::{
 
 use super::*;
 
-fn transaction_principal(request: &SecurityTransactionCreateRequest) -> &Did {
+fn transaction_principal(request: &SecurityTransactionCreateRequest) -> &arkret_wire::DidCoreId {
     match request {
         SecurityTransactionCreateRequest::Recovery(request) => &request.principal_id,
         SecurityTransactionCreateRequest::SecurityRotation(request) => &request.principal_id,
@@ -63,7 +63,7 @@ pub(super) async fn security_transaction_create(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("security_transaction_principal_isolation"));
     }
-    let coordinator_service_id = Did::new(state.service_id().clone())
+    let coordinator_service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("invalid local service DID: {error}")))?;
     let (resource, canonical_request) = request
         .into_initial_resource(coordinator_service_id, chrono::Utc::now())
@@ -601,7 +601,7 @@ fn initial_backup_erase_outcome(
 
 fn backup_value_matches_rotation(
     value: &Value,
-    principal_id: &Did,
+    principal_id: &arkret_wire::DidCoreId,
     series_id: &arkret_wire::BackupSeriesId,
     backup_kind: arkret_wire::BackupRotationKind,
     expected: &arkret_wire::BackupObjectRef,
@@ -708,11 +708,15 @@ pub(crate) async fn backup_series_erase_command(
         )
         .with_wire_code("security_transaction_failed_precondition"));
     }
-    let expected_control_realm = crate::routing::identity::principal_control_realm_for_actor(
-        state,
-        transaction.resource.principal_id.as_str(),
-    )?;
-    if request.authorization_lease.scope_ref.realm_id() != &expected_control_realm {
+    let expected_control_realm = request.authorization_lease.scope_ref.realm_id();
+    if !state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(
+            expected_control_realm.as_str(),
+            transaction.resource.principal_id.as_str(),
+        )
+    {
         return Err(AppError::conflict(
             "backup-series erase lease is scoped outside principal control",
         )
@@ -1411,9 +1415,8 @@ async fn continue_issue_terminal_receipt(
                 || !authorize_follows_reanchor
                 || reanchor_payload.replacement_authorize_payload_digest
                     != replacement_payload_digest
-                || did_entry_ref.as_deref().and_then(|reference| {
-                    did_version_id_from_ref(&transaction.resource.principal_id, reference)
-                }) != Some(reanchor_payload.did_version_id.as_str())
+                || reanchor_payload.authority_instance.principal_id
+                    != transaction.resource.principal_id
             {
                 return Err(AppError::conflict(
                     "device re-anchor Event changed the accepted recovery unit binding",
@@ -1614,160 +1617,16 @@ fn verify_recovery_device_signature(
 }
 
 async fn continue_publish_did_entry(
-    state: &AppState,
-    mut transaction: SecurityTransactionRecord,
+    _state: &AppState,
+    _transaction: SecurityTransactionRecord,
     _request: TypedSecurityTransactionContinueRequest,
-    canonical_request: Vec<u8>,
-    res: &mut Response,
+    _canonical_request: Vec<u8>,
+    _res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    let (_, plan) = root_anchored_parts(&transaction.resource)?;
-    let entry_bytes =
-        arkret_canonical::base64url_decode(&plan.did_publication.canonical_entry_base64url)
-            .map_err(|error| {
-                AppError::internal(format!("prepared DID entry encoding is invalid: {error}"))
-            })?;
-    arkret_canonical::verify_digest(&entry_bytes, plan.did_publication.entry_digest.as_str())
-        .map_err(|error| {
-            AppError::internal(format!("prepared DID entry digest is invalid: {error}"))
-        })?;
-    let entry: Value = serde_json::from_slice(&entry_bytes)
-        .map_err(|error| AppError::internal(format!("prepared DID entry is invalid: {error}")))?;
-    let canonical_entry = arkret_canonical::canonical_json_bytes(&entry)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if canonical_entry != entry_bytes {
-        return Err(AppError::internal(
-            "prepared DID entry bytes are not canonical JSON",
-        ));
-    }
-    let operation = entry
-        .as_object()
-        .ok_or_else(|| AppError::internal("prepared DID entry must be a JSON object"))?
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let version_id = entry
-        .get("versionId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("prepared DID entry is missing versionId"))?;
-    let expected_version_id = did_version_id_from_ref(
-        &transaction.resource.principal_id,
-        &plan.did_publication.expected_entry_ref,
+    Err(AppError::conflict(
+        "device re-anchor DID publication is unavailable until the protocol carries a compatible exact-authority receipt scope",
     )
-    .ok_or_else(|| {
-        AppError::internal("prepared DID entry ref is not a canonical DID version reference")
-    })?;
-    if version_id != expected_version_id {
-        return Err(AppError::internal(
-            "prepared DID entry versionId changed the reserved entry ref",
-        ));
-    }
-    let seq = version_id
-        .split_once('-')
-        .and_then(|(seq, _)| seq.parse::<u64>().ok())
-        .ok_or_else(|| AppError::internal("prepared DID entry versionId has no valid sequence"))?;
-    let submit_request = arkret_models_identity::DidOperationSubmitRequestBody {
-        did: transaction.resource.principal_id.clone(),
-        did_method: transaction.resource.principal_id.method().to_owned(),
-        seq: Some(seq),
-        prev_event_digest: None,
-        operation,
-    };
-    submit_request
-        .validate()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-
-    state
-        .security_transactions()
-        .begin_step(SecurityTransactionStepAttemptState {
-            transaction_id: transaction_id.clone(),
-            step: SecurityTransactionStep::PublishDidEntry,
-            canonical_request: canonical_request.clone(),
-        })
-        .await
-        .map_err(security_transaction_service_error)?;
-
-    let (endpoint, http) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &plan.did_publication.registry_endpoint,
-        "recovery DID registry",
-        state.config().development_mode,
-        std::time::Duration::from_secs(30),
-    )
-    .map_err(|error| AppError::internal(error).with_status(StatusCode::SERVICE_UNAVAILABLE))?;
-    let mut base_url = endpoint.clone();
-    base_url.set_path("/");
-    let mut client_builder = arkret_http_client::Client::builder(base_url).http_client(http);
-    if state.config().development_mode {
-        client_builder = client_builder.allow_insecure_localhost();
-    }
-    let client = client_builder.build().map_err(|error| {
-        AppError::internal(format!("DID registry client build failed: {error}"))
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
-    })?;
-    let outcome = client
-        .identity_submit_did_operation(&submit_request)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("DID registry publication failed: {error}"))
-                .with_status(StatusCode::SERVICE_UNAVAILABLE)
-        })?;
-    if !did_publication_status_is_success(&outcome.status)
-        || outcome.did != transaction.resource.principal_id
-        || outcome.seq != Some(seq)
-        || outcome.operation_ref.as_deref()
-            != Some(plan.did_publication.expected_entry_ref.as_str())
-    {
-        return Err(AppError::internal(
-            "DID registry outcome changed the prepared publication binding",
-        ));
-    }
-
-    let submit_request_digest = canonical_digest(&submit_request)?;
-    let outcome_digest = canonical_digest(&outcome)?;
-    transaction.resource.accepted_steps.push(AcceptedStep {
-        step: SecurityTransactionStep::PublishDidEntry,
-        prepared_material_digest: submit_request_digest,
-        acceptor_id: plan.did_publication.registry_service_id.as_str().to_owned(),
-        output_ref: plan.did_publication.expected_entry_ref.clone(),
-        output_digest: outcome_digest,
-        accepted_at: chrono::Utc::now(),
-    });
-    transaction.resource.state = SecurityTransactionState::Running;
-    transaction.resource.next_required_step = Some(SecurityTransactionStep::SubmitReanchorUnit);
-    transaction
-        .resource
-        .validate_structural()
-        .map_err(|error| {
-            AppError::internal(format!("advanced security transaction is invalid: {error}"))
-        })?;
-    let response_value = serde_json::to_value(&transaction.resource).map_err(|error| {
-        AppError::internal(format!(
-            "security transaction response encode failed: {error}"
-        ))
-    })?;
-    let participant_outcome = serde_json::to_value(&outcome)
-        .map_err(|error| AppError::internal(format!("DID outcome encode failed: {error}")))?;
-    let stored = state
-        .security_transactions()
-        .accept_step(
-            transaction,
-            SecurityTransactionStepOutcomeState {
-                transaction_id,
-                step: SecurityTransactionStep::PublishDidEntry,
-                canonical_request,
-                response: response_value,
-                participant_outcome: Some(participant_outcome),
-            },
-        )
-        .await
-        .map_err(security_transaction_service_error)?;
-    let resource = serde_json::from_value(stored.response).map_err(|error| {
-        AppError::internal(format!(
-            "stored security transaction response invalid: {error}"
-        ))
-    })?;
-    res.status_code(StatusCode::OK);
-    json_ok(resource)
+    .with_wire_code("security_transaction_failed_precondition"))
 }
 
 async fn continue_submit_reanchor_unit(
@@ -1957,24 +1816,6 @@ fn canonical_digest(value: &impl Serialize) -> Result<Hash, AppError> {
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
-fn did_version_id_from_ref<'a>(principal_id: &Did, reference: &'a str) -> Option<&'a str> {
-    let value = reference
-        .strip_prefix(principal_id.as_str())?
-        .strip_prefix("?versionId=")?;
-    (!value.is_empty() && !value.bytes().any(|byte| matches!(byte, b'&' | b'#' | b'?')))
-        .then_some(value)
-}
-
-fn did_publication_status_is_success(
-    status: &arkret_models_identity::identity::DidOperationSubmitStatus,
-) -> bool {
-    matches!(
-        status,
-        arkret_models_identity::identity::DidOperationSubmitStatus::Accepted
-            | arkret_models_identity::identity::DidOperationSubmitStatus::Duplicate
-    )
-}
-
 fn security_transaction_service_error(error: soland_services::ServiceError) -> AppError {
     if error.kind() == soland_services::ServiceErrorKind::Conflict
         && error.detail().contains("different canonical bytes")
@@ -1982,48 +1823,5 @@ fn security_transaction_service_error(error: soland_services::ServiceError) -> A
         AppError::conflict(error.detail()).with_wire_code("duplicate_conflict")
     } else {
         recovery_service_error(error)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn did_version_reference_yields_only_the_native_version_id() {
-        let did = Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
-        assert_eq!(
-            did_version_id_from_ref(
-                &did,
-                "did:webvh:z6mkfixture:alice.example?versionId=2-zQmRecovery",
-            ),
-            Some("2-zQmRecovery")
-        );
-        assert_eq!(
-            did_version_id_from_ref(&did, "2-zQmRecovery"),
-            None,
-            "a bare native version id is not a protocol artifact reference"
-        );
-        assert_eq!(
-            did_version_id_from_ref(
-                &did,
-                "did:webvh:z6mkfixture:alice.example?versionId=2-zQmRecovery&service=agent",
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn did_publication_exact_replay_is_successful() {
-        use arkret_models_identity::identity::DidOperationSubmitStatus;
-        assert!(did_publication_status_is_success(
-            &DidOperationSubmitStatus::Accepted
-        ));
-        assert!(did_publication_status_is_success(
-            &DidOperationSubmitStatus::Duplicate
-        ));
-        assert!(!did_publication_status_is_success(
-            &DidOperationSubmitStatus::Pending
-        ));
     }
 }

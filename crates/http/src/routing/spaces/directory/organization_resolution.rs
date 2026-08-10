@@ -48,9 +48,9 @@ pub(super) async fn resolve_organization(
 ) -> JsonResult<DirectoryOrganizationResolutionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if body.organization_did.is_none() && body.handle.is_none() {
+    if body.organization_principal_id.is_none() && body.handle.is_none() {
         return Err(AppError::missing_param(
-            "organization_did or handle is required",
+            "organization_principal_id or handle is required",
         ));
     }
     organizations::refresh_organization_projection(state)
@@ -59,14 +59,13 @@ pub(super) async fn resolve_organization(
     if let Some(organization) = organizations::organization_records_for_directory(state)
         .into_iter()
         .find(|organization| {
-            body.organization_did
-                .as_ref()
-                .is_some_and(|did| organization["organization_did"].as_str() == Some(did.as_str()))
-                || body.handle.as_deref().is_some_and(|handle| {
-                    organization["handle"]
-                        .as_str()
-                        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(handle))
-                })
+            body.organization_principal_id.as_ref().is_some_and(|did| {
+                organization["organization_principal_id"].as_str() == Some(did.as_str())
+            }) || body.handle.as_deref().is_some_and(|handle| {
+                organization["handle"]
+                    .as_str()
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(handle))
+            })
         })
     {
         let associated_realms: Vec<Value> = organization["realms"]
@@ -93,9 +92,9 @@ pub(super) async fn resolve_organization(
     let realm_entries = live_realm_entries(state).await;
     let realm_refs: Vec<&RealmDirectoryEntry> = realm_entries.iter().collect();
     let organization = demo_organization(&realm_refs, state.service_id());
-    let matches_id = body.organization_did.as_ref().is_some_and(|did| {
+    let matches_id = body.organization_principal_id.as_ref().is_some_and(|did| {
         did.as_str()
-            == organization["organization_did"]
+            == organization["organization_principal_id"]
                 .as_str()
                 .unwrap_or_default()
             || did.as_str() == state.service_id()

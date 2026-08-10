@@ -6,7 +6,7 @@ use arkret_models_identity::{
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence, ServiceResolutionRecord, ServiceResolutionRecordCore,
 };
-use arkret_wire::{DidUrl, Hash, ServiceId};
+use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -31,18 +31,20 @@ fn canonical_digest(value: &impl serde::Serialize) -> Result<Hash, AppError> {
     .map_err(|error| AppError::internal(format!("canonical digest is invalid: {error}")))
 }
 
-pub(crate) fn service_ids(state: &AppState) -> Result<(ServiceId, arkret_wire::FullId), AppError> {
+pub(crate) fn service_ids(
+    state: &AppState,
+) -> Result<(DidCoreId, arkret_wire::DidFullId), AppError> {
     let commitment = state.service_resolution_commitment();
     let core = arkret_wire::project_full_id_to_core_id(&commitment.full_id).map_err(|error| {
         AppError::new(
             ErrorCode::ServiceIdentityUnavailable,
-            format!("service FullId cannot be projected: {error}"),
+            format!("service DidFullId cannot be projected: {error}"),
         )
     })?;
-    Ok((ServiceId::from(core), commitment.full_id.clone()))
+    Ok((DidCoreId::from(core), commitment.full_id.clone()))
 }
 
-fn current_record_url(state: &AppState, service_id: &ServiceId) -> Result<String, AppError> {
+fn current_record_url(state: &AppState, service_id: &DidCoreId) -> Result<String, AppError> {
     let base = canonical_base_url(state)?;
     Ok(format!(
         "{base}_arkret/open/services/{}/resolution",
@@ -78,7 +80,7 @@ fn percent_encode_path_segment(value: &str) -> String {
 fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError> {
     #[derive(serde::Serialize)]
     struct RouteBindingProjection<'a> {
-        service_id: &'a ServiceId,
+        service_id: &'a DidCoreId,
         service_kind: &'a arkret_wire::ServiceKind,
         service_resolution: &'a arkret_models_identity::ResolutionCommitment,
         http_json_base_url: String,
@@ -132,7 +134,7 @@ fn webvh_resolution_event_ref(log_head_digest: &str) -> Result<String, AppError>
 
 pub(crate) fn service_assertion_method(
     state: &AppState,
-    stored: &arkret_identity::service_identity::StoredServiceIdentity,
+    stored: &arkret_identity::service_identity::StoredDidCoreIdentity,
 ) -> Result<DidUrl, AppError> {
     let expected_multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         state.notary_verifying_key().as_bytes(),
@@ -263,69 +265,13 @@ pub(crate) async fn ensure_current_record(
     ))
 }
 
-pub(crate) async fn authenticated_current_resolution(
-    state: &AppState,
-    description: &ServiceDescribe,
-) -> Result<AuthenticatedServiceResolution, AppError> {
-    let record = ensure_current_record(state, description).await?;
-    let stored = state
-        .stored_service_identity()
-        .await
-        .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
-    let normalized_did_document: DidDocument = serde_json::from_value(
-        serde_json::to_value(&stored.did_document)
-            .map_err(|error| AppError::internal(format!("service DID encode failed: {error}")))?,
-    )
-    .map_err(|error| AppError::internal(format!("service DID normalize failed: {error}")))?;
-    let document_digest = arkret_identity::document_canonical_digest(&normalized_did_document)
-        .map_err(|error| AppError::internal(format!("service DID digest failed: {error}")))?;
-    let witness_proofs_digest = canonical_digest(&Vec::<serde_json::Value>::new())?;
-    let commitment = state.service_resolution_commitment();
-    let boundary = ResolutionMethodEvidenceBoundary {
-        from_method_history_head: commitment.method_history_head.clone(),
-        from_version_id: commitment.version_id.clone(),
-        to_method_history_head: commitment.method_history_head.clone(),
-        to_version_id: commitment.version_id.clone(),
-    };
-    let method_history_evidence = ResolutionMethodHistoryEvidence::WebvhLog {
-        adapter_version: "did:webvh:1.0".to_owned(),
-        boundary,
-        evidence: ResolutionDidBindingEvidenceReceipt {
-            kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
-            method: "webvh".to_owned(),
-            document_digest,
-            method_proofs: vec![ResolutionDidBindingMethodProof {
-                kind: ResolutionDidBindingMethodProofKind::WebvhLog,
-                history_head: commitment.method_history_head.clone(),
-                witnesses: Vec::new(),
-                witness_proofs_digest,
-            }],
-        },
-    };
-    let authenticated = AuthenticatedServiceResolution {
-        service_resolution_record: record,
-        method_history_evidence,
-        normalized_did_document,
-    };
-    let (service_id, _) = service_ids(state)?;
-    arkret_signatures::service_resolution::verify_authenticated_service_resolution(
-        &authenticated,
-        &service_id,
-        Utc::now(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!("produced service resolution is invalid: {error}"))
-    })?;
-    Ok(authenticated)
-}
-
 #[salvo::oapi::endpoint(operation_id = "ak.open.service.read.resolution", tags("identity"))]
 async fn open_service_resolution(
     service_id: PathParam<String>,
     depot: &mut Depot,
 ) -> JsonResult<ServiceResolutionRecord> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let requested = ServiceId::new(service_id.into_inner())
+    let requested = DidCoreId::new(service_id.into_inner())
         .map_err(|_| AppError::not_found("service resolution not found"))?;
     let (current, _) = service_ids(state)?;
     if requested != current {

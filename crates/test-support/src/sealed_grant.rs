@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{CellRef, Did, EventId, GrantId, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{CellRef, DidFullId, EventId, GrantId, Hash, Hlc, RealmId, SealId};
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
@@ -118,9 +118,9 @@ pub async fn seed_sealed_capability_grant(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        arkret_wire::ActorId::from(
+        arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &Did::new(fixture.issuer.to_owned()).expect("fixture grant issuer DID"),
+                &DidFullId::new(fixture.issuer.to_owned()).expect("fixture grant issuer DID"),
             )
             .expect("fixture grant issuer projection"),
         ),
@@ -140,7 +140,7 @@ pub async fn seed_sealed_capability_grant(
 
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
-        Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
+        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .expect("fixture notary verification method"),
     );
@@ -232,7 +232,7 @@ pub async fn seal_accepted_capability_grant(
 
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
-        Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
+        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .expect("fixture notary verification method"),
     );
@@ -281,7 +281,7 @@ pub fn seed_historical_capability_grant(
 
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
-        Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
+        DidFullId::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .expect("fixture notary verification method"),
     );
@@ -340,9 +340,9 @@ fn grant_cell_op(grant_id: &str, issuer: &str, move_id: &Hash, body: Value) -> (
     ))
     .expect("capability grant cell ref");
     let op = IssuedOp {
-        issuer: arkret_wire::ActorId::from(
+        issuer: arkret_wire::DidCoreId::from(
             arkret_wire::project_full_id_to_core_id(
-                &Did::new(issuer.to_owned()).expect("fixture grant issuer DID"),
+                &DidFullId::new(issuer.to_owned()).expect("fixture grant issuer DID"),
             )
             .expect("fixture grant issuer projection"),
         ),

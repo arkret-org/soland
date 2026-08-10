@@ -1003,12 +1003,12 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
         if is_equivocation {
             let Some(issuer) = winner_event.proofs.iter().find_map(|proof| {
                 let (controller, _) = proof.verification_method.rsplit_once('#')?;
-                let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+                let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
                 (arkret_wire::project_full_id_to_core_id(&full_id)
-                    .map(arkret_wire::ActorId::from)
+                    .map(arkret_wire::DidCoreId::from)
                     .ok()
                     == Some(winner_event.actor_id.clone()))
-                .then_some(full_id)
+                .then_some(winner_event.actor_id.clone())
             }) else {
                 continue;
             };
@@ -1202,11 +1202,11 @@ async fn device_lists_for_actors(
 
     let changed = changed
         .into_iter()
-        .filter_map(|actor| arkret_identifiers::Did::new(actor).ok())
+        .filter_map(|actor| arkret_identifiers::DidCoreId::new(actor).ok())
         .collect();
     let left = left
         .into_iter()
-        .filter_map(|actor| arkret_identifiers::Did::new(actor).ok())
+        .filter_map(|actor| arkret_identifiers::DidCoreId::new(actor).ok())
         .collect();
     (
         arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {
@@ -1346,7 +1346,7 @@ async fn notification_account_data_events(
         let Ok(Value::Object(payload)) = serde_json::to_value(row.notification) else {
             continue;
         };
-        event.actor_id = match arkret_wire::ActorId::new(session.actor.clone()) {
+        event.actor_id = match arkret_wire::DidCoreId::new(session.actor.clone()) {
             Ok(actor_id) => actor_id,
             Err(_) => continue,
         };
@@ -1591,8 +1591,10 @@ mod account_notification_tests {
                                 "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
                             )
                             .unwrap(),
-                            agent_id: arkret_wire::Did::new("did:web:agent.example".to_owned())
-                                .expect("test Agent DID"),
+                            agent_id: arkret_wire::DidCoreId::new(
+                                "ak:did_core:web:agent.example".to_owned(),
+                            )
+                            .expect("test Agent core id"),
                             requested_at: "2026-07-27T04:57:02.959Z"
                                 .parse()
                                 .expect("test requested_at"),

@@ -3,14 +3,14 @@ use arkret_models_identity::{
     ServiceResolutionPublishRequest, ServiceResolutionRecord, ServiceRouteCacheEntry,
     ServiceRouteHandoverNotice, ServiceRouteNoticeState,
 };
-use arkret_wire::{Hash, RealmId, RequestId, ServiceId};
+use arkret_wire::{DidCoreId, Hash, RealmId, RequestId};
 use chrono::{DateTime, Utc};
 
 use super::{PersistenceResult, async_trait};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceResolutionMirrorEntry {
-    pub source_service_id: ServiceId,
+    pub source_service_id: DidCoreId,
     pub realm_id: RealmId,
     pub request_id: RequestId,
     pub request_digest: Hash,
@@ -75,7 +75,7 @@ pub enum MonotonicRouteWrite {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceResolutionForkEvidence {
-    pub service_id: ServiceId,
+    pub service_id: DidCoreId,
     pub service_kind: String,
     pub artifact_family: String,
     pub artifact_key: String,
@@ -90,7 +90,7 @@ pub struct ServiceResolutionForkEvidence {
 /// discovery or authorization statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ServiceRouteStoredKey {
-    pub service_id: ServiceId,
+    pub service_id: DidCoreId,
     pub service_kind: String,
 }
 
@@ -110,28 +110,28 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn notice_states(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceRouteNoticeState>>;
 
     async fn handover_mirror_entries(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionMirrorEntry>>;
 
     async fn quarantine_evidence(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<ServiceResolutionForkEvidence>>;
 
     async fn last_seen_floor(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceResolutionLastSeenFloor>>;
 
@@ -142,7 +142,7 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn notice_state(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
         handover_id: &str,
     ) -> PersistenceResult<Option<ServiceRouteNoticeState>>;
@@ -168,9 +168,9 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn successor_records(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
         after_sequence: u64,
         limit: usize,
@@ -178,9 +178,9 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn latest_notice(
         &self,
-        source_service_id: &ServiceId,
+        source_service_id: &DidCoreId,
         realm_id: &RealmId,
-        target_service_id: &ServiceId,
+        target_service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>>;
 
@@ -191,13 +191,13 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn is_quarantined(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<bool>;
 
     async fn route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<Option<ServiceRouteCacheEntry>>;
 
@@ -205,7 +205,7 @@ pub trait ServiceRouteStore: Send + Sync {
 
     async fn evict_route_cache(
         &self,
-        service_id: &ServiceId,
+        service_id: &DidCoreId,
         service_kind: &str,
     ) -> PersistenceResult<()>;
 }

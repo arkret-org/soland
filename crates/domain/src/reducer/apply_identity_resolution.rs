@@ -3,8 +3,11 @@ use super::*;
 const RESOLUTION_CELL: &str = super::apply_realm_lifecycle::PRINCIPAL_RESOLUTION_CELL;
 
 impl ProjectionState {
-    pub fn principal_resolution_for_actor(&self, principal_id: &str) -> Option<&Value> {
-        let realm_id = self.principal_control_realm_for_actor(principal_id)?;
+    /// Read the resolution singleton of one explicitly selected PCR.
+    ///
+    /// Multiple PCRs may share a principal core, so this API deliberately
+    /// cannot discover a supposedly global current PCR from `principal_id`.
+    pub fn principal_resolution_for_realm(&self, realm_id: &str) -> Option<&Value> {
         self.realm_null_subject_cell_value(realm_id, "ak.component.identity.resolution.v1")
     }
 
@@ -13,7 +16,12 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         let principal_id = operation.context.sender.as_str();
-        if self.principal_control_realm_for_actor(principal_id) != Some(operation.realm_id.as_str())
+        if !self.realm_is_principal_control(operation.realm_id.as_str())
+            || self
+                .realm_states
+                .get(operation.realm_id.as_str())
+                .and_then(|realm| realm.owner.as_deref())
+                != Some(principal_id)
         {
             return ProjectionEffect::Rejected {
                 reason: "identity_resolution_wrong_realm".to_owned(),
@@ -39,7 +47,7 @@ impl ProjectionState {
         let valid_next = next
             .get("full_id")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_wire::FullId::new(value.to_owned()).ok())
+            .and_then(|value| arkret_wire::DidFullId::new(value.to_owned()).ok())
             .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
             .is_some_and(|projected| projected.as_str() == principal_id)
             && next

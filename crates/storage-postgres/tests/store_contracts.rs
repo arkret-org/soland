@@ -133,13 +133,13 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
     };
     let _db_guard = DB_GUARD.lock().await;
     let now = chrono::Utc::now();
-    let actor_full_id = arkret_identifiers::FullId::new(format!(
+    let actor_full_id = arkret_identifiers::DidFullId::new(format!(
         "did:web:managed-anchor-{}.example",
         uuid::Uuid::now_v7()
     ))
     .unwrap();
     let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id)
-        .map(arkret_identifiers::ActorId::from)
+        .map(arkret_identifiers::DidCoreId::from)
         .unwrap();
     let realm_id =
         arkret_identifiers::RealmId::from_event_id(&arkret_identifiers::EventId::from_digest(

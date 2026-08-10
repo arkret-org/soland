@@ -168,11 +168,11 @@ async fn validate_event_envelope_with_ingress(
             "actor_id is required",
         )
     })?;
-    if arkret_wire::ActorId::new(actor_id.clone()).is_err() {
+    if arkret_wire::DidCoreId::new(actor_id.clone()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "actor_id must be a Core ActorId",
+            "actor_id must be a Core DidCoreId",
         ));
     }
     let actor_seq = object

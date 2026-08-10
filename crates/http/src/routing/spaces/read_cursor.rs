@@ -109,9 +109,7 @@ fn validate_caller_signed_read_cursor(
             .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?,
     )
     .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?;
-    if arkret_wire::project_full_id_to_core_id(&cursor.actor_id).map_or(true, |core| {
-        arkret_wire::ActorId::from(core) != event.actor_id
-    }) {
+    if cursor.actor_id != event.actor_id {
         return Err(AppError::invalid_param(
             "advance_event payload.actor_id must equal event.actor_id",
         ));

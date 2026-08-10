@@ -1,3 +1,4 @@
+use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_wire::SchemaId;
 
@@ -61,12 +62,13 @@ pub(super) fn signed_agent_selector_claim(
     subject: &str,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> Result<AgentSelectorClaim, AppError> {
-    let service_id = state.service_id().clone();
-    let issuer = Did::new(service_id.clone())
-        .map_err(|err| AppError::internal(format!("invalid service DID: {err}")))?;
-    let controller_subject = Did::new(controller_subject.to_owned())
+    let service_id = DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("invalid service core id: {error}")))?;
+    let issuer = service_id.clone();
+    let issuer_full_id = state.service_resolution_commitment().full_id.clone();
+    let controller_subject = DidCoreId::new(controller_subject.to_owned())
         .map_err(|err| AppError::internal(format!("invalid controller DID: {err}")))?;
-    let subject = Did::new(subject.to_owned())
+    let subject = DidCoreId::new(subject.to_owned())
         .map_err(|err| AppError::internal(format!("invalid agent DID: {err}")))?;
     let audience = selector_claim_audience(request);
     let created_at = now();
@@ -98,14 +100,13 @@ pub(super) fn signed_agent_selector_claim(
     })?;
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
-        issuer.clone(),
-        arkret_wire::DidUrl::new(format!("{service_id}#directory-agent-selector-claim")).map_err(
-            |error| {
+        issuer_full_id.clone(),
+        arkret_wire::DidUrl::new(format!("{issuer_full_id}#directory-agent-selector-claim"))
+            .map_err(|error| {
                 AppError::internal(format!(
                     "directory claim verification method is invalid: {error}"
                 ))
-            },
-        )?,
+            })?,
     );
     let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
@@ -125,10 +126,7 @@ pub(super) fn signed_agent_selector_claim(
         agent_slug: agent_slug.to_owned(),
         subject,
         issuer,
-        issuer_service_id: Some(
-            Did::new(state.service_id().clone())
-                .map_err(|err| AppError::internal(format!("invalid issuer service DID: {err}")))?,
-        ),
+        issuer_service_id: Some(service_id),
         binding_state: HandleBindingState::Verified,
         visibility: HandleVisibility::Restricted,
         audience: Some(selector_claim_audience(request)),
@@ -194,7 +192,7 @@ pub(super) async fn resolve_agent_selector(
     }
     let subject = matches[0].id.as_str();
     if body
-        .expected_agent_did
+        .expected_actor_id
         .as_ref()
         .is_some_and(|expected| expected.as_str() != subject)
     {

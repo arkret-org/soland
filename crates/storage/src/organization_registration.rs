@@ -5,7 +5,7 @@ use arkret_models_identity::{
     OrganizationRegistrationOutcome, OrganizationRegistrationScope, OrganizationRegistrationStatus,
     next_organization_registration_generation, organization_registration_replay_outcome,
 };
-use arkret_wire::{CoreId, FullId, Hash};
+use arkret_wire::{DidCoreId, DidFullId, Hash};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -48,10 +48,10 @@ impl OrganizationRegistrationChallengeRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizationRegistrationGenerationRecord {
-    pub organization_id: CoreId,
-    pub full_id: FullId,
+    pub organization_id: DidCoreId,
+    pub full_id: DidFullId,
     pub registration_generation: u64,
-    pub local_admin_subject: CoreId,
+    pub local_admin_subject: DidCoreId,
     pub delegated_scopes: Vec<OrganizationRegistrationScope>,
     pub status: OrganizationRegistrationStatus,
     pub current_outcome_id: String,
@@ -63,7 +63,7 @@ pub struct OrganizationRegistrationGenerationRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizationRegistrationStateRecord {
-    pub organization_id: CoreId,
+    pub organization_id: DidCoreId,
     pub current_generation: u64,
     pub generations: BTreeMap<u64, OrganizationRegistrationGenerationRecord>,
 }
@@ -137,7 +137,7 @@ pub struct OrganizationRegistrationRefreshCommit {
 
 #[derive(Clone, Debug)]
 pub struct OrganizationRegistrationLifecycleCommit {
-    pub organization_id: CoreId,
+    pub organization_id: DidCoreId,
     pub expected_current_generation: u64,
     pub expected_current_outcome_id: String,
     pub outcome: OrganizationRegistrationOutcome,
@@ -159,12 +159,12 @@ pub trait OrganizationRegistrationStore: Send + Sync {
 
     async fn get_current(
         &self,
-        organization_id: &CoreId,
+        organization_id: &DidCoreId,
     ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>>;
 
     async fn get_generation(
         &self,
-        organization_id: &CoreId,
+        organization_id: &DidCoreId,
         generation: u64,
     ) -> PersistenceResult<Option<OrganizationRegistrationGenerationRecord>>;
 
@@ -185,7 +185,7 @@ pub trait OrganizationRegistrationStore: Send + Sync {
 
     async fn mark_stale(
         &self,
-        organization_id: &CoreId,
+        organization_id: &DidCoreId,
         expected_current_generation: u64,
         expected_current_outcome_id: &str,
         changed_at: DateTime<Utc>,
@@ -426,7 +426,7 @@ pub fn apply_organization_registration_refresh(
 pub fn apply_organization_registration_stale(
     state: &mut OrganizationRegistrationStateRecord,
     outcomes: &BTreeMap<String, OrganizationRegistrationOutcome>,
-    organization_id: &CoreId,
+    organization_id: &DidCoreId,
     expected_current_generation: u64,
     expected_current_outcome_id: &str,
     changed_at: DateTime<Utc>,

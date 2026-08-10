@@ -315,7 +315,7 @@ pub struct AppConfig {
     /// Durable key custody shared by service identity, notary, and admin
     /// KeyStore namespaces. Signing and WebVH
     /// control secrets are addressed exclusively by the opaque KeyRefs in
-    /// the verified `LocalServiceIdentity`; AppState neither derives a key id
+    /// the verified `LocalDidCoreIdentity`; AppState neither derives a key id
     /// from the service DID nor independently mints a runtime signer.
     ///
     /// When disabled, an explicit `SOLAND_NOTARY_SIGNING_KEY` may supply the
@@ -334,7 +334,8 @@ pub struct AppConfig {
     pub federation_fanout_topology: FederationFanoutTopology,
     /// Federation peer endpoints the outbound layer considers as broadcast
     /// targets (mesh) or hub upstream (hub). The resolved form is
-    /// `url|service_did|trust_domain`. Endpoint-only entries are resolved
+    /// `url|service_id|trust_domain`, where `service_id` is a `DidCoreId`.
+    /// Endpoint-only entries are resolved
     /// through `/_arkret/describe`; the discovered service DID and trust
     /// domain are kept in runtime state rather than copied into deployment
     /// config. Sovereign outbound fails closed until that binding is present.
@@ -429,7 +430,8 @@ pub struct AppConfig {
     /// cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
-    /// Defaults to `ak:trust_domain:<host_of_service_id>`.
+    /// This is explicit deployment identity configuration: a stable service
+    /// core id cannot be reversed into a host or trust domain.
     pub trust_domain: String,
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
@@ -808,7 +810,7 @@ impl AppConfig {
             );
         }
         if let Some(value) = account_authority_service_id.as_deref() {
-            arkret_identifiers::Did::new(value.to_owned()).map_err(|error| {
+            arkret_identifiers::DidCoreId::new(value.to_owned()).map_err(|error| {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
         }
@@ -984,14 +986,14 @@ impl AppConfig {
             crate::security::sovereign_enclave_allowed_outbound_hosts();
         let candidate_join_policy_enabled =
             env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
-        // When the operator does not pin a trust domain, service bootstrap
-        // derives it from the resolved runtime DID before AppState is built.
-        let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").unwrap_or_default();
-        if !trust_domain.is_empty() {
-            arkret_identifiers::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
-                anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
-            })?;
-        }
+        let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").ok_or_else(|| {
+            anyhow::anyhow!(
+                "SOLAND_TRUST_DOMAIN is required; it cannot be derived from the service core id"
+            )
+        })?;
+        arkret_identifiers::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
+            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
+        })?;
         let receive_policy_constraints = load_receive_policy_constraints()?;
         let failpoints = crate::failpoints::FailpointRegistry::from_env(development_mode)?;
         let log_format = LogFormat::from_env(development_mode);
@@ -1411,14 +1413,6 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
     Ok(Some(seed))
 }
 
-/// Round R2/R3 (T08) — derive a deployment-bound trust domain id.
-///
-/// Order of resolution:
-/// 1. `SOLAND_TRUST_DOMAIN` env var if set (must validate as `ak:trust_domain:<scope>` per SDK
-///    [`arkret_identifiers::TypedTrustDomainId`]).
-/// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
-///    remainder, then prefix with `ak:trust_domain:`.
-///
 /// `sync/federation.md` §4.1 deployment gate: outbound federation on a
 /// non-durable outbox is a silent data-loss configuration.
 ///
@@ -1444,66 +1438,6 @@ pub fn assert_durable_outbox_backend(
          outbox drops every pending delivery on restart. Configure DATABASE_URL, or set \
          SOLAND_FEDERATION_OUTBOUND=0 if this deployment must not federate."
     )
-}
-
-pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
-    if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
-        // Validate via SDK typed id — rejects bad shape at boot.
-        arkret_identifiers::TypedTrustDomainId::new(value.clone()).map_err(|e| {
-            anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {e}")
-        })?;
-        return Ok(value);
-    }
-    let host = did_host_from_service_id(service_id)
-        .or_else(|| service_id.strip_prefix("did:key:").map(str::to_owned))
-        .unwrap_or_else(|| service_id.to_owned());
-    // Normalise to the SDK scope grammar: lowercase, keep
-    // [a-z0-9.\-_:].
-    let scope: String = host
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
-        .collect();
-    let scope = if scope.is_empty() {
-        "local".to_owned()
-    } else {
-        scope
-    };
-    let candidate = format!("ak:trust_domain:{scope}");
-    // Final safety check.
-    arkret_identifiers::TypedTrustDomainId::new(candidate.clone()).map_err(|e| {
-        anyhow::anyhow!(
-            "derived trust_domain from service_id {service_id:?} failed validation: {e}"
-        )
-    })?;
-    Ok(candidate)
-}
-
-pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
-    let host = if let Some(rest) = service_id.strip_prefix("did:web:") {
-        rest.split(':').next()?
-    } else {
-        let rest = service_id.strip_prefix("did:webvh:")?;
-        let mut parts = rest.split(':');
-        let scid = parts.next()?;
-        let host = parts.next()?;
-        if scid.is_empty() {
-            return None;
-        }
-        host
-    };
-    let host = host
-        .split("%3A")
-        .next()
-        .unwrap_or(host)
-        .split("%3a")
-        .next()
-        .unwrap_or(host)
-        .trim_end_matches('.');
-    // Hosts are case-insensitive; return the canonical lowercase form. This is
-    // the single canonical implementation — `federation::signature` delegates
-    // here rather than keeping a second copy that had drifted on casing.
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 fn load_receive_policy_constraints()
@@ -1631,15 +1565,16 @@ fn env_csv_cap(name: &str) -> Option<Vec<String>> {
     )
 }
 
-fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_identifiers::Did>>> {
+fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_identifiers::DidCoreId>>> {
     let Some(values) = env_csv_cap(name) else {
         return Ok(None);
     };
     values
         .into_iter()
         .map(|value| {
-            arkret_identifiers::Did::new(value.clone())
-                .map_err(|error| anyhow::anyhow!("{name} contains invalid DID `{value}`: {error}"))
+            arkret_identifiers::DidCoreId::new(value.clone()).map_err(|error| {
+                anyhow::anyhow!("{name} contains invalid DID core id `{value}`: {error}")
+            })
         })
         .collect::<anyhow::Result<Vec<_>>>()
         .map(Some)
@@ -1796,16 +1731,6 @@ mod tests {
         let methods = default_did_resolver_allow_methods();
         assert_eq!(methods, vec!["webvh", "key", "uuid"]);
         assert!(!methods.iter().any(|m| m == "web"));
-    }
-
-    #[test]
-    fn trust_domain_derives_webvh_host_not_scid() {
-        let _env = ScopedEnv::new("SOLAND_TRUST_DOMAIN");
-        let trust_domain = derive_trust_domain(
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:local.host:webvh:service",
-        )
-        .unwrap();
-        assert_eq!(trust_domain, "ak:trust_domain:local.host");
     }
 
     #[test]

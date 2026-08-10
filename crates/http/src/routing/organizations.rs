@@ -32,7 +32,7 @@ use crate::{JsonResult, json_ok};
 struct UpsertOrganizationRequestBody {
     #[serde(default)]
     organization_id: Option<String>,
-    organization_did: String,
+    organization_principal_id: String,
     #[serde(default)]
     handle: Option<String>,
     #[serde(default)]
@@ -53,7 +53,7 @@ struct LinkOrganizationRealmRequestBody {
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct OrganizationView {
     organization_id: String,
-    organization_did: String,
+    organization_principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     handle: Option<String>,
     display_name: String,
@@ -170,7 +170,7 @@ pub(crate) fn router() -> Router {
         .get(list_organizations)
         .post(upsert_organization)
         .push(
-            Router::with_path("{organization_did}")
+            Router::with_path("{organization_principal_id}")
                 .get(get_organization)
                 .push(Router::with_path("policy").get(get_organization_policy))
                 .push(Router::with_path("policy").post(upsert_organization_policy))
@@ -253,13 +253,13 @@ async fn upsert_organization(
     // principals — not every authenticated user may mint organizations.
     ensure_organization_registry_admin(state, &session.actor)?;
     let body = body.into_inner();
-    validate_did(&body.organization_did)
-        .map_err(|_| AppError::invalid_param("organization_did must be a DID"))?;
+    validate_did(&body.organization_principal_id)
+        .map_err(|_| AppError::invalid_param("organization_principal_id must be a DID"))?;
     let now = Utc::now();
     let organization_id = normalized_organization_id(
         body.organization_id
             .as_deref()
-            .unwrap_or(body.organization_did.as_str()),
+            .unwrap_or(body.organization_principal_id.as_str()),
     )?;
     let display_name = body
         .display_name
@@ -273,7 +273,7 @@ async fn upsert_organization(
     let member_count = body.member_count.unwrap_or(members.len());
     let record = OrganizationRecord {
         organization_id: organization_id.clone(),
-        organization_did: body.organization_did,
+        organization_principal_id: body.organization_principal_id,
         handle: body.handle,
         display_name,
         // No source Event stands behind a locally registered organization.
@@ -304,14 +304,14 @@ async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_did: PathParam<String>,
+    organization_principal_id: PathParam<String>,
 ) -> JsonResult<OrganizationView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_principal_id.into_inner())?;
     let record = state
         .governance()
         .cached_organization(&organization_id)
@@ -332,14 +332,14 @@ async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_did: PathParam<String>,
+    organization_principal_id: PathParam<String>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_principal_id.into_inner())?;
     let policy = state
         .governance()
         .cached_organization_policy(&organization_id)
@@ -360,13 +360,13 @@ async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_did: PathParam<String>,
+    organization_principal_id: PathParam<String>,
     body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_principal_id.into_inner())?;
     ensure_organization_placeholder(state, &organization_id, &session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -383,12 +383,12 @@ async fn upsert_organization_policy(
         );
     }
     if payload
-        .get("organization_did")
+        .get("organization_principal_id")
         .and_then(Value::as_str)
         .is_none()
     {
         payload.as_object_mut().expect("object checked").insert(
-            "organization_did".to_owned(),
+            "organization_principal_id".to_owned(),
             json!(organization_id.clone()),
         );
     }
@@ -440,13 +440,13 @@ async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_did: PathParam<String>,
+    organization_principal_id: PathParam<String>,
     body: JsonBody<LinkOrganizationRealmRequestBody>,
 ) -> JsonResult<OrganizationRealmLinkOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_id = normalized_organization_id(&organization_did.into_inner())?;
+    let organization_id = normalized_organization_id(&organization_principal_id.into_inner())?;
     let body = body.into_inner();
     ensure_organization_placeholder(state, &organization_id, &session.actor)
         .await
@@ -481,7 +481,11 @@ pub(crate) async fn record_realm_organizations_from_event(
                 .map(ToOwned::to_owned),
         );
     }
-    for key in ["organization_id", "organization_did", "organization_ref"] {
+    for key in [
+        "organization_id",
+        "organization_principal_id",
+        "organization_ref",
+    ] {
         if let Some(value) = object.get(key).and_then(Value::as_str) {
             orgs.push(value.to_owned());
         }
@@ -765,7 +769,7 @@ async fn ensure_organization_placeholder(
     let now = Utc::now();
     let record = OrganizationRecord {
         organization_id: organization_id.to_owned(),
-        organization_did: organization_id.to_owned(),
+        organization_principal_id: organization_id.to_owned(),
         handle: None,
         display_name: display_name_from_organization_id(organization_id),
         // A placeholder record for an organization this server only knows locally:
@@ -792,7 +796,7 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
     let realm_count = realms.len();
     OrganizationView {
         organization_id: record.organization_id.clone(),
-        organization_did: record.organization_did.clone(),
+        organization_principal_id: record.organization_principal_id.clone(),
         handle: record.handle.clone(),
         display_name: record.display_name.clone(),
         source_refs: record.source_refs.clone(),
@@ -964,7 +968,7 @@ fn approval_matches(approval: &Value, org_ids: &BTreeSet<String>) -> bool {
     }
     let Some(org_id) = approval
         .get("organization_id")
-        .or_else(|| approval.get("organization_did"))
+        .or_else(|| approval.get("organization_principal_id"))
         .or_else(|| approval.get("org"))
         .and_then(Value::as_str)
     else {

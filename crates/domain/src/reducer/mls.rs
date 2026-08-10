@@ -1149,7 +1149,7 @@ fn validate_welcome_trust_binding(
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
         || envelope
-            .get("requester_did")
+            .get("requester_actor_id")
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
     {

@@ -97,7 +97,7 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         "relation" => return resource.starts_with("ak:relation:"),
         "view" => return resource.starts_with("ak:view:"),
         "event" => return resource.starts_with("ak:event:"),
-        "actor" => return resource.starts_with("did:") || resource.starts_with("ak:actor:"),
+        "actor" => return resource.starts_with("ak:did_core:"),
         "schema" => {
             return resource.starts_with("ak:schema:") || resource.starts_with("ak.schema.");
         }
@@ -375,5 +375,15 @@ mod tests {
             validate_resource_selector_object(selector.as_object().unwrap()).is_ok(),
             "realm-and-space.md §2.5 requires this exact selector shape"
         );
+    }
+
+    #[test]
+    fn actor_selector_accepts_only_did_core_resources() {
+        assert!(resource_matches(
+            "actor",
+            "ak:did_core:webvh:z6mkactorfixture"
+        ));
+        assert!(!resource_matches("actor", "did:web:actor.example"));
+        assert!(!resource_matches("actor", "ak:member:z6mkactorfixture"));
     }
 }

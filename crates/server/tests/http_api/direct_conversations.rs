@@ -34,7 +34,10 @@ fn human_direct_resolve_request(
 ) -> arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
     arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
         peer: arkret_models_collaboration::contact_operations::ContactPeer::Human {
-            principal_id: arkret_wire::Did::new(peer).expect("valid human contact DID"),
+            principal_id: arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new(peer).expect("valid human contact DID"),
+            )
+            .unwrap(),
         },
     }
 }
@@ -245,12 +248,12 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         seed_remote_claim_prerequisites(&state, &source_service_id).await;
     let trust_domain =
         arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap();
-    let requester = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
-    let target = arkret_identifiers::Did::new(BOB_DID.to_owned()).unwrap();
+    let requester = arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
+    let target = arkret_identifiers::DidFullId::new(BOB_DID.to_owned()).unwrap();
     let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain.clone(),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(requester.clone()),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(target.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(arkret_wire::project_full_id_to_core_id(&requester).unwrap()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(arkret_wire::project_full_id_to_core_id(&target).unwrap()),
     )
     .unwrap();
     let claim_request_id = URL_SAFE_NO_PAD.encode([41_u8; 16]);
@@ -265,6 +268,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     .unwrap();
     let unsigned: arkret_models_crypto::PeerKeyPackagesClaimUnsignedRequest =
         serde_json::from_value(serde_json::json!({
+            "kind": "device",
             "claim_request_id": claim_request_id,
             "target_principal_id": target,
             "requester": requester,
@@ -296,9 +300,12 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     let draft = arkret_models_crypto::PeerKeyPackagesClaimAuthorizationDraft {
         request: unsigned.clone(),
         transport_binding: arkret_models_crypto::PeerKeyPackagesClaimTransportBinding {
-            source_service_id: arkret_identifiers::Did::new(source_service_id.clone()).unwrap(),
-            destination_service_id: arkret_identifiers::Did::new(destination_service_id.clone())
+            source_service_id: arkret_identifiers::DidCoreId::new(source_service_id.clone())
                 .unwrap(),
+            destination_service_id: arkret_identifiers::DidCoreId::new(
+                destination_service_id.clone(),
+            )
+            .unwrap(),
             source_trust_domain: trust_domain.clone(),
             destination_trust_domain: trust_domain,
         },
@@ -308,7 +315,12 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         &authorization,
     )
     .unwrap();
-    authorization.signature.sig = arkret_wire::Base64UrlString::new(
+    let arkret_models_crypto::PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+        &mut authorization
+    else {
+        unreachable!("fixture constructs device authorization")
+    };
+    signature.sig = arkret_wire::Base64UrlString::new(
         URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_bytes).to_bytes()),
     )
     .unwrap();

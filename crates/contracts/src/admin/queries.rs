@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use arkret_models_collaboration::governance::grant_constraint::{
     GrantConstraint, IssuerAuthorityRef,
 };
@@ -43,7 +43,7 @@ use serde_json::Value;
 pub struct AdminActor {
     /// Canonical actor id (the DID string).
     pub id: String,
-    pub did: Did,
+    pub did: DidFullId,
     /// Durable surrogate account row id (`ak:account:<uuid7>`), stable across
     /// DID rotation. Account-lifecycle admin endpoints address accounts by
     /// DID, not by this id.

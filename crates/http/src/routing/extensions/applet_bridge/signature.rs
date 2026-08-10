@@ -348,23 +348,14 @@ fn applet_verification_error(error: HttpMessageVerificationError) -> AppError {
 }
 
 /// Resolve the Ed25519 public key for the registration verification method via
-/// the DID resolver. In `development_mode` a deterministic per-DID fallback key
-/// is used (mirroring the federation path) so the joint e2e harness can drive
-/// signed deliveries without a live DID document; a forged signature still
-/// fails the cryptographic `verify`.
+/// the DID resolver. Missing resolution evidence always fails closed, including
+/// in development mode.
 pub(super) fn applet_resolve_verifying_key(
     state: &AppState,
     verification_method: &str,
 ) -> Result<ed25519_dalek::VerifyingKey, AppError> {
     if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method) {
         return Ok(key);
-    }
-    if state.config().development_mode {
-        let signing = http_signature::deterministic_development_signing_key(
-            b"soland:applet-service-key:",
-            verification_method,
-        );
-        return Ok(signing.verifying_key());
     }
     Err(applet_signature_error_invalid(
         "Applet registration verification key is unavailable",
@@ -392,4 +383,23 @@ pub(super) fn applet_signature_error_window(message: impl Into<String>) -> AppEr
     AppError::unauthenticated(message)
         .with_status(StatusCode::UNAUTHORIZED)
         .with_top_level_reason("signature_window_invalid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_mode_does_not_derive_an_applet_fallback_key() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let error = applet_resolve_verifying_key(
+            &state,
+            "did:web:unregistered-applet.invalid#applet-webhook",
+        )
+        .expect_err("an unregistered DID method must fail closed in development mode");
+        assert_eq!(error.wire_code(), "unauthenticated");
+    }
 }

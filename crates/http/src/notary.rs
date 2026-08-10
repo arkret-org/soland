@@ -67,7 +67,7 @@ pub struct NotaryOutcome {
 #[derive(Clone, Debug)]
 struct AcceptedControlMove {
     event_digest: Hash,
-    actor_id: arkret_wire::ActorId,
+    actor_id: arkret_wire::DidCoreId,
     effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 
@@ -1610,7 +1610,7 @@ mod tests {
         let notary_cell = notary_cell_ref(&realm_id).unwrap();
         let move_id = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let local_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-            arkret_identifiers::Did::new(state.service_id().clone()).unwrap(),
+            state.service_resolution_commitment().full_id.clone(),
         ))
         .unwrap();
         let event_ops = vec![(
@@ -1639,7 +1639,7 @@ mod tests {
         );
 
         let remote_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-            arkret_identifiers::Did::new("did:web:notary.example".to_owned()).unwrap(),
+            arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
         ))
         .unwrap();
         let remote_event_ops = vec![(

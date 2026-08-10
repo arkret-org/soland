@@ -69,7 +69,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let created_at = now();
     let timeline_hlc = snapshot_timeline_hlc(state, &events, created_at)?;
-    let service_id = arkret_identifiers::Did::new(state.service_id().clone())
+    let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let auth_state_digest = snapshot_auth_state_digest(
         state.service_id(),
@@ -222,7 +222,7 @@ fn snapshot_event_set_leaf(
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         event_digest: arkret_identifiers::Hash::new(record.canonical_digest.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-        actor_id: arkret_identifiers::Did::new(record.actor_id.clone())
+        actor_id: arkret_identifiers::DidCoreId::new(record.actor_id.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         actor_seq: record.actor_seq,
         hlc: event_hlc_or_received_at(state, record)?,

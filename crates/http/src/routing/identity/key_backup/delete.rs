@@ -107,12 +107,13 @@ pub(super) async fn issue_key_backup_delete_challenge(
     let request_id = body.into_inner().request_id;
     require_owned_backup(state, &backup_id, &session.actor).await?;
 
-    let principal_id = Did::new(session.actor.clone()).map_err(|error| {
-        AppError::capability_denied(format!("authenticated actor is not a valid DID: {error}"))
-    })?;
+    let principal_id =
+        arkret_identifiers::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::capability_denied(format!("authenticated actor is not a valid DID: {error}"))
+        })?;
     let typed_backup_id = BackupId::new(backup_id.clone())
         .map_err(|error| AppError::invalid_param(format!("backup_id is invalid: {error}")))?;
-    let service_id = Did::new(state.service_id().clone())
+    let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service_id is not a valid DID: {error}")))?;
     let audience = NonEmptyString::new(service_audience(state)?)
         .map_err(|error| AppError::internal(format!("service audience is invalid: {error}")))?;
@@ -373,39 +374,15 @@ fn check_proof_envelope(
 /// `did:key:<multikey>#<multikey>` method excludes unrelated device/service
 /// keys without copying them into the DID document.
 async fn verify_principal_signing_delete(
-    state: &AppState,
-    challenge: &KeysBackupsDeleteChallenge,
-    proof: &PayloadProof,
-    expected_digest: &arkret_identifiers::Hash,
-    canonical: &[u8],
+    _state: &AppState,
+    _challenge: &KeysBackupsDeleteChallenge,
+    _proof: &PayloadProof,
+    _expected_digest: &arkret_identifiers::Hash,
+    _canonical: &[u8],
 ) -> Result<(), AppError> {
-    check_proof_envelope(challenge, proof, expected_digest)?;
-    let current = state
-        .dids()
-        .resolve_current_webvh_state(&challenge.principal_id)
-        .await
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "key backup delete principal root history is unavailable or invalid: {error}"
-            ))
-        })?;
-    if current.status != soland_services::identity::PinnedDidVersionStatus::Current {
-        return Err(AppError::capability_denied(
-            "key backup delete principal root history is deactivated",
-        ));
-    }
-    verify_current_webvh_update_key_proof(
-        &current.update_keys,
-        proof.verification_method.as_str(),
-        canonical,
-        &proof.jws,
-    )
-    .map_err(|error| {
-        AppError::capability_denied(format!(
-            "key backup delete proof is not authorized by the current WebVH root: {error}"
-        ))
-    })?;
-    Ok(())
+    Err(AppError::capability_denied(
+        "principal-signing key-backup deletion requires an exact principal authority instance",
+    ))
 }
 
 /// Resolve a proof key solely from the already-verified current WebVH head and
@@ -537,7 +514,7 @@ async fn verify_device_quorum_delete(
 async fn verify_trusted_recovery_service_delete(
     state: &AppState,
     challenge: &KeysBackupsDeleteChallenge,
-    service_id: &Did,
+    service_id: &arkret_wire::DidCoreId,
     recovery_session_id: &str,
     has_attestation: bool,
     proof: &PayloadProof,
@@ -593,16 +570,17 @@ async fn verify_trusted_recovery_service_delete(
             "the accepted recovery policy requires an attestation_ref for this service",
         ));
     }
-    crate::jws_verify::validate_verification_method_controller(
-        service_id.as_str(),
-        proof.verification_method.as_str(),
-    )
-    .map_err(|error| {
-        AppError::capability_denied(format!(
-            "key backup delete service proof verification method is not controlled by the service: \
-             {error}"
-        ))
-    })?;
+    let service_full_id =
+        arkret_identity::verification_method_did(proof.verification_method.as_str())
+            .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    let service_core_id = arkret_wire::project_full_id_to_core_id(&service_full_id)
+        .map(arkret_wire::DidCoreId::from)
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    if service_core_id != *service_id {
+        return Err(AppError::capability_denied(
+            "key backup delete service proof does not bind the declared service core id",
+        ));
+    }
     let key =
         crate::jws_verify::resolve_ed25519_pubkey_async(state, proof.verification_method.as_str())
             .await

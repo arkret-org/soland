@@ -408,9 +408,19 @@ pub(super) async fn verify_realm_organization_proof_signature(
 
     // Resolves the key from the organization's own DID document AND enforces
     // verification-method controller == organization_id (the security anchor).
+    let signer_full_id = arkret_identity::verification_method_did(
+        payload.authorization.verification_method.as_str(),
+    )
+    .map_err(|_| "organization_statement_unverified")?;
+    let signer_core_id = arkret_wire::project_full_id_to_core_id(&signer_full_id)
+        .map(arkret_wire::DidCoreId::from)
+        .map_err(|_| "organization_statement_unverified")?;
+    if signer_core_id != payload.organization_id {
+        return Err("organization_statement_unverified");
+    }
     let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did(
         state,
-        &payload.organization_id,
+        &signer_full_id,
         payload.authorization.verification_method.as_str(),
     )
     .await

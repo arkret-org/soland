@@ -3,7 +3,7 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
-use arkret_identifiers::Did;
+use arkret_identifiers::DidFullId;
 use arkret_models_collaboration::governance::erasure::{
     ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptPackage, ErasureReceiptProof,
     ErasureReceiptSubmitRequestBody, ErasureScope, ErasureStorageBoundary, ErasureSubject,
@@ -744,7 +744,7 @@ struct AccountEraseOutcome {
 /// rewrite worker; this is the v1 "memory ledger" cascade. Spec: A.3
 /// + identity/account-lifecycle.md.
 fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
-    let actor_id = match arkret_identifiers::Did::new(actor.to_owned()) {
+    let actor_id = match arkret_identifiers::DidCoreId::new(actor.to_owned()) {
         Ok(did) => did,
         Err(_) => return 0,
     };
@@ -876,7 +876,7 @@ fn build_erasure_receipt_value(
     erased_classes: Vec<ErasedClass>,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, AppError> {
-    let issuer = Did::new(state.service_id().clone())
+    let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
     let retained_stub_value = serde_json::to_value(&retained_stub)

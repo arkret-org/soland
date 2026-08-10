@@ -737,8 +737,8 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         return Ok(Some(reason));
     }
     let snapshot = state.projections().snapshot();
-    if snapshot.principal_control_realm_for_actor(event.actor_id.as_str())
-        != Some(event.realm_id.as_str())
+    if !snapshot
+        .realm_is_principal_control_for_actor(event.realm_id.as_str(), event.actor_id.as_str())
     {
         return Ok(Some("event Realm is not the actor's accepted PCR"));
     }
@@ -770,7 +770,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         notary,
         arkret_wire::notary::NotaryValue::SingleDid { ref did, .. }
             if arkret_wire::project_full_id_to_core_id(did)
-                .is_ok_and(|core| arkret_wire::ActorId::from(core) == event.actor_id)
+                .is_ok_and(|core| arkret_wire::DidCoreId::from(core) == event.actor_id)
     ) {
         return Ok(Some("current notary is not single_did == principal"));
     }
@@ -1095,7 +1095,7 @@ pub(super) async fn submit_event_value_with_context(
                         "validated realm_id is invalid",
                     )
                 })?,
-                arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
+                arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",
@@ -1222,7 +1222,7 @@ pub(super) async fn submit_event_value_with_context(
                     "validated realm_id is invalid",
                 )
             })?,
-            arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
+            arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
@@ -2058,7 +2058,7 @@ pub(super) async fn submit_event_value_with_context(
                 "validated realm_id is invalid",
             )
         })?,
-        arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
+        arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -2166,7 +2166,7 @@ pub(super) async fn submit_event_value_with_context(
                             "validated realm_id is invalid",
                         )
                     })?,
-                    arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
+                    arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "internal_error",
@@ -2242,7 +2242,7 @@ pub(super) async fn submit_event_value_with_context(
                                 "validated realm_id is invalid",
                             )
                         })?,
-                        arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
+                        arkret_wire::DidCoreId::new(parsed.actor_id.clone()).map_err(|_| {
                             SubmitOneError::new(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 "internal_error",

@@ -303,7 +303,7 @@ pub enum ProjectionEffect {
     /// `realm_policy_servers` structured cache.
     RealmPolicyServerProjected {
         realm_id: String,
-        policy_server_did: String,
+        policy_server_service_id: arkret_wire::DidCoreId,
     },
     RealmPolicyServerTombstoned {
         realm_id: String,

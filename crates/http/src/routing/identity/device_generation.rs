@@ -52,9 +52,7 @@ async fn generation_view_from_records(
     principal_id: &str,
     records: &[CanonicalEventRecord],
 ) -> Result<Option<DeviceGenerationView>, ServiceError> {
-    let Some(mut last_unconflicted) =
-        bootstrap_generation_ref(state, principal_id, records).await?
-    else {
+    let Some(mut last_unconflicted) = bootstrap_generation_ref(principal_id, records) else {
         let devices = state.identities().devices_for_actor(principal_id).await?;
         return Ok(federated_generation_view_from_payloads(
             devices
@@ -71,20 +69,14 @@ async fn generation_view_from_records(
         .iter()
         .filter(|record| record.actor_id == principal_id && record.kind == "ak.device.reanchor")
     {
-        let Some(version_id) = record
+        let Some(new_generation) = record
             .envelope
-            .pointer("/payload/did_version_id")
-            .and_then(Value::as_str)
+            .pointer("/payload/new_device_generation")
+            .and_then(Value::as_u64)
         else {
             continue;
         };
-        let Some(version_number) = version_id
-            .split_once('-')
-            .and_then(|(number, _)| number.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        slots.entry(version_number).or_default().push(record);
+        slots.entry(new_generation).or_default().push(record);
     }
     for candidates in slots.into_values() {
         let fingerprints = candidates
@@ -99,15 +91,15 @@ async fn generation_view_from_records(
         let previous = candidate
             .envelope
             .pointer("/payload/previous_device_generation")
-            .and_then(Value::as_str);
+            .and_then(Value::as_u64);
         let next = candidate
             .envelope
             .pointer("/payload/new_device_generation")
-            .and_then(Value::as_str);
-        if previous == Some(last_unconflicted.as_str())
+            .and_then(Value::as_u64);
+        if previous == last_unconflicted.parse::<u64>().ok()
             && let Some(next) = next
         {
-            last_unconflicted = next.to_owned();
+            last_unconflicted = next.to_string();
             status = DeviceGenerationStatus::Active;
         }
     }
@@ -154,11 +146,10 @@ fn federated_generation_view_from_payloads<'a>(
     })
 }
 
-async fn bootstrap_generation_ref(
-    state: &AppState,
+fn bootstrap_generation_ref(
     principal_id: &str,
     records: &[CanonicalEventRecord],
-) -> Result<Option<String>, ServiceError> {
+) -> Option<String> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
@@ -178,7 +169,7 @@ async fn bootstrap_generation_ref(
                 })
     });
     let Some(bootstrap) = bootstrap else {
-        return Ok(None);
+        return None;
     };
     let paired = records.iter().any(|record| {
         record.actor_id == principal_id
@@ -192,19 +183,9 @@ async fn bootstrap_generation_ref(
                 })
     });
     if !paired {
-        return Ok(None);
+        return None;
     }
-    let mut entries = state
-        .dids()
-        .log_events(principal_id)
-        .await
-        .map_err(|error| ServiceError::internal(error.to_string()))?;
-    entries.sort_by_key(|entry| entry.seq);
-    Ok(entries
-        .first()
-        .and_then(|entry| entry.operation.get("versionId"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
+    Some("1".to_owned())
 }
 
 fn reanchor_unit_fingerprint(
@@ -216,7 +197,7 @@ fn reanchor_unit_fingerprint(
         "{}\u{0}{}\u{0}{}",
         reanchor
             .envelope
-            .pointer("/payload/did_version_id")
+            .pointer("/payload/authority_instance/authority_instance_digest")
             .and_then(Value::as_str)?,
         reanchor.canonical_digest,
         authorize.canonical_digest,
@@ -248,8 +229,8 @@ pub async fn authorized_generation_for_event(
         return Ok(reanchor
             .envelope
             .pointer("/payload/new_device_generation")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned));
+            .and_then(Value::as_u64)
+            .map(|generation| generation.to_string()));
     }
     Ok(
         generation_view_from_records(state, &record.actor_id, &records)
@@ -303,16 +284,14 @@ fn quarantined_generation_event_digests_from_records(
         .iter()
         .filter(|record| record.actor_id == principal_id && record.kind == "ak.device.reanchor")
     {
-        let Some(version_number) = record
+        let Some(new_generation) = record
             .envelope
-            .pointer("/payload/did_version_id")
-            .and_then(Value::as_str)
-            .and_then(|version| version.split_once('-'))
-            .and_then(|(number, _)| number.parse::<u64>().ok())
+            .pointer("/payload/new_device_generation")
+            .and_then(Value::as_u64)
         else {
             continue;
         };
-        slots.entry(version_number).or_default().push(record);
+        slots.entry(new_generation).or_default().push(record);
     }
     let mut quarantined_ids = BTreeSet::new();
     for candidates in slots.into_values() {
@@ -442,7 +421,7 @@ mod tests {
     fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> CanonicalEventRecord {
         CanonicalEventRecord {
             event_id: id.to_owned(),
-            actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
+            actor_id: "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
             actor_seq: 1,
             realm_id: None,
             kind: kind.to_owned(),
@@ -478,7 +457,7 @@ mod tests {
 
     #[test]
     fn same_height_siblings_and_causal_successors_are_all_quarantined() {
-        let principal = "did:webvh:z6mkfixture:alice.example";
+        let principal = "ak:did_core:webvh:z6mkfixture:alice.example";
         let reanchor_a = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         let authorize_a = "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
         let reanchor_b = "ak:event:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
@@ -491,7 +470,8 @@ mod tests {
                 "ak.device.reanchor",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 json!({"payload": {
-                    "did_version_id": "2-A",
+                    "new_device_generation": 2,
+                    "authority_instance": {"authority_instance_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                 }}),
             ),
             record(
@@ -505,7 +485,8 @@ mod tests {
                 "ak.device.reanchor",
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 json!({"payload": {
-                    "did_version_id": "2-B",
+                    "new_device_generation": 2,
+                    "authority_instance": {"authority_instance_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
                 }}),
             ),
             record(
@@ -525,7 +506,8 @@ mod tests {
                 "ak.device.reanchor",
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 json!({"payload": {
-                    "did_version_id": "3-C",
+                    "new_device_generation": 3,
+                    "authority_instance": {"authority_instance_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
                 }}),
             ),
             record(

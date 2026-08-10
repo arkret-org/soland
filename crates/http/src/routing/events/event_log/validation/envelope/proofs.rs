@@ -178,8 +178,8 @@ pub(crate) async fn validate_event_proofs(
         }
         let signer_controller = if minimal_metadata_context.is_some() {
             // Pairwise authorship deliberately does not compare a resolvable
-            // did:key controller string with the stable Core ActorId here.
-            // The closed policy verifier below projects the FullId controller
+            // did:key controller string with the stable Core DidCoreId here.
+            // The closed policy verifier below projects the DidFullId controller
             // and checks it against actor_id before accepting the Leaf key.
             method_root.to_owned()
         } else if let Some(expected_root_method) = root_anchor_method.as_deref() {
@@ -328,16 +328,30 @@ pub(crate) async fn validate_event_proofs(
                 &proof_binding_bytes,
                 &jws,
             )? {
-                crate::jws_verify::verify_principal_authorized_event_proof_async(
-                    &typed_proof,
-                    envelope_bytes,
-                    &actor_did,
-                    &verification_method,
-                    &signer_controller,
-                    state,
-                )
-                .await
-                .map_err(|error| {
+                let verification = if object.get("kind").and_then(Value::as_str)
+                    == Some(arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
+                {
+                    crate::jws_verify::verify_registered_identity_resolution_event_proof_async(
+                        &typed_proof,
+                        envelope_bytes,
+                        &actor_did,
+                        &verification_method,
+                        &signer_controller,
+                        state,
+                    )
+                    .await
+                } else {
+                    crate::jws_verify::verify_principal_authorized_event_proof_async(
+                        &typed_proof,
+                        envelope_bytes,
+                        &actor_did,
+                        &verification_method,
+                        &signer_controller,
+                        state,
+                    )
+                    .await
+                };
+                verification.map_err(|error| {
                     use crate::jws_verify::PrincipalAuthorizedJwsError;
 
                     match error {
@@ -618,7 +632,7 @@ pub(super) fn event_proof_binding_bytes(
     verification_method: &str,
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
-) -> Result<(arkret_wire::Proof, arkret_wire::ActorId, Vec<u8>), EventValidationError> {
+) -> Result<(arkret_wire::Proof, arkret_wire::DidCoreId, Vec<u8>), EventValidationError> {
     let proof: arkret_wire::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
         .map_err(|error| {
             event_validation_error(
@@ -637,11 +651,11 @@ pub(super) fn event_proof_binding_bytes(
             "event proof binding fields are inconsistent",
         ));
     }
-    let actor = arkret_wire::ActorId::new(actor_id.to_owned()).map_err(|error| {
+    let actor = arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            format!("event actor_id is not a valid Core ActorId: {error}"),
+            format!("event actor_id is not a valid Core DidCoreId: {error}"),
         )
     })?;
     let bytes = proof.canonical_binding_bytes(&actor).map_err(|error| {

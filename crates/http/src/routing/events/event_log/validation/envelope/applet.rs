@@ -188,7 +188,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             )
         })?;
     let document =
-        crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
+        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
             tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
             event_validation_error(
                 StatusCode::FORBIDDEN,

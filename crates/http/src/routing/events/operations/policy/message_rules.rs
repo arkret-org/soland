@@ -254,10 +254,7 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         .and_then(Value::as_str)
         .ok_or("principal_control_event_missing_principal_id")?;
     let snapshot = state.projections().snapshot();
-    let expected = snapshot
-        .principal_control_realm_for_actor(principal)
-        .ok_or("principal_control_realm_unavailable")?;
-    if realm_ids_match(operation.realm_id.as_str(), expected) {
+    if snapshot.realm_is_principal_control_for_actor(operation.realm_id.as_str(), principal) {
         Ok(())
     } else {
         Err("principal_control_realm_mismatch")

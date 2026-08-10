@@ -1994,7 +1994,7 @@ impl ProjectionState {
                 continue;
             }
             if let Some(subject) = body.get("subject").and_then(Value::as_str)
-                && subject.starts_with("did:")
+                && subject.starts_with("ak:did_core:")
             {
                 revoked.insert(subject.to_owned());
             }
@@ -2687,7 +2687,10 @@ mod agent_key_tests {
         ));
 
         let mut root = state.realm_authority_root(REALM).unwrap();
-        root.controller_id = arkret_identifiers::Did::new("did:web:bob.example").unwrap();
+        root.controller_id = arkret_wire::project_full_id_to_core_id(
+            &arkret_identifiers::DidFullId::new("did:web:bob.example").unwrap(),
+        )
+        .unwrap();
         root.controller_epoch += 1;
         state.realm_null_subject_cells.insert(
             (

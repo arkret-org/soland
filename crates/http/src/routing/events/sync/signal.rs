@@ -392,9 +392,7 @@ async fn verify_signal_agent_proof(
     state: &AppState,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
-    let sender_actor_id = arkret_wire::project_full_id_to_core_id(&envelope.sender_actor_id)
-        .map(arkret_wire::ActorId::from)
-        .map_err(|_| signal_proof_invalid("Signal sender_actor_id cannot be projected"))?;
+    let sender_actor_id = envelope.sender_actor_id.clone();
     let record = state
         .agent_pairings()
         .agent(sender_actor_id.as_str())

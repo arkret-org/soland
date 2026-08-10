@@ -254,7 +254,8 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
 fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
-        Did::new(actor.to_owned()).unwrap(),
+        arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap())
+            .unwrap(),
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
     )

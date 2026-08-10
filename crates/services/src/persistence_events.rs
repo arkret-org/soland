@@ -270,8 +270,8 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 }),
                 reanchor_slot.map(|state| soland_storage::IdentityAnchorReanchorSlot {
                     actor_id: state.actor_id,
-                    version_number: state.version_number,
-                    did_version_id: state.did_version_id,
+                    authority_instance_digest: state.authority_instance_digest,
+                    new_device_generation: state.new_device_generation,
                     reanchor_digest: state.reanchor_digest,
                     authorize_digest: state.authorize_digest,
                 }),

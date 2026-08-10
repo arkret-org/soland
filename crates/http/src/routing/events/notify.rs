@@ -16,8 +16,8 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
-    Did, EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState,
-    RealmId, StrandId,
+    DidCoreId, DidFullId, EventId, NotificationId, NotificationKind, NotificationPriority,
+    NotificationState, RealmId, StrandId,
 };
 use serde_json::Value;
 
@@ -196,7 +196,7 @@ async fn put_notification(
             id: NotificationId::new(crate::ids::generate_notification_id())
                 .map_err(|error| format!("notification id is invalid: {error}"))?,
             schema: NotificationSchema::V1,
-            actor_id: Did::new(recipient_id.to_owned())
+            actor_id: arkret_identifiers::DidCoreId::new(recipient_id.to_owned())
                 .map_err(|error| format!("notification recipient is invalid: {error}"))?,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id: EventId::new(source_event_id.to_owned())
@@ -228,7 +228,7 @@ async fn put_notification(
             .validate()
             .map_err(|error| format!("notification is invalid: {error}"))?;
         let source_actor_id = source_actor_id
-            .map(|value| Did::new(value.to_owned()))
+            .map(|value| DidCoreId::new(value.to_owned()))
             .transpose()
             .map_err(|error| format!("notification source actor is invalid: {error}"))?;
         Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {
@@ -434,8 +434,8 @@ pub(crate) async fn dispatch_assignment_notifications(
     else {
         return;
     };
-    let Some(assignee) =
-        relation_value_string(payload, &["to_ref", "to"]).filter(|value| value.starts_with("did:"))
+    let Some(assignee) = relation_value_string(payload, &["to_ref", "to"])
+        .filter(|value| value.starts_with("ak:did_core:"))
     else {
         return;
     };
@@ -547,7 +547,7 @@ fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<S
                 && relation.from_ref.as_deref() == Some(strand_id)
         })
         .filter_map(|relation| relation.to_ref.clone())
-        .filter(|actor| actor.starts_with("did:"))
+        .filter(|actor| actor.starts_with("ak:did_core:"))
         .collect::<BTreeSet<_>>();
     recipients.extend(
         projection
@@ -671,7 +671,7 @@ mod tests {
         );
         for member in members {
             entry.members.insert(
-                arkret_identifiers::Did::new((*member).to_owned()).expect("valid member did"),
+                arkret_identifiers::DidCoreId::new((*member).to_owned()).expect("valid member id"),
             );
         }
         state.realm_directory().upsert(entry);
