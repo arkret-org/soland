@@ -168,11 +168,11 @@ async fn validate_event_envelope_with_ingress(
             "actor_id is required",
         )
     })?;
-    if validate_did(&actor_id).is_err() {
+    if arkret_wire::ActorId::new(actor_id.clone()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "actor_id must be a DID",
+            "actor_id must be a Core ActorId",
         ));
     }
     let actor_seq = object
@@ -211,7 +211,18 @@ async fn validate_event_envelope_with_ingress(
     // equality gate below, not after it.
     let is_authorized_internal_adapter =
         internal_admission.is_some_and(|admission| admission.matches(session, object));
-    let managed_agent_delegation = if actor_id != session.actor && !is_authorized_internal_adapter {
+    let ephemeral_pairwise_author = if actor_id != session.actor && !is_authorized_internal_adapter
+    {
+        let context =
+            super::minimal_metadata_author::minimal_metadata_author_context(object, state).await;
+        super::minimal_metadata_author::is_ephemeral_pairwise_author(&actor_id, context.as_ref())
+    } else {
+        false
+    };
+    let managed_agent_delegation = if actor_id != session.actor
+        && !is_authorized_internal_adapter
+        && !ephemeral_pairwise_author
+    {
         match crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
             state,
             object,
@@ -234,7 +245,11 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    if actor_id != session.actor && !managed_agent_delegation && !is_authorized_internal_adapter {
+    if actor_id != session.actor
+        && !managed_agent_delegation
+        && !is_authorized_internal_adapter
+        && !ephemeral_pairwise_author
+    {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
@@ -428,6 +443,11 @@ async fn validate_event_envelope_with_ingress(
     let is_member_self_knock = member_self_knock(object, &session.actor);
     let is_authorized_internal_adapter = internal_admission
         .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
+    let membership_subject = if ephemeral_pairwise_author {
+        actor_id.as_str()
+    } else {
+        session.actor.as_str()
+    };
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
@@ -440,7 +460,7 @@ async fn validate_event_envelope_with_ingress(
         && !is_identity_anchor_authorize
         && !is_identity_anchor_reanchor
         && !is_authorized_internal_adapter
-        && !realm_has_member(state, &realm_id, &session.actor).await
+        && !realm_has_member(state, &realm_id, membership_subject).await
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,

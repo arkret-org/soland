@@ -160,8 +160,12 @@ pub(crate) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service_id = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("invalid configured service_id: {error}")))?;
+    let service_resolution = state.service_resolution_commitment();
+    let service_id = arkret_wire::ServiceId::from(
+        arkret_wire::project_full_id_to_core_id(&service_resolution.full_id).map_err(|error| {
+            AppError::internal(format!("service resolution projection failed: {error}"))
+        })?,
+    );
     let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
         state.config().trust_domain.clone(),
     )
@@ -177,6 +181,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     ];
     let description = ServiceDescribe {
         service_id,
+        service_resolution: service_resolution.as_ref().clone(),
         trust_domain,
         service_kind: arkret_wire::ServiceKind::DirectoryService,
         protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),

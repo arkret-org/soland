@@ -39,11 +39,20 @@ impl ContactStore for MemoryContactStore {
     ) -> PersistenceResult<bool> {
         let mut data = self.data.lock();
         let key = (record.requester.clone(), record.target.clone());
-        let Some(current) = data.get(&key) else {
+        let reverse_key = (record.target.clone(), record.requester.clone());
+        let current_key = if data.contains_key(&key) {
+            key.clone()
+        } else {
+            reverse_key
+        };
+        let Some(current) = data.get(&current_key) else {
             return Ok(false);
         };
         if current.updated_at != expected_updated_at || record.updated_at <= expected_updated_at {
             return Ok(false);
+        }
+        if current_key != key {
+            data.remove(&current_key);
         }
         data.insert(key, record.clone());
         Ok(true)

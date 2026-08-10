@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{BlobRef, Did, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, CoreId, Did, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairActivationState, AgentKeyPairOutcome,
@@ -127,6 +127,11 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("agent-signer-evidence/query")
                 .post(evidence::query_agent_signer_evidence),
         )
+        .push(
+            Router::with_path("agent-provisioning-abandonment-challenges")
+                .post(issue_provisioning_abandonment_challenge),
+        )
+        .push(Router::with_path("agent-provisioning-abandonments").post(abandon_provisioning))
         .push(Router::with_path("agent-sidecars:ensure").post(ensure_sidecar))
         .push(
             Router::with_path("agent-sidecars")

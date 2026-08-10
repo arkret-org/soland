@@ -433,6 +433,9 @@ async fn put_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
+    if is_service_internal_account_data_key(&account_data_key) {
+        return Err(AppError::not_found("not found"));
+    }
     validate_registered_account_data_key(&account_data_key)?;
 
     // AKP-0008 / AKP-0009: registered personal-agent account-data types are
@@ -524,6 +527,9 @@ async fn get_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
+    if is_service_internal_account_data_key(&account_data_key) {
+        return Err(AppError::not_found("not found"));
+    }
     validate_registered_account_data_key(&account_data_key)?;
 
     // Controller-private entries are indistinguishable from absent ones for
@@ -569,11 +575,20 @@ async fn list_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .filter(|record| {
-            !(agent_context && is_controller_private_account_data_key(&record.account_data_key))
+            !is_service_internal_account_data_key(&record.account_data_key)
+                && !(agent_context
+                    && is_controller_private_account_data_key(&record.account_data_key))
         })
         .map(entry_from)
         .collect();
     json_ok(AccountDataList { entries })
+}
+
+/// Service-owned coordination rows share the AccountData storage primitive so
+/// they can use its durable CAS semantics, but they are not protocol account
+/// data and must never cross a holder or Agent read/sync boundary.
+pub(crate) fn is_service_internal_account_data_key(key: &str) -> bool {
+    key.starts_with("ak.internal.")
 }
 
 #[endpoint(
@@ -593,6 +608,9 @@ async fn delete_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
+    if is_service_internal_account_data_key(&account_data_key) {
+        return Err(AppError::not_found("not found"));
+    }
     validate_registered_account_data_key(&account_data_key)?;
     if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
@@ -825,6 +843,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));
+    }
+
+    #[test]
+    fn service_internal_cas_keys_are_outside_holder_account_data() {
+        assert!(is_service_internal_account_data_key(
+            "ak.internal.principal_service_binding.v1"
+        ));
+        assert!(!is_service_internal_account_data_key(
+            "ak.account.blocklist"
+        ));
+        assert!(!is_service_internal_account_data_key(
+            "ak.agent.sidecar_view_state.v1:ak:did_core:fixture"
+        ));
     }
 
     #[test]

@@ -83,6 +83,13 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<EventBatchReceipt>>;
+    /// Accepted identity-anchor account binding for one stable principal.
+    /// This is service-internal authority evidence and is never projected to
+    /// holder sync as AccountData.
+    async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>>;
     /// Control Proposal Ack committed in the same durable unit as `event_id`.
     ///
     /// This is the recovery source for adapters whose online control-event

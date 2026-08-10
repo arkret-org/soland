@@ -26,7 +26,8 @@ use arkret_models_collaboration::contact_operations::{
     ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
 use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationCoordinates, DirectConversationResolveOutcome,
+    DirectConversationCoordinates, DirectConversationFounderBasisEvidence,
+    DirectConversationFoundingInput, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
@@ -62,7 +63,7 @@ use soland_services::identity::{
     DirectConversationBindingRecord, SessionIdentityState as SessionRecord,
 };
 
-use self::social::direct::{direct_active_generation_ref, direct_founder_for_pair};
+use self::social::direct::{direct_active_generation_cell, direct_founder_for_pair};
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
     revoke_sessions_for_actor,
@@ -146,6 +147,17 @@ pub(crate) use social::{
     verify_contact_service_signature_bytes,
 };
 mod lifecycle;
+mod principal_service_binding;
+
+pub(crate) async fn current_principal_service_binding(
+    state: &AppState,
+    principal_id: &str,
+) -> Result<
+    Option<arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding>,
+    AppError,
+> {
+    principal_service_binding::current_binding(state, principal_id).await
+}
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
     AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
@@ -171,6 +183,11 @@ pub(super) fn protocol_router() -> Router {
         )
         .push(contact_routes())
         .push(direct_conversation_routes())
+        .push(
+            Router::with_path("principal-service-bindings")
+                .push(Router::with_path("prepare").post(principal_service_binding::prepare))
+                .push(Router::with_path("commit").post(principal_service_binding::commit)),
+        )
         .push(
             Router::with_path("invite-receive-policy")
                 .get(get_invite_receive_policy)
@@ -1024,7 +1041,7 @@ async fn account_viewer_impl(
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
         .and_then(|value| serde_json::from_value(value).ok());
-    let profile = Some(actor_profile_from_account(&account, None)?);
+    let profile = Some(actor_profile_from_account(state, &account, None).await?);
     let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
         principal_id,
@@ -1237,7 +1254,7 @@ async fn update_profile(
     )
     .await;
     json_ok(AccountUpdateProfileOutcome {
-        profile: actor_profile_from_account(&current, Some(now()))?,
+        profile: actor_profile_from_account(state, &current, Some(now())).await?,
     })
 }
 
@@ -1293,12 +1310,20 @@ fn patch_blob_ref(patch: &Patch, field: &str) -> Result<Option<Option<BlobRef>>,
         .transpose()
 }
 
-fn actor_profile_from_account(
+async fn actor_profile_from_account(
+    state: &AppState,
     account: &AccountRecord,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<ActorProfile, AppError> {
-    let principal_id = Did::new(account.did.clone())
-        .map_err(|error| AppError::internal(format!("stored account DID is invalid: {error}")))?;
+    let principal_id = arkret_wire::CoreId::new(account.did.clone()).map_err(|error| {
+        AppError::internal(format!("stored account principal id is invalid: {error}"))
+    })?;
+    let resolution = state
+        .persistence()
+        .current_principal_resolution(&principal_id)
+        .await
+        .map_err(|error| AppError::internal(format!("principal resolution store failed: {error}")))?
+        .map(|record| record.projection);
     let mut profile_fields = BTreeMap::new();
     if let Some(bio) = account.bio.clone() {
         profile_fields.insert("bio".to_owned(), Value::String(bio));
@@ -1322,6 +1347,7 @@ fn actor_profile_from_account(
         avatar_blob_ref: account.avatar_blob_ref.clone(),
         status: None,
         accountable_principal_ids: vec![principal_id.clone()],
+        resolution,
         profile_fields,
         created_at: account.created_at,
         updated_by: Some(principal_id),
@@ -1403,13 +1429,26 @@ async fn direct_conversation_resolve(
         && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
         && let Some(record) = bindings.any_endorsed()
     {
+        let active_generation = direct_active_generation_cell(state, &pair_key, &record).await?;
         return json_ok(DirectConversationResolveOutcome::Suspended {
             coordinates: direct_coordinates(pair_key_hash, &record)?,
             blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
+            active_mls_generation_ref: active_generation
+                .as_ref()
+                .map(|(event_ref, _)| event_ref.clone()),
+            active_mls_generation_value_digest: active_generation
+                .map(|(_, value_digest)| value_digest),
         });
     }
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
+        let active_generation = direct_active_generation_cell(state, &pair_key, &binding).await?;
+        let active_mls_generation_ref = active_generation
+            .as_ref()
+            .map(|(event_ref, _)| event_ref.clone());
+        let active_mls_generation_value_digest = active_generation
+            .as_ref()
+            .map(|(_, value_digest)| value_digest.clone());
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
             || projection.realm_is_tombstoned(&binding.realm_id)
@@ -1417,6 +1456,8 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::RealmTerminalFault],
+                active_mls_generation_ref,
+                active_mls_generation_value_digest,
             });
         }
         if contact
@@ -1426,12 +1467,16 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+                active_mls_generation_ref,
+                active_mls_generation_value_digest,
             });
         }
         if !direct_binding_matches_projection(state, &binding) {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
+                active_mls_generation_ref,
+                active_mls_generation_value_digest,
             });
         }
         if projection
@@ -1444,6 +1489,8 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
+                active_mls_generation_ref,
+                active_mls_generation_value_digest,
             });
         }
         if state.account_lifecycle_state(&session.actor) != "active"
@@ -1452,16 +1499,20 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PolicyStale],
+                active_mls_generation_ref,
+                active_mls_generation_value_digest,
             });
         }
-        let Some(active_mls_generation_ref) =
-            direct_active_generation_ref(state, &pair_key, &binding).await?
-        else {
+        let Some(active_mls_generation_ref) = active_mls_generation_ref else {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
+                active_mls_generation_ref: None,
+                active_mls_generation_value_digest: None,
             });
         };
+        let active_mls_generation_value_digest = active_mls_generation_value_digest
+            .expect("accepted active generation fields are paired");
         let mut send_blockers = Vec::new();
         if projection.realm_is_frozen_at(&binding.realm_id, now()) {
             send_blockers.push(DirectConversationSendBlocker::PolicyStale);
@@ -1515,6 +1566,7 @@ async fn direct_conversation_resolve(
         return json_ok(DirectConversationResolveOutcome::Found {
             coordinates,
             active_mls_generation_ref,
+            active_mls_generation_value_digest,
             send_blockers,
         });
     }
@@ -1551,11 +1603,14 @@ async fn direct_conversation_resolve(
                 return json_ok(DirectConversationResolveOutcome::Suspended {
                     coordinates,
                     blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+                    active_mls_generation_ref: None,
+                    active_mls_generation_value_digest: None,
                 });
             }
             return json_ok(DirectConversationResolveOutcome::Provisional {
                 coordinates,
                 active_mls_generation_ref: None,
+                active_mls_generation_value_digest: None,
             });
         }
     }
@@ -1566,7 +1621,87 @@ async fn direct_conversation_resolve(
     }
     match founder {
         Some(founder) if founder == session.actor => {
-            json_ok(DirectConversationResolveOutcome::CreationRequired)
+            let Some(source_service_binding) =
+                principal_service_binding::current_binding(state, &session.actor).await?
+            else {
+                return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                    retry_after_ms: None,
+                });
+            };
+            let founder_basis_evidence = if managed_agent_basis.is_some() {
+                let record = state
+                    .agent_pairings()
+                    .agent(&peer)
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!("managed Agent lookup failed: {error}"))
+                    })?
+                    .ok_or_else(|| AppError::internal("managed Agent disappeared"))?;
+                let provision_event_ref = record
+                    .provision_event_refs
+                    .as_ref()
+                    .and_then(|refs| refs.get("provision_event_id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::internal("managed Agent provision reference is missing")
+                    })?;
+                let provision = state
+                    .event_queries()
+                    .accepted_event(provision_event_ref)
+                    .await
+                    .map_err(|error| AppError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        AppError::internal("managed Agent provision Event is unavailable")
+                    })?;
+                DirectConversationFounderBasisEvidence::ControllerAgent {
+                    agent_provision_ref: EventId::new(provision.event_id).map_err(|error| {
+                        AppError::internal(format!("managed Agent provision ref invalid: {error}"))
+                    })?,
+                    agent_provision_digest: Hash::new(provision.canonical_digest).map_err(
+                        |error| {
+                            AppError::internal(format!(
+                                "managed Agent provision digest invalid: {error}"
+                            ))
+                        },
+                    )?,
+                    controller_binding_digest: source_service_binding.binding_digest.clone(),
+                }
+            } else {
+                let record = contact.as_ref().ok_or_else(|| {
+                    AppError::internal("accepted Contact basis evidence is unavailable")
+                })?;
+                let bundle = record.basis_evidence.clone().ok_or_else(|| {
+                    AppError::internal("accepted Contact basis evidence is unavailable")
+                })?;
+                let evidence = DirectConversationFounderBasisEvidence::Human {
+                    basis_evidence_bundle: bundle,
+                    root_basis_continuity_chain: record.basis_evidence_history.clone(),
+                };
+                let current_proofs_are_fresh = match &evidence {
+                    DirectConversationFounderBasisEvidence::Human {
+                        basis_evidence_bundle,
+                        ..
+                    } => basis_evidence_bundle.current_proofs.iter().all(|proof| {
+                        !proof.terminal
+                            && proof.complete_through > 0
+                            && proof.fresh_until > now()
+                            && proof.accepted_frontier.contains(&proof.head_event_ref)
+                    }),
+                    DirectConversationFounderBasisEvidence::ControllerAgent { .. } => false,
+                };
+                if evidence.participants_and_founder().is_err() || !current_proofs_are_fresh {
+                    return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                        retry_after_ms: None,
+                    });
+                }
+                evidence
+            };
+            json_ok(DirectConversationResolveOutcome::CreationRequired {
+                next_founding_input: DirectConversationFoundingInput {
+                    founder_basis_evidence,
+                    source_service_binding,
+                },
+            })
         }
         Some(_) => json_ok(DirectConversationResolveOutcome::AwaitingFounder {
             retry_after_ms: None,

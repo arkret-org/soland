@@ -489,7 +489,6 @@ async fn provision_agent_sdk_commit_attempt(
     .unwrap();
     let arkret_models_collaboration::agent_operations::AgentProvisionOutcome::AwaitingControllerEvent {
         agent_id,
-        principal_control_realm_id,
         controller_realm_id,
         allocation_handle,
         controller_authorization_ref,
@@ -529,6 +528,43 @@ async fn provision_agent_sdk_commit_attempt(
         controller_id,
         verification_method.clone(),
     );
+    let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
+        arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+            agent_id: agent_id.clone(),
+            controller_id: arkret_identifiers::Did::new(controller.to_owned()).unwrap(),
+            genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
+            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
+                state.config().trust_domain.clone(),
+            )
+            .unwrap(),
+            capability_action_registry_digest:
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
+            created_at: now,
+        },
+    )
+    .unwrap();
+    let mut pcr_genesis = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        arkret_wire::ScopeRef::RealmGenesis,
+        agent_id.clone(),
+        0,
+        arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0000-a13f9c2e")).unwrap(),
+        serde_json::to_value(create_payload).unwrap(),
+    )
+    .unwrap();
+    pcr_genesis.created_at = now;
+    pcr_genesis.executed_by = Some(arkret_identifiers::Did::new(controller.to_owned()).unwrap());
+    pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone());
+    pcr_genesis.refs.clear();
+    pcr_genesis.refresh_content_bound_identity().unwrap();
+    arkret_signatures::sign_event(
+        &mut pcr_genesis,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    let principal_control_realm_id = pcr_genesis.realm_id.clone();
     let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"realm_id": controller_realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -606,6 +642,31 @@ async fn provision_agent_sdk_commit_attempt(
         .await;
     let status = committed.status_code.expect("commit status");
     let body = committed.take_json().await.expect("commit body");
+    if status != StatusCode::OK || body["status"] != "awaiting_pcr_genesis" {
+        return (status, body, commit_body);
+    }
+
+    let genesis_body = arkret_sdk::EventsSubmitBatchRequestBody {
+        events: vec![arkret_wire::EventInitialSubmission::online(pcr_genesis)],
+    };
+    let mut genesis_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&genesis_body)
+        .send(&app)
+        .await;
+    assert_eq!(
+        genesis_response.status_code,
+        Some(StatusCode::OK),
+        "{}",
+        genesis_response.take_string().await.unwrap_or_default()
+    );
+    let mut completed = TestClient::post("http://server/_arkret/self/agents")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&commit_body)
+        .send(&app)
+        .await;
+    let status = completed.status_code.expect("final commit status");
+    let body = completed.take_json().await.expect("final commit body");
     (status, body, commit_body)
 }
 

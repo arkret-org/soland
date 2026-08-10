@@ -663,6 +663,26 @@ impl EventStore for MemoryEventStore {
             .collect())
     }
 
+    async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>> {
+        let matches = self
+            .identity_anchor_account_slots
+            .lock()
+            .values()
+            .filter(|slot| slot.principal_id == principal_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [slot] => Ok(Some(slot.clone())),
+            _ => Err(PersistenceError::Conflict(
+                "principal has multiple identity-anchor account slots".to_owned(),
+            )),
+        }
+    }
+
     async fn control_proposal_ack_for_event(
         &self,
         event_id: &str,

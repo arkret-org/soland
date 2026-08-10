@@ -1,5 +1,75 @@
 use super::*;
 
+pub(super) async fn persist_principal_resolution_projection(
+    state: &AppState,
+    event: &Event,
+) -> Result<(), String> {
+    let kind = event.kind.as_str();
+    if kind != arkret_wire::EventKind::RealmCreate.as_str()
+        && kind != arkret_wire::EventKind::IdentityResolutionUpdate.as_str()
+    {
+        return Ok(());
+    }
+    let principal_id = arkret_wire::CoreId::new(event.actor_id.to_string())
+        .map_err(|error| format!("accepted principal id is invalid: {error}"))?;
+    let Some(projection_value) = state
+        .projections()
+        .snapshot()
+        .principal_resolution_for_actor(principal_id.as_str())
+        .cloned()
+    else {
+        // Ordinary Realm creation has no principal-resolution cell.
+        if kind == arkret_wire::EventKind::RealmCreate.as_str() {
+            return Ok(());
+        }
+        return Err("accepted principal resolution Event did not materialize its cell".to_owned());
+    };
+    let projection = serde_json::from_value(projection_value)
+        .map_err(|error| format!("materialized principal resolution is invalid: {error}"))?;
+    let existing = state
+        .persistence()
+        .current_principal_resolution(&principal_id)
+        .await
+        .map_err(|error| format!("load principal resolution index: {error}"))?;
+    let expected = if kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str() {
+        event
+            .payload
+            .get("previous_resolution_event_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "accepted principal resolution update omits its predecessor".to_owned())?
+            .into()
+    } else {
+        None
+    };
+    let genesis_event = existing
+        .as_ref()
+        .map(|record| record.genesis_event.clone())
+        .unwrap_or_else(|| event.clone());
+    let record = soland_storage::PrincipalResolutionRecord {
+        principal_id,
+        principal_control_realm_id: event.realm_id.clone(),
+        genesis_event,
+        current_event: event.clone(),
+        projection,
+    };
+    match state
+        .persistence()
+        .compare_and_set_principal_resolution(expected, record)
+        .await
+        .map_err(|error| format!("store principal resolution index: {error}"))?
+    {
+        soland_storage::PrincipalResolutionCasResult::Applied(_) => Ok(()),
+        soland_storage::PrincipalResolutionCasResult::Conflict(Some(current))
+            if current.current_event.event_id == event.event_id =>
+        {
+            Ok(())
+        }
+        soland_storage::PrincipalResolutionCasResult::Conflict(_) => {
+            Err("principal resolution read-index CAS conflict".to_owned())
+        }
+    }
+}
+
 pub(super) fn operation_with_unsigned_agent_context(
     operation: &Operation,
     envelope: &Value,

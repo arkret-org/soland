@@ -47,6 +47,8 @@ pub struct PgPersistenceStore {
     signal_relay: PgSignalRelayStore,
     webvh: PgWebvhStore,
     service_identity: PgServiceIdentityStore,
+    principal_resolutions: PgPrincipalResolutionStore,
+    service_routes: PgServiceRouteStore,
     realm_invites: PgRealmInviteStore,
     circle_projections: PgCircleProjectionStore,
     strand_watch_projections: PgStrandWatchProjectionStore,
@@ -115,6 +117,8 @@ impl PgPersistenceStore {
             signal_relay: PgSignalRelayStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
             service_identity: PgServiceIdentityStore { pool: pool.clone() },
+            principal_resolutions: PgPrincipalResolutionStore { pool: pool.clone() },
+            service_routes: PgServiceRouteStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
             circle_projections: PgCircleProjectionStore { pool: pool.clone() },
             strand_watch_projections: PgStrandWatchProjectionStore { pool: pool.clone() },
@@ -475,6 +479,16 @@ impl SyncStoreRegistry for PgPersistenceStore {
 
     fn control_proposal_authority_acks(&self) -> &dyn ControlProposalAuthorityAckStore {
         &self.control_proposal_authority_acks
+    }
+}
+
+impl ResolutionStoreRegistry for PgPersistenceStore {
+    fn principal_resolutions(&self) -> &dyn PrincipalResolutionStore {
+        &self.principal_resolutions
+    }
+
+    fn service_routes(&self) -> &dyn ServiceRouteStore {
+        &self.service_routes
     }
 }
 

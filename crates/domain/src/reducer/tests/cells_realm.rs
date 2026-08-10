@@ -1338,6 +1338,109 @@ fn apply_projected_create(
     state.apply_projected(&operation, &writes, hlc)
 }
 
+#[test]
+fn managed_agent_genesis_activates_agent_status_cell_once() {
+    let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
+    let agent_id = "did:web:reducer-test.example";
+    let genesis =
+        arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
+            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
+                .unwrap(),
+            arkret_identifiers::TypedTrustDomainId::new(
+                "ak:trust_domain:managed-agent-pcr".to_owned(),
+            )
+            .unwrap(),
+            vec!["ak.profile.principal_control_realm.v1".to_owned()],
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_wire::SecurityClass::HighAssurance,
+            arkret_wire::EncryptionProfile::MlsRfc9420,
+            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+            arkret_wire::notary::NotaryValue::single_did(
+                arkret_identifiers::Did::new(agent_id).unwrap(),
+            ),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+        )
+        .unwrap();
+    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+        .to_value()
+        .unwrap();
+    let mut state = ProjectionState::new();
+
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
+    let mut operation = make_operation(
+        arkret_wire::EventKind::RealmCreate,
+        realm_id,
+        payload.clone(),
+    );
+    operation.context.sender = arkret_identifiers::Did::new(agent_id).unwrap();
+    let effect = state.apply_projected(&operation, &writes, &ServerHlc::new("test"));
+    assert!(
+        !matches!(effect, ProjectionEffect::Rejected { .. }),
+        "managed-Agent genesis unexpectedly rejected: {effect:?}; writes={writes:?}"
+    );
+    assert_eq!(
+        state.agent_lifecycles.get(agent_id),
+        Some(&arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
+    );
+    let cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:{}:{agent_id}",
+        arkret_wire::CellFamilyId::AGENT_STATUS_V1
+    ))
+    .unwrap();
+    assert_eq!(
+        state.cells.get(&cell),
+        Some(&CellState::Value(serde_json::json!("active")))
+    );
+    let (_, replay_writes) =
+        projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
+    let mut replay = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
+    replay.context.sender = arkret_identifiers::Did::new(agent_id).unwrap();
+    assert!(matches!(
+        state.apply_projected(&replay, &replay_writes, &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { reason }
+            if reason == "invalid_agent_lifecycle_transition"
+    ));
+}
+
+#[test]
+fn managed_agent_genesis_requires_the_registered_status_projection() {
+    let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
+    let genesis =
+        arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
+            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
+                .unwrap(),
+            arkret_identifiers::TypedTrustDomainId::new(
+                "ak:trust_domain:managed-agent-pcr".to_owned(),
+            )
+            .unwrap(),
+            vec!["ak.profile.principal_control_realm.v1".to_owned()],
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_wire::SecurityClass::HighAssurance,
+            arkret_wire::EncryptionProfile::MlsRfc9420,
+            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+            arkret_wire::notary::NotaryValue::single_did(
+                arkret_identifiers::Did::new("did:web:reducer-test.example").unwrap(),
+            ),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+        )
+        .unwrap();
+    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+        .to_value()
+        .unwrap();
+    let operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
+    let mut state = ProjectionState::new();
+
+    assert!(matches!(
+        state.apply_projected(&operation, &[], &ServerHlc::new("test")),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED
+    ));
+    assert!(state.agent_lifecycles.is_empty());
+}
+
 fn apply_bundle(state: &mut ProjectionState, realm_id: &str, payload: Value) -> ProjectionEffect {
     let operation = make_operation(arkret_wire::EventKind::RealmPolicyBundle, realm_id, payload);
     state.apply_realm_policy_bundle(&operation)

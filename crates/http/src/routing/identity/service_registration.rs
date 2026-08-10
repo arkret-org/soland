@@ -1,12 +1,10 @@
 //! Standard Service Identity Provider operations.
 
-use arkret_identifiers::Did;
 use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
-    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
+    ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::{ServiceKind, ServiceRegistrationReceiptId};
-use ed25519_dalek::Signer;
+use arkret_wire::{PayloadProof, ServiceId, ServiceKind, project_full_id_to_core_id, proof_kind};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -43,9 +41,10 @@ pub(crate) async fn ensure(
     validate_signed_inception(&request, &operation)?;
 
     let issued_at = chrono::Utc::now();
-    let receipt = sign_registration_receipt(state, &key, &request, issued_at)?;
+    let receipt = sign_registration_receipt(state, &key, &request, issued_at).await?;
     let outcome = ServiceRegistrationOutcome {
-        service_id: request.inception_operation.state.id.clone(),
+        service_id: receipt.service_id.clone(),
+        full_id: request.inception_operation.state.id.clone(),
         did_document: request.inception_operation.state.clone(),
         version_id: request.inception_operation.version_id.clone(),
         registration_receipt: receipt,
@@ -56,11 +55,11 @@ pub(crate) async fn ensure(
         .map_err(registration_rejected)?;
 
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
-    let service_id = outcome.service_id.to_string();
+    let service_full_id = outcome.did_document.id.to_string();
     let document_value = serde_json::to_value(&outcome.did_document)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let document = DidDocumentState {
-        did: service_id.clone(),
+        did: service_full_id.clone(),
         did_document: document_value,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -77,7 +76,7 @@ pub(crate) async fn ensure(
     };
     let event = DidLogEvent {
         event_digest,
-        did: service_id,
+        did: service_full_id,
         seq: 1,
         operation,
         created_at: issued_at,
@@ -152,16 +151,15 @@ fn validate_signed_inception(
     validate_rotation_authorization_for_log(&log).map_err(registration_rejected)
 }
 
-fn sign_registration_receipt(
+async fn sign_registration_receipt(
     state: &AppState,
     key: &ServiceRegistrationKey,
     request: &ServiceRegistrationEnsureRequestBody,
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ServiceRegistrationReceipt, AppError> {
     let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
-    let issued_at_wire = arkret_canonical::format_timestamp_canonical(issued_at);
-    let provider_service_id = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("provider service DID invalid: {error}")))?;
+    let provider_service_id = ServiceId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("provider service id invalid: {error}")))?;
     let log_head_digest = request
         .inception_operation
         .log_head_digest()
@@ -170,86 +168,56 @@ fn sign_registration_receipt(
         .inception_operation
         .control_key_digest()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_claims = json!({
-        "registration_key": key,
-        "service_id": request.inception_operation.state.id,
-        "version_id": request.inception_operation.version_id,
-        "log_head_digest": log_head_digest,
-        "control_key_digest": control_key_digest,
-        "issued_at": issued_at_wire,
-        "provider_service_id": provider_service_id,
-    });
-    let receipt_digest = arkret_canonical::canonical_sha256(&receipt_claims)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let registration_receipt_id = ServiceRegistrationReceiptId::new(format!(
-        "ak:service_registration_receipt:{}",
-        receipt_digest
-            .strip_prefix("sha256:")
-            .unwrap_or(&receipt_digest)
-    ))
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let verification_method = provider_verification_method(&provider_service_id)?;
-    let proof_config = json!({
-        "type": "DataIntegrityProof",
-        "cryptosuite": "eddsa-jcs-2022",
-        "verificationMethod": verification_method,
-        "proofPurpose": "assertionMethod",
-    });
-    let signed_receipt = json!({
-        "registration_receipt_id": registration_receipt_id,
-        "registration_key": key,
-        "service_id": request.inception_operation.state.id,
-        "version_id": request.inception_operation.version_id,
-        "log_head_digest": log_head_digest,
-        "control_key_digest": control_key_digest,
-        "issued_at": issued_at_wire,
-        "provider_service_id": provider_service_id,
-    });
-    let mut signing_input = Vec::with_capacity(64);
-    let proof_config_bytes = arkret_canonical::canonical_json_bytes(&proof_config)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_bytes = arkret_canonical::canonical_json_bytes(&signed_receipt)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&proof_config_bytes));
-    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&receipt_bytes));
-    let signature = state.notary_signing_key().sign(&signing_input);
-    let proof = ServiceWebvhDataIntegrityProof {
-        proof_type: "DataIntegrityProof".to_owned(),
-        cryptosuite: "eddsa-jcs-2022".to_owned(),
-        verification_method,
-        proof_purpose: "assertionMethod".to_owned(),
-        proof_value: format!("z{}", bs58::encode(signature.to_bytes()).into_string()),
-    };
-    let receipt = ServiceRegistrationReceipt {
-        registration_receipt_id,
+    let full_id = request.inception_operation.state.id.clone();
+    let service_id = ServiceId::from(
+        project_full_id_to_core_id(&full_id)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let mut receipt = ServiceRegistrationReceipt {
+        registration_receipt_id: arkret_wire::ServiceRegistrationReceiptId::new(format!(
+            "ak:service_registration_receipt:{}",
+            "0".repeat(64)
+        ))
+        .map_err(|error| AppError::internal(error.to_string()))?,
         registration_key: key.clone(),
-        service_id: request.inception_operation.state.id.clone(),
+        service_id,
+        full_id,
         version_id: request.inception_operation.version_id.clone(),
         log_head_digest,
         control_key_digest,
         issued_at,
         provider_service_id,
-        proof,
+        proof: PayloadProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
+            verification_method,
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            created_at: issued_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "placeholder".to_owned(),
+        },
     };
+    receipt.registration_receipt_id = receipt
+        .expected_registration_receipt_id()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    receipt.proof.payload_digest = receipt
+        .expected_payload_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    receipt.proof = arkret_signatures::service_identity::sign_registration_receipt_proof(
+        &receipt,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     receipt
-        .validate_for(key, &request.inception_operation.state.id)
+        .validate_for(key, &receipt.service_id, &receipt.full_id)
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(receipt)
-}
-
-fn provider_verification_method(
-    provider_service_id: &Did,
-) -> Result<arkret_wire::DidUrl, AppError> {
-    let raw = if let Some(multibase) = provider_service_id.as_str().strip_prefix("did:key:") {
-        format!("{provider_service_id}#{multibase}")
-    } else {
-        format!("{provider_service_id}#notary-key")
-    };
-    arkret_wire::DidUrl::new(raw).map_err(|error| {
-        AppError::internal(format!(
-            "provider verification method is not a DID URL: {error}"
-        ))
-    })
 }
 
 fn registration_rejected(error: impl std::fmt::Display) -> AppError {

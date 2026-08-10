@@ -612,6 +612,19 @@ pub(super) async fn submit_identity_anchor_batch(
                 .await;
             }
         }
+        if is_bootstrap {
+            let create =
+                serde_json::from_value::<Event>(envelopes[0].clone()).map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted PCR genesis Event is invalid: {error}"),
+                    )
+                })?;
+            if let Err(error) = persist_principal_resolution_projection(state, &create).await {
+                tracing::error!(%error, event_id = %first.event_id, "principal genesis resolution read-index update failed");
+            }
+        }
     }
     if is_bootstrap {
         bootstrap_realm_member_index(

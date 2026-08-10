@@ -11,12 +11,13 @@ pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
     AccountStore, AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
-    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentSidecarContextRecord,
-    AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
-    AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
-    BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
-    CircleProjectionStore, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey,
-    ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
+    AgentSidecarContextRecord, AgentSidecarRecord, AgentStore, AppletStore,
+    AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
+    BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord,
+    CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
+    ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
+    ContactKey, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
     ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
@@ -32,11 +33,11 @@ pub(crate) use soland_storage::{
     IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
     IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
     InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    KeyBackupDeleteChallengeRecord, KeyBackupStore, MessageRecord, MessageStore,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
-    MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore,
-    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
-    MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    IssueAgentProvisioningAbandonmentChallenge, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    MessageRecord, MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
+    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis,
+    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
     OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
     OrganizationRegistrationStore, OrganizationStore, OutboundPushBridgeCacheRecord,
@@ -57,13 +58,14 @@ pub(crate) use soland_storage::{
     StrandProjectionRecord, StrandProjectionStore, StrandWatchProjectionRecord,
     StrandWatchProjectionStore, SyncCursorRecord, SyncCursorStore, WebsocketAuthStore,
     WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
-    agent_participation_record_key, device_message_expires_at, document_declares_registration_key,
-    ensure_device_message_id, evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
-    frontier_exchange_failure_record, frontier_exchange_success_record,
-    identity_anchor_slot_conflicts, mls_epoch_key, peer_page_record_after_cursor,
-    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
-    recovery_active_policy_locked, registration_as_existing, registrations_match,
-    remove_third_party_active_material, stage_identity_anchor_events,
+    agent_participation_record_key, apply_agent_provisioning_abandonment,
+    apply_agent_provisioning_abandonment_challenge, device_message_expires_at,
+    document_declares_registration_key, ensure_device_message_id, evaluate_drift,
+    event_position_cmp, fresh_device_message_ack_token, frontier_exchange_failure_record,
+    frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_epoch_key,
+    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
+    record_is_peer_authz_state_record, recovery_active_policy_locked, registration_as_existing,
+    registrations_match, remove_third_party_active_material, stage_identity_anchor_events,
     valid_new_service_registration_records, validate_backup_erase_progress_initial,
     validate_backup_erase_progress_update, validate_security_transaction_update,
     webvh_freshness_on_put,
@@ -94,12 +96,14 @@ mod multisig;
 mod notifications;
 mod organization_registration;
 mod policy;
+mod principal_resolution;
 mod projection;
 mod publication_evidence;
 mod push;
 mod realm_invites;
 mod recovery;
 mod service_identity;
+mod service_route;
 mod sessions;
 mod sidecars;
 mod signal;
@@ -149,6 +153,7 @@ pub(crate) use multisig::MemoryMultisigPendingStore;
 pub(crate) use notifications::MemoryNotificationStore;
 pub(crate) use organization_registration::MemoryOrganizationRegistrationStore;
 pub(crate) use policy::MemoryPolicyDocumentStore;
+pub(crate) use principal_resolution::MemoryPrincipalResolutionStore;
 pub(crate) use projection::{
     MemoryCircleProjectionStore, MemoryMorphProjectionStore, MemoryProjectionEventStore,
     MemoryRealmMetaStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
@@ -161,6 +166,7 @@ pub(crate) use recovery::{
     MemoryRecoveryPolicyStore, MemoryRecoverySessionStore, MemorySecurityTransactionStore,
 };
 pub(crate) use service_identity::MemoryServiceIdentityStore;
+pub use service_route::MemoryServiceRouteStore;
 pub(crate) use sessions::MemorySessionStore;
 pub(crate) use sidecars::MemorySidecarStore;
 pub(crate) use signal::MemorySignalRelayStore;

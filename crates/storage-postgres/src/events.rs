@@ -1229,6 +1229,50 @@ impl EventStore for PgEventStore {
         rows.into_iter().map(EventBatchReceipt::try_from).collect()
     }
 
+    async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>> {
+        #[derive(QueryableByName)]
+        struct AccountSlotRow {
+            #[diesel(sql_type = Text)]
+            account_authority_id: String,
+            #[diesel(sql_type = Text)]
+            account_subject: String,
+            #[diesel(sql_type = Text)]
+            principal_id: String,
+            #[diesel(sql_type = Text)]
+            realm_id: String,
+            #[diesel(sql_type = Text)]
+            create_event_id: String,
+        }
+
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query(
+            "SELECT account_authority_id, account_subject, principal_id, realm_id, create_event_id \
+             FROM identity_anchor_account_slots WHERE principal_id = $1 LIMIT 2",
+        )
+        .bind::<Text, _>(principal_id)
+        .load::<AccountSlotRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        match rows.as_slice() {
+            [] => Ok(None),
+            [row] => Ok(Some(IdentityAnchorAccountSlot {
+                account_authority_id: row.account_authority_id.clone(),
+                account_subject: row.account_subject.clone(),
+                principal_id: row.principal_id.clone(),
+                realm_id: row.realm_id.clone(),
+                create_event_id: row.create_event_id.clone(),
+            })),
+            _ => Err(PersistenceError::Conflict(
+                "principal has multiple identity-anchor account slots".to_owned(),
+            )),
+        }
+    }
+
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

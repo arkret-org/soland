@@ -20,6 +20,14 @@ fn encrypted_payload(event_kind: &str) -> Value {
 /// forbidden for `mls_rfc9420`, so the fixture carries them exactly when the
 /// scheme it declares does.
 fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
+    let realm_id = arkret_identifiers::RealmId::new(REALM_ID).unwrap();
+    let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
+        &arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &realm_id,
+    )
+    .unwrap();
     let mut envelope = serde_json::json!({
         "scheme": scheme,
         "version": "1.0",
@@ -30,6 +38,7 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
         "aad_visibility_event_id": "hidden",
         "aad": {
             "realm_id": REALM_ID,
+            "scope_digest": scope_digest,
             "event_kind": event_kind
         },
         "key_ref": {
@@ -203,6 +212,27 @@ fn pin_note_accepts_encrypted_projection_payload() {
     ));
     let pin = state.pins.values().next().expect("pin should project");
     assert_eq!(pin.note.as_ref(), Some(&note));
+}
+
+#[test]
+fn pin_note_rejects_envelope_committed_to_another_scope() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+    let mut note = encrypted_payload(arkret_wire::EventKind::PinAdd.as_str());
+    note["aad"]["scope_digest"] = serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+
+    let effect = state.apply(
+        &make_operation(arkret_wire::EventKind::PinAdd, REALM_ID, pin_payload(note)),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "pin_note_encrypted_payload_required"
+    ));
+    assert!(state.pins.is_empty());
 }
 
 #[test]

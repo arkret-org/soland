@@ -182,13 +182,22 @@ fn stage_contact_projection(
         commit.record.requester.clone(),
         commit.record.target.clone(),
     );
-    match (staged.get(&key), commit.expected_updated_at) {
+    let reverse_key = (key.1.clone(), key.0.clone());
+    let current_key = if staged.contains_key(&key) {
+        key.clone()
+    } else {
+        reverse_key
+    };
+    match (staged.get(&current_key), commit.expected_updated_at) {
         (None, None) => {}
         (Some(current), Some(expected))
             if current.updated_at == expected && commit.record.updated_at > expected => {}
         _ => {
             return Err(PersistenceError::Conflict(commit.conflict_code.clone()));
         }
+    }
+    if current_key != key {
+        staged.remove(&current_key);
     }
     staged.insert(key, commit.record.clone());
     Ok(())

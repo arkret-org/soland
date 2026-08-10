@@ -196,7 +196,7 @@ async fn events_describe(
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
-        state.service_id(),
+        state.service_resolution_commitment().as_ref(),
         &state.config().public_base_url,
         state.jobs().storage_mode(),
         state.config().development_mode,

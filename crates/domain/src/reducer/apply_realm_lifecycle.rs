@@ -6,6 +6,59 @@ use super::*;
 /// their family id, so the wire cell ref constant is split here rather than
 /// re-spelled.
 const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHORITY_ROOT_V1;
+pub const PRINCIPAL_RESOLUTION_CELL: &str = "ak:cell:ak.component.identity.resolution.v1:null";
+
+fn principal_genesis_resolution_value(
+    operation: &Operation,
+    payload_object: Option<&serde_json::Map<String, Value>>,
+) -> Result<Option<Value>, &'static str> {
+    let Some(object) = payload_object else {
+        return Ok(None);
+    };
+    if !matches!(
+        object.get("purpose").and_then(Value::as_str),
+        Some("principal_control" | "managed_agent_control")
+    ) {
+        return Ok(None);
+    }
+    let commitment = object
+        .get("initial_resolution")
+        .cloned()
+        .ok_or("identity_resolution_missing")?;
+    let full_id = commitment
+        .get("full_id")
+        .and_then(Value::as_str)
+        .ok_or("identity_resolution_invalid")?;
+    let full_id =
+        arkret_wire::FullId::new(full_id.to_owned()).map_err(|_| "identity_resolution_invalid")?;
+    let projected = arkret_wire::project_full_id_to_core_id(&full_id)
+        .map_err(|_| "identity_resolution_invalid")?;
+    if projected.as_str() != operation.context.sender.as_str()
+        || commitment
+            .get("method_history_head")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || commitment
+            .get("version_id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err("identity_resolution_invalid");
+    }
+    let mut projection = commitment
+        .as_object()
+        .cloned()
+        .ok_or("identity_resolution_invalid")?;
+    projection.insert(
+        "resolution_event_ref".to_owned(),
+        Value::String(operation.context.accepted_event_id.to_string()),
+    );
+    projection.insert(
+        "updated_at".to_owned(),
+        Value::String(utc_timestamp_z(operation.created_at)),
+    );
+    Ok(Some(Value::Object(projection)))
+}
 
 /// Re-derive the registered `ak.component.realm.authority_root.v1` genesis
 /// value from an `ak.realm.create` payload.
@@ -41,6 +94,14 @@ fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Valu
     writes
         .iter()
         .find(|write| write.cell.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+        .and_then(|write| write.as_direct())
+        .and_then(|effect| effect.op.value)
+}
+
+fn registered_principal_resolution_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
+    writes
+        .iter()
+        .find(|write| write.cell.as_str() == PRINCIPAL_RESOLUTION_CELL)
         .and_then(|write| write.as_direct())
         .and_then(|effect| effect.op.value)
 }
@@ -1078,6 +1139,53 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
+        let managed_agent_status = if kind == arkret_wire::EventKind::RealmCreate
+            && payload_object
+                .and_then(|object| object.get("purpose"))
+                .and_then(Value::as_str)
+                == Some("managed_agent_control")
+        {
+            let agent_id = operation.context.sender.to_string();
+            let cell = match arkret_identifiers::CellRef::new(format!(
+                "ak:cell:{}:{agent_id}",
+                arkret_wire::CellFamilyId::AGENT_STATUS_V1
+            )) {
+                Ok(cell) => cell,
+                Err(_) => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+            let projected_transition = self
+                .projected_cell_writes()
+                .iter()
+                .find(|write| write.cell == cell)
+                .and_then(ProjectedCellWrite::as_direct)
+                .map(|effect| effect.op);
+            let Some(projected_transition) = projected_transition else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                };
+            };
+            if projected_transition.op_type != arkret_wire::cba::LatticeOpType::Transition
+                || projected_transition.from.as_ref().and_then(Value::as_str)
+                    != Some("uninitialized")
+                || projected_transition.to.as_ref().and_then(Value::as_str) != Some("active")
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                };
+            }
+            if self.cells.contains_key(&cell) || self.agent_lifecycles.contains_key(&agent_id) {
+                return ProjectionEffect::Rejected {
+                    reason: "invalid_agent_lifecycle_transition".to_owned(),
+                };
+            }
+            Some((agent_id, cell))
+        } else {
+            None
+        };
         let create_reducer_profile = if kind == arkret_wire::EventKind::RealmCreate {
             let Some(profile) = payload_object
                 .and_then(|object| object.get("reducer_profile"))
@@ -1263,6 +1371,26 @@ impl ProjectionState {
         } else {
             None
         };
+        let principal_genesis_resolution = if kind == arkret_wire::EventKind::RealmCreate {
+            match principal_genesis_resolution_value(operation, payload_object) {
+                Ok(value) => {
+                    if value != registered_principal_resolution_write(self.projected_cell_writes())
+                    {
+                        return ProjectionEffect::Rejected {
+                            reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                        };
+                    }
+                    value
+                }
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            }
+        } else {
+            None
+        };
 
         // Structured cache mirror.
         let realm = self
@@ -1381,6 +1509,22 @@ impl ProjectionState {
                         ),
                         CellState::Value(Value::String(reducer_profile)),
                     );
+                }
+                if let Some(resolution) = principal_genesis_resolution {
+                    self.realm_null_subject_cells.insert(
+                        (realm_id.clone(), PRINCIPAL_RESOLUTION_CELL.to_owned()),
+                        CellState::Value(resolution),
+                    );
+                }
+                // The managed-Agent PCR genesis is the sole transition from
+                // the internal FSM state `uninitialized` to the first public
+                // state `active`. Provision admission only reserves/declares
+                // the future PCR and must never activate this cell early.
+                if let Some((agent_id, cell)) = managed_agent_status {
+                    self.cells
+                        .insert(cell, CellState::Value(Value::String("active".to_owned())));
+                    self.agent_lifecycles
+                        .insert(agent_id, AgentLifecycleState::Active);
                 }
             }
             arkret_wire::EventKind::RealmProfile => {

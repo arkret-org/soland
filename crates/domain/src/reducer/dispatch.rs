@@ -219,6 +219,13 @@ fn apply_realm_create_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::RealmCreate)
 }
+fn apply_identity_resolution_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_identity_resolution_update(op)
+}
 fn apply_realm_profile_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1001,6 +1008,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmCreate,
         apply_realm_create_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::IdentityResolutionUpdate,
+        apply_identity_resolution_update_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::RealmProfile,

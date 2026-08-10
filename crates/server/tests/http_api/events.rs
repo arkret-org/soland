@@ -1520,18 +1520,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),
     );
-    let provision_event_id = agent_record
-        .provision_event_refs
-        .as_ref()
-        .and_then(|refs| refs.get("provision_event_id"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .expect("managed Agent record must retain its provision Event id");
-    create
-        .refs
-        .push(arkret_bootstrap::managed_agent_provision_ref(
-            arkret_identifiers::EventId::new(provision_event_id).unwrap(),
-        ));
+    create.refs.clear();
     // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
     // array. The genesis write set is now derived by the receiver, and the only
     // thing a producer can still get wrong is a payload whose registered

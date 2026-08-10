@@ -897,6 +897,7 @@ mod tests {
             "aad_visibility_event_id": "hidden",
             "aad": {
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
+                "scope_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "event_kind": "ak.message.create"
             },
             "key_ref": {

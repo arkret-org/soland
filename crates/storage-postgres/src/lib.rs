@@ -16,26 +16,29 @@ pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
     AccountStore, AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
-    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentSidecarContextRecord,
-    AgentSidecarRecord, AgentStore, AppletStore, AppletTransactionReplayBegin,
-    AppletTransactionReplayRecord, AuditStore, BackupSeriesEraseProgressRecord, BlobRecord,
-    BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
-    CircleProjectionStore, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
-    ContactStore, ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore,
-    CursorRevocation, DeviceInventoryRecord, DeviceInventoryStore, DeviceMessageBatchCommitOutcome,
-    DeviceMessageBatchInspection, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
-    DeviceMessageRecord, DeviceMessageStore, DevicePairingRecord, DevicePairingStore,
-    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord, DriftResult,
-    EventStore, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord,
-    IdempotencyStore, IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome,
-    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome,
-    InviteLocatorRecord, InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
-    JoinApplicationRecord, JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
+    AgentSidecarContextRecord, AgentSidecarRecord, AgentStore, AppletStore,
+    AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
+    BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord,
+    CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
+    ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord, ConsentCellStore,
+    ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DevicePairingRecord, DevicePairingStore, DirectConversationFoundingCommitOutcome,
+    DirectConversationFoundingSlotRecord, DriftResult, EventStore,
+    FederationFrontierExchangeRecord, FederationFrontierExchangeStore, FederationOperationsStore,
+    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
+    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
+    FederationOutboxState, FederationOutboxStateDepth, FederationOutboxStore,
+    FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
+    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    IssueAgentProvisioningAbandonmentChallenge, JoinApplicationCommand,
+    JoinApplicationCommandOutcome, JoinApplicationMutation, JoinApplicationRecord,
+    JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
@@ -59,7 +62,8 @@ pub(crate) use soland_storage::{
     StrandProjectionStore, StrandWatchProjectionRecord, StrandWatchProjectionStore,
     SyncCursorRecord, SyncCursorStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord,
     WebvhStore, account_with_primary_localpart_select, applet_registration_select_sql,
-    applet_transaction_replay_select_sql, audit_uuid_index, decode_grant_dots,
+    applet_transaction_replay_select_sql, apply_agent_provisioning_abandonment,
+    apply_agent_provisioning_abandonment_challenge, audit_uuid_index, decode_grant_dots,
     decode_registration_outcome, decode_session_agent_payload, encode_grant_dots,
     encode_session_payload, ensure_device_message_id, evaluate_drift,
     fresh_device_message_ack_token, frontier_exchange_failure_record,
@@ -105,6 +109,7 @@ mod multisig;
 mod notifications;
 mod organization_registration;
 mod policy;
+mod principal_resolution;
 mod projection;
 mod publication_evidence;
 mod push;
@@ -114,6 +119,7 @@ mod recovery;
 mod registry;
 mod security_transactions;
 mod service_identity;
+mod service_route;
 mod sessions;
 mod settings;
 mod sidecars;
@@ -148,6 +154,7 @@ pub use multisig::*;
 pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
+pub use principal_resolution::*;
 pub use projection::*;
 pub use publication_evidence::*;
 pub use push::*;
@@ -156,6 +163,7 @@ pub use recovery::*;
 pub use registry::PgPersistenceStore;
 pub use security_transactions::*;
 pub use service_identity::*;
+pub use service_route::*;
 pub use sessions::*;
 pub use settings::*;
 pub use sidecars::*;

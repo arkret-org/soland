@@ -1,0 +1,347 @@
+use arkret_models_identity::{
+    ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionPublishAck,
+    ServiceResolutionPublishRequest, ServiceResolutionRecord, ServiceRouteCacheEntry,
+    ServiceRouteHandoverNotice, ServiceRouteNoticeState,
+};
+use arkret_wire::{Hash, RealmId, ServiceId};
+use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
+use diesel::{OptionalExtension, QueryableByName, sql_query};
+use diesel_async::RunQueryDsl;
+use soland_storage::{
+    MonotonicRouteWrite, PersistenceError, PersistenceResult, ServiceResolutionForkEvidence,
+    ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry, ServiceRouteStore,
+};
+
+use crate::{PgPool, async_trait, pg_conn};
+
+pub struct PgServiceRouteStore {
+    pub pool: PgPool,
+}
+
+#[derive(QueryableByName)]
+struct JsonRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct MirrorRow {
+    #[diesel(sql_type = Text)]
+    source_service_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    request_id: String,
+    #[diesel(sql_type = Text)]
+    request_digest: String,
+    #[diesel(sql_type = Text)]
+    artifact_key: String,
+    #[diesel(sql_type = Text)]
+    artifact_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    artifact: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    ack: serde_json::Value,
+    #[diesel(sql_type = Timestamptz)]
+    accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(QueryableByName)]
+struct ExistsRow {
+    #[diesel(sql_type = Bool)]
+    found: bool,
+}
+
+fn encode<T: serde::Serialize>(value: &T) -> PersistenceResult<serde_json::Value> {
+    serde_json::to_value(value).map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn decode<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> PersistenceResult<T> {
+    serde_json::from_value(value).map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn key_json(key: &ServiceResolutionArtifactKey) -> PersistenceResult<String> {
+    arkret_canonical::canonical_json_string(key)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+impl MirrorRow {
+    fn decode(self) -> PersistenceResult<ServiceResolutionMirrorEntry> {
+        Ok(ServiceResolutionMirrorEntry {
+            source_service_id: ServiceId::new(self.source_service_id)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            realm_id: RealmId::new(self.realm_id)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            request_id: arkret_wire::RequestId::new(self.request_id)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            request_digest: Hash::new(self.request_digest)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            artifact_key: serde_json::from_str(&self.artifact_key)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            artifact_digest: Hash::new(self.artifact_digest)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            request: decode(self.artifact)?,
+            ack: decode(self.ack)?,
+            accepted_at: self.accepted_at,
+        })
+    }
+}
+
+#[async_trait]
+impl ServiceRouteStore for PgServiceRouteStore {
+    async fn last_seen_floor(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> PersistenceResult<Option<ServiceResolutionLastSeenFloor>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT floor AS value FROM service_resolution_last_seen_floors WHERE service_id=$1 AND service_kind=$2")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind)
+            .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            .map(|row| decode(row.value)).transpose()
+    }
+
+    async fn advance_last_seen_floor(
+        &self,
+        floor: ServiceResolutionLastSeenFloor,
+    ) -> PersistenceResult<MonotonicRouteWrite> {
+        let value = encode(&floor)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let changed = sql_query("INSERT INTO service_resolution_last_seen_floors(service_id,service_kind,floor,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(service_id,service_kind) DO UPDATE SET floor=EXCLUDED.floor,updated_at=EXCLUDED.updated_at WHERE ((service_resolution_last_seen_floors.floor->>'record_sequence')::bigint < $5)")
+            .bind::<Text,_>(floor.service_id.as_str()).bind::<Text,_>(&floor.service_kind)
+            .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(floor.verified_at)
+            .bind::<BigInt,_>(i64::try_from(floor.record_sequence).unwrap_or(i64::MAX))
+            .execute(&mut *conn).await.map_err(PersistenceError::database)? > 0;
+        if changed {
+            return Ok(MonotonicRouteWrite::Applied);
+        }
+        let current = self
+            .last_seen_floor(&floor.service_id, &floor.service_kind)
+            .await?
+            .ok_or_else(|| PersistenceError::Internal("floor upsert lost its row".to_owned()))?;
+        Ok(if current.record_sequence > floor.record_sequence {
+            MonotonicRouteWrite::Stale
+        } else if current.record_digest == floor.record_digest {
+            MonotonicRouteWrite::Replay
+        } else {
+            MonotonicRouteWrite::Conflict {
+                accepted_digest: current.record_digest,
+            }
+        })
+    }
+
+    async fn notice_state(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+        handover_id: &str,
+    ) -> PersistenceResult<Option<ServiceRouteNoticeState>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT notice_state AS value FROM service_route_notice_states WHERE service_id=$1 AND service_kind=$2 AND handover_id=$3")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind).bind::<Text,_>(handover_id)
+            .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            .map(|row| decode(row.value)).transpose()
+    }
+
+    async fn advance_notice_state(
+        &self,
+        next: ServiceRouteNoticeState,
+    ) -> PersistenceResult<MonotonicRouteWrite> {
+        let value = encode(&next)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let changed = sql_query("INSERT INTO service_route_notice_states(service_id,service_kind,handover_id,notice_state,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind,handover_id) DO UPDATE SET notice_state=EXCLUDED.notice_state,updated_at=EXCLUDED.updated_at WHERE ((service_route_notice_states.notice_state->>'notice_revision')::bigint < $6)")
+            .bind::<Text,_>(next.service_id.as_str()).bind::<Text,_>(&next.service_kind).bind::<Text,_>(&next.handover_id)
+            .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(next.verified_at).bind::<BigInt,_>(i64::from(next.notice_revision))
+            .execute(&mut *conn).await.map_err(PersistenceError::database)? > 0;
+        if changed {
+            return Ok(MonotonicRouteWrite::Applied);
+        }
+        let current = self
+            .notice_state(&next.service_id, &next.service_kind, &next.handover_id)
+            .await?
+            .ok_or_else(|| PersistenceError::Internal("notice upsert lost its row".to_owned()))?;
+        Ok(if current.notice_revision > next.notice_revision {
+            MonotonicRouteWrite::Stale
+        } else if current.notice_digest == next.notice_digest {
+            MonotonicRouteWrite::Replay
+        } else {
+            MonotonicRouteWrite::Conflict {
+                accepted_digest: current.notice_digest,
+            }
+        })
+    }
+
+    async fn commit_mirror(
+        &self,
+        entry: ServiceResolutionMirrorEntry,
+    ) -> PersistenceResult<ServiceResolutionMirrorCommit> {
+        let artifact_key = key_json(&entry.artifact_key)?;
+        let request = encode(&entry.request)?;
+        let ack = encode(&entry.ack)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let inserted = sql_query("INSERT INTO service_resolution_mirror_ledger(source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
+            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str())
+            .bind::<Text,_>(entry.request_id.as_str()).bind::<Text,_>(entry.request_digest.as_str())
+            .bind::<Text,_>(&artifact_key).bind::<Text,_>(entry.artifact_digest.as_str())
+            .bind::<Jsonb,_>(&request).bind::<Jsonb,_>(&ack).bind::<Timestamptz,_>(entry.accepted_at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)? > 0;
+        if inserted {
+            return Ok(ServiceResolutionMirrorCommit::Stored(entry.ack));
+        }
+        let by_request = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND request_id=$3")
+            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str()).bind::<Text,_>(entry.request_id.as_str())
+            .get_result::<MirrorRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        if let Some(current) = by_request {
+            let current = current.decode()?;
+            return Ok(if current.request_digest == entry.request_digest {
+                ServiceResolutionMirrorCommit::Replay(current.ack)
+            } else {
+                ServiceResolutionMirrorCommit::TransportConflict
+            });
+        }
+        let current = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND artifact_key=$3")
+            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str()).bind::<Text,_>(&artifact_key)
+            .get_result::<MirrorRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            .ok_or_else(|| PersistenceError::Internal("mirror conflict row disappeared".to_owned()))?.decode()?;
+        Ok(ServiceResolutionMirrorCommit::ArtifactConflict {
+            accepted_digest: current.artifact_digest,
+        })
+    }
+
+    async fn successor_records(
+        &self,
+        source_service_id: &ServiceId,
+        realm_id: &RealmId,
+        target_service_id: &ServiceId,
+        service_kind: &str,
+        after_sequence: u64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<ServiceResolutionRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 ORDER BY accepted_at ASC")
+            .bind::<Text,_>(source_service_id.as_str()).bind::<Text,_>(realm_id.as_str())
+            .load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        let mut records = Vec::new();
+        for row in rows {
+            let request: ServiceResolutionPublishRequest = decode(row.value)?;
+            if let Some(record) = request.service_resolution_record.filter(|record| {
+                &record.record.service_id == target_service_id
+                    && record.record.service_kind == service_kind
+                    && record.record.record_sequence > after_sequence
+            }) {
+                records.push(record);
+            }
+        }
+        records.sort_by_key(|record| record.record.record_sequence);
+        records.truncate(limit);
+        Ok(records)
+    }
+
+    async fn latest_notice(
+        &self,
+        source_service_id: &ServiceId,
+        realm_id: &RealmId,
+        target_service_id: &ServiceId,
+        service_kind: &str,
+    ) -> PersistenceResult<Option<ServiceRouteHandoverNotice>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query("SELECT artifact AS value FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 ORDER BY accepted_at DESC")
+            .bind::<Text,_>(source_service_id.as_str()).bind::<Text,_>(realm_id.as_str()).load::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        let mut latest: Option<ServiceRouteHandoverNotice> = None;
+        for row in rows {
+            let request: ServiceResolutionPublishRequest = decode(row.value)?;
+            if let Some(notice) = request.service_route_handover_notice.filter(|notice| {
+                &notice.notice.service_id == target_service_id
+                    && notice.notice.service_kind == service_kind
+            }) {
+                if latest.as_ref().is_none_or(|current| {
+                    current.notice.notice_revision < notice.notice.notice_revision
+                }) {
+                    latest = Some(notice);
+                }
+            }
+        }
+        Ok(latest)
+    }
+
+    async fn quarantine_fork(
+        &self,
+        evidence: ServiceResolutionForkEvidence,
+    ) -> PersistenceResult<()> {
+        let value = encode(&evidence.evidence)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("INSERT INTO service_resolution_fork_quarantine(service_id,service_kind,artifact_family,artifact_key,accepted_digest,conflicting_digest,evidence,quarantined_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING")
+            .bind::<Text,_>(evidence.service_id.as_str()).bind::<Text,_>(&evidence.service_kind).bind::<Text,_>(&evidence.artifact_family).bind::<Text,_>(&evidence.artifact_key)
+            .bind::<Text,_>(evidence.accepted_digest.as_str()).bind::<Text,_>(evidence.conflicting_digest.as_str()).bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(evidence.quarantined_at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        Ok(())
+    }
+
+    async fn is_quarantined(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(sql_query("SELECT EXISTS(SELECT 1 FROM service_resolution_fork_quarantine WHERE service_id=$1 AND service_kind=$2) AS found")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind).get_result::<ExistsRow>(&mut *conn).await.map_err(PersistenceError::database)?.found)
+    }
+
+    async fn route_cache(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> PersistenceResult<Option<ServiceRouteCacheEntry>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT entry AS value FROM service_route_cache WHERE service_id=$1 AND service_kind=$2")
+            .bind::<Text,_>(service_id.as_str()).bind::<Text,_>(service_kind).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.map(|row| decode(row.value)).transpose()
+    }
+
+    async fn put_route_cache(&self, entry: ServiceRouteCacheEntry) -> PersistenceResult<()> {
+        let value = encode(&entry)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("INSERT INTO service_route_cache(service_id,service_kind,entry,cache_expires_at,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind) DO UPDATE SET entry=EXCLUDED.entry,cache_expires_at=EXCLUDED.cache_expires_at,updated_at=EXCLUDED.updated_at")
+            .bind::<Text,_>(entry.service_id.as_str()).bind::<Text,_>(&entry.service_kind).bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(entry.cache_expires_at).bind::<Timestamptz,_>(entry.cached_at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        Ok(())
+    }
+
+    async fn evict_route_cache(
+        &self,
+        service_id: &ServiceId,
+        service_kind: &str,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM service_route_cache WHERE service_id=$1 AND service_kind=$2")
+            .bind::<Text, _>(service_id.as_str())
+            .bind::<Text, _>(service_kind)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(())
+    }
+}

@@ -585,6 +585,7 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
         request_receipts: record.request_receipts,
         request_mirror_receipts: record.request_mirror_receipts,
         basis_evidence: record.basis_evidence,
+        basis_evidence_history: record.basis_evidence_history,
         control_outcomes: record.control_outcomes,
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
@@ -608,6 +609,7 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         request_receipts: record.request_receipts,
         request_mirror_receipts: record.request_mirror_receipts,
         basis_evidence: record.basis_evidence,
+        basis_evidence_history: record.basis_evidence_history,
         control_outcomes: record.control_outcomes,
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
@@ -922,6 +924,28 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .0
             .agents()
             .clear_runtime_approval_notification_if_current(agent_id, approval_request_id)
+            .await?)
+    }
+
+    async fn issue_provisioning_abandonment_challenge(
+        &self,
+        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
+    ) -> crate::ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+        Ok(self
+            .0
+            .agents()
+            .issue_provisioning_abandonment_challenge(command)
+            .await?)
+    }
+
+    async fn confirm_provisioning_abandonment(
+        &self,
+        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
+    ) -> crate::ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+        Ok(self
+            .0
+            .agents()
+            .confirm_provisioning_abandonment(command)
             .await?)
     }
 }

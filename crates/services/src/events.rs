@@ -909,6 +909,10 @@ pub trait EventReadPort: Send + Sync {
         &self,
         event_id: &str,
     ) -> ServiceResult<Vec<EventBatchReceipt>>;
+    async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>>;
     async fn control_proposal_ack_for_event(
         &self,
         event_id: &str,
@@ -1292,6 +1296,14 @@ impl EventQueryService {
     ) -> ServiceResult<Vec<EventBatchReceipt>> {
         self.events
             .canonical_batch_receipts_for_event(event_id)
+            .await
+    }
+    pub async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>> {
+        self.events
+            .identity_anchor_account_slot_for_principal(principal_id)
             .await
     }
     pub async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats> {

@@ -678,6 +678,9 @@ CREATE TABLE public.contacts (
     request_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
     request_mirror_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
     basis_evidence jsonb,
+    -- Append-only verified basis snapshots preserve the full glare/recontact
+    -- lineage while `basis_evidence` remains the current accepted head.
+    basis_evidence_history jsonb DEFAULT '[]'::jsonb NOT NULL,
     control_outcomes jsonb DEFAULT '[]'::jsonb NOT NULL,
     response_event_ref bytea CHECK (octet_length(response_event_ref) = 33),
     tombstone_event_ref bytea CHECK (octet_length(tombstone_event_ref) = 33),
@@ -2087,8 +2090,91 @@ CREATE INDEX webvh_log_events_did_seq_idx ON public.webvh_log_events USING btree
 -- Secrets/KeyStore backend and MUST NOT be copied into PostgreSQL.
 CREATE TABLE public.service_identity (
     id text PRIMARY KEY,
-    identity jsonb NOT NULL
+    identity jsonb NOT NULL,
+    resolution jsonb,
+    resolution_digest text
 );
+
+-- Rebuildable owner-side PCR resolution projection. Canonical Events and
+-- Seals remain protocol truth; these rows provide a crash-safe current/history
+-- read index for the public resolution evidence surface.
+CREATE TABLE public.principal_resolutions (
+    principal_id text PRIMARY KEY,
+    principal_control_realm_id text UNIQUE NOT NULL,
+    genesis_event_id text NOT NULL,
+    current_event_id text NOT NULL,
+    projection jsonb NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE public.principal_resolution_events (
+    principal_id text NOT NULL REFERENCES public.principal_resolutions(principal_id) ON DELETE CASCADE,
+    event_id text NOT NULL,
+    previous_event_id text,
+    method_history_head text NOT NULL,
+    event_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    PRIMARY KEY (principal_id, event_id)
+);
+CREATE UNIQUE INDEX principal_resolution_events_predecessor_idx
+    ON public.principal_resolution_events (principal_id, previous_event_id)
+    WHERE previous_event_id IS NOT NULL;
+
+-- Durable remote-route safety state is deliberately split from the
+-- replaceable TTL cache. Restart or cache eviction must never lower a floor,
+-- forget an accepted notice/fork, or lose a mirror receipt transcript.
+CREATE TABLE public.service_resolution_last_seen_floors (
+    service_id text NOT NULL,
+    service_kind text NOT NULL,
+    floor jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind)
+);
+
+CREATE TABLE public.service_route_notice_states (
+    service_id text NOT NULL,
+    service_kind text NOT NULL,
+    handover_id text NOT NULL,
+    notice_state jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind, handover_id)
+);
+
+CREATE TABLE public.service_resolution_mirror_ledger (
+    source_service_id text NOT NULL,
+    realm_id text NOT NULL,
+    request_id text NOT NULL,
+    request_digest text NOT NULL,
+    artifact_key text NOT NULL,
+    artifact_digest text NOT NULL,
+    artifact jsonb NOT NULL,
+    ack jsonb NOT NULL,
+    accepted_at timestamptz NOT NULL,
+    PRIMARY KEY (source_service_id, realm_id, request_id),
+    UNIQUE (source_service_id, realm_id, artifact_key)
+);
+
+CREATE TABLE public.service_resolution_fork_quarantine (
+    service_id text NOT NULL,
+    service_kind text NOT NULL,
+    artifact_family text NOT NULL,
+    artifact_key text NOT NULL,
+    accepted_digest text NOT NULL,
+    conflicting_digest text NOT NULL,
+    evidence jsonb NOT NULL,
+    quarantined_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind, artifact_family, artifact_key, conflicting_digest)
+);
+
+CREATE TABLE public.service_route_cache (
+    service_id text NOT NULL,
+    service_kind text NOT NULL,
+    entry jsonb NOT NULL,
+    cache_expires_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (service_id, service_kind)
+);
+CREATE INDEX service_route_cache_expiry_idx ON public.service_route_cache (cache_expires_at);
 
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
@@ -2123,7 +2209,8 @@ CREATE TABLE public.identity_anchor_account_slots (
     principal_id text NOT NULL,
     realm_id text NOT NULL,
     create_event_id text NOT NULL,
-    PRIMARY KEY (account_authority_id, account_subject)
+    PRIMARY KEY (account_authority_id, account_subject),
+    UNIQUE (principal_id)
 );
 
 CREATE TABLE public.direct_conversation_founding_slots (

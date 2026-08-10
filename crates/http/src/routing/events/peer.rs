@@ -1670,14 +1670,26 @@ pub(in crate::routing) async fn validate_peer_request(
             .map_err(|_| schema_violation("source-trust-domain must be a trust domain"))?;
     }
     let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
-    if validate_did(&source_service_id).is_err() {
-        return Err(schema_violation("source-service-id must be a DID"));
+    if validate_did(&source_service_id).is_err()
+        && arkret_wire::ServiceId::new(source_service_id.clone()).is_err()
+    {
+        return Err(schema_violation(
+            "source-service-id must be a service core_id",
+        ));
     }
     let destination_service_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
-    if validate_did(&destination_service_id).is_err() {
-        return Err(schema_violation("destination-service-id must be a DID"));
+    if validate_did(&destination_service_id).is_err()
+        && arkret_wire::ServiceId::new(destination_service_id.clone()).is_err()
+    {
+        return Err(schema_violation(
+            "destination-service-id must be a service core_id",
+        ));
     }
-    if destination_service_id != *state.service_id() {
+    let local_core =
+        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+            .map(|core| core.into_string())
+            .map_err(|_| AppError::internal("local service full_id cannot be projected"))?;
+    if destination_service_id != *state.service_id() && destination_service_id != local_core {
         return Err(cross_domain_replay(
             "destination-service-id header does not match this service",
         ));
@@ -1693,6 +1705,45 @@ pub(in crate::routing) async fn validate_peer_request(
     )
     .await?;
     Ok(())
+}
+
+/// Realm-scoped route mirrors reuse the canonical peer policy and additionally
+/// require both requester scope and an effective, requester-visible reference
+/// to the target service. The caller deliberately receives only a boolean so
+/// unknown, invisible and not-held targets remain indistinguishable.
+pub(in crate::routing) async fn peer_route_visibility(
+    state: &AppState,
+    source_service_id: &str,
+    realm_id: &str,
+    target_service_id: &str,
+) -> Result<bool, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("peer route visibility: {error}")))?;
+    let authz = PeerReadAuthz::build(state, source_service_id, &records).await?;
+    if !authz.frontier_visible_for_realm(realm_id) {
+        return Ok(false);
+    }
+    Ok(records.iter().any(|record| {
+        super::event_log::canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
+            && authz.record_visible(record)
+            && json_contains_string(&record.envelope, target_service_id)
+    }))
+}
+
+fn json_contains_string(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::String(value) => value == expected,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_string(value, expected)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| json_contains_string(value, expected)),
+        _ => false,
+    }
 }
 
 fn source_service_id_from_request(req: &Request) -> Result<String, AppError> {

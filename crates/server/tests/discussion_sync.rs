@@ -450,10 +450,10 @@ async fn send_circle_scoped_encrypted_message(
 ) -> String {
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     // Spec-conforming encrypted message: `encrypted_content` (not the retired
-    // `encrypted_payload`), `track_name`, and an aad carrying ONLY realm_id +
-    // event_kind. The message does NOT carry scope_circle_id — its circle
-    // scope is derived server-side from the Strand (install_projected_strand_scope).
-    let payload = json!({
+    // `encrypted_payload`), `track_name`, and AAD committed to the exact
+    // reducer-derived scope. The message does NOT carry scope_circle_id — its
+    // Circle scope is derived from the Strand and authenticated by scope_digest.
+    let mut payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "encrypted_content": {
@@ -476,6 +476,12 @@ async fn send_circle_scoped_encrypted_message(
             "payload_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
         }
     });
+    let accepted_scope = derived_scope_ref(&state, realm_id, "ak.message.create", &payload);
+    let typed_realm_id = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let scope_digest =
+        arkret_models_crypto::encrypted_envelope_scope_digest(&accepted_scope, &typed_realm_id)
+            .expect("fixture encrypted AAD scope digest");
+    payload["encrypted_content"]["aad"]["scope_digest"] = Value::String(scope_digest.to_string());
     let event = signed_event(SignedEvent {
         state: &state,
         token,

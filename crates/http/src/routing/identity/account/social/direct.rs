@@ -985,16 +985,28 @@ pub(crate) fn direct_founder_basis_from_contact(
         if record.basis_id.as_deref() != Some(bundle.basis_id.as_str()) {
             return Err("direct_conversation_founder_basis_unavailable");
         }
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human {
+            basis_evidence_bundle: bundle.clone(),
+            root_basis_continuity_chain: record.basis_evidence_history.clone(),
+        }
+        .participants_and_founder()
+        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+        arkret_models_collaboration::contact_operations::validate_recontact_continuity(
+            bundle,
+            &record.basis_evidence_history,
+        )
+        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+        let root = record.basis_evidence_history.last().unwrap_or(bundle);
         if let arkret_models_collaboration::contact_operations::ContactBasis::Glare {
             requests,
             ..
-        } = &bundle.basis
+        } = &root.basis
         {
-            let attestations = bundle
+            let attestations = root
                 .glare_concurrency_attestations
                 .as_ref()
                 .ok_or("direct_conversation_founder_basis_unavailable")?;
-            if bundle.request_receipts.len() != 2
+            if root.request_receipts.len() != 2
                 || attestations.iter().any(|attestation| {
                     attestation.complete_through == 0
                         || requests.iter().any(|request| {
@@ -1007,7 +1019,7 @@ pub(crate) fn direct_founder_basis_from_contact(
                 return Err("direct_conversation_founder_basis_unavailable");
             }
             let first = &requests[0];
-            let receipt = bundle
+            let receipt = root
                 .request_receipts
                 .iter()
                 .find(|receipt| receipt.core.request_event_ref == first.request_event_ref)
@@ -1026,14 +1038,26 @@ pub(crate) fn direct_founder_basis_from_contact(
                 },
             );
         }
+        let arkret_models_collaboration::contact_operations::ContactBasis::Normal {
+            request_event_ref,
+            ..
+        } = &root.basis
+        else {
+            unreachable!("glare returned above")
+        };
+        let request_issuer = root
+            .request_receipts
+            .iter()
+            .find(|receipt| &receipt.core.request_event_ref == request_event_ref)
+            .map(|receipt| receipt.core.holder.subject_id().clone())
+            .ok_or("direct_conversation_founder_basis_unavailable")?;
+        return Ok(
+            arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Normal {
+                request_issuer,
+            },
+        );
     }
-    let request_issuer = arkret_identifiers::Did::new(record.requester.clone())
-        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
-    Ok(
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Normal {
-            request_issuer,
-        },
-    )
+    Err("direct_conversation_founder_basis_unavailable")
 }
 
 /// Which participant may author the founding unit for this pair, if it can be determined now.
@@ -1089,11 +1113,11 @@ pub(crate) async fn direct_founder_for_pair(
 }
 
 /// Current active exact-pair MLS generation activation for a bound conversation.
-pub(crate) async fn direct_active_generation_ref(
+pub(crate) async fn direct_active_generation_cell(
     state: &AppState,
     pair_key: &str,
     binding: &DirectConversationBindingRecord,
-) -> Result<Option<EventId>, AppError> {
+) -> Result<Option<(EventId, Hash)>, AppError> {
     let active_value = state
         .projections()
         .snapshot()
@@ -1125,9 +1149,17 @@ pub(crate) async fn direct_active_generation_ref(
     matching_refs.sort_unstable();
     matching_refs.dedup();
     if matching_refs.len() != 1 {
-        return Ok(None);
+        return Err(AppError::internal(
+            "accepted Direct Conversation generation cell has no unique source Event",
+        ));
     }
-    EventId::new(matching_refs.pop().expect("cardinality checked"))
-        .map(Some)
-        .map_err(|error| AppError::internal(format!("stored activation ref invalid: {error}")))
+    let event_id = EventId::new(matching_refs.pop().expect("cardinality checked"))
+        .map_err(|error| AppError::internal(format!("stored activation ref invalid: {error}")))?;
+    let value_digest = arkret_canonical::canonical_sha256(&active_value).map_err(|error| {
+        AppError::internal(format!("active generation value digest failed: {error}"))
+    })?;
+    let value_digest = Hash::new(value_digest).map_err(|error| {
+        AppError::internal(format!("active generation digest invalid: {error}"))
+    })?;
+    Ok(Some((event_id, value_digest)))
 }

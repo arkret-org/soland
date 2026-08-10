@@ -381,6 +381,7 @@ diesel::table! {
         request_receipts -> Jsonb,
         request_mirror_receipts -> Jsonb,
         basis_evidence -> Nullable<Jsonb>,
+        basis_evidence_history -> Jsonb,
         control_outcomes -> Jsonb,
         response_event_ref -> Nullable<Bytea>,
         tombstone_event_ref -> Nullable<Bytea>,
@@ -1238,6 +1239,86 @@ diesel::table! {
     service_identity (id) {
         id -> Text,
         identity -> Jsonb,
+        resolution -> Nullable<Jsonb>,
+        resolution_digest -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    principal_resolutions (principal_id) {
+        principal_id -> Text,
+        principal_control_realm_id -> Text,
+        genesis_event_id -> Text,
+        current_event_id -> Text,
+        projection -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    principal_resolution_events (principal_id, event_id) {
+        principal_id -> Text,
+        event_id -> Text,
+        previous_event_id -> Nullable<Text>,
+        method_history_head -> Text,
+        event_json -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_resolution_last_seen_floors (service_id, service_kind) {
+        service_id -> Text,
+        service_kind -> Text,
+        floor -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_route_notice_states (service_id, service_kind, handover_id) {
+        service_id -> Text,
+        service_kind -> Text,
+        handover_id -> Text,
+        notice_state -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_resolution_mirror_ledger (source_service_id, realm_id, request_id) {
+        source_service_id -> Text,
+        realm_id -> Text,
+        request_id -> Text,
+        request_digest -> Text,
+        artifact_key -> Text,
+        artifact_digest -> Text,
+        artifact -> Jsonb,
+        ack -> Jsonb,
+        accepted_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_resolution_fork_quarantine (service_id, service_kind, artifact_family, artifact_key, conflicting_digest) {
+        service_id -> Text,
+        service_kind -> Text,
+        artifact_family -> Text,
+        artifact_key -> Text,
+        accepted_digest -> Text,
+        conflicting_digest -> Text,
+        evidence -> Jsonb,
+        quarantined_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    service_route_cache (service_id, service_kind) {
+        service_id -> Text,
+        service_kind -> Text,
+        entry -> Jsonb,
+        cache_expires_at -> Timestamptz,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -1455,6 +1536,7 @@ diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk
 diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
+diesel::joinable!(principal_resolution_events -> principal_resolutions (principal_id));
 diesel::allow_tables_to_appear_in_same_query!(
     account_datas,
     account_lifecycle,
@@ -1511,6 +1593,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     peer_keypackage_claims,
     pending_agent_drafts,
     policy_documents,
+    principal_resolution_events,
+    principal_resolutions,
     projection_circle_members,
     projection_circles,
     projection_events,
@@ -1535,6 +1619,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     server_settings,
     service_identity,
     service_identity_registrations,
+    service_resolution_fork_quarantine,
+    service_resolution_last_seen_floors,
+    service_resolution_mirror_ledger,
+    service_route_cache,
+    service_route_notice_states,
     sessions,
     publication_evidence,
     signal_relay,

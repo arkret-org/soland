@@ -175,11 +175,16 @@ async fn run() -> anyhow::Result<()> {
     }
     let supervisor_persistence = bootstrap.persistence.clone();
     let supervisor_key_store = bootstrap.key_store.clone();
+    let resolution_commitment = bootstrap
+        .resolution_commitment
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("serving service identity has no resolution commitment"))?;
     let state = crate::runtime::build_app_state(
         config.clone(),
         db,
         bootstrap.persistence,
         bootstrap.state,
+        resolution_commitment,
         bootstrap.signing_seed,
     )?;
     spawn_service_identity_supervisor(state.clone(), supervisor_persistence, supervisor_key_store);
@@ -610,6 +615,9 @@ fn spawn_service_identity_supervisor(
                             "service identity supervisor rejected a runtime identity switch"
                         );
                         break;
+                    }
+                    if let Some(commitment) = bootstrap.resolution_commitment {
+                        state.replace_service_resolution_commitment(commitment);
                     }
                     state.replace_service_identity_state(bootstrap.state);
                     if !keep_retrying {

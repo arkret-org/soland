@@ -46,6 +46,7 @@ pub struct ContactRecord {
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub basis_evidence: Option<ContactBasisEvidenceBundle>,
+    pub basis_evidence_history: Vec<ContactBasisEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,

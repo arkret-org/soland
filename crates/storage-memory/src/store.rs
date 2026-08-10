@@ -22,23 +22,24 @@ use super::{
     MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
     MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
     MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
-    MemoryPolicyDocumentStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
-    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
-    MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
-    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
-    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore, MemoryProjectionEventStore,
+    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
+    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
+    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
     MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
     MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
     MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
     MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
-    ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
-    RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    PrincipalResolutionStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
+    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
     RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
     RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
-    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
+    ServiceIdentityStore, ServiceRouteStore, SessionStore, SidecarStore, SignalRelayStore,
     SpaceContainerProjectionStore, StrandProjectionStore, StrandWatchProjectionStore,
     SyncCursorStore, WebsocketAuthStore, WebvhStore,
 };
@@ -89,6 +90,8 @@ pub struct SolandMemoryPersistenceStore {
     security_transactions: MemorySecurityTransactionStore,
     webvh: MemoryWebvhStore,
     service_identity: MemoryServiceIdentityStore,
+    principal_resolutions: MemoryPrincipalResolutionStore,
+    service_routes: MemoryServiceRouteStore,
     realm_invites: MemoryRealmInviteStore,
     pub(crate) events: MemoryEventStore,
     pub(crate) projection_events: MemoryProjectionEventStore,
@@ -130,7 +133,7 @@ impl SolandMemoryPersistenceStore {
         let canonical_events = Arc::new(Mutex::new(BTreeMap::new()));
         let projection_events = MemoryProjectionEventStore::new(canonical_events.clone());
         let events = MemoryEventStore::with_devices(
-            canonical_events,
+            canonical_events.clone(),
             devices.shared_data(),
             publication_evidence_data.clone(),
             federation_outbox.data.clone(),
@@ -190,6 +193,8 @@ impl SolandMemoryPersistenceStore {
                 }
             },
             service_identity: MemoryServiceIdentityStore::new(),
+            principal_resolutions: MemoryPrincipalResolutionStore::new(),
+            service_routes: MemoryServiceRouteStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
             events,
             projection_events,
@@ -215,11 +220,14 @@ impl SolandMemoryPersistenceStore {
             agents: {
                 #[cfg(feature = "fault-injection")]
                 {
-                    MemoryAgentStore::with_fault_injector(fault_injector.clone())
+                    MemoryAgentStore::with_events_and_fault_injector(
+                        canonical_events.clone(),
+                        fault_injector.clone(),
+                    )
                 }
                 #[cfg(not(feature = "fault-injection"))]
                 {
-                    MemoryAgentStore::new()
+                    MemoryAgentStore::with_events(canonical_events.clone())
                 }
             },
             sidecars: MemorySidecarStore::new(),
@@ -591,6 +599,16 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
 
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore {
         &self.websocket_auth
+    }
+}
+
+impl soland_storage::ResolutionStoreRegistry for SolandMemoryPersistenceStore {
+    fn principal_resolutions(&self) -> &dyn PrincipalResolutionStore {
+        &self.principal_resolutions
+    }
+
+    fn service_routes(&self) -> &dyn ServiceRouteStore {
+        &self.service_routes
     }
 }
 

@@ -56,6 +56,18 @@ pub(crate) struct MinimalMetadataAuthorContext {
     pub coordinates: MinimalMetadataAuthorCoordinates,
 }
 
+/// The only actor/session mismatch that is not a delegated identity link.
+/// The transport session remains the rate-limit/visibility principal; the
+/// Event author is authenticated later against the exact active MLS LeafNode.
+pub(crate) fn is_ephemeral_pairwise_author(
+    actor_id: &str,
+    context: Option<&MinimalMetadataAuthorContext>,
+) -> bool {
+    context.is_some()
+        && actor_id.starts_with("ak:did_core:key:")
+        && arkret_wire::ActorId::new(actor_id.to_owned()).is_ok()
+}
+
 /// Extract the encrypted-content coordinates from a content payload. `None`
 /// when the payload carries no encrypted envelope (plaintext operations are
 /// governed by other gates).
@@ -287,8 +299,12 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     .ed25519_bytes()
     .map_err(|error| author_credential_invalid(format!("proof key decode: {error}")))?;
 
-    let actor_did = arkret_identifiers::Did::new(actor_id.to_owned())
+    let actor = arkret_wire::ActorId::new(actor_id.to_owned())
         .map_err(|error| author_credential_invalid(format!("actor_id: {error}")))?;
+    let proof_verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| {
+            author_credential_invalid(format!("verification_method is not a DID URL: {error}"))
+        })?;
     let view = AuthorGroupStateView {
         group_id: context.coordinates.group_id.clone(),
         epoch: context.coordinates.epoch,
@@ -299,7 +315,8 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         group_id: &context.coordinates.group_id,
         epoch: context.coordinates.epoch,
         group_state_ref: &context.coordinates.group_state_ref,
-        actor_id: &actor_did,
+        actor_id: &actor,
+        proof_verification_method: &proof_verification_method,
         proof_public_key: &proof_public_key,
     };
     admit_minimal_metadata_author_claim(&view, &claim)?;
@@ -309,11 +326,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     let proof = arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
         proof_purpose: None,
-        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(
-            |error| {
-                author_credential_invalid(format!("verification_method is not a DID URL: {error}"))
-            },
-        )?,
+        verification_method: proof_verification_method,
         event_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
             proof_binding_bytes,
         ))
@@ -343,6 +356,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
 #[cfg(test)]
 mod tests {
     use arkret_policy::{AuthorLeaf, AuthorLeafCredential};
+    use arkret_wire::{ActorId, DidUrl, FullId, project_full_id_to_core_id};
 
     use super::*;
 
@@ -365,6 +379,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn actor_session_exception_is_pairwise_and_context_bound() {
+        let context = MinimalMetadataAuthorContext {
+            realm_id: "ak:realm:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9".to_owned(),
+            coordinates: MinimalMetadataAuthorCoordinates {
+                group_id: "Zml4dHVyZS1yZWFsbQ".to_owned(),
+                epoch: 7,
+                group_state_ref: "ak:event:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9".to_owned(),
+            },
+        };
+        let pairwise = ActorId::from(
+            project_full_id_to_core_id(&FullId::new("did:key:z6MkpairwiseAlice").unwrap()).unwrap(),
+        );
+        assert!(is_ephemeral_pairwise_author(
+            pairwise.as_str(),
+            Some(&context)
+        ));
+        assert!(!is_ephemeral_pairwise_author(
+            "ak:did_core:webvh:z6Mklongterm",
+            Some(&context),
+        ));
+        assert!(!is_ephemeral_pairwise_author(pairwise.as_str(), None));
+    }
+
     // The §2.10.3 admission is a pure function of (view, claim): the vector's
     // reject cases all surface as the single canonical
     // `failed_precondition + minimal_metadata_author_credential_invalid`, and
@@ -373,31 +411,34 @@ mod tests {
     // no resolver or directory parameter to call.
     #[test]
     fn admission_maps_every_failure_to_the_canonical_reason() {
-        let actor = arkret_identifiers::Did::new("did:key:z6MkpairwiseAlice").unwrap();
+        let full_id = FullId::new("did:key:z6MkpairwiseAlice").unwrap();
+        let actor = ActorId::from(project_full_id_to_core_id(&full_id).unwrap());
+        let proof_method = DidUrl::new(format!("{full_id}#z6MkpairwiseAlice")).unwrap();
         let proof_key = vec![0xA1u8; 32];
         let base_claim = MinimalMetadataAuthorClaim {
             group_id: "Zml4dHVyZS1yZWFsbQ",
             epoch: 7,
             group_state_ref: "ak:event:AYJ6k4yNe3sgr_7Xr3OYBCsTpcHMbdQAogrCDJGM0fh9",
             actor_id: &actor,
+            proof_verification_method: &proof_method,
             proof_public_key: &proof_key,
         };
 
         // unique active leaf → accept.
         let unique = view(vec![
-            leaf(0, "did:key:z6MkpairwiseBob", 0xB0),
-            leaf(3, "did:key:z6MkpairwiseAlice", 0xA1),
+            leaf(0, "ak:did_core:key:other", 0xB0),
+            leaf(3, actor.as_str(), 0xA1),
         ]);
         admit_minimal_metadata_author_claim(&unique, &base_claim).unwrap();
 
         // duplicate identity / removed leaf / rollback / key mismatch → the
         // canonical failed_precondition reason, uniformly.
         let duplicate = view(vec![
-            leaf(1, "did:key:z6MkpairwiseAlice", 0xA1),
-            leaf(4, "did:key:z6MkpairwiseAlice", 0xC4),
+            leaf(1, actor.as_str(), 0xA1),
+            leaf(4, actor.as_str(), 0xC4),
         ]);
-        let removed = view(vec![leaf(0, "did:key:z6MkpairwiseBob", 0xB0)]);
-        let key_mismatch = view(vec![leaf(3, "did:key:z6MkpairwiseAlice", 0xE7)]);
+        let removed = view(vec![leaf(0, "ak:did_core:key:other", 0xB0)]);
+        let key_mismatch = view(vec![leaf(3, actor.as_str(), 0xE7)]);
         let mut rollback_claim = base_claim.clone();
         rollback_claim.group_state_ref = "ak:event:AXXyHtC0MgQ7on9ZHrO_NaIHvB0Lz6pk0TlTNxj6Wyp1";
 

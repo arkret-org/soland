@@ -18,7 +18,12 @@ pub(crate) use uuid::Uuid;
 
 mod agent_principal;
 mod records;
-pub use agent_principal::{AgentPrincipalRecord, PendingAgentPairingCommitIntent};
+pub use agent_principal::{
+    AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
+    ConfirmAgentProvisioningAbandonment, IssueAgentProvisioningAbandonmentChallenge,
+    PendingAgentPairingCommitIntent, agent_provisioning_is_abandoned,
+    apply_agent_provisioning_abandonment, apply_agent_provisioning_abandonment_challenge,
+};
 pub use records::*;
 
 mod accounts;
@@ -47,12 +52,14 @@ mod multisig;
 mod notifications;
 mod organization_registration;
 mod policy;
+mod principal_resolution;
 mod projection;
 mod publication_evidence;
 mod push;
 mod realm_invites;
 mod recovery;
 mod service_identity;
+mod service_route;
 mod sessions;
 mod sidecars;
 mod signal;
@@ -83,12 +90,14 @@ pub use multisig::*;
 pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
+pub use principal_resolution::*;
 pub use projection::*;
 pub use publication_evidence::*;
 pub use push::*;
 pub use realm_invites::*;
 pub use recovery::*;
 pub use service_identity::*;
+pub use service_route::*;
 pub use sessions::*;
 pub use sidecars::*;
 pub use signal::*;
@@ -222,6 +231,12 @@ pub trait SyncStoreRegistry: Send + Sync {
     fn websocket_auth(&self) -> &dyn WebsocketAuthStore;
 }
 
+/// Owner-published identity resolution and remote-route safety persistence.
+pub trait ResolutionStoreRegistry: Send + Sync {
+    fn principal_resolutions(&self) -> &dyn PrincipalResolutionStore;
+    fn service_routes(&self) -> &dyn ServiceRouteStore;
+}
+
 /// Complete persistence capability assembled by an infrastructure adapter.
 pub trait PersistenceStore:
     EventCommitUnitOfWork
@@ -232,6 +247,7 @@ pub trait PersistenceStore:
     + EventProjectionStoreRegistry
     + MlsAgentStoreRegistry
     + SyncStoreRegistry
+    + ResolutionStoreRegistry
     + Send
     + Sync
 {

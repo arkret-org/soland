@@ -345,7 +345,7 @@ async fn agent_signer_evidence_bundle_for_sync(
         String,
         arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
     >,
-) -> Option<arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle> {
+) -> Option<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceBundle> {
     None
 }
 
@@ -1267,6 +1267,14 @@ async fn account_data_events(
         let Some(key) = event.payload.get("key").and_then(Value::as_str) else {
             continue;
         };
+        // Service-internal CAS state is deliberately persisted through the
+        // AccountData storage port, but is never a holder-visible account-data
+        // Event. Keep this guard even though current internal writers do not
+        // append Events, so a future writer cannot expose frozen challenges or
+        // binding history accidentally.
+        if crate::routing::identity::account_data::is_service_internal_account_data_key(key) {
+            continue;
+        }
         // Agent runtime sessions never receive controller-private account
         // data over the account stream, even when their session presents the
         // controller as actor (fail closed; private-objects.md §4.2).

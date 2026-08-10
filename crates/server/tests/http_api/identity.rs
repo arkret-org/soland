@@ -8,6 +8,22 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+#[tokio::test]
+async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
+    let state = soland_test_support::app_state(test_config());
+    let service = app_from_state(state);
+    let url =
+        "http://server/_arkret/open/principals/ak%3Adid_core%3Aweb%3Aunknown.example/resolution";
+
+    let unknown = TestClient::get(url).send(&service).await;
+    assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
+
+    let oversized = TestClient::get(format!("{url}?history_depth=257"))
+        .send(&service)
+        .await;
+    assert_eq!(oversized.status_code, Some(StatusCode::BAD_REQUEST));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
     let state = soland_test_support::app_state(test_config());

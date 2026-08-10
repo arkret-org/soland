@@ -307,7 +307,7 @@ async fn server_describe(
         )));
     }
     json_ok(ServerDescribeOutcome(
-        build_server_description_resolved(state).await,
+        build_server_description_resolved(state).await?,
     ))
 }
 
@@ -315,7 +315,7 @@ async fn server_describe(
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.describe"))]
 async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service = build_server_description_resolved(state).await;
+    let service = build_server_description_resolved(state).await?;
     let unsupported_profiles = unsupported_profiles_from_limits(&service.limits);
     json_ok(SolandServerDescribeOutcome {
         service,
@@ -349,7 +349,7 @@ fn unsupported_profiles_from_limits(
 
 pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     let mut description = describe(
-        state.service_id(),
+        state.service_resolution_commitment().as_ref(),
         &state.config().public_base_url,
         state.jobs().storage_mode(),
         state.config().development_mode,
@@ -396,8 +396,12 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     description
 }
 
-async fn build_server_description_resolved(state: &AppState) -> ServiceDescribe {
-    build_server_description(state)
+async fn build_server_description_resolved(
+    state: &AppState,
+) -> Result<ServiceDescribe, soland_http::error::AppError> {
+    let description = build_server_description(state);
+    super::service_resolution::ensure_current_record(state, &description).await?;
+    Ok(description)
 }
 
 /// Inject the T6.1 claim-level partition fields (`implemented_features`,

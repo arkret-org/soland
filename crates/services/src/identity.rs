@@ -76,6 +76,11 @@ pub struct ContactRecord {
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub basis_evidence: Option<ContactBasisEvidenceBundle>,
+    /// Immediate terminal predecessor first, followed by its predecessors up
+    /// to the unique root basis.  Keeping the verified bundles beside the
+    /// current row lets the resolver supply the exact re-contact continuity
+    /// chain without reconstructing signed evidence from Event references.
+    pub basis_evidence_history: Vec<ContactBasisEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
@@ -989,7 +994,7 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
     pub authorized_signing_key_binding:
-        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+        arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1001,8 +1006,7 @@ pub struct RecordAgentPairingCommitIntentCommand {
     pub pairing_request_id: OpaqueLocalId,
     pub request_digest: String,
     pub authorize_event_id: String,
-    pub signing_key_binding:
-        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+    pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1010,7 +1014,7 @@ pub struct AgentPairingCommitIntentState {
     pub request_digest: String,
     pub authorize_event_id: String,
     pub signing_key_binding:
-        Option<arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding>,
+        Option<arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1047,7 +1051,7 @@ pub struct AgentPairingState {
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
     pub authorized_signing_key_binding:
-        Option<arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding>,
+        Option<arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1075,8 +1079,7 @@ pub struct ActiveAgentRuntimeBinding {
     pub authorized_event_ref: EventId,
     pub verification_method: DidUrl,
     pub public_key_digest: Hash,
-    pub signing_key_binding:
-        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+    pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1406,6 +1409,14 @@ pub trait AgentPairingPort: Send + Sync {
         agent_id: &str,
         approval_request_id: &str,
     ) -> ServiceResult<bool>;
+    async fn issue_provisioning_abandonment_challenge(
+        &self,
+        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
+    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
+    async fn confirm_provisioning_abandonment(
+        &self,
+        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
+    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
 }
 
 #[derive(Clone, Debug)]
@@ -2090,6 +2101,22 @@ impl AgentPairingService {
         self.pairing
             .clear_approval_notification_if_current(agent_id, approval_request_id)
             .await
+    }
+
+    pub async fn issue_provisioning_abandonment_challenge(
+        &self,
+        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
+    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+        self.pairing
+            .issue_provisioning_abandonment_challenge(command)
+            .await
+    }
+
+    pub async fn confirm_provisioning_abandonment(
+        &self,
+        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
+    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+        self.pairing.confirm_provisioning_abandonment(command).await
     }
 
     pub async fn ensure_sidecar(
@@ -2794,8 +2821,8 @@ mod tests {
     const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 
     fn active_signing_key_binding()
-    -> arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding {
-        let mut binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding =
+    -> arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding {
+        let mut binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding =
             serde_json::from_value(serde_json::json!({
                 "schema": "ak.schema.agent_signing_key_binding.v1",
                 "agent_id": ACTIVE_BINDING_AGENT_ID,
@@ -2824,7 +2851,7 @@ mod tests {
     }
 
     fn active_agent_pairing_state(
-        binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+        binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
         authorized_public_key_digest: String,
     ) -> AgentPairingState {
         let mut record = AgentPairingState::new(

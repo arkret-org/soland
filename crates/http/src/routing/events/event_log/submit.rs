@@ -2270,11 +2270,11 @@ pub(crate) async fn submit_federation_events(
     if let Some(bundle) = &agent_signer_evidence_bundle {
         for evidence in &bundle.evidence {
             let admission_evidence = match evidence {
-                arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
+                arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
                     admission_evidence,
                     ..
                 }
-                | arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
+                | arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
                     admission_evidence,
                     ..
                 } => admission_evidence,
@@ -3481,10 +3481,7 @@ mod managed_agent_pcr_batch_tests {
         event.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
-        event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
-            arkret_wire::EventId::new("ak:event:AW3zvyLFyfJyAW_Los_ITK2y0zh5E3jCU6bCFkbpPvNc")
-                .unwrap(),
-        )];
+        event.refs.clear();
         // v1 carries no producer `effects[]`: the router recognises a managed
         // Agent PCR create by whether the registered contract materializes its
         // control material, so the fixture is the bare signed Event.

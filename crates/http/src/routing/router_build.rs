@@ -209,6 +209,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         .push(
             Router::with_path("peer")
                 .push(events::peer_router())
+                .push(system::peer_router())
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router())
                 .push(federation::federation::erasure_receipts::router())
@@ -217,6 +218,7 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         // `open` - unauthenticated, body-only handoff resolver surface.
         .push(
             Router::with_path("open")
+                .push(system::open_router())
                 .push(invites::open_router())
                 .push(identity::agents::open_router())
                 .push(identity::device_pairing_open::open_router()),

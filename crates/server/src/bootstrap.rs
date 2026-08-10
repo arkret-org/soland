@@ -17,10 +17,10 @@ use arkret_identity::service_identity::{
 use arkret_keystore::KeyStore;
 use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
-    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
+    ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
-use arkret_wire::ServiceKind;
-use ed25519_dalek::{Signature, Signer, SigningKey};
+use arkret_wire::{PayloadProof, ServiceId, ServiceKind, project_full_id_to_core_id, proof_kind};
+use ed25519_dalek::SigningKey;
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -50,6 +50,9 @@ pub struct ServiceIdentityBootstrap {
     /// silently prepare a second control root.
     pub key_store: Option<Arc<dyn KeyStore>>,
     pub state: ServiceIdentityState,
+    /// Stable FullId plus the exact current method-history coordinates that
+    /// every ServiceDescribe and signed ServiceResolutionRecord must share.
+    pub resolution_commitment: Option<arkret_models_identity::ResolutionCommitment>,
     /// Signing seed resolved through the verified identity's active KeyRef.
     /// AppState must use this exact seed and must never independently mint or
     /// derive a second runtime signer.
@@ -131,10 +134,23 @@ pub async fn retry_service_identity(
     } else {
         anyhow::bail!("service identity bootstrap produced no serving identity")
     };
+    let resolution_commitment = persistence
+        .stored_service_identity()
+        .await
+        .map_err(|error| anyhow::anyhow!("reading service resolution commitment failed: {error}"))?
+        .map(|stored| {
+            Ok(arkret_models_identity::ResolutionCommitment {
+                full_id: stored.identity.full_id.clone(),
+                method_history_head: stored.registration_receipt.log_head_digest.clone(),
+                version_id: stored.identity.version_id.clone(),
+            })
+        })
+        .transpose()?;
     Ok(ServiceIdentityBootstrap {
         persistence,
         key_store,
         state,
+        resolution_commitment,
         signing_seed,
     })
 }
@@ -712,6 +728,7 @@ async fn restore_identity_bundle(
     validate_signed_service_inception(&request)?;
     let outcome = ServiceRegistrationOutcome {
         service_id: bundle.identity.identity.service_id.clone(),
+        full_id: bundle.identity.identity.full_id.clone(),
         did_document: bundle.identity.did_document.clone(),
         version_id: bundle.identity.identity.version_id.clone(),
         registration_receipt: bundle.identity.registration_receipt.clone(),
@@ -723,7 +740,7 @@ async fn restore_identity_bundle(
     let now = chrono::Utc::now();
     let event_digest = outcome.registration_receipt.log_head_digest.clone();
     let document = WebvhDocumentRecord {
-        did: outcome.service_id.to_string(),
+        did: bundle.identity.identity.full_id.to_string(),
         did_document: serde_json::to_value(&outcome.did_document)?,
         key_log_head: Some(event_digest.clone()),
         seq: 1,
@@ -740,7 +757,7 @@ async fn restore_identity_bundle(
     };
     let event = WebvhLogRecord {
         event_digest,
-        did: outcome.service_id.to_string(),
+        did: bundle.identity.identity.full_id.to_string(),
         seq: 1,
         operation: serde_json::to_value(inception)?,
         created_at: now,
@@ -802,36 +819,21 @@ fn validate_signed_service_inception(
 
 fn validate_registration_receipt_signature(
     stored: &StoredServiceIdentity,
-    signing_seed: &[u8; 32],
+    _signing_seed: &[u8; 32],
 ) -> anyhow::Result<()> {
     let receipt = &stored.registration_receipt;
     if receipt.provider_service_id != stored.identity.service_id {
         anyhow::bail!("self-hosted identity bundle receipt was issued by a different service DID");
     }
-    let expected_method = format!("{}#notary-key", stored.identity.service_id);
-    if receipt.proof.verification_method != expected_method {
+    let expected_method = format!("{}#notary-key", stored.identity.full_id);
+    if receipt.proof.verification_method.as_str() != expected_method {
         anyhow::bail!("identity bundle receipt uses an unexpected verification method");
     }
-    let signing_input = registration_receipt_signing_input(
-        receipt.registration_receipt_id.as_str(),
-        &receipt.registration_key,
-        &receipt.service_id,
-        &receipt.version_id,
-        &receipt.log_head_digest,
-        &receipt.control_key_digest,
-        receipt.issued_at,
-        &receipt.provider_service_id,
-        &receipt.proof.verification_method,
-    )?;
-    let signature_bytes = arkret_canonical::decode_ed25519_signature_multibase(
-        &receipt.proof.proof_value,
+    arkret_signatures::service_identity::verify_registration_receipt_proof(
+        receipt,
+        &stored.did_document,
     )
-    .map_err(|error| anyhow::anyhow!("identity bundle receipt proof is invalid: {error}"))?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    SigningKey::from_bytes(signing_seed)
-        .verifying_key()
-        .verify_strict(&signing_input, &signature)
-        .map_err(|error| anyhow::anyhow!("identity bundle receipt signature failed: {error}"))
+    .map_err(|error| anyhow::anyhow!("identity bundle receipt signature failed: {error}"))
 }
 
 fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey> {
@@ -1074,7 +1076,8 @@ async fn mint_local_service_identity(
         issued_at,
     )?;
     let outcome = ServiceRegistrationOutcome {
-        service_id: service_id.clone(),
+        service_id: receipt.service_id.clone(),
+        full_id: service_id.clone(),
         did_document: request.inception_operation.state.clone(),
         version_id: request.inception_operation.version_id.clone(),
         registration_receipt: receipt,
@@ -1153,93 +1156,46 @@ fn sign_registration_receipt(
     let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
-    let receipt_claims = json!({
-        "registration_key": key,
-        "service_id": request.inception_operation.state.id,
-        "version_id": request.inception_operation.version_id,
-        "log_head_digest": log_head_digest,
-        "control_key_digest": control_key_digest,
-        "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
-        "provider_service_id": provider_service_id,
-    });
-    let receipt_digest = arkret_canonical::canonical_sha256(&receipt_claims)?;
-    let registration_receipt_id = arkret_wire::ServiceRegistrationReceiptId::new(format!(
-        "ak:service_registration_receipt:{}",
-        receipt_digest
-            .strip_prefix("sha256:")
-            .unwrap_or(&receipt_digest)
-    ))?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{provider_service_id}#notary-key"))
+    let full_id = request.inception_operation.state.id.clone();
+    let service_id = ServiceId::from(project_full_id_to_core_id(&full_id)?);
+    let provider_full_id = provider_service_id;
+    let provider_service_id = ServiceId::from(project_full_id_to_core_id(provider_full_id)?);
+    let verification_method = arkret_wire::DidUrl::new(format!("{provider_full_id}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")
         })?;
-    let signing_input = registration_receipt_signing_input(
-        registration_receipt_id.as_str(),
-        key,
-        &request.inception_operation.state.id,
-        &request.inception_operation.version_id,
-        &log_head_digest,
-        &control_key_digest,
-        issued_at,
-        provider_service_id,
-        &verification_method,
-    )?;
-    let signature = SigningKey::from_bytes(signing_seed).sign(&signing_input);
-    let receipt = ServiceRegistrationReceipt {
-        registration_receipt_id,
+    let mut receipt = ServiceRegistrationReceipt {
+        registration_receipt_id: arkret_wire::ServiceRegistrationReceiptId::new(format!(
+            "ak:service_registration_receipt:{}",
+            "0".repeat(64)
+        ))?,
         registration_key: key.clone(),
-        service_id: request.inception_operation.state.id.clone(),
+        service_id,
+        full_id,
         version_id: request.inception_operation.version_id.clone(),
         log_head_digest,
         control_key_digest,
         issued_at,
-        provider_service_id: provider_service_id.clone(),
-        proof: ServiceWebvhDataIntegrityProof {
-            proof_type: "DataIntegrityProof".to_owned(),
-            cryptosuite: "eddsa-jcs-2022".to_owned(),
+        provider_service_id,
+        proof: PayloadProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method,
-            proof_purpose: "assertionMethod".to_owned(),
-            proof_value: arkret_canonical::encode_multibase_base58btc(signature.to_bytes()),
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))?,
+            created_at: issued_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "placeholder".to_owned(),
         },
     };
-    receipt.validate_for(key, &receipt.service_id)?;
+    receipt.registration_receipt_id = receipt.expected_registration_receipt_id()?;
+    receipt.proof.payload_digest = receipt.expected_payload_digest()?;
+    receipt.proof = arkret_signatures::service_identity::sign_registration_receipt_proof(
+        &receipt,
+        &SigningKey::from_bytes(signing_seed),
+    )?;
+    receipt.validate_for(key, &receipt.service_id, &receipt.full_id)?;
     Ok(receipt)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn registration_receipt_signing_input(
-    registration_receipt_id: &str,
-    registration_key: &ServiceRegistrationKey,
-    service_id: &Did,
-    version_id: &str,
-    log_head_digest: &str,
-    control_key_digest: &str,
-    issued_at: chrono::DateTime<chrono::Utc>,
-    provider_service_id: &Did,
-    verification_method: &str,
-) -> anyhow::Result<Vec<u8>> {
-    let proof_config = json!({
-        "type": "DataIntegrityProof",
-        "cryptosuite": "eddsa-jcs-2022",
-        "verificationMethod": verification_method,
-        "proofPurpose": "assertionMethod",
-    });
-    let signed_receipt = json!({
-        "registration_receipt_id": registration_receipt_id,
-        "registration_key": registration_key,
-        "service_id": service_id,
-        "version_id": version_id,
-        "log_head_digest": log_head_digest,
-        "control_key_digest": control_key_digest,
-        "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
-        "provider_service_id": provider_service_id,
-    });
-    let mut signing_input = Vec::with_capacity(64);
-    let proof_config_bytes = arkret_canonical::canonical_json_bytes(&proof_config)?;
-    let receipt_bytes = arkret_canonical::canonical_json_bytes(&signed_receipt)?;
-    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&proof_config_bytes));
-    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&receipt_bytes));
-    Ok(signing_input)
 }
 
 fn signing_key_ref(
@@ -1610,10 +1566,11 @@ mod tests {
         .expect("first provisioning with bundle");
         let key = registration_key(&config).unwrap();
         let mut forged = bundle_backend.load(&key).unwrap().unwrap();
-        let proof_value = &mut forged.identity.registration_receipt.proof.proof_value;
-        let replacement = if proof_value.ends_with('1') { '2' } else { '1' };
-        proof_value.pop();
-        proof_value.push(replacement);
+        let mut jws = forged.identity.registration_receipt.proof.jws.clone();
+        let replacement = if jws.ends_with('1') { '2' } else { '1' };
+        jws.pop();
+        jws.push(replacement);
+        forged.identity.registration_receipt.proof.jws = jws;
         forged.receipt_chain[0] = forged.identity.registration_receipt.clone();
         bundle_backend.store(&forged).unwrap();
 

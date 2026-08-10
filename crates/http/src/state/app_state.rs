@@ -10,6 +10,7 @@ use arkret_identity::service_identity::ServiceIdentityState;
 #[cfg(test)]
 use arkret_identity::service_identity::{LocalServiceIdentity, ServiceIdentityKeyRef};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_identity::ResolutionCommitment;
 use arkret_models_identity::account::AccountRegistrationPolicy;
 #[cfg(test)]
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
@@ -89,6 +90,10 @@ pub struct AppState {
     /// Full service-identity lifecycle state used by readiness, doctor, and
     /// identity-mutation gates.
     service_identity: Arc<ArcSwap<ServiceIdentityState>>,
+    /// Exact current service method-history coordinates. Public describe,
+    /// open resolution, and Account-Authority gate assembly all read this
+    /// same snapshot instead of projecting a stable CoreId back into a DID.
+    service_resolution_commitment: Arc<ArcSwap<ResolutionCommitment>>,
     /// Mutable operational overlay (admin allowlist, rate-limit ceilings,
     /// federation peers, feature toggles). Seeded from `config` at boot,
     /// overlaid by the `server_settings` DB row in [`AppState::hydrate`], and
@@ -274,10 +279,19 @@ fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentitySt
         ServiceIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     ServiceIdentityState::Ready {
         identity: LocalServiceIdentity {
-            service_id: Did::new(
+            full_id: Did::new(
                 "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
             )
             .expect("fixture service DID"),
+            service_id: arkret_wire::ServiceId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &Did::new(
+                        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                    )
+                    .expect("fixture service DID"),
+                )
+                .expect("fixture service projection"),
+            ),
             registration_key,
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],
@@ -287,6 +301,24 @@ fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentitySt
             version_id: "fixture-v1".to_owned(),
             last_verified_at: chrono::Utc::now(),
         },
+    }
+}
+
+#[cfg(test)]
+fn development_fixture_resolution_commitment(
+    identity: &ServiceIdentityState,
+) -> ResolutionCommitment {
+    ResolutionCommitment {
+        full_id: arkret_wire::FullId::new(
+            identity
+                .identity()
+                .expect("fixture has a serving identity")
+                .full_id
+                .to_string(),
+        )
+        .expect("fixture service FullId"),
+        method_history_head: format!("sha256:{}", "0".repeat(64)),
+        version_id: "fixture-v1".to_owned(),
     }
 }
 
@@ -331,7 +363,15 @@ mod test_construction {
         ) -> Self {
             let identity = development_fixture_service_identity(&config);
             let signing_seed = fixture_signing_seed(&config, &identity);
-            Self::new_with_service_identity(config, db, persistence, identity, signing_seed)
+            let commitment = development_fixture_resolution_commitment(&identity);
+            Self::new_with_service_identity(
+                config,
+                db,
+                persistence,
+                identity,
+                commitment,
+                signing_seed,
+            )
         }
 
         pub fn new_with_service_identity(
@@ -339,6 +379,7 @@ mod test_construction {
             db: Db,
             persistence: Arc<dyn PersistenceStore>,
             service_identity: ServiceIdentityState,
+            service_resolution_commitment: ResolutionCommitment,
             resolved_signing_seed: [u8; 32],
         ) -> Self {
             let cell_registry = ProjectionService::sdk_cell_registry();
@@ -377,6 +418,7 @@ mod test_construction {
                     storage_mode,
                 },
                 service_identity,
+                service_resolution_commitment,
                 resolved_signing_seed,
             )
         }
@@ -557,26 +599,55 @@ impl AppState {
         if stored.identity.service_id.as_str() != self.service_id {
             return Err("durable service identity does not match the serving service".to_owned());
         }
+        let expected_multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            self.notary_verifying_key().as_bytes(),
+        );
         let assertion_method = stored
-            .did_document
-            .assertion_method
-            .first()
-            .ok_or_else(|| "service DID document has no assertion method".to_owned())?;
-        if !stored
             .did_document
             .verification_method
             .iter()
-            .any(|method| method.id == *assertion_method)
-        {
-            return Err("service DID assertion method is not declared".to_owned());
-        }
+            .find(|method| {
+                method.public_key_multibase == expected_multibase
+                    && stored.did_document.assertion_method.contains(&method.id)
+            })
+            .ok_or_else(|| "runtime signer is not a current service assertion method".to_owned())?;
         let document_bytes = arkret_canonical::canonical_json_bytes(&stored.did_document)
             .map_err(|error| error.to_string())?;
         let document_digest = Hash::new(arkret_canonical::sha256_digest(document_bytes))
             .map_err(|error| error.to_string())?;
-        let assertion_method = arkret_wire::DidUrl::new(assertion_method.clone())
+        let assertion_method = arkret_wire::DidUrl::new(assertion_method.id.clone())
             .map_err(|error| error.to_string())?;
         Ok((document_digest, assertion_method))
+    }
+
+    pub async fn stored_service_identity(
+        &self,
+    ) -> Result<arkret_identity::service_identity::StoredServiceIdentity, String> {
+        self.persistence
+            .stored_service_identity()
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "durable service identity is unavailable".to_owned())
+    }
+
+    pub async fn current_signed_service_resolution(
+        &self,
+    ) -> Result<Option<arkret_models_identity::ServiceResolutionRecord>, String> {
+        self.persistence
+            .current_service_resolution()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn compare_and_set_signed_service_resolution(
+        &self,
+        expected_digest: Option<&Hash>,
+        record: arkret_models_identity::ServiceResolutionRecord,
+    ) -> Result<bool, String> {
+        self.persistence
+            .compare_and_set_service_resolution(expected_digest, record)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub fn install_federation_peer_verifying_key(
@@ -642,6 +713,15 @@ impl AppState {
         self.service_identity.store(Arc::new(state));
     }
 
+    pub fn service_resolution_commitment(&self) -> Arc<ResolutionCommitment> {
+        self.service_resolution_commitment.load_full()
+    }
+
+    pub fn replace_service_resolution_commitment(&self, commitment: ResolutionCommitment) {
+        self.service_resolution_commitment
+            .store(Arc::new(commitment));
+    }
+
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the NotaryWorker and service-owned signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
@@ -691,6 +771,7 @@ impl AppState {
         config: AppConfig,
         runtime: AppStateRuntime,
         service_identity: ServiceIdentityState,
+        service_resolution_commitment: ResolutionCommitment,
         resolved_signing_seed: [u8; 32],
     ) -> Self {
         let AppStateRuntime {
@@ -712,6 +793,8 @@ impl AppState {
             .service_id
             .to_string();
         let service_identity = Arc::new(ArcSwap::from_pointee(service_identity));
+        let service_resolution_commitment =
+            Arc::new(ArcSwap::from_pointee(service_resolution_commitment));
 
         // Build the production DID resolver chain before the struct literal
         // so we can still
@@ -816,6 +899,7 @@ impl AppState {
             config,
             service_id: service_id.clone(),
             service_identity,
+            service_resolution_commitment,
             settings: initial_settings,
             authorization,
             storage_mode,
@@ -1092,6 +1176,10 @@ impl AppState {
 
     pub(crate) fn projections(&self) -> &ProjectionService {
         &self.projections
+    }
+
+    pub(crate) fn persistence(&self) -> &PersistenceHandle {
+        &self.persistence
     }
 
     /// Runtime-authoritative admin-allowlist check. Reads the live overlay,
@@ -1738,6 +1826,7 @@ mod membership_hydration_tests {
     fn app_state_uses_the_bootstrap_resolved_signing_seed() {
         let config = AppConfig::test_default();
         let identity = development_fixture_service_identity(&config);
+        let commitment = development_fixture_resolution_commitment(&identity);
         let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
         let resolved_seed = [0xa5; 32];
 
@@ -1746,6 +1835,7 @@ mod membership_hydration_tests {
             Db { pool: None },
             persistence,
             identity,
+            commitment,
             resolved_seed,
         );
 

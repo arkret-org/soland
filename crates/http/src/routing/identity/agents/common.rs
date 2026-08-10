@@ -70,7 +70,21 @@ pub(super) fn ensure_agent_record_controller(
             "agent principal is not controlled by the authenticated session",
         ));
     }
+    if !agent_record_is_materialized(record) {
+        return Err(AppError::capability_denied(
+            "Agent provisioning has not accepted its PCR genesis",
+        ));
+    }
     Ok(())
+}
+
+pub(super) fn agent_record_is_materialized(record: &AgentPrincipalRecord) -> bool {
+    record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("pcr_genesis_accepted"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 pub(super) async fn require_agent_controller(

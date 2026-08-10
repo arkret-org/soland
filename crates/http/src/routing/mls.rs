@@ -623,7 +623,8 @@ async fn peer_claim_keypackage(
             &source_service_id,
             &request_digest,
             &predicted,
-        )?;
+        )
+        .await?;
         let outcome_value = serde_json::to_value(&outcome).map_err(|error| {
             AppError::internal(format!("peer claim outcome serialize: {error}"))
         })?;
@@ -1069,14 +1070,14 @@ async fn peer_claim_policy_authorized(
     Ok(true)
 }
 
-fn build_peer_claim_outcome(
+async fn build_peer_claim_outcome(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
     source_service_id: &str,
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
-    let claims = vec![keypackage_claim_record(claimed, body.claim_nonce.as_str())?];
+    let claims = vec![keypackage_claim_record(state, claimed, body.claim_nonce.as_str()).await?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
@@ -3237,19 +3238,39 @@ fn last_resort_matches_realm(kp: &MlsKeyPackageRow, intended_realm_id: &str) -> 
     })
 }
 
-fn keypackage_claim_record(
+async fn keypackage_claim_record(
+    state: &AppState,
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
     let trust_binding = KeyPackageTrustBinding::from_row(record)?;
+    let principal_id = Did::new(record.actor_id.clone())
+        .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
+    let target_device_signing_key_evidence = if trust_binding.device_authorize_event_id.is_some() {
+        let verification_method = format!("{}#{}", principal_id, record.device_id);
+        Some(
+            crate::jws_verify::federated_device_signing_key_evidence(
+                state,
+                &principal_id,
+                &record.device_id,
+                &verification_method,
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::FailedPrecondition, error)
+                    .with_wire_code("target_device_signing_key_evidence_unavailable")
+            })?,
+        )
+    } else {
+        None
+    };
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
     Ok(KeyPackageClaimRecord {
         claim_id: format!("{}:{claim_nonce}", record.id),
         keypackage_ref: record.keypackage_ref.clone(),
         keypackage_digest: Hash::new(record.keypackage_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid keypackage_digest: {error}")))?,
-        principal_id: Did::new(record.actor_id.clone())
-            .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?,
+        principal_id,
         device_id: record.device_id.clone(),
         key_package,
         capabilities: record.capabilities.clone(),
@@ -3257,6 +3278,12 @@ fn keypackage_claim_record(
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
         device_authorize_event_id: trust_binding.device_authorize_event_id,
         agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
+        target_device_signing_key_evidence,
+        // Native Agent evidence is supplied by the closed snapshot producer;
+        // fail-closed outcome validation below prevents an Agent leaf from
+        // crossing federation until that producer can materialize the exact
+        // request-bound current observation.
+        target_agent_signer_evidence: None,
         expires_at: match record.claim_expires_at_unix_ms {
             Some(expires_at_unix_ms) => unix_millis_datetime(expires_at_unix_ms)?,
             None => unix_timestamp_datetime(record.lifetime_not_after)?,

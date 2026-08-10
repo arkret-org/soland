@@ -2,6 +2,9 @@ use salvo::prelude::*;
 
 pub(crate) mod describe;
 pub(crate) mod extract;
+pub(crate) mod principal_resolution;
+pub(crate) mod service_resolution;
+pub(crate) mod service_route_peer;
 
 use super::identity::auth;
 
@@ -15,4 +18,14 @@ pub fn local_router() -> Router {
 
 pub fn health_router() -> Router {
     describe::health_router()
+}
+
+pub fn open_router() -> Router {
+    Router::new()
+        .push(service_resolution::open_router())
+        .push(principal_resolution::open_router())
+}
+
+pub fn peer_router() -> Router {
+    service_route_peer::router()
 }

@@ -176,7 +176,13 @@ pub(crate) async fn validate_event_proofs(
                 ));
             }
         }
-        let signer_controller = if let Some(expected_root_method) = root_anchor_method.as_deref() {
+        let signer_controller = if minimal_metadata_context.is_some() {
+            // Pairwise authorship deliberately does not compare a resolvable
+            // did:key controller string with the stable Core ActorId here.
+            // The closed policy verifier below projects the FullId controller
+            // and checks it against actor_id before accepting the Leaf key.
+            method_root.to_owned()
+        } else if let Some(expected_root_method) = root_anchor_method.as_deref() {
             if verification_method_url != expected_root_method {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
@@ -612,7 +618,7 @@ pub(super) fn event_proof_binding_bytes(
     verification_method: &str,
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
-) -> Result<(arkret_wire::Proof, arkret_identifiers::Did, Vec<u8>), EventValidationError> {
+) -> Result<(arkret_wire::Proof, arkret_wire::ActorId, Vec<u8>), EventValidationError> {
     let proof: arkret_wire::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
         .map_err(|error| {
             event_validation_error(
@@ -631,11 +637,11 @@ pub(super) fn event_proof_binding_bytes(
             "event proof binding fields are inconsistent",
         ));
     }
-    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).map_err(|error| {
+    let actor = arkret_wire::ActorId::new(actor_id.to_owned()).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
-            format!("event actor_id is not a valid DID: {error}"),
+            format!("event actor_id is not a valid Core ActorId: {error}"),
         )
     })?;
     let bytes = proof.canonical_binding_bytes(&actor).map_err(|error| {

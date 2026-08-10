@@ -2333,6 +2333,24 @@ pub(super) async fn submit_event_value_with_context(
         .await;
         resolve_moderation_dismiss_queue_item(state, &operation, &parsed.event_id).await;
     }
+    if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str()
+    {
+        let accepted_event = serde_json::from_value::<Event>(envelope_for_bootstrap.clone())
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted principal resolution Event is invalid: {error}"),
+                )
+            })?;
+        if let Err(error) = persist_principal_resolution_projection(state, &accepted_event).await {
+            // This index is rebuildable from canonical Events. The Event is
+            // already committed, so never misreport it as rejected; surface
+            // the drift for repair and let public reads fail closed meanwhile.
+            tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
+        }
+    }
     if let Some(event) = projected_event {
         let _ = state.publish_event_notification(crate::state::EventNotification::event(
             event.realm_id.clone(),

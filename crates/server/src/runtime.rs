@@ -27,6 +27,7 @@ pub fn build_app_state(
     db: Db,
     persistence: PersistenceHandle,
     service_identity: arkret_identity::service_identity::ServiceIdentityState,
+    service_resolution_commitment: arkret_models_identity::ResolutionCommitment,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
     let cell_registry = soland_services::projection::ProjectionService::try_sdk_cell_registry()
@@ -74,6 +75,7 @@ pub fn build_app_state(
             storage_mode,
         },
         service_identity,
+        service_resolution_commitment,
         resolved_signing_seed,
     ))
 }

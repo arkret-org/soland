@@ -19,11 +19,11 @@ use arkret_canonical as canonical;
 use arkret_identifiers::{Did, Hash};
 use arkret_models_collaboration::contact_operations::{
     ContactBasis, ContactBasisEvidenceBundle, ContactCurrentProof, ContactScope,
-    ContactScopeUpdatePayload, GlareConcurrencyAttestation, PeerContactControlKind,
-    PeerContactControlReceipt, PeerContactControlReceiptDomain, PeerContactControlSubmitOutcome,
-    PeerContactDisposition, PeerContactEventSubmitOutcome, PeerContactMirrorReceipt,
-    PeerContactMirrorReceiptDomain, PeerContactSubmitOutcome, PeerContactSubmitRequestBody,
-    RequestAcceptanceReceipt,
+    ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
+    PeerContactControlKind, PeerContactControlReceipt, PeerContactControlReceiptDomain,
+    PeerContactControlSubmitOutcome, PeerContactDisposition, PeerContactEventSubmitOutcome,
+    PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain, PeerContactSubmitOutcome,
+    PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -188,11 +188,29 @@ async fn peer_contacts_submit(
             })?;
             if request_receipt.core.request_event_ref != signed_event.event_id
                 || request_receipt.core.holder.subject_id() != &signed_event.actor_id
+                || request_receipt.core.issuer.as_str() != source_service_id
+                || request_receipt.core.request_digest
+                    != Hash::new(signed_event.event_digest().map_err(|error| {
+                        AppError::internal(format!("Contact request Event digest: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact request digest invalid: {error}"))
+                    })?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact request receipt does not bind signed_event",
                 ));
             }
+            super::account::validate_request_receipt_cryptography(
+                state,
+                request_receipt,
+                "request_receipt",
+            )?;
+            super::account::validate_request_receipt_cryptography(
+                state,
+                request_receipt,
+                "request_receipt",
+            )?;
             validate_contact_introduction_evidence_digest(
                 &serde_json::to_value(&signed_event.payload).map_err(|error| {
                     AppError::internal(format!("Contact request payload encode: {error}"))
@@ -218,11 +236,34 @@ async fn peer_contacts_submit(
                 })?;
             if response_receipt.response_event_ref != signed_event.event_id
                 || response_receipt.issuer != signed_event.actor_id
+                || response_receipt.response_digest
+                    != Hash::new(signed_event.event_digest().map_err(|error| {
+                        AppError::internal(format!("Contact response Event digest: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact response digest invalid: {error}"))
+                    })?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact response receipt does not bind signed_event",
                 ));
             }
+            super::account::validate_request_receipt_cryptography(
+                state,
+                &response_receipt.request_receipt,
+                "response_receipt.request_receipt",
+            )?;
+            verify_contact_evidence_signature(
+                state,
+                &source_service_id,
+                &response_receipt.signature,
+                &response_receipt
+                    .canonical_signing_bytes()
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact response receipt transcript: {error}"))
+                    })?,
+                "response_receipt",
+            )?;
             ("ak.contact.accepted", signed_event, contact_address)
         }
         PeerContactSubmitRequestBody::Reject {
@@ -242,11 +283,32 @@ async fn peer_contacts_submit(
                 })?;
             if reject_receipt.reject_event_ref != signed_event.event_id
                 || reject_receipt.issuer != signed_event.actor_id
+                || reject_receipt.reject_digest
+                    != Hash::new(signed_event.event_digest().map_err(|error| {
+                        AppError::internal(format!("Contact reject Event digest: {error}"))
+                    })?)
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact reject digest invalid: {error}"))
+                    })?
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact reject receipt does not bind signed_event",
                 ));
             }
+            super::account::validate_request_receipt_cryptography(
+                state,
+                &reject_receipt.request_receipt,
+                "reject_receipt.request_receipt",
+            )?;
+            verify_contact_evidence_signature(
+                state,
+                &source_service_id,
+                &reject_receipt.signature,
+                &reject_receipt.canonical_signing_bytes().map_err(|error| {
+                    AppError::internal(format!("Contact reject receipt transcript: {error}"))
+                })?,
+                "reject_receipt",
+            )?;
             ("ak.contact.rejected", signed_event, contact_address)
         }
         PeerContactSubmitRequestBody::ScopeUpdate {
@@ -256,7 +318,14 @@ async fn peer_contacts_submit(
             contact_address,
             ..
         } => {
-            validate_contact_lineage_carrier(signed_event, lineage, current_proof, false)?;
+            validate_contact_lineage_carrier(
+                state,
+                &source_service_id,
+                signed_event,
+                lineage,
+                current_proof,
+                false,
+            )?;
             ("ak.contact.scope.update", signed_event, contact_address)
         }
         PeerContactSubmitRequestBody::Tombstone {
@@ -266,7 +335,14 @@ async fn peer_contacts_submit(
             contact_address,
             ..
         } => {
-            validate_contact_lineage_carrier(signed_event, lineage, current_proof, true)?;
+            validate_contact_lineage_carrier(
+                state,
+                &source_service_id,
+                signed_event,
+                lineage,
+                current_proof,
+                true,
+            )?;
             ("ak.contact.tombstoned", signed_event, contact_address)
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
@@ -288,6 +364,39 @@ async fn peer_contacts_submit(
         ));
     }
     let payload = signed_event.payload.clone();
+    if let Some(current_proof) = match &delivery {
+        PeerContactSubmitRequestBody::Response { current_proof, .. } => current_proof.as_ref(),
+        PeerContactSubmitRequestBody::ScopeUpdate { current_proof, .. }
+        | PeerContactSubmitRequestBody::Tombstone { current_proof, .. } => Some(current_proof),
+        _ => None,
+    } {
+        if current_proof.issuer != signed_event.actor_id
+            || current_proof.head_event_ref != signed_event.event_id
+            || current_proof.head_digest
+                != Hash::new(signed_event.event_digest().map_err(|error| {
+                    AppError::internal(format!("Contact carrier Event digest: {error}"))
+                })?)
+                .map_err(|error| AppError::internal(format!("Contact digest invalid: {error}")))?
+            || !current_proof
+                .accepted_frontier
+                .contains(&signed_event.event_id)
+            || current_proof.complete_through == 0
+            || current_proof.fresh_until <= now()
+        {
+            return Err(super::super::events::peer::schema_violation(
+                "Contact carrier current proof does not bind the exact signed Event",
+            ));
+        }
+        verify_contact_evidence_signature(
+            state,
+            &source_service_id,
+            &current_proof.signature,
+            &current_proof.canonical_signing_bytes().map_err(|error| {
+                AppError::internal(format!("Contact current proof transcript: {error}"))
+            })?,
+            "carrier_current_proof",
+        )?;
+    }
 
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
@@ -298,6 +407,26 @@ async fn peer_contacts_submit(
     // reverse `respond` delivery back to the originator.
     // Project the issuer's exact signed envelope; peer transport never
     // re-signs or rewrites the Contact fact.
+    let (request_receipt, response_receipt, reject_receipt, carrier_current_proof) = match &delivery
+    {
+        PeerContactSubmitRequestBody::Request {
+            request_receipt, ..
+        } => (Some(request_receipt), None, None, None),
+        PeerContactSubmitRequestBody::Response {
+            response_receipt,
+            current_proof,
+            ..
+        } => (None, Some(response_receipt), None, current_proof.as_ref()),
+        PeerContactSubmitRequestBody::ScopeUpdate { current_proof, .. }
+        | PeerContactSubmitRequestBody::Tombstone { current_proof, .. } => {
+            (None, None, None, Some(current_proof))
+        }
+        PeerContactSubmitRequestBody::Reject { reject_receipt, .. } => {
+            (None, None, Some(reject_receipt), None)
+        }
+        PeerContactSubmitRequestBody::ProofRefresh { .. }
+        | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
+    };
     let outcome = project_delivered_contact_fact(
         state,
         fact_kind,
@@ -307,12 +436,10 @@ async fn peer_contacts_submit(
             AppError::internal(format!("contact payload encode failed: {error}"))
         })?,
         signed_event.event_id.as_str(),
-        match &delivery {
-            PeerContactSubmitRequestBody::Request {
-                request_receipt, ..
-            } => Some(request_receipt),
-            _ => None,
-        },
+        request_receipt,
+        response_receipt,
+        reject_receipt,
+        carrier_current_proof,
         Some(&source_service_id),
     )
     .await?;
@@ -367,11 +494,43 @@ async fn peer_contacts_submit(
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
     };
+    let current_proof = if matches!(
+        result_kind,
+        arkret_models_collaboration::contact_operations::ContactResultKind::Response
+            | arkret_models_collaboration::contact_operations::ContactResultKind::ScopeUpdate
+            | arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone
+    ) {
+        let record = state
+            .contacts()
+            .contact_any(&subject_id, &issuer)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::internal("projected Contact row disappeared"))?;
+        record.basis_evidence.and_then(|bundle| {
+            bundle
+                .current_proofs
+                .into_iter()
+                .find(|proof| proof.issuer.as_str() == subject_id)
+        })
+    } else {
+        None
+    };
+    if matches!(
+        result_kind,
+        arkret_models_collaboration::contact_operations::ContactResultKind::ScopeUpdate
+            | arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone
+    ) && current_proof.is_none()
+    {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "accepted Contact lineage carrier has no recipient current proof",
+        ));
+    }
     let response = PeerContactSubmitOutcome::Event(PeerContactEventSubmitOutcome {
         result_kind,
         status: disposition,
         mirror_receipt,
-        current_proof: None,
+        current_proof,
         retry_after_ms: None,
     });
     if matches!(delivery, PeerContactSubmitRequestBody::Request { .. }) {
@@ -1147,7 +1306,59 @@ fn sign_contact_evidence_bytes(
     })
 }
 
+fn mirrored_contact_current_proof(
+    state: &AppState,
+    issuer: Did,
+    source: &ContactCurrentProof,
+) -> Result<ContactCurrentProof, AppError> {
+    let created_at = now();
+    let mut proof = ContactCurrentProof {
+        basis_id: source.basis_id.clone(),
+        issuer,
+        terminal: source.terminal,
+        head_event_ref: source.head_event_ref.clone(),
+        head_digest: source.head_digest.clone(),
+        accepted_frontier: source.accepted_frontier.clone(),
+        complete_through: source.complete_through,
+        fresh_until: created_at + chrono::Duration::minutes(10),
+        signature: placeholder_contact_signature(state, created_at)?,
+    };
+    proof.signature = sign_contact_evidence_bytes(
+        state,
+        created_at,
+        &proof.canonical_signing_bytes().map_err(|error| {
+            AppError::internal(format!("mirrored Contact proof transcript: {error}"))
+        })?,
+    )?;
+    Ok(proof)
+}
+
+fn normal_contact_basis(
+    receipt: &RequestAcceptanceReceipt,
+) -> Result<(ContactBasis, Hash), AppError> {
+    let mut participants = [
+        receipt.core.holder.subject_id().clone(),
+        receipt.core.peer.subject_id().clone(),
+    ];
+    participants.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    let basis = ContactBasis::Normal {
+        sorted_pair_members: participants,
+        request_event_ref: receipt.core.request_event_ref.clone(),
+        request_acceptance_receipt_digest: super::account::canonical_contact_digest(receipt)?,
+    };
+    let mut transcript = serde_json::to_value(&basis)
+        .map_err(|error| AppError::internal(format!("Contact basis encode: {error}")))?;
+    transcript
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("Contact basis must encode as an object"))?
+        .insert("domain".to_owned(), json!("ak.contact.basis.v1"));
+    let basis_id = super::account::canonical_contact_digest(&transcript)?;
+    Ok((basis, basis_id))
+}
+
 fn validate_contact_lineage_carrier(
+    state: &AppState,
+    source_service_id: &str,
     event: &Event,
     lineage: &arkret_models_collaboration::contact_operations::ContactLineage,
     current_proof: &arkret_models_collaboration::contact_operations::ContactCurrentProof,
@@ -1163,6 +1374,72 @@ fn validate_contact_lineage_carrier(
             "Contact lineage/current proof does not bind signed_event",
         ));
     }
+    match &event.kind {
+        arkret_wire::EventKind::ContactScopeUpdate => {
+            let payload = serde_json::from_value::<ContactScopeUpdatePayload>(
+                serde_json::to_value(&event.payload).map_err(|error| {
+                    AppError::internal(format!("Contact scope payload encode: {error}"))
+                })?,
+            )
+            .map_err(|_| {
+                super::super::events::peer::schema_violation(
+                    "invalid ak.contact.scope.update payload",
+                )
+            })?;
+            if lineage.peer != payload.peer
+                || lineage.basis_id != payload.basis_id
+                || lineage.version != payload.version
+                || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
+                || lineage.granted_to_peer_scopes != payload.granted_to_peer_scopes
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact scope lineage does not bind the signed payload",
+                ));
+            }
+        }
+        arkret_wire::EventKind::ContactTombstoned => {
+            let payload = serde_json::from_value::<ContactTombstonedPayload>(
+                serde_json::to_value(&event.payload).map_err(|error| {
+                    AppError::internal(format!("Contact tombstone payload encode: {error}"))
+                })?,
+            )
+            .map_err(|_| {
+                super::super::events::peer::schema_violation(
+                    "invalid ak.contact.tombstoned payload",
+                )
+            })?;
+            if lineage.peer != payload.peer
+                || lineage.basis_id != payload.basis_id
+                || lineage.version != payload.version
+                || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
+                || !lineage.granted_to_peer_scopes.is_empty()
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact tombstone lineage does not bind the signed payload",
+                ));
+            }
+        }
+        _ => {
+            return Err(super::super::events::peer::schema_violation(
+                "Contact lineage carrier has an invalid Event kind",
+            ));
+        }
+    }
+    let mut signing_value = serde_json::to_value(lineage)
+        .map_err(|error| AppError::internal(format!("Contact lineage encode: {error}")))?;
+    signing_value
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("Contact lineage must encode as an object"))?
+        .remove("signature");
+    let signing_bytes = canonical::canonical_json_bytes(&signing_value)
+        .map_err(|error| AppError::internal(format!("Contact lineage transcript: {error}")))?;
+    verify_contact_evidence_signature(
+        state,
+        source_service_id,
+        &lineage.signature,
+        &signing_bytes,
+        "carrier_lineage",
+    )?;
     Ok(())
 }
 
@@ -1709,6 +1986,179 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
     }
 }
 
+pub(crate) async fn accept_outbound_contact_event_outcome(
+    state: &AppState,
+    request: &PeerContactSubmitRequestBody,
+    outcome: &PeerContactEventSubmitOutcome,
+    peer_service_id: &str,
+) -> Result<(), AppError> {
+    let (signed_event, contact_address, sent_proof, expected_kind, terminal) = match request {
+        PeerContactSubmitRequestBody::Response {
+            signed_event,
+            contact_address,
+            current_proof,
+            ..
+        } => (
+            signed_event,
+            contact_address,
+            current_proof.as_ref(),
+            arkret_models_collaboration::contact_operations::ContactResultKind::Response,
+            false,
+        ),
+        PeerContactSubmitRequestBody::ScopeUpdate {
+            signed_event,
+            contact_address,
+            current_proof,
+            ..
+        } => (
+            signed_event,
+            contact_address,
+            Some(current_proof),
+            arkret_models_collaboration::contact_operations::ContactResultKind::ScopeUpdate,
+            false,
+        ),
+        PeerContactSubmitRequestBody::Tombstone {
+            signed_event,
+            contact_address,
+            current_proof,
+            ..
+        } => (
+            signed_event,
+            contact_address,
+            Some(current_proof),
+            arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone,
+            true,
+        ),
+        _ => {
+            return Err(super::super::events::peer::schema_violation(
+                "Contact Event outcome does not match an evidence-bearing carrier",
+            ));
+        }
+    };
+    if outcome.result_kind != expected_kind
+        || !matches!(
+            outcome.status,
+            PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+        )
+        || outcome.mirror_receipt.signed_event_ref != signed_event.event_id
+        || outcome.mirror_receipt.signed_event_digest
+            != Hash::new(signed_event.event_digest().map_err(|error| {
+                AppError::internal(format!("outbound Contact Event digest: {error}"))
+            })?)
+            .map_err(|error| AppError::internal(format!("Contact digest invalid: {error}")))?
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact Event outcome does not bind the outbound signed Event",
+        ));
+    }
+    validate_mirror_receipt_cryptography(
+        state,
+        &outcome.mirror_receipt,
+        peer_service_id,
+        "outbound_contact_mirror_receipt",
+    )?;
+    let Some(returned_proof) = outcome.current_proof.as_ref() else {
+        if expected_kind
+            == arkret_models_collaboration::contact_operations::ContactResultKind::Response
+            && sent_proof.is_none()
+        {
+            return Ok(());
+        }
+        return Err(super::super::events::peer::schema_violation(
+            "Contact Event outcome is missing the recipient current proof",
+        ));
+    };
+    let sent_proof = sent_proof.ok_or_else(|| {
+        super::super::events::peer::schema_violation(
+            "Contact Event carrier cannot absorb a proof without its source proof",
+        )
+    })?;
+    if returned_proof.issuer != contact_address.subject_id
+        || returned_proof.basis_id != sent_proof.basis_id
+        || returned_proof.terminal != terminal
+        || returned_proof.head_event_ref != signed_event.event_id
+        || returned_proof.head_digest != sent_proof.head_digest
+        || !returned_proof
+            .accepted_frontier
+            .contains(&signed_event.event_id)
+        || returned_proof.complete_through == 0
+        || returned_proof.fresh_until <= now()
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "recipient Contact current proof does not bind the outbound lineage head",
+        ));
+    }
+    verify_contact_evidence_signature(
+        state,
+        peer_service_id,
+        &returned_proof.signature,
+        &returned_proof.canonical_signing_bytes().map_err(|error| {
+            AppError::internal(format!("recipient Contact proof transcript: {error}"))
+        })?,
+        "outbound_contact_current_proof",
+    )?;
+    let contacts = state.contacts();
+    let mut record = contacts
+        .contact_any(
+            signed_event.actor_id.as_str(),
+            contact_address.subject_id.as_str(),
+        )
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("outbound Contact projection disappeared"))?;
+    let mut bundle = record.basis_evidence.clone().ok_or_else(|| {
+        AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "outbound Contact projection has no basis evidence",
+        )
+    })?;
+    if bundle.basis_id != returned_proof.basis_id {
+        return Err(super::super::events::peer::schema_violation(
+            "recipient Contact proof names another basis",
+        ));
+    }
+    let returned_proof_digest = super::account::canonical_contact_digest(returned_proof)?;
+    for proof in &bundle.current_proofs {
+        if proof.issuer == returned_proof.issuer
+            && super::account::canonical_contact_digest(proof)? == returned_proof_digest
+        {
+            return Ok(());
+        }
+    }
+    let expected_updated_at = record.updated_at;
+    bundle
+        .current_proofs
+        .retain(|proof| proof.issuer != returned_proof.issuer);
+    bundle.current_proofs.push(returned_proof.clone());
+    bundle.current_proofs.sort_by(|left, right| {
+        left.issuer
+            .as_str()
+            .as_bytes()
+            .cmp(right.issuer.as_str().as_bytes())
+    });
+    let expected_issuers = [
+        signed_event.actor_id.as_str(),
+        contact_address.subject_id.as_str(),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    if bundle.current_proofs.len() != 2
+        || bundle
+            .current_proofs
+            .iter()
+            .map(|proof| proof.issuer.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            != expected_issuers
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact Event outcome does not complete the exact pair proof set",
+        ));
+    }
+    record.basis_evidence = Some(bundle);
+    advance_contact_revision(&mut record, expected_updated_at);
+    save_contact_cas(contacts, expected_updated_at, record).await
+}
+
 pub(crate) async fn reenqueue_deferred_contact_control(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
@@ -2064,6 +2514,9 @@ async fn project_delivered_contact_fact(
     payload: &Value,
     contact_event_id: &str,
     request_receipt: Option<&RequestAcceptanceReceipt>,
+    response_receipt: Option<&NormalResponseAcceptanceReceipt>,
+    reject_receipt: Option<&RejectAcceptanceReceipt>,
+    carrier_current_proof: Option<&ContactCurrentProof>,
     source_service_id: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let projected_scopes = granted_scopes(payload);
@@ -2090,6 +2543,12 @@ async fn project_delivered_contact_fact(
                     "ak.contact.requested peer does not match the addressed holder",
                 ));
             }
+            if request_receipt.core.previous_terminal_basis_id != request.previous_terminal_basis_id
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact request receipt continuity pointer does not match signed_event",
+                ));
+            }
             // requester = issuer, target = subject_id (this holder). Form a
             // pending_incoming row on the target side.
             let raw_message = payload
@@ -2108,6 +2567,123 @@ async fn project_delivered_contact_fact(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
             {
+                if existing.status == "tombstoned" {
+                    let terminal = existing.basis_evidence.clone().ok_or_else(|| {
+                        AppError::new(
+                            soland_http::error::ErrorCode::FailedPrecondition,
+                            "terminal Contact basis evidence is unavailable",
+                        )
+                    })?;
+                    if request.previous_terminal_basis_id.as_ref() != Some(&terminal.basis_id)
+                        || terminal.current_proofs.len() != 2
+                        || terminal
+                            .current_proofs
+                            .iter()
+                            .any(|proof| !proof.terminal || proof.basis_id != terminal.basis_id)
+                    {
+                        return Err(super::super::events::peer::schema_violation(
+                            "recontact request does not bind the durable terminal head",
+                        ));
+                    }
+                    arkret_models_collaboration::contact_operations::validate_recontact_continuity(
+                        &terminal,
+                        &existing.basis_evidence_history,
+                    )
+                    .map_err(|error| {
+                        AppError::new(
+                            soland_http::error::ErrorCode::FailedPrecondition,
+                            format!("terminal Contact continuity is invalid: {error}"),
+                        )
+                    })?;
+                    let expected_updated_at = existing.updated_at;
+                    let created_at = existing.created_at;
+                    let mut history =
+                        Vec::with_capacity(existing.basis_evidence_history.len().saturating_add(1));
+                    history.push(terminal);
+                    history.extend(existing.basis_evidence_history);
+                    if history.len() > 64 {
+                        return Err(AppError::new(
+                            soland_http::error::ErrorCode::FailedPrecondition,
+                            "Contact basis continuity exceeds 64 predecessors",
+                        ));
+                    }
+                    let replacement = ContactRecord {
+                        requester: issuer.to_owned(),
+                        target: subject_id.to_owned(),
+                        basis_id: None,
+                        version: None,
+                        granted_to_target_scopes: projected_scopes.clone(),
+                        granted_to_requester_scopes: Vec::new(),
+                        status: "pending".to_owned(),
+                        request_event_ref: Some(contact_event_id.to_owned()),
+                        request_receipts: vec![request_receipt.clone()],
+                        request_mirror_receipts: Vec::new(),
+                        basis_evidence: None,
+                        basis_evidence_history: history,
+                        control_outcomes: Vec::new(),
+                        response_event_ref: None,
+                        tombstone_event_ref: None,
+                        message,
+                        peer_service_id: source_service_id.map(ToOwned::to_owned),
+                        created_at,
+                        updated_at: now(),
+                    };
+                    save_contact_cas(contacts, expected_updated_at, replacement).await?;
+                    append_delivered_contact_fact_projection_event(
+                        state,
+                        fact_kind,
+                        issuer,
+                        payload,
+                        contact_event_id,
+                    )
+                    .await;
+                    return Ok("accepted");
+                }
+                if existing.status == "rejected" {
+                    let expected_previous = existing
+                        .basis_evidence_history
+                        .first()
+                        .map(|bundle| &bundle.basis_id);
+                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                        return Err(super::super::events::peer::schema_violation(
+                            "new Contact request does not preserve terminal continuity",
+                        ));
+                    }
+                    let expected_updated_at = existing.updated_at;
+                    let created_at = existing.created_at;
+                    let history = existing.basis_evidence_history;
+                    let replacement = ContactRecord {
+                        requester: issuer.to_owned(),
+                        target: subject_id.to_owned(),
+                        basis_id: None,
+                        version: None,
+                        granted_to_target_scopes: projected_scopes.clone(),
+                        granted_to_requester_scopes: Vec::new(),
+                        status: "pending".to_owned(),
+                        request_event_ref: Some(contact_event_id.to_owned()),
+                        request_receipts: vec![request_receipt.clone()],
+                        request_mirror_receipts: Vec::new(),
+                        basis_evidence: None,
+                        basis_evidence_history: history,
+                        control_outcomes: Vec::new(),
+                        response_event_ref: None,
+                        tombstone_event_ref: None,
+                        message,
+                        peer_service_id: source_service_id.map(ToOwned::to_owned),
+                        created_at,
+                        updated_at: now(),
+                    };
+                    save_contact_cas(contacts, expected_updated_at, replacement).await?;
+                    append_delivered_contact_fact_projection_event(
+                        state,
+                        fact_kind,
+                        issuer,
+                        payload,
+                        contact_event_id,
+                    )
+                    .await;
+                    return Ok("accepted");
+                }
                 if existing.status == "pending"
                     && existing.request_event_ref.as_deref() == Some(contact_event_id)
                 {
@@ -2127,6 +2703,15 @@ async fn project_delivered_contact_fact(
                     && existing.target == issuer
                     && existing.request_event_ref.as_deref() != Some(contact_event_id)
                 {
+                    let expected_previous = existing
+                        .basis_evidence_history
+                        .first()
+                        .map(|bundle| &bundle.basis_id);
+                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                        return Err(super::super::events::peer::schema_violation(
+                            "glare recontact requests do not bind the same terminal predecessor",
+                        ));
+                    }
                     // A reverse request may coexist only as an unconsumed
                     // glare candidate. Preserve the original request
                     // orientation and append the exact second source receipt;
@@ -2162,6 +2747,7 @@ async fn project_delivered_contact_fact(
                 request_receipts: vec![request_receipt.clone()],
                 request_mirror_receipts: Vec::new(),
                 basis_evidence: None,
+                basis_evidence_history: Vec::new(),
                 control_outcomes: Vec::new(),
                 response_event_ref: None,
                 tombstone_event_ref: None,
@@ -2245,22 +2831,78 @@ async fn project_delivered_contact_fact(
                     "ak.contact.accepted request_id does not match the pending request",
                 ));
             }
+            let response_receipt = response_receipt.ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "ak.contact.accepted carrier is missing its response receipt",
+                )
+            })?;
+            let request_receipt = contact.request_receipts.first().cloned().ok_or_else(|| {
+                AppError::new(
+                    soland_http::error::ErrorCode::FailedPrecondition,
+                    "pending Contact row has no durable request receipt",
+                )
+            })?;
+            if super::account::canonical_contact_digest(&response_receipt.request_receipt)?
+                != super::account::canonical_contact_digest(&request_receipt)?
+                || response_receipt.basis_id != accepted.basis_id
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "ak.contact.accepted response receipt does not bind the durable request",
+                ));
+            }
+            let (basis, derived_basis_id) = normal_contact_basis(&request_receipt)?;
+            if derived_basis_id != accepted.basis_id {
+                return Err(super::super::events::peer::schema_violation(
+                    "ak.contact.accepted basis id is not derived from the durable request",
+                ));
+            }
+            let expected_updated_at = contact.updated_at;
             contact.granted_to_requester_scopes = granted_scopes(payload);
             contact.basis_id = Some(accepted.basis_id.to_string());
             contact.version = Some(accepted.version);
             contact.status = "accepted".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
-            contact.updated_at = now();
+            advance_contact_revision(&mut contact, expected_updated_at);
             // Peer end is the remote accepter (`issuer`), hosted on the
             // delivering source server. Record/backfill it so the requester's
             // row can address future invites/responses to the peer's home PS.
             if let Some(source) = source_service_id {
                 contact.peer_service_id = Some(source.to_owned());
             }
-            contacts
-                .save_contact(contact)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            if let Some(remote_proof) = carrier_current_proof {
+                if remote_proof.basis_id != accepted.basis_id || remote_proof.terminal {
+                    return Err(super::super::events::peer::schema_violation(
+                        "ak.contact.accepted current proof has invalid basis or terminal state",
+                    ));
+                }
+                let local_proof = mirrored_contact_current_proof(
+                    state,
+                    Did::new(subject_id.to_owned()).map_err(|error| {
+                        AppError::internal(format!("Contact subject DID invalid: {error}"))
+                    })?,
+                    remote_proof,
+                )?;
+                let mut current_proofs = vec![remote_proof.clone(), local_proof];
+                current_proofs.sort_by(|left, right| {
+                    left.issuer
+                        .as_str()
+                        .as_bytes()
+                        .cmp(right.issuer.as_str().as_bytes())
+                });
+                contact.basis_evidence = Some(ContactBasisEvidenceBundle {
+                    basis_id: accepted.basis_id.clone(),
+                    previous_terminal_basis_id: request_receipt
+                        .core
+                        .previous_terminal_basis_id
+                        .clone(),
+                    basis,
+                    request_receipts: vec![request_receipt],
+                    normal_response_receipt: Some(response_receipt.clone()),
+                    glare_concurrency_attestations: None,
+                    current_proofs,
+                });
+            }
+            save_contact_cas(contacts, expected_updated_at, contact).await?;
             append_delivered_contact_fact_projection_event(
                 state,
                 fact_kind,
@@ -2311,13 +2953,36 @@ async fn project_delivered_contact_fact(
                     "ak.contact.rejected request_id does not match the pending request",
                 ));
             }
+            let reject_receipt = reject_receipt.ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "ak.contact.rejected carrier is missing its reject receipt",
+                )
+            })?;
+            let durable_request_receipt = contact
+                .request_receipts
+                .iter()
+                .find(|receipt| receipt.core.request_event_ref == rejected.request_event_ref)
+                .ok_or_else(|| {
+                    AppError::new(
+                        soland_http::error::ErrorCode::FailedPrecondition,
+                        "pending Contact row has no durable request receipt",
+                    )
+                })?;
+            let durable_request_digest =
+                super::account::canonical_contact_digest(durable_request_receipt)?;
+            if super::account::canonical_contact_digest(&reject_receipt.request_receipt)?
+                != durable_request_digest
+                || rejected.request_acceptance_receipt_digest != durable_request_digest
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "ak.contact.rejected receipt does not bind the durable request",
+                ));
+            }
+            let expected_updated_at = contact.updated_at;
             contact.status = "rejected".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
-            contact.updated_at = now();
-            contacts
-                .save_contact(contact)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            advance_contact_revision(&mut contact, expected_updated_at);
+            save_contact_cas(contacts, expected_updated_at, contact).await?;
             append_delivered_contact_fact_projection_event(
                 state,
                 fact_kind,
@@ -2363,6 +3028,7 @@ async fn project_delivered_contact_fact(
                     "ak.contact.scope.update lineage CAS mismatch",
                 ));
             }
+            let expected_updated_at = contact.updated_at;
             contact.version = Some(update.version);
             if contact.requester == issuer {
                 contact.granted_to_target_scopes = projected_scopes;
@@ -2371,11 +3037,43 @@ async fn project_delivered_contact_fact(
                 contact.granted_to_requester_scopes = projected_scopes;
                 contact.response_event_ref = Some(contact_event_id.to_owned());
             }
-            contact.updated_at = now();
-            contacts
-                .save_contact(contact)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            let remote_proof = carrier_current_proof.ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "ak.contact.scope.update carrier is missing its current proof",
+                )
+            })?;
+            let mut bundle = contact.basis_evidence.clone().ok_or_else(|| {
+                AppError::new(
+                    soland_http::error::ErrorCode::FailedPrecondition,
+                    "accepted Contact has no durable basis evidence",
+                )
+            })?;
+            if remote_proof.basis_id != bundle.basis_id || remote_proof.terminal {
+                return Err(super::super::events::peer::schema_violation(
+                    "ak.contact.scope.update proof has invalid basis or terminal state",
+                ));
+            }
+            let local_proof = mirrored_contact_current_proof(
+                state,
+                Did::new(subject_id.to_owned()).map_err(|error| {
+                    AppError::internal(format!("Contact subject DID invalid: {error}"))
+                })?,
+                remote_proof,
+            )?;
+            bundle.current_proofs.retain(|proof| {
+                proof.issuer != remote_proof.issuer && proof.issuer != local_proof.issuer
+            });
+            bundle.current_proofs.push(remote_proof.clone());
+            bundle.current_proofs.push(local_proof);
+            bundle.current_proofs.sort_by(|left, right| {
+                left.issuer
+                    .as_str()
+                    .as_bytes()
+                    .cmp(right.issuer.as_str().as_bytes())
+            });
+            contact.basis_evidence = Some(bundle);
+            advance_contact_revision(&mut contact, expected_updated_at);
+            save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
         }
         "ak.contact.tombstoned" => {
@@ -2420,14 +3118,47 @@ async fn project_delivered_contact_fact(
                     "ak.contact.tombstoned lineage CAS mismatch",
                 ));
             }
+            let expected_updated_at = row.updated_at;
             row.version = Some(tombstone.version);
             row.status = "tombstoned".to_owned();
             row.tombstone_event_ref = Some(contact_event_id.to_owned());
-            row.updated_at = now();
-            contacts
-                .save_contact(row)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
+            let remote_proof = carrier_current_proof.ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "ak.contact.tombstoned carrier is missing its terminal proof",
+                )
+            })?;
+            let mut bundle = row.basis_evidence.clone().ok_or_else(|| {
+                AppError::new(
+                    soland_http::error::ErrorCode::FailedPrecondition,
+                    "tombstoned Contact has no durable basis evidence",
+                )
+            })?;
+            if remote_proof.basis_id != bundle.basis_id || !remote_proof.terminal {
+                return Err(super::super::events::peer::schema_violation(
+                    "ak.contact.tombstoned proof has invalid basis or terminal state",
+                ));
+            }
+            let local_proof = mirrored_contact_current_proof(
+                state,
+                Did::new(subject_id.to_owned()).map_err(|error| {
+                    AppError::internal(format!("Contact subject DID invalid: {error}"))
+                })?,
+                remote_proof,
+            )?;
+            bundle.current_proofs.retain(|proof| {
+                proof.issuer != remote_proof.issuer && proof.issuer != local_proof.issuer
+            });
+            bundle.current_proofs.push(remote_proof.clone());
+            bundle.current_proofs.push(local_proof);
+            bundle.current_proofs.sort_by(|left, right| {
+                left.issuer
+                    .as_str()
+                    .as_bytes()
+                    .cmp(right.issuer.as_str().as_bytes())
+            });
+            row.basis_evidence = Some(bundle);
+            advance_contact_revision(&mut row, expected_updated_at);
+            save_contact_cas(contacts, expected_updated_at, row).await?;
             append_delivered_contact_fact_projection_event(
                 state,
                 fact_kind,
@@ -2563,6 +3294,9 @@ mod tests {
             &payload,
             request_event_ref,
             Some(&request_receipt),
+            None,
+            None,
+            None,
             Some(source_service_id),
         )
         .await
@@ -2654,6 +3388,7 @@ mod tests {
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
             basis_evidence: None,
+            basis_evidence_history: Vec::new(),
             control_outcomes: Vec::new(),
             response_event_ref: None,
             tombstone_event_ref: None,
@@ -2705,6 +3440,17 @@ mod tests {
             "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             'b',
         );
+        let ordered = [first.clone(), second.clone()];
+        let (historical_basis_id, historical_basis, _) = derive_glare_basis(&ordered).unwrap();
+        let historical_bundle = ContactBasisEvidenceBundle {
+            basis_id: historical_basis_id.clone(),
+            previous_terminal_basis_id: None,
+            basis: historical_basis,
+            request_receipts: ordered.to_vec(),
+            normal_response_receipt: None,
+            glare_concurrency_attestations: None,
+            current_proofs: Vec::new(),
+        };
         let now = chrono::Utc::now();
         state
             .contacts()
@@ -2720,6 +3466,7 @@ mod tests {
                 request_receipts: vec![first.clone(), second.clone()],
                 request_mirror_receipts: Vec::new(),
                 basis_evidence: None,
+                basis_evidence_history: vec![historical_bundle],
                 control_outcomes: Vec::new(),
                 response_event_ref: None,
                 tombstone_event_ref: None,
@@ -2741,6 +3488,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.request_receipts.len(), 2);
+        assert_eq!(row.basis_evidence_history.len(), 1);
+        assert_eq!(
+            row.basis_evidence_history[0].basis_id, historical_basis_id,
+            "restart hydration must retain the exact historical basis chain"
+        );
         assert_eq!(
             serde_json::to_value(&row.request_receipts[0].core).unwrap(),
             serde_json::to_value(&first.core).unwrap()
@@ -2805,6 +3557,7 @@ mod tests {
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
             basis_evidence: None,
+            basis_evidence_history: Vec::new(),
             control_outcomes: vec![outcome.clone()],
             response_event_ref: None,
             tombstone_event_ref: None,

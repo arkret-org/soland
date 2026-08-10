@@ -478,9 +478,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             key_id == signing_key_binding.agent_key_id.as_str()
                 && authorized_event_id == accepted.event_id
         })
-        .then_some(
-            arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus::Active,
-        );
+        .then_some(arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus::Active);
     let authorization_is_witnessed = authorization_status_allows_activation(authorization_status);
     if !authorization_is_witnessed {
         return Ok(agent_record);
@@ -552,12 +550,9 @@ pub(super) async fn reconcile_accepted_agent_authorization(
 }
 
 fn authorization_status_allows_activation(
-    status: Option<arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus>,
+    status: Option<arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus>,
 ) -> bool {
-    status
-        == Some(
-            arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus::Active,
-        )
+    status == Some(arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus::Active)
 }
 
 /// Pure decision core for the open runtime-key-request status poll.
@@ -958,7 +953,7 @@ async fn validate_agent_signing_key_binding(
 
 #[allow(clippy::too_many_arguments)]
 async fn validate_agent_signing_key_binding_parts(
-    binding: &arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+    binding: &arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
     authorize_event: &arkret_wire::Event,
     agent_id: &Did,
     verification_method: &arkret_wire::DidUrl,
@@ -1890,7 +1885,7 @@ mod requested_scope_tests {
 
     #[test]
     fn pairing_activation_requires_active_portable_authorization_evidence() {
-        use arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus;
+        use arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus;
 
         assert!(!authorization_status_allows_activation(None));
         assert!(!authorization_status_allows_activation(Some(

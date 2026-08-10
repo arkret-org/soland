@@ -192,6 +192,7 @@ mod tests {
                 request_receipts: Vec::new(),
                 request_mirror_receipts: Vec::new(),
                 basis_evidence: None,
+                basis_evidence_history: Vec::new(),
                 control_outcomes: Vec::new(),
                 response_event_ref: None,
                 tombstone_event_ref: None,

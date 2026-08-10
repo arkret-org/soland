@@ -458,11 +458,11 @@ fn peer_event_partial_retry(
     if let Some(bundle) = &mut request.agent_signer_evidence_bundle {
         bundle.evidence.retain(|evidence| {
             let admission_evidence = match evidence {
-                arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
+                arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
                     admission_evidence,
                     ..
                 }
-                | arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
+                | arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
                     admission_evidence,
                     ..
                 } => admission_evidence,
@@ -999,6 +999,21 @@ impl FederationDispatcher {
                 .map_err(|error| error.to_string())?;
                 Ok(())
             }
+            (
+                arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::Response { .. }
+                    | arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ScopeUpdate { .. }
+                    | arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::Tombstone { .. },
+                arkret_models_collaboration::contact_operations::PeerContactSubmitOutcome::Event(
+                    event_outcome,
+                ),
+            ) => crate::routing::identity::contact_federation::accept_outbound_contact_event_outcome(
+                &self.state,
+                &request,
+                event_outcome,
+                &row.delivery.peer_did,
+            )
+            .await
+            .map_err(|error| error.to_string()),
             (
                 arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::GlareFinalize { .. }
                     | arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::ProofRefresh { .. },

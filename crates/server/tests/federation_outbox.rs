@@ -767,8 +767,27 @@ async fn pg_restart() -> Option<AppState> {
         soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
-    let state = soland::runtime::build_app_state(config, db, persistence, identity, signing_seed)
-        .expect("postgres AppState");
+    let resolution_commitment = arkret_models_identity::ResolutionCommitment {
+        full_id: arkret_wire::FullId::new(
+            identity
+                .identity()
+                .expect("fixture serving identity")
+                .service_id
+                .to_string(),
+        )
+        .expect("fixture service FullId"),
+        method_history_head: format!("sha256:{}", "0".repeat(64)),
+        version_id: "fixture-v1".to_owned(),
+    };
+    let state = soland::runtime::build_app_state(
+        config,
+        db,
+        persistence,
+        identity,
+        resolution_commitment,
+        signing_seed,
+    )
+    .expect("postgres AppState");
     soland_test_support::register_persistence(&state, persistence_store);
     Some(state)
 }

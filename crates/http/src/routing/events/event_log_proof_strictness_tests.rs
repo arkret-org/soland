@@ -341,6 +341,14 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
         .unwrap();
 
     let encrypted_envelope = |visibility: &str| {
+        let typed_realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
+        let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
+            &arkret_wire::ScopeRef::Realm {
+                realm_id: typed_realm.clone(),
+            },
+            &typed_realm,
+        )
+        .unwrap();
         json!({
             "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "track_name": "main",
@@ -354,6 +362,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 "aad_visibility_event_id": visibility,
                 "aad": {
                     "realm_id": realm_id,
+                    "scope_digest": scope_digest,
                     "event_kind": "ak.message.create"
                 },
                 "key_ref": {
@@ -846,7 +855,16 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         arkret_wire::EventKind::MessageCreate.as_str(),
-        json!({
+        {
+            let typed_realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
+            let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
+                &arkret_wire::ScopeRef::Realm {
+                    realm_id: typed_realm.clone(),
+                },
+                &typed_realm,
+            )
+            .unwrap();
+            json!({
             "strand_id": "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "track_name": "main",
             "encrypted_content": {
@@ -859,6 +877,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
                 "aad_visibility_event_id": "routing_digest",
                 "aad": {
                     "realm_id": realm_id,
+                    "scope_digest": scope_digest,
                     "event_kind": "ak.message.create",
                     "event_ref_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 },
@@ -869,7 +888,8 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
                 "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                 "aad_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }
-        }),
+            })
+        },
     );
     // The envelope is wider than the hidden ceiling, so it is rejected rather
     // than silently downgraded and routed on.

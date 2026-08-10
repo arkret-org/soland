@@ -126,6 +126,7 @@ fn persistence_event_commit_request(
                     request_receipts: commit.record.request_receipts,
                     request_mirror_receipts: commit.record.request_mirror_receipts,
                     basis_evidence: commit.record.basis_evidence,
+                    basis_evidence_history: commit.record.basis_evidence_history,
                     control_outcomes: commit.record.control_outcomes,
                     response_event_ref: commit.record.response_event_ref,
                     tombstone_event_ref: commit.record.tombstone_event_ref,
@@ -333,6 +334,16 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .into_iter()
             .map(application_accepted_event)
             .collect())
+    }
+    async fn identity_anchor_account_slot_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>> {
+        Ok(self
+            .0
+            .events()
+            .identity_anchor_account_slot_for_principal(principal_id)
+            .await?)
     }
     async fn canonical_batch_receipts_for_event(
         &self,

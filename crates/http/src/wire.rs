@@ -746,7 +746,7 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
 
 #[allow(clippy::too_many_arguments)] // mirrors AppConfig fields; callers pass them positionally once
 pub fn describe(
-    service_id: &str,
+    service_resolution: &arkret_models_identity::ResolutionCommitment,
     public_base_url: &str,
     storage: &'static str,
     development_mode: bool,
@@ -897,7 +897,11 @@ pub fn describe(
     };
 
     let mut description = ServiceDescribe {
-        service_id: service_id.parse().expect("valid service DID"),
+        service_id: arkret_wire::ServiceId::from(
+            arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
+                .expect("service resolution FullId must project to a stable service id"),
+        ),
+        service_resolution: service_resolution.clone(),
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
@@ -1320,10 +1324,18 @@ pub type ReadMarkerOutcome = arkret_models_collaboration::objects::read_receipts
 mod tests {
     use super::*;
 
+    fn fixture_service_resolution() -> arkret_models_identity::ResolutionCommitment {
+        arkret_models_identity::ResolutionCommitment {
+            full_id: arkret_wire::FullId::new("did:web:soland.example").unwrap(),
+            method_history_head: "fixture-history-head".to_owned(),
+            version_id: "fixture-v1".to_owned(),
+        }
+    }
+
     #[test]
     fn service_describe_advertises_realm_key_history_features() {
         let description = describe(
-            "did:web:soland.example",
+            &fixture_service_resolution(),
             "https://soland.example/",
             "memory",
             true,
@@ -1352,7 +1364,7 @@ mod tests {
     #[test]
     fn service_describe_supported_bindings_advertise_public_base_url() {
         let description = describe(
-            "did:web:soland.example",
+            &fixture_service_resolution(),
             "https://soland.example/",
             "memory",
             true,

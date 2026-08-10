@@ -5,6 +5,61 @@ use super::*;
 
 const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
 const AGENT_PROVISION_ALLOCATION_DOMAIN: &str = "ak.agent-provision-allocation-v1";
+const AGENT_PROVISIONING_ABANDONMENT_TTL_SECONDS: i64 = 300;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentProvisioningAbandonmentChallengeRequestBody {
+    request_id: arkret_wire::ProtocolOperationId,
+    agent_id: CoreId,
+    principal_control_realm_id: RealmId,
+    allocation_handle: arkret_wire::ProtocolOpaqueId,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentProvisioningAbandonmentChallengeOutcome {
+    request_id: arkret_wire::ProtocolOperationId,
+    challenge_id: arkret_wire::ProtocolOpaqueId,
+    challenge: arkret_wire::Base64UrlString,
+    purpose: String,
+    account_subject: Hash,
+    agent_id: CoreId,
+    agent_slug: String,
+    principal_control_realm_id: RealmId,
+    allocation_handle: arkret_wire::ProtocolOpaqueId,
+    consequence_disclosure: Vec<String>,
+    dpop_jkt: String,
+    audience: Did,
+    origin: String,
+    trust_domain: String,
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+    issued_at: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentProvisioningAbandonmentRequestBody {
+    request_id: arkret_wire::ProtocolOperationId,
+    challenge_id: arkret_wire::ProtocolOpaqueId,
+    challenge: arkret_wire::Base64UrlString,
+    agent_id: CoreId,
+    principal_control_realm_id: RealmId,
+    allocation_handle: arkret_wire::ProtocolOpaqueId,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentProvisioningAbandonmentOutcome {
+    request_id: arkret_wire::ProtocolOperationId,
+    status: String,
+    agent_id: CoreId,
+    principal_control_realm_id: RealmId,
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+    abandoned_at: chrono::DateTime<chrono::Utc>,
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,12 +259,6 @@ pub(super) async fn provision_agent(
             requested_scope,
             pairing_ttl_ms,
         } => {
-            // The current wire shape requires the server to return a PCR id
-            // before it carries the signed create Event that alone determines
-            // that id.  Reject even a historical idempotency hit: replaying a
-            // formerly minted/subject-derived id would preserve the invalid
-            // allocation contract.
-            let _ = crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             if let Some(record) = lookup_provision_allocation(state, &controller_id, &key).await? {
                 if record.expires_at <= now_utc {
@@ -233,6 +282,25 @@ pub(super) async fn provision_agent(
                                 "stored Agent provision allocation invalid: {error}"
                             ))
                         })?;
+                    if let AgentProvisionOutcome::AwaitingControllerEvent { agent_id, .. } =
+                        &prepared.outcome
+                        && state
+                            .agent_pairings()
+                            .agent(agent_id.as_str())
+                            .await
+                            .map_err(|error| {
+                                AppError::internal(format!(
+                                    "Agent provision abandonment lookup failed: {error}"
+                                ))
+                            })?
+                            .as_ref()
+                            .is_some_and(soland_storage::agent_provisioning_is_abandoned)
+                    {
+                        // Abandonment suppresses every holder-readable trace of
+                        // the old allocation. The durable record remains only
+                        // as a no-reuse tombstone.
+                        return Err(AppError::not_found("Agent provision allocation not found"));
+                    }
                     return json_ok(prepared.outcome);
                 }
             }
@@ -286,8 +354,6 @@ pub(super) async fn provision_agent(
                 Did::new(generate_agent_principal_did(state.service_id())).map_err(|error| {
                     AppError::internal(format!("generated Agent DID invalid: {error}"))
                 })?;
-            let principal_control_realm_id =
-                crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let controller_did = Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
@@ -306,7 +372,6 @@ pub(super) async fn provision_agent(
                 issue_allocation_handle(state, &controller_id, &operation_id, &idempotency_key)?;
             let outcome = AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id,
-                principal_control_realm_id,
                 controller_realm_id: RealmId::new(controller_realm).map_err(|error| {
                     AppError::internal(format!("controller PCR id invalid: {error}"))
                 })?,
@@ -373,9 +438,6 @@ pub(super) async fn provision_agent(
             provision_event,
             pairing_ttl_ms,
         } => {
-            // Do not let a persisted legacy prepare allocation bypass the
-            // event-derived PCR requirement during commit.
-            let _ = crate::routing::identity::managed_agent_pcr::unavailable_precreate_managed_agent_pcr_id()?;
             let prepare_key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             let allocation = lookup_provision_allocation(state, &controller_id, &prepare_key)
                 .await?
@@ -391,7 +453,6 @@ pub(super) async fn provision_agent(
                 })?;
             let AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id: allocated_agent_id,
-                principal_control_realm_id: allocated_realm_id,
                 controller_realm_id,
                 allocation_handle: allocated_handle,
                 controller_authorization_ref,
@@ -411,7 +472,6 @@ pub(super) async fn provision_agent(
                     pairing_ttl_ms,
                 })?
                 || allocated_agent_id != agent_id
-                || allocated_realm_id != principal_control_realm_id
                 || allocated_handle != allocation_handle
                 || prepared.slug != slug
                 || prepared.requested_scope != requested_scope
@@ -455,6 +515,23 @@ pub(super) async fn provision_agent(
                     AppError::invalid_param(format!("requested_scope is invalid: {error}"))
                 })?;
             let provision_event_id = provision_event.event.event_id.to_string();
+            let commit_key = agent_provision_phase_key("commit", &operation_id, &idempotency_key);
+            if let Some(record) =
+                lookup_provision_allocation(state, &controller_id, &commit_key).await?
+            {
+                if record.request_hash != request_hash {
+                    return Err(AppError::conflict(
+                        "Agent provision commit idempotency key was reused with different inputs",
+                    ));
+                }
+                let outcome = serde_json::from_value(record.response_body).map_err(|error| {
+                    AppError::internal(format!(
+                        "stored Agent provision commit outcome invalid: {error}"
+                    ))
+                })?;
+                res.status_code(StatusCode::CREATED);
+                return json_ok(outcome);
+            }
             let mut existing = state
                 .agent_pairings()
                 .agents_for_controller(&controller_id)
@@ -463,10 +540,14 @@ pub(super) async fn provision_agent(
             for record in &mut existing {
                 *record = lazily_expire_pairing(state, record.clone()).await?;
             }
-            if let Some(record) = existing
+            let existing_record = existing
                 .iter()
                 .find(|record| record.id == agent_id.as_str())
-            {
+                .cloned();
+            if let Some(record) = existing_record.as_ref() {
+                if soland_storage::agent_provisioning_is_abandoned(record) {
+                    return Err(AppError::not_found("Agent provision allocation not found"));
+                }
                 let replay_matches = record.controller_id == controller_id
                     && record.principal_control_realm_id == principal_control_realm_id.as_str()
                     && record.agent_slug.as_deref() == Some(slug.as_str())
@@ -488,49 +569,80 @@ pub(super) async fn provision_agent(
                         "Agent provision commit reuses an allocation with different inputs",
                     ));
                 }
-                let pairing_request_id = record.pairing_request_id.clone().ok_or_else(|| {
-                    AppError::internal("completed Agent provision is missing pairing_request_id")
-                })?;
-                let expires_at = record.pairing_expires_at.ok_or_else(|| {
-                    AppError::internal("completed Agent provision is missing pairing_expires_at")
-                })?;
-                res.status_code(StatusCode::CREATED);
-                return json_ok(AgentProvisionOutcome::Complete {
-                    outcome:
-                        arkret_models_collaboration::agent_operations::AgentProvisionComplete {
-                            agent_id,
-                            principal_control_realm_id,
-                            controller_authorization_ref,
-                            requested_scope_digest,
-                            pcr_recovery: AgentProvisionPcrRecovery::default(),
-                            pairing_request_id,
-                            pairing_code: record.pairing_code.clone(),
-                            expires_at,
-                        },
-                });
             }
-            if existing.iter().any(|record| {
-                record.agent_slug.as_deref() == Some(slug.as_str())
-                    && agent_record_reserves_selector_slug(record, &now_utc)
-            }) {
+            if existing_record.is_none()
+                && existing.iter().any(|record| {
+                    record.agent_slug.as_deref() == Some(slug.as_str())
+                        && agent_record_reserves_selector_slug(record, &now_utc)
+                })
+            {
                 return Err(AppError::invalid_param(
                     "slug is already bound to an active or open agent for this controller",
                 ));
             }
 
-            let accepted_provision_event_id = submit_provision_event(
+            let mut principal = if let Some(record) = existing_record {
+                record
+            } else {
+                let accepted_provision_event_id = submit_provision_event(
+                    state,
+                    &session,
+                    &controller_realm_now,
+                    &agent_id,
+                    &principal_control_realm_id,
+                    &controller_authorization_ref,
+                    &slug,
+                    &requested_scope_digest,
+                    *provision_event,
+                )
+                .await?;
+                debug_assert_eq!(accepted_provision_event_id, provision_event_id);
+
+                let mut principal = AgentPrincipalRecord::new(
+                    agent_id.to_string(),
+                    controller_id.clone(),
+                    principal_control_realm_id.as_str().to_owned(),
+                    controller_authorization_ref.clone(),
+                    AgentLifecycleState::Active,
+                    allocation.created_at,
+                );
+                principal.agent_slug = Some(slug.clone());
+                principal.requested_scope = Some(requested_scope_value.clone());
+                principal.provision_event_refs = Some(json!({
+                    "provision_event_id": accepted_provision_event_id,
+                    "operation_id": operation_id,
+                    "idempotency_key": idempotency_key,
+                    "allocation_handle": allocation_handle,
+                    "commit_request_hash": request_hash,
+                    "pcr_genesis_accepted": false,
+                }));
+                state
+                    .agent_pairings()
+                    .save_agent(principal.clone())
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "Agent provision reservation persist failed: {error}"
+                        ))
+                    })?;
+                principal
+            };
+
+            if !crate::routing::identity::managed_agent_pcr::managed_agent_pcr_genesis_accepted(
                 state,
-                &session,
-                &controller_realm_now,
-                &agent_id,
-                &principal_control_realm_id,
-                &controller_authorization_ref,
-                &slug,
-                &requested_scope_digest,
-                *provision_event,
+                agent_id.as_str(),
+                principal_control_realm_id.as_str(),
             )
-            .await?;
-            debug_assert_eq!(accepted_provision_event_id, provision_event_id);
+            .await?
+            {
+                return json_ok(AgentProvisionOutcome::AwaitingPcrGenesis {
+                    agent_id,
+                    principal_control_realm_id,
+                    allocation_handle,
+                    controller_authorization_ref,
+                    requested_scope_digest,
+                });
+            }
 
             crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_identity_anchor(
                 state,
@@ -559,26 +671,17 @@ pub(super) async fn provision_agent(
                 .min(12 * 60 * 60 * 1000);
             let expires_at =
                 now_utc + chrono::Duration::milliseconds(effective_pairing_ttl_ms as i64);
-            let mut principal = AgentPrincipalRecord::new(
-                agent_id.to_string(),
-                controller_id.clone(),
-                principal_control_realm_id.as_str().to_owned(),
-                controller_authorization_ref.clone(),
-                AgentLifecycleState::Active,
-                allocation.created_at,
-            );
             principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
                 &controller_account.account_id,
             ));
             principal.recipient_service_id = Some(state.service_id().clone());
-            principal.agent_slug = Some(slug.clone());
-            principal.requested_scope = Some(requested_scope_value);
             principal.provision_event_refs = Some(json!({
-                "provision_event_id": accepted_provision_event_id,
+                "provision_event_id": provision_event_id,
                 "operation_id": operation_id,
                 "idempotency_key": idempotency_key,
                 "allocation_handle": allocation_handle,
                 "commit_request_hash": request_hash,
+                "pcr_genesis_accepted": true,
             }));
             principal.pairing_request_id = Some(pairing_request_id.clone());
             principal.pairing_code = Some(pairing_code.clone());
@@ -601,7 +704,6 @@ pub(super) async fn provision_agent(
                     expires_at,
                 },
             };
-            let commit_key = agent_provision_phase_key("commit", &operation_id, &idempotency_key);
             state
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
@@ -643,6 +745,281 @@ pub(super) async fn provision_agent(
             json_ok(outcome)
         }
     }
+}
+
+fn abandonment_request_digest(value: &impl serde::Serialize) -> Result<String, AppError> {
+    arkret_canonical::canonical_sha256(value)
+        .map_err(|error| AppError::invalid_param(format!("abandonment request invalid: {error}")))
+}
+
+fn abandonment_credential_fingerprint(session: &SessionRecord) -> String {
+    session.token_hash.clone()
+}
+
+fn abandonment_dpop_jkt(session: &SessionRecord) -> Result<String, AppError> {
+    session
+        .session_grant
+        .as_ref()
+        .map(|grant| grant.cnf_jkt.clone())
+        .filter(|thumbprint| {
+            thumbprint.len() == 43
+                && thumbprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Agent provisioning abandonment requires a DPoP-bound session grant",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+        })
+}
+
+fn abandonment_storage_error(
+    outcome: soland_storage::AgentProvisioningAbandonmentWriteOutcome,
+    issuing: bool,
+) -> Result<Value, AppError> {
+    use soland_storage::AgentProvisioningAbandonmentWriteOutcome as Outcome;
+    match outcome {
+        Outcome::Challenge(value) | Outcome::Abandoned(value) => Ok(value),
+        Outcome::NotFound => Err(AppError::not_found("Agent provisioning not found")),
+        Outcome::ProvisionMismatch => Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent provisioning abandonment does not match the durable allocation",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)),
+        Outcome::GenesisAccepted => Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "managed Agent PCR genesis is already accepted",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_pcr_genesis_already_accepted")),
+        Outcome::ChallengeMissing => Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent provisioning abandonment challenge was not issued",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)),
+        Outcome::ChallengeExpired => Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent provisioning abandonment challenge expired",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_provisioning_challenge_expired")),
+        Outcome::ChallengeConsumed => {
+            let error = if issuing {
+                AppError::conflict(
+                    "Agent provisioning abandonment request_id was reused with different intent",
+                )
+            } else {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Agent provisioning abandonment challenge was already consumed",
+                )
+                .with_status(StatusCode::PRECONDITION_FAILED)
+                .with_reason_code("agent_provisioning_challenge_already_consumed")
+            };
+            Err(error)
+        }
+        Outcome::CredentialReused => Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "abandonment confirmation must use credentials fresh from challenge issuance",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)),
+    }
+}
+
+#[endpoint(
+    operation_id = "ak.self.agent.command.issue_provisioning_abandonment_challenge",
+    summary = "Issue an Agent provisioning abandonment challenge",
+    tags("agents")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.agent.command.issue_provisioning_abandonment_challenge")
+)]
+pub(super) async fn issue_provisioning_abandonment_challenge(
+    aa: AuthArgs,
+    body: JsonBody<AgentProvisioningAbandonmentChallengeRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentProvisioningAbandonmentChallengeOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let record = state
+        .agent_pairings()
+        .agent(body.agent_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Agent provisioning lookup failed: {error}")))?
+        .ok_or_else(|| AppError::not_found("Agent provisioning not found"))?;
+    if record.controller_id != session.actor {
+        return Err(AppError::not_found("Agent provisioning not found"));
+    }
+    let agent_slug = record
+        .agent_slug
+        .clone()
+        .or_else(|| {
+            record
+                .provision_event_refs
+                .as_ref()
+                .and_then(|refs| refs.pointer("/provisioning_abandonment/released_agent_slug"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Agent provisioning has no durable selector claim",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+        })?;
+    let account_slot = state
+        .event_queries()
+        .identity_anchor_account_slot_for_principal(&session.actor)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("controller identity-anchor lookup failed: {error}"))
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "controller identity-anchor account binding is unavailable",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+        })?;
+    let issued_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .ok_or_else(|| AppError::internal("current abandonment timestamp is out of range"))?;
+    let challenge_id = arkret_wire::ProtocolOpaqueId::new(format!(
+        "agent-provisioning-abandonment:{}",
+        uuid::Uuid::now_v7()
+    ))
+    .map_err(|error| AppError::internal(format!("generated challenge id invalid: {error}")))?;
+    let challenge =
+        arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>()))
+            .map_err(|error| AppError::internal(format!("generated challenge invalid: {error}")))?;
+    let service_id = Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let origin = reqwest::Url::parse(&state.config().public_base_url)
+        .map_err(|error| AppError::internal(format!("public base URL invalid: {error}")))?
+        .origin()
+        .ascii_serialization();
+    let outcome = AgentProvisioningAbandonmentChallengeOutcome {
+        request_id: body.request_id.clone(),
+        challenge_id,
+        challenge,
+        purpose: "agent_provisioning_abandonment".to_owned(),
+        account_subject: Hash::new(account_slot.account_subject)
+            .map_err(|error| AppError::internal(format!("account subject invalid: {error}")))?,
+        agent_id: body.agent_id.clone(),
+        agent_slug,
+        principal_control_realm_id: body.principal_control_realm_id.clone(),
+        allocation_handle: body.allocation_handle.clone(),
+        consequence_disclosure: vec![
+            "declared_principal_control_realm_id_is_permanently_unusable".to_owned(),
+            "agent_slug_is_released_for_reuse".to_owned(),
+            "accepted_provision_event_stays_in_controller_pcr_history".to_owned(),
+            "a_new_agent_must_be_provisioned_from_scratch".to_owned(),
+        ],
+        dpop_jkt: abandonment_dpop_jkt(&session)?,
+        audience: service_id,
+        origin,
+        trust_domain: state.config().trust_domain.clone(),
+        issued_at,
+        expires_at: issued_at
+            + chrono::Duration::seconds(AGENT_PROVISIONING_ABANDONMENT_TTL_SECONDS),
+    };
+    let request_digest = abandonment_request_digest(&body)?;
+    let stored = state
+        .agent_pairings()
+        .issue_provisioning_abandonment_challenge(
+            &soland_storage::IssueAgentProvisioningAbandonmentChallenge {
+                controller_id: session.actor.clone(),
+                agent_id: body.agent_id.to_string(),
+                principal_control_realm_id: body.principal_control_realm_id.to_string(),
+                allocation_handle: body.allocation_handle.to_string(),
+                request_digest,
+                credential_fingerprint: abandonment_credential_fingerprint(&session),
+                challenge_outcome: serde_json::to_value(&outcome).map_err(|error| {
+                    AppError::internal(format!("abandonment challenge encode failed: {error}"))
+                })?,
+            },
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("abandonment challenge persist failed: {error}"))
+        })?;
+    let value = abandonment_storage_error(stored, true)?;
+    let outcome = serde_json::from_value(value).map_err(|error| {
+        AppError::internal(format!("stored abandonment challenge invalid: {error}"))
+    })?;
+    json_ok(outcome)
+}
+
+#[endpoint(
+    operation_id = "ak.self.agent.command.abandon_provisioning",
+    summary = "Abandon an Agent provisioning",
+    tags("agents")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.abandon_provisioning"))]
+pub(super) async fn abandon_provisioning(
+    aa: AuthArgs,
+    body: JsonBody<AgentProvisioningAbandonmentRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AgentProvisioningAbandonmentOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let abandoned_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .ok_or_else(|| AppError::internal("current abandonment timestamp is out of range"))?;
+    let outcome = AgentProvisioningAbandonmentOutcome {
+        request_id: body.request_id.clone(),
+        status: "abandoned".to_owned(),
+        agent_id: body.agent_id.clone(),
+        principal_control_realm_id: body.principal_control_realm_id.clone(),
+        abandoned_at,
+    };
+    let stored = state
+        .agent_pairings()
+        .confirm_provisioning_abandonment(&soland_storage::ConfirmAgentProvisioningAbandonment {
+            controller_id: session.actor.clone(),
+            agent_id: body.agent_id.to_string(),
+            principal_control_realm_id: body.principal_control_realm_id.to_string(),
+            allocation_handle: body.allocation_handle.to_string(),
+            challenge_id: body.challenge_id.to_string(),
+            challenge: body.challenge.to_string(),
+            request_digest: abandonment_request_digest(&body)?,
+            credential_fingerprint: abandonment_credential_fingerprint(&session),
+            now: abandoned_at,
+            terminal_outcome: serde_json::to_value(&outcome).map_err(|error| {
+                AppError::internal(format!("abandonment outcome encode failed: {error}"))
+            })?,
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("abandonment commit failed: {error}")))?;
+    let value = abandonment_storage_error(stored, false)?;
+    let outcome: AgentProvisioningAbandonmentOutcome =
+        serde_json::from_value(value).map_err(|error| {
+            AppError::internal(format!("stored abandonment outcome invalid: {error}"))
+        })?;
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "ak.self.agent.command.abandon_provisioning",
+        json!({
+            "agent_id": &outcome.agent_id,
+            "principal_control_realm_id": &outcome.principal_control_realm_id,
+            "abandoned_at": outcome.abandoned_at,
+        }),
+        "accepted",
+    )
+    .await;
+    json_ok(outcome)
 }
 /// `ak.self.agent.command.renew_pairing` — re-open pairing for a bootstrap or
 /// a runtime-replacement agent (key-management.md §3.6.1). Both branches share
@@ -840,6 +1217,9 @@ pub(super) async fn list_agents(
     // lifecycle intent or Realm grants.
     let mut agents = Vec::with_capacity(records.len());
     for record in records {
+        if !agent_record_is_materialized(&record) {
+            continue;
+        }
         let record = reconcile_accepted_agent_authorization(state, record).await?;
         let record = lazily_expire_pairing(state, record).await?;
         let runtime_state = agent_runtime_state_from_record(
@@ -884,6 +1264,9 @@ pub(super) async fn get_agent(
         .await
         .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
         .ok_or_else(|| AppError::not_found("agent not found"))?;
+    if !agent_record_is_materialized(&record) {
+        return Err(AppError::not_found("agent not found"));
+    }
     // Controller-self only: hide others' agents behind 404 to avoid enumeration.
     if let Some(session) = session.as_ref()
         && record.controller_id != session.actor

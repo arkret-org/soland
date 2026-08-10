@@ -42,11 +42,16 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
     let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
+    let resolution_commitment = bootstrap
+        .resolution_commitment
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("serving service identity has no resolution commitment"))?;
     let state = soland::runtime::build_app_state(
         config,
         db,
         bootstrap.persistence,
         bootstrap.state,
+        resolution_commitment,
         bootstrap.signing_seed,
     )?;
 
