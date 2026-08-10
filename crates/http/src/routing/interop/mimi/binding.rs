@@ -177,52 +177,6 @@ pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), 
     }
 }
 
-pub(super) async fn enforce_mimi_room_binding_transition(
-    state: &AppState,
-    room_id: &str,
-    next_binding: &Value,
-) -> Result<(), AppError> {
-    let next_status = mimi_room_binding_status(next_binding)?;
-    let previous = latest_mimi_room_binding(state, room_id).await?;
-    let previous_status = match previous.as_ref() {
-        Some(previous) => Some(mimi_room_binding_status(&previous.binding)?),
-        None => None,
-    };
-    if mimi_room_binding_transition_allowed(previous_status, next_status) {
-        return Ok(());
-    }
-    let detail = previous_status
-        .map(|status| format!("from={status};to={next_status}"))
-        .unwrap_or_else(|| format!("from=<none>;to={next_status}"));
-    Err(
-        AppError::invalid_param("MIMI room binding status transition is not allowed")
-            .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_BINDING_STATUS_TRANSITION_INVALID)
-            .with_reason_detail(detail),
-    )
-}
-
-pub(super) fn mimi_room_binding_status(binding: &Value) -> Result<&str, AppError> {
-    let payload = mimi_room_binding_security_payload(binding);
-    payload
-        .get("status")
-        .and_then(Value::as_str)
-        .filter(|status| matches!(*status, "proposed" | "accepted" | "revoked" | "migrating"))
-        .ok_or_else(|| {
-            AppError::invalid_param("MIMI room binding requires a lifecycle status")
-                .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE)
-        })
-}
-
-pub(super) fn mimi_room_binding_transition_allowed(previous: Option<&str>, next: &str) -> bool {
-    matches!(
-        (previous, next),
-        (None, "proposed" | "accepted")
-            | (Some("proposed"), "accepted" | "revoked")
-            | (Some("accepted"), "migrating" | "revoked")
-            | (Some("migrating"), "accepted" | "revoked")
-    )
-}
-
 pub(super) fn mimi_room_binding_security_payload(binding: &Value) -> &Value {
     binding
         .get("payload")

@@ -20,7 +20,7 @@ use arkret_state::state::{
     CellRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
     MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
 };
-use arkret_wire::{Seal, ServiceKind};
+use arkret_wire::{Seal, ServiceId, ServiceKind, project_full_id_to_core_id};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -311,12 +311,16 @@ pub fn fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
     .expect("principal-server registration key");
     let signing_key_ref =
         ServiceIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
+    let full_id = Did::new(
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+    )
+    .expect("fixture service DID");
     ServiceIdentityState::Ready {
         identity: LocalServiceIdentity {
-            service_id: Did::new(
-                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            )
-            .expect("fixture service DID"),
+            service_id: ServiceId::from(
+                project_full_id_to_core_id(&full_id).expect("fixture service projection"),
+            ),
+            full_id,
             registration_key,
             provider: None,
             signing_key_refs: vec![signing_key_ref.clone()],

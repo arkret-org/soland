@@ -69,8 +69,8 @@ BUNDLE_SOURCE="${BUNDLE_CANDIDATES[0]}"
 BUNDLE_BACKEND_FILE="$(basename "$BUNDLE_SOURCE")"
 BUNDLE_PATH="${WORKDIR}/service-identity-bundle.json"
 cp "$BUNDLE_SOURCE" "$BUNDLE_PATH"
-SERVICE_ID="$(jq -er '.identity.identity.service_id | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
-    echo "[backup-drill] FATAL: SDK identity bundle has no did:webvh service_id" >&2
+SERVICE_ID="$(jq -er '.identity.identity.full_id | select(startswith("did:webvh:"))' "$BUNDLE_PATH")" || {
+    echo "[backup-drill] FATAL: SDK identity bundle has no did:webvh full_id" >&2
     exit 1
 }
 BUNDLE_SHA="$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')"

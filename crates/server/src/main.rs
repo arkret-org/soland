@@ -682,7 +682,10 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
-                            .identity_document(description.service_id.as_str(), None)
+                            .identity_document(
+                                description.service_resolution.full_id.as_str(),
+                                None,
+                            )
                             .await
                         {
                             Ok(document) => document,
@@ -735,11 +738,11 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         };
                         let expected_verification_method =
                             soland_http::routing::federation::federation_service_signature_key_id(
-                                description.service_id.as_str(),
+                                description.service_resolution.full_id.as_str(),
                             );
                         let receipt_verification_method =
-                            format!("{}#notary-key", description.service_id);
-                        if document.id != description.service_id
+                            format!("{}#notary-key", description.service_resolution.full_id);
+                        if document.id != description.service_resolution.full_id
                             || document.validate_for(&registration_key).is_err()
                             || !document
                                 .assertion_method

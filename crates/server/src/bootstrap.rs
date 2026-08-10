@@ -138,14 +138,11 @@ pub async fn retry_service_identity(
         .stored_service_identity()
         .await
         .map_err(|error| anyhow::anyhow!("reading service resolution commitment failed: {error}"))?
-        .map(|stored| {
-            Ok(arkret_models_identity::ResolutionCommitment {
-                full_id: stored.identity.full_id.clone(),
-                method_history_head: stored.registration_receipt.log_head_digest.clone(),
-                version_id: stored.identity.version_id.clone(),
-            })
-        })
-        .transpose()?;
+        .map(|stored| arkret_models_identity::ResolutionCommitment {
+            full_id: stored.identity.full_id.clone(),
+            method_history_head: stored.registration_receipt.log_head_digest.clone(),
+            version_id: stored.identity.version_id.clone(),
+        });
     Ok(ServiceIdentityBootstrap {
         persistence,
         key_store,
@@ -504,6 +501,7 @@ fn stored_external_identity_from_outcome(
     let stored = StoredServiceIdentity {
         identity: LocalServiceIdentity {
             service_id: outcome.service_id,
+            full_id: outcome.full_id,
             registration_key: registration_key.clone(),
             provider: Some(provider.clone()),
             signing_key_refs: vec![material.signing_key_ref.clone()],
@@ -661,7 +659,7 @@ async fn ensure_identity_bundle(
         anyhow::bail!("service identity bundle backend is unavailable: {error}");
     }
     let history = persistence
-        .webvh_history(stored.identity.service_id.as_str())
+        .webvh_history(stored.identity.full_id.as_str())
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
     if history.len() != 1 {
@@ -866,11 +864,12 @@ fn stored_identity_from_outcome(
     outcome
         .validate_for(&registration_key)
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
-    let signing_key_ref = signing_key_ref(config, &outcome.service_id, key_store)?;
+    let signing_key_ref = signing_key_ref(config, &outcome.full_id, key_store)?;
     let generation = webvh_version_number(&outcome.version_id)?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let identity = LocalServiceIdentity {
         service_id: outcome.service_id,
+        full_id: outcome.full_id,
         registration_key,
         provider: None,
         signing_key_refs: vec![signing_key_ref.clone()],
@@ -900,10 +899,10 @@ async fn validate_stored_service_identity(
     stored
         .validate()
         .map_err(|error| anyhow::anyhow!("persisted service identity is invalid: {error}"))?;
-    if stored.identity.service_id.method() != "webvh" {
+    if stored.identity.full_id.method() != "webvh" {
         anyhow::bail!(
             "persisted service identity {} is not did:webvh; legacy service identities are not supported",
-            stored.identity.service_id
+            stored.identity.full_id
         );
     }
 
@@ -912,7 +911,7 @@ async fn validate_stored_service_identity(
     validate_service_signing_binding(stored, &signing_seed)?;
 
     let log = persistence
-        .webvh_history(stored.identity.service_id.as_str())
+        .webvh_history(stored.identity.full_id.as_str())
         .await
         .map_err(|error| {
             anyhow::anyhow!("reading persisted service WebVH history failed: {error}")
@@ -920,7 +919,7 @@ async fn validate_stored_service_identity(
     let head = log.last().ok_or_else(|| {
         anyhow::anyhow!("persisted service identity has no authoritative WebVH history")
     })?;
-    validate_persisted_webvh_history(stored.identity.service_id.as_str(), &log)?;
+    validate_persisted_webvh_history(stored.identity.full_id.as_str(), &log)?;
     let head_version_id = head
         .operation
         .get("versionId")
@@ -1312,7 +1311,7 @@ mod tests {
         state
             .identity()
             .expect("serving service identity")
-            .service_id
+            .full_id
             .to_string()
     }
 
@@ -1333,7 +1332,7 @@ mod tests {
             .await
             .expect("identity lookup")
             .expect("stored identity");
-        assert_eq!(stored.identity.service_id.method(), "webvh");
+        assert_eq!(stored.identity.full_id.method(), "webvh");
         assert_eq!(
             stored.identity.registration_key,
             registration_key(&config).unwrap()
@@ -1356,7 +1355,7 @@ mod tests {
                 )
                 .is_ok()
         );
-        assert_eq!(state_did(&state), stored.identity.service_id.as_str());
+        assert_eq!(state_did(&state), stored.identity.full_id.as_str());
     }
 
     #[tokio::test]
