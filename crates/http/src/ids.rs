@@ -1,10 +1,9 @@
 //! Arkret v1 protocol-compliant ID generation.
 //!
-//! All typed object IDs follow the format `ak:<kind>:<uuid>` where `<uuid>`
-//! is RFC 9562 UUID version 7 (48-bit Unix-millisecond timestamp + 4-bit
-//! version=7 + 12-bit rand_a + 2-bit variant=10 + 62-bit rand_b), serialized
-//! as the canonical 36-character lowercase hex form
-//! `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` where N ∈ {8,9,a,b}.
+//! Producer-allocated typed IDs use RFC 9562 UUIDv7 tokens. Event-derived IDs
+//! (`event`, `realm`, `space`, `circle`, `strand`, and peers) instead retain
+//! the complete 264-bit, 44-character Event token and must never pass through
+//! the UUID persistence helpers in this module.
 //!
 //! See `arkret-spec/spec/v1/zh/conformance/encoding.md` §4.
 
@@ -105,7 +104,7 @@ pub fn typed_uuid_part(typed: &str) -> Option<Uuid> {
 ///
 /// SOL-COR-02: this variant is reserved for IDs the server **itself**
 /// generated (via the `generate_*` helpers above) or that arrived through an
-/// SDK strong-typed newtype (`RealmId`/`OperationId`/`SealId::new`/...), where
+/// SDK strong-typed producer-allocated newtype (`OperationId`/`SealId::new`/...), where
 /// a malformed value would be an internal invariant violation rather than bad
 /// client input. The name documents that contract: callers MUST guarantee the
 /// value cannot be an unvalidated client string; request parsing must use SDK
@@ -243,7 +242,7 @@ mod tests {
     #[test]
     fn space_container_id_rejects_bad_kind() {
         assert!(SpaceContainerId::new(fixture_realm_id()).is_err());
-        assert!(SpaceContainerId::new("ak:space:not-a-uuid").is_err());
+        assert!(SpaceContainerId::new("ak:space:01914b2e-7a6d-7cc2-98eb-07c7c9ff4b55").is_err());
         assert!(SpaceContainerId::new("").is_err());
     }
 }

@@ -440,9 +440,9 @@ fn matching_request_has_revoked_upstream_grant(
 /// AKP-0007 / SEL-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
 /// the spec resource-selector enum admits `realm`, `space`, `strand`,
 /// `morph`, `circle`, `actor`. soland's resource matcher accepts the
-/// `ak:circle:<uuid>` typed-id form alongside the existing space /
+/// complete event-derived `ak:circle:<44-char token>` form alongside the existing space /
 /// realm forms, plus a `circle` keyword selector that resolves to
-/// "any ak:circle:<uuid>" so policy-authoring tools can express
+/// "any ak:circle:<event token>" so policy-authoring tools can express
 /// circle-wide grants without enumerating each circle.
 pub(crate) fn resource_matches(pattern: &str, resource: &str) -> bool {
     if pattern == "*" {
@@ -775,8 +775,8 @@ fn evaluate_constraint(
             // time).
             //
             // Evaluation contract: the resource selector for a Circle
-            // capability is of the form `ak:circle:<uuid>` (mirrors the
-            // `ak:space:<uuid>` pattern used by `realm.*` / `space.*`
+            // capability is a complete event-derived `ak:circle:` id (mirrors the
+            // event-derived `ak:space:` pattern used by `realm.*` / `space.*`
             // grants). If the resource looks like a Circle id, it MUST
             // be a member of the allowed set; otherwise the constraint
             // does not apply and silently passes (caller-policy: any

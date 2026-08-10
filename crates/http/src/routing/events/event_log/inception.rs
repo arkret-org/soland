@@ -310,10 +310,18 @@ mod tests {
         json!({ "prev_refs": refs }).as_object().unwrap().clone()
     }
 
+    fn event_ref(index: usize) -> String {
+        arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(&index.to_be_bytes()),
+        )
+        .to_string()
+    }
+
     #[test]
     fn prev_refs_over_max_rejected() {
         let refs: Vec<Value> = (0..(MAX_EVENT_PREV_REFS + 1))
-            .map(|i| json!(format!("ak:event:e{i}")))
+            .map(|i| json!(event_ref(i)))
             .collect();
         let err =
             event_ref_list(&object(json!(refs)), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
@@ -322,7 +330,8 @@ mod tests {
 
     #[test]
     fn duplicate_prev_refs_rejected() {
-        let refs = json!(["ak:event:e1", "ak:event:e1"]);
+        let duplicate = event_ref(1);
+        let refs = json!([duplicate.clone(), duplicate]);
         let err = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
         assert_eq!(err.code, "prev_refs_too_large");
     }

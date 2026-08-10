@@ -486,11 +486,11 @@ async fn directory_resolve_target_preview_requires_effective_preview_policy() {
     )
     .await;
     let realm_id = realm["realm_id"].as_str().unwrap();
-    let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
+    let realm_token = realm_id.strip_prefix("ak:realm:").unwrap();
     let strand_id = soland_test_support::fixture_content_bound_id("ak:strand:");
-    let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
+    let strand_token = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
-        "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
+        "web+arkret:realm/{realm_token}/strand/{strand_token}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
     );
     let token = preview_token_for_address(
         &state,
@@ -544,11 +544,11 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         .await
         .unwrap();
 
-    let realm_uuid = realm_id.strip_prefix("ak:realm:").unwrap();
+    let realm_token = realm_id.strip_prefix("ak:realm:").unwrap();
     let strand_id = soland_test_support::fixture_content_bound_id("ak:strand:");
-    let strand_uuid = strand_id.strip_prefix("ak:strand:").unwrap();
+    let strand_token = strand_id.strip_prefix("ak:strand:").unwrap();
     let address = format!(
-        "web+arkret:realm/{realm_uuid}/strand/{strand_uuid}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
+        "web+arkret:realm/{realm_token}/strand/{strand_token}?via=did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service&lt=preview"
     );
     let token = preview_token_for_address(&state, &address, realm_id, &policy_digest);
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-target")

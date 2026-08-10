@@ -164,7 +164,7 @@ pub struct ProjectionState {
     /// AKP-0007 — server-side Circle projection. Mirrors the canonical
     /// state-machine for `ak.circle.*` lifecycle / membership events
     /// (spec b7d35be `zh/models/circle.md`). Keyed by `circle_id`
-    /// (`ak:circle:<uuid>`); membership and parent-Realm binding live in
+    /// (`ak:circle:<44-char event token>`); membership and parent-Realm binding live in
     /// the struct so the wire layer can enforce
     /// `Circle.members ⊆ Realm.members` without an extra DB hop.
     pub circles: BTreeMap<String, CircleProjection>,

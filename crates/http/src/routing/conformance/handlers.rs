@@ -1414,20 +1414,8 @@ fn payload_too_large_error(message: impl Into<String>) -> AppError {
 }
 
 fn canonical_event_operation_id(record: &CanonicalEventRecord) -> Option<String> {
-    record
-        .envelope
-        .get("unsigned")
-        .and_then(Value::as_object)
-        .and_then(|unsigned| unsigned.get("local_operation_idempotency_alias"))
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("ak:operation:"))
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            record
-                .event_id
-                .strip_prefix("ak:event:")
-                .map(|suffix| format!("ak:operation:{suffix}"))
-        })
+    crate::routing::events::event_log::event_operation_id(&record.envelope, &record.event_id)
+        .map(|operation_id| operation_id.to_string())
 }
 
 fn canonical_event_diagnostic(record: &CanonicalEventRecord) -> CanonicalEventDiagnostic {

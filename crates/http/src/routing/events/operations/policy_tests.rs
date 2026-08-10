@@ -824,10 +824,6 @@ async fn register_agent_selection(
         .save_agent(record)
         .await
         .expect("agent record");
-    let realm_uuid = realm_id
-        .as_str()
-        .strip_prefix("ak:realm:")
-        .expect("realm id prefix");
     assert!(
         state
             .agent_participations()
@@ -835,7 +831,7 @@ async fn register_agent_selection(
                 json!({
                     "agent_id": agent_id,
                     "scope_kind": "realm",
-                    "scope_key": format!("realm:{realm_uuid}"),
+                    "scope_key": crate::routing::agent_participation::realm_scope_key(realm_id.as_str()),
                     "realm_id": realm_id.as_str(),
                     "scope": { "kind": "realm", "realm_id": realm_id.as_str() },
                     "version": 1,

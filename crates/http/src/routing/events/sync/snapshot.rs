@@ -1404,7 +1404,7 @@ pub(crate) async fn projection_record_visible_to_session(
         arkret_wire::EventKind::SidecarCreate => event
             .event_id
             .strip_prefix("ak:event:")
-            .map(|uuid| format!("ak:sidecar:{uuid}")),
+            .map(|event_token| format!("ak:sidecar:{event_token}")),
         arkret_wire::EventKind::SidecarContextAttach
         | arkret_wire::EventKind::AgentSidecarExchangeControl => event
             .payload

@@ -126,14 +126,7 @@ pub(in crate::routing) fn event_canonical_bytes(
 }
 
 pub(crate) fn is_valid_event_id(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("ak:event:") else {
-        return false;
-    };
-    !rest.is_empty()
-        && value.len() <= 160
-        && rest
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+    EventId::new(value.to_owned()).is_ok()
 }
 
 pub(in crate::routing) async fn event_submit_response(
@@ -263,7 +256,7 @@ fn event_projection_operation_uuid(event_id: &str) -> uuid::Uuid {
     uuid::Uuid::from_bytes(bytes)
 }
 
-fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
+pub(crate) fn event_operation_id(envelope: &Value, event_id: &str) -> Option<OperationId> {
     // Prefer the client-supplied alias when it's a valid OperationId
     // (`ak:operation:<uuid v7>` per `arkret-rust-sdk/identifiers`). A client
     // that authored the draft locally already dedupes on that value, so

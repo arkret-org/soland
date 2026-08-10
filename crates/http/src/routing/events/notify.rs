@@ -26,10 +26,6 @@ use crate::routing::agent_participation::{
 };
 use crate::state::AppState;
 
-fn uuid_tail(typed_id: &str) -> &str {
-    typed_id.rsplit(':').next().unwrap_or(typed_id)
-}
-
 fn value_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| value.get(*key).and_then(Value::as_str))
@@ -166,10 +162,10 @@ fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
 async fn agent_accepts_third_party_mention(
     state: &AppState,
     agent: &str,
-    realm_uuid: &str,
+    realm_id: &str,
     strand_id: Option<&str>,
 ) -> bool {
-    let Some(scope_keys) = scope_keys_for_message(state, realm_uuid, strand_id) else {
+    let Some(scope_keys) = scope_keys_for_message(state, realm_id, strand_id) else {
         return false;
     };
     resolve_agent_participation_for_scope_keys(state, agent, &scope_keys)
@@ -293,7 +289,6 @@ pub(crate) async fn dispatch_message_notifications(
     let payload = &operation.payload;
     let sender = operation.context.sender.to_string();
     let realm_id = operation.realm_id.as_str().to_owned();
-    let realm_uuid = uuid_tail(&realm_id).to_owned();
     let source_event_id = operation_source_event_id(operation);
     let strand_id = payload
         .get("strand_id")
@@ -401,7 +396,7 @@ pub(crate) async fn dispatch_message_notifications(
                 && !agent_accepts_third_party_mention(
                     state,
                     &subject,
-                    &realm_uuid,
+                    &realm_id,
                     strand_id.as_deref(),
                 )
                 .await
@@ -714,7 +709,7 @@ mod tests {
                     json!({
                         "agent_id": agent,
                         "scope_kind": "realm",
-                        "scope_key": format!("realm:{}", uuid_tail(realm_id)),
+                        "scope_key": crate::routing::agent_participation::realm_scope_key(realm_id),
                         "realm_id": realm_id,
                         "scope": { "kind": "realm", "realm_id": realm_id },
                         "version": expected_version + 1,

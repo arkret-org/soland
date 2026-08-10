@@ -529,9 +529,9 @@ backup/restore of the already-bound key. They do not rotate identity material.
   for diesel symmetry but reintroducing `discussion_realm_ref` after the
   AKP-0007 cutover would conflict with the v1 typed scope model.
 - **Disk sizing**: `effective_scope` adds one nullable `TEXT` column per
-  projected Event. For a typical `ak:circle:<uuid>` value the on-wire form
-  is 46 bytes; PostgreSQL's `TEXT` overhead pushes the stored cost to ~50
-  bytes per row, plus an additional ~20 bytes for the BTREE index entry on
+  projected Event. A complete `ak:circle:<44-char event token>` value is 54
+  bytes on the wire; PostgreSQL's short `TEXT` header and tuple alignment put
+  the stored cost around 55–60 bytes per row, plus the BTREE index entry on
   `projection_events_effective_scope_idx`. A 100M-event projection grows
   by ~7 GiB total (table + index). Drop the index if your deployment never
   filters projection reads by Circle scope.

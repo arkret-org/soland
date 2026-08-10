@@ -4,10 +4,6 @@ use super::*;
 
 // ── AKP-0016 — agent participation ceiling (admission validate + projection write) ──
 
-pub(super) fn ap_uuid_part(typed_id: &str) -> &str {
-    typed_id.rsplit(':').next().unwrap_or(typed_id)
-}
-
 pub(super) fn ap_bool(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
@@ -26,7 +22,7 @@ pub(super) fn agent_participation_ceiling_change(
 )> {
     use arkret_models_collaboration::governance::agent_participation::ParticipationBits;
     let payload = &operation.payload;
-    let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
+    let realm_id = operation.realm_id.as_str();
     let find = || -> Option<Value> {
         let base = payload
             .get("agent_participation")
@@ -77,29 +73,33 @@ pub(super) fn agent_participation_ceiling_change(
             let value = find()?;
             Some((
                 "realm",
-                format!("realm:{realm_uuid}"),
+                crate::routing::agent_participation::realm_scope_key(realm_id),
                 to_part(&value),
                 Vec::new(),
             ))
         }
         Some(arkret_wire::EventKind::CircleCreate) | Some(arkret_wire::EventKind::CircleUpdate) => {
             let value = find()?;
-            let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
+            let circle_id = id_of("circle_id")?;
             Some((
                 "circle",
-                format!("circle:{realm_uuid}:{circle_uuid}"),
+                crate::routing::agent_participation::circle_scope_key(realm_id, &circle_id),
                 to_part(&value),
-                vec![format!("realm:{realm_uuid}")],
+                vec![crate::routing::agent_participation::realm_scope_key(
+                    realm_id,
+                )],
             ))
         }
         Some(arkret_wire::EventKind::StrandCreate) | Some(arkret_wire::EventKind::StrandUpdate) => {
             let value = find()?;
-            let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
+            let strand_id = id_of("strand_id")?;
             Some((
                 "strand",
-                format!("strand:{realm_uuid}:{strand_uuid}"),
+                crate::routing::agent_participation::strand_scope_key(realm_id, &strand_id),
                 to_part(&value),
-                vec![format!("realm:{realm_uuid}")],
+                vec![crate::routing::agent_participation::realm_scope_key(
+                    realm_id,
+                )],
             ))
         }
         _ => None,
@@ -119,8 +119,9 @@ pub(super) fn agent_participation_parent_scope_keys(
     if scope_kind != "strand" {
         return fallback_parent_keys;
     }
-    let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
-    let mut parent_keys = vec![format!("realm:{realm_uuid}")];
+    let mut parent_keys = vec![crate::routing::agent_participation::realm_scope_key(
+        operation.realm_id.as_str(),
+    )];
     let scope_circle_id = operation
         .payload
         .pointer("/object/scope_circle_id")

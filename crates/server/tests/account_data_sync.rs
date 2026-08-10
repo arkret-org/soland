@@ -428,10 +428,11 @@ fn encrypted_account_data_value(
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
-    realm_id
-        .strip_prefix("ak:realm:")
-        .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
+    arkret_identifiers::RealmId::new(realm_id.to_owned())
+        .map(|realm_id| {
+            arkret_identifiers::StrandId::from_event_id(&realm_id.event_id()).to_string()
+        })
+        .unwrap_or_else(|_| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
 #[tokio::test]

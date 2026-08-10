@@ -436,7 +436,7 @@ pub struct AppConfig {
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
     pub receive_policy_constraints: Option<arkret_wire::receive_policy::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
-    /// (`ak:realm:0196419b-...`), demo account (`did:web:alice.example`),
+    /// (`ak:realm:<44-char event token>`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
     /// production deployments don't ship a globally-shared demo Realm
     /// that collides across federated peers. Test harnesses opt in via

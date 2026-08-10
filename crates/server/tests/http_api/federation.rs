@@ -254,8 +254,8 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let predecessor_id = authored_event_id(&predecessor).to_owned();
     put_event_record(&state, predecessor, now - ChronoDuration::seconds(1)).await;
     for idx in 0..16 {
-        let event_id = format!("ak:event:01904100-0000-8000-8000-fede000001{idx:02x}");
-        let event = signed_event_envelope(&event_id, 41, vec![predecessor_id.as_str()]);
+        let event_label = format!("federation-sibling-{idx}");
+        let event = signed_event_envelope(&event_label, 41, vec![predecessor_id.as_str()]);
         put_event_record(&state, event, now + ChronoDuration::seconds(idx)).await;
     }
 

@@ -2174,7 +2174,13 @@ mod tests {
         causal_refs: &[u32],
         payload: Value,
     ) -> AcceptedEvent {
-        let event_id = |value: u32| format!("ak:event:01964137-0000-8000-8000-{value:012x}");
+        let event_id = |value: u32| {
+            arkret_identifiers::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                arkret_canonical::sha256_bytes(&value.to_be_bytes()),
+            )
+            .to_string()
+        };
         AcceptedEvent {
             event_id: event_id(suffix),
             actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),

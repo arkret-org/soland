@@ -975,7 +975,7 @@ mod tests {
         let circle_id =
             caller_signed_circle_create_id(ACTOR, &circle_create_event(circle_object())).unwrap();
 
-        // Same UUID payload as the Event, only the typed prefix differs. This is
+        // Same complete 44-character token as the Event, only the typed prefix differs. This is
         // what makes the id something every receiver can recompute.
         assert_eq!(
             circle_id.as_str(),

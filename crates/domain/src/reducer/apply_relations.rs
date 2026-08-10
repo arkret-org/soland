@@ -1063,6 +1063,10 @@ mod cross_realm_relation_tests {
         to: &str,
         digest: &str,
     ) -> Operation {
+        let event_id = arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(seed.as_bytes()),
+        );
         let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -1075,7 +1079,7 @@ mod cross_realm_relation_tests {
                 "relation_kind": relation_kind,
                 "from_ref": from,
                 "to_ref": to,
-                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}")
+                "event_id": event_id
             }),
         );
         operation.context.canonical_event_digest =

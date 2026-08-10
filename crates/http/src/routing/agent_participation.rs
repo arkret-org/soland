@@ -10,20 +10,16 @@ pub(crate) struct ResolvedAgentParticipation {
     pub(crate) effective: ParticipationBits,
 }
 
-pub(crate) fn uuid_tail(typed_id: &str) -> &str {
-    typed_id.rsplit(':').next().unwrap_or(typed_id)
-}
-
 pub(crate) fn realm_scope_key(realm_id: &str) -> String {
-    format!("realm:{}", uuid_tail(realm_id))
+    format!("realm:{realm_id}")
 }
 
 pub(crate) fn circle_scope_key(realm_id: &str, circle_id: &str) -> String {
-    format!("circle:{}:{}", uuid_tail(realm_id), uuid_tail(circle_id))
+    format!("circle:{realm_id}:{circle_id}")
 }
 
 pub(crate) fn strand_scope_key(realm_id: &str, strand_id: &str) -> String {
-    format!("strand:{}:{}", uuid_tail(realm_id), uuid_tail(strand_id))
+    format!("strand:{realm_id}:{strand_id}")
 }
 
 pub(crate) fn participation_from_value(row: &Value) -> ParticipationBits {
@@ -122,4 +118,26 @@ pub(crate) async fn resolve_agent_participation_for_scope_keys(
     Some(ResolvedAgentParticipation {
         effective: effective_participation(ceiling, selection),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{circle_scope_key, realm_scope_key, strand_scope_key};
+
+    const REALM_ID: &str = "ak:realm:AfF-hFqRoMbajXkPapH-xaq0xwK-UKt2ph2zTs9JZRAO";
+    const CIRCLE_ID: &str = "ak:circle:AfUeGRE3CFApB-5spxARHjovex9S5j5RWL8mAUSkpOMS";
+    const STRAND_ID: &str = "ak:strand:AYbepLWCNKm2SxJt1JgbGtBjKrwf_iGhnjreRy4TZj09";
+
+    #[test]
+    fn scope_keys_preserve_complete_event_derived_tokens() {
+        assert_eq!(realm_scope_key(REALM_ID), format!("realm:{REALM_ID}"));
+        assert_eq!(
+            circle_scope_key(REALM_ID, CIRCLE_ID),
+            format!("circle:{REALM_ID}:{CIRCLE_ID}")
+        );
+        assert_eq!(
+            strand_scope_key(REALM_ID, STRAND_ID),
+            format!("strand:{REALM_ID}:{STRAND_ID}")
+        );
+    }
 }

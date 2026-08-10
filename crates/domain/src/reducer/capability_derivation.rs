@@ -344,7 +344,7 @@ pub(crate) fn find_capability_grant(
 ///
 /// The Circle HTTP surface (`/_arkret/self/circles/{id}/members`) runs the
 /// real `SolandAuthzEngine::check(sender, "ak.circle.member.manage",
-/// "ak:circle:<id>", …)` — which evaluates the grant's `allowed_circle_ids`
+/// "ak:circle:<44-char event token>", …)` — which evaluates the grant's `allowed_circle_ids`
 /// selector — and stamps the result into the operation payload before handing
 /// it to the reducer. The reducer treats this as a fail-closed assertion:
 /// absent / false / mismatched-circle ⇒ not authorised.

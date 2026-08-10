@@ -1558,7 +1558,7 @@ fn committed_seal_effect(seal: &Seal) -> SealEffect {
 // ────────────────────────────────────────────────────────────────────────
 
 /// Validate every entry in a Seal `delta[]` is shaped as
-/// `sha256:<64 lowercase hex>` — never a `ak:event:<uuid>` form.
+/// `sha256:<64 lowercase hex>` — never a legacy UUID-shaped typed-ID form.
 ///
 /// Receivers MUST recompute and verify entries; the strict shape check
 /// here guards against the removed event-id form that was permitted in

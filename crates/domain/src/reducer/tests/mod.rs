@@ -52,7 +52,7 @@ pub(super) fn make_operation(
 ) -> Operation {
     // The production Event→Operation adapter injects the accepted event_id.
     // Unit tests commonly construct only the create object's typed id, so
-    // mirror that adapter by retyping the same UUID when the id-kind registry
+    // mirror that adapter by retyping the same complete event token when the id-kind registry
     // declares the object Event-derived.
     let derived_event_id = payload
         .get("object")
@@ -60,11 +60,11 @@ pub(super) fn make_operation(
         .and_then(|object| object.get("id"))
         .and_then(Value::as_str)
         .and_then(|object_id| object_id.rsplit_once(':'))
-        .and_then(|(kind, uuid)| {
+        .and_then(|(kind, event_token)| {
             let prefix = format!("{kind}:");
             arkret_identifiers::EVENT_DERIVED_ID_KIND_PREFIXES
                 .contains(&prefix.as_str())
-                .then(|| format!("ak:event:{uuid}"))
+                .then(|| format!("ak:event:{event_token}"))
         });
     if payload.get("event_id").is_none()
         && let Some(event_id) = derived_event_id

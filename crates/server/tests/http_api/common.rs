@@ -880,15 +880,16 @@ pub(crate) fn multipart_blob_upload_body(
 }
 
 pub(crate) fn expected_strand_id_for_scope(scope_id: &str) -> String {
-    scope_id
-        .strip_prefix("ak:realm:")
-        .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| {
-            let digest = Sha256::digest(scope_id.as_bytes());
-            format!("ak:strand:{}", hex::encode(digest))
-                .chars()
-                .take("ak:strand:".len() + 26)
-                .collect()
+    arkret_identifiers::RealmId::new(scope_id.to_owned())
+        .map(|realm_id| {
+            arkret_identifiers::StrandId::from_event_id(&realm_id.event_id()).to_string()
+        })
+        .unwrap_or_else(|_| {
+            let event_id = arkret_identifiers::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                arkret_canonical::sha256_bytes(scope_id.as_bytes()),
+            );
+            arkret_identifiers::StrandId::from_event_id(&event_id).to_string()
         })
 }
 
@@ -1284,10 +1285,10 @@ pub(crate) async fn submit_message_event(
     }
     if let Some(event_id) = response["event_id"].as_str() {
         let event_id = event_id.to_owned();
-        let event_suffix = event_id.strip_prefix("ak:event:").unwrap_or(&event_id);
-        response["operation_id"] = Value::String(format!("ak:operation:{event_suffix}"));
+        let event_token = event_id.strip_prefix("ak:event:").unwrap_or(&event_id);
+        response["operation_id"] = Value::String(projected_operation_id(&event_id));
         response["kind"] = Value::String("ak.message.create".to_owned());
-        response["message_id"] = Value::String(format!("ak:message:{event_suffix}"));
+        response["message_id"] = Value::String(format!("ak:message:{event_token}"));
         response["realm_id"] = Value::String(realm_id.to_owned());
         response["source_realm_id"] = Value::String(realm_id.to_owned());
         response["sender"] = Value::String(actor.to_owned());
@@ -2600,7 +2601,7 @@ pub(crate) async fn persist_test_message_with_actor_seq(
         message_id: event_id.replacen("ak:event:", "ak:message:", 1),
         realm_id: realm_id.to_owned(),
         sender: sender.to_owned(),
-        thread_id: format!("ak:strand:test-{}", event_id),
+        thread_id: expected_strand_id_for_scope(realm_id),
         content: serde_json::json!({"body": body}),
         encrypted: false,
         created_at: chrono::Utc::now(),
@@ -2624,4 +2625,15 @@ pub(crate) async fn persist_test_message_with_actor_seq(
         .await
         .unwrap();
     record
+}
+fn projected_operation_id(event_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"ak:operation:soland-event-projection:v1:");
+    hasher.update(event_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!("ak:operation:{}", uuid::Uuid::from_bytes(bytes))
 }
