@@ -42,10 +42,11 @@ use arkret_models_crypto::{
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
     KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
     PeerKeyPackageClaimErrorCode, PeerKeyPackageClaimPurpose, PeerKeyPackageClaimReceipt,
-    PeerKeyPackagesClaimAuthorizationDraft, PeerKeyPackagesClaimOutcome,
-    PeerKeyPackagesClaimQueryOutcome, PeerKeyPackagesClaimQueryRequestBody,
-    PeerKeyPackagesClaimQueryState, PeerKeyPackagesClaimRequestBody,
-    PeerKeyPackagesClaimTransportBinding, peer_keypackage_claim_authorization_signing_bytes,
+    PeerKeyPackageRequesterAuthorization, PeerKeyPackagesClaimAuthorizationDraft,
+    PeerKeyPackagesClaimOutcome, PeerKeyPackagesClaimQueryOutcome,
+    PeerKeyPackagesClaimQueryRequestBody, PeerKeyPackagesClaimQueryState,
+    PeerKeyPackagesClaimRequestBody, PeerKeyPackagesClaimTransportBinding,
+    SelfKeyPackageClaimReceipt, peer_keypackage_claim_authorization_signing_bytes,
     peer_keypackage_claim_receipt_signing_bytes,
 };
 use base64::Engine;
@@ -73,6 +74,79 @@ use crate::state::AppState;
 use crate::wire::now;
 
 const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
+
+fn welcome_recipient_device_id(
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+) -> Option<&arkret_wire::DeviceId> {
+    match &welcome.recipient {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+            recipient_device_id,
+        } => Some(recipient_device_id),
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            ..
+        } => None,
+    }
+}
+
+fn self_keypackage_claim_receipt(
+    state: &AppState,
+    request: &KeyPackagesClaimRequestBody,
+    claims: &[KeyPackageClaimRecord],
+    claimed_at: DateTime<Utc>,
+) -> Result<SelfKeyPackageClaimReceipt, AppError> {
+    let service_id = arkret_wire::CoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service core_id invalid: {error}")))?;
+    let verification_method = format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    );
+    let mut receipt = SelfKeyPackageClaimReceipt {
+        operation_id: arkret_wire::ProtocolOperationId::new(
+            "ak.self.keys.keypackages.command.claim".to_owned(),
+        )
+        .map_err(|error| AppError::internal(format!("operation id invalid: {error}")))?,
+        claim_request_id: request.claim_nonce.clone(),
+        request_digest: Hash::new(arkret_canonical::canonical_sha256(request).map_err(
+            |error| AppError::internal(format!("self claim request digest failed: {error}")),
+        )?)
+        .map_err(|error| {
+            AppError::internal(format!("self claim request digest invalid: {error}"))
+        })?,
+        claims_digest: Hash::new(
+            arkret_canonical::canonical_sha256(&claims.to_vec()).map_err(|error| {
+                AppError::internal(format!("self claim claims digest failed: {error}"))
+            })?,
+        )
+        .map_err(|error| {
+            AppError::internal(format!("self claim claims digest invalid: {error}"))
+        })?,
+        source_service_id: service_id.clone(),
+        destination_service_id: service_id,
+        request: request.clone(),
+        claimed_at,
+        expires_at: request.expires_at,
+        signature: KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(verification_method)
+                .map_err(|error| AppError::internal(format!("receipt kid invalid: {error}")))?,
+            signature_algorithm: Some(
+                arkret_wire::NonEmptyString::new("Ed25519".to_owned())
+                    .expect("fixed signature algorithm is valid"),
+            ),
+            sig: arkret_wire::Base64UrlString::new("AA".to_owned())
+                .expect("static placeholder is valid base64url"),
+        },
+    };
+    let signing_bytes = receipt.canonical_signing_bytes().map_err(|error| {
+        AppError::internal(format!("self claim receipt transcript failed: {error}"))
+    })?;
+    receipt.signature.sig = arkret_wire::Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_bytes).to_bytes()),
+    )
+    .map_err(|error| {
+        AppError::internal(format!("self claim receipt signature invalid: {error}"))
+    })?;
+    Ok(receipt)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyPackageTrustBinding {
@@ -209,7 +283,11 @@ async fn upload_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
-    let actor_id = body.principal_id.to_string();
+    let principal_id =
+        arkret_wire::project_full_id_to_core_id(&body.principal_id).map_err(|error| {
+            AppError::invalid_param(format!("principal_id cannot be projected: {error}"))
+        })?;
+    let actor_id = principal_id.to_string();
     let device_id = body.device_id.to_string();
     if actor_id != session.actor {
         return Err(AppError::capability_denied(
@@ -224,8 +302,7 @@ async fn upload_keypackage(
     if body.key_packages.is_empty() {
         return Err(AppError::missing_param("key_packages is required"));
     }
-    let trust_binding =
-        current_keypackage_trust_binding(state, &body.principal_id, &device_id).await?;
+    let trust_binding = current_keypackage_trust_binding(state, &principal_id, &device_id).await?;
     let unsigned_upload = body.unsigned();
     let upload_signing_input =
         arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&unsigned_upload)
@@ -243,7 +320,7 @@ async fn upload_keypackage(
             .map_err(AppError::invalid_param)?;
         validate_agent_keypackage_upload(
             state,
-            &body.principal_id,
+            &principal_id,
             authorize_event_id,
             &first_key_package,
             &body.device_signature,
@@ -254,7 +331,7 @@ async fn upload_keypackage(
     } else {
         verify_device_keypackage_signature(
             state,
-            &body.principal_id,
+            &principal_id,
             &device_id,
             &body.device_signature,
             &upload_signing_input,
@@ -340,7 +417,7 @@ async fn upload_keypackage(
         if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref()
             && let Err(reason) = validate_agent_keypackage_upload(
                 state,
-                &body.principal_id,
+                &principal_id,
                 authorize_event_id,
                 &key_package_bytes,
                 &device_signature,
@@ -355,7 +432,7 @@ async fn upload_keypackage(
             && entry.device_signature.is_some()
             && let Err(error) = verify_device_keypackage_signature(
                 state,
-                &body.principal_id,
+                &principal_id,
                 &device_id,
                 &device_signature,
                 &entry_signing_input,
@@ -770,7 +847,7 @@ async fn peer_query_keypackage_claim(
             body.request_digest.clone(),
             terminal_state,
             Some(refs),
-            Did::new(source_service_id.clone()).map_err(|error| {
+            arkret_wire::CoreId::new(source_service_id.clone()).map_err(|error| {
                 AppError::internal(format!("peer source service id invalid: {error}"))
             })?,
             now(),
@@ -822,10 +899,12 @@ fn peer_claim_transport_binding(
     state: &AppState,
     req: &Request,
 ) -> Result<PeerKeyPackagesClaimTransportBinding, AppError> {
-    let source_service_id = Did::new(peer_required_header(req, "source-service-id")?)
-        .map_err(|_| peer_claim_schema_violation("source-service-id must be a DID"))?;
-    let destination_service_id = Did::new(peer_required_header(req, "destination-service-id")?)
-        .map_err(|_| peer_claim_schema_violation("destination-service-id must be a DID"))?;
+    let source_service_id =
+        arkret_wire::CoreId::new(peer_required_header(req, "source-service-id")?)
+            .map_err(|_| peer_claim_schema_violation("source-service-id must be a core_id"))?;
+    let destination_service_id =
+        arkret_wire::CoreId::new(peer_required_header(req, "destination-service-id")?)
+            .map_err(|_| peer_claim_schema_violation("destination-service-id must be a core_id"))?;
     let source_trust_domain = arkret_identifiers::TypedTrustDomainId::new(peer_required_header(
         req,
         "source-trust-domain",
@@ -857,10 +936,14 @@ fn peer_claim_transport_binding(
 
 fn validate_peer_claim_time_window(body: &PeerKeyPackagesClaimRequestBody) -> Result<(), AppError> {
     let authorization = &body.requester_authorization;
+    let signed_at = match authorization {
+        PeerKeyPackageRequesterAuthorization::Device { signed_at, .. }
+        | PeerKeyPackageRequesterAuthorization::NativeAgent { signed_at, .. } => *signed_at,
+    };
     let current = now();
-    if authorization.signed_at > current + chrono::Duration::seconds(60)
-        || body.expires_at <= authorization.signed_at
-        || body.expires_at - authorization.signed_at > chrono::Duration::minutes(5)
+    if signed_at > current + chrono::Duration::seconds(60)
+        || body.expires_at <= signed_at
+        || body.expires_at.signed_duration_since(signed_at) > chrono::Duration::minutes(5)
         || body.expires_at <= current
     {
         return Err(peer_claim_schema_violation(
@@ -868,6 +951,22 @@ fn validate_peer_claim_time_window(body: &PeerKeyPackagesClaimRequestBody) -> Re
         ));
     }
     Ok(())
+}
+
+fn verification_method_binds_core_device(
+    verification_method: &arkret_wire::DidUrl,
+    principal_id: &arkret_wire::CoreId,
+    device_id: &arkret_wire::DeviceId,
+) -> bool {
+    let Some((controller, fragment)) = verification_method.rsplit_once('#') else {
+        return false;
+    };
+    if fragment != device_id.as_str() {
+        return false;
+    }
+    arkret_wire::FullId::new(controller.to_owned())
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+        .is_ok_and(|core| core == *principal_id)
 }
 
 async fn verify_peer_claim_participant_authorization(
@@ -885,8 +984,25 @@ async fn verify_peer_claim_participant_authorization(
         );
         Ok::<bool, AppError>(false)
     };
-    if authorization
-        .signature
+    let (verification_method, signature, requester_device_id, device_authorize_event_id) =
+        match authorization {
+            PeerKeyPackageRequesterAuthorization::Device {
+                verification_method,
+                requester_device_id,
+                device_authorize_event_id,
+                signature,
+                ..
+            } => (
+                verification_method,
+                signature,
+                requester_device_id,
+                device_authorize_event_id,
+            ),
+            PeerKeyPackageRequesterAuthorization::NativeAgent { .. } => {
+                return reject("native_agent_authorization_verifier_unavailable");
+            }
+        };
+    if signature
         .signature_algorithm
         .as_ref()
         .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
@@ -898,19 +1014,17 @@ async fn verify_peer_claim_participant_authorization(
             AppError::internal(format!("peer claim authorization transcript: {error}"))
         })?;
     let key = {
-        let device_id = &authorization.requester_device_id;
+        let device_id = requester_device_id;
         if let Some(evidence) = body.requester_signing_key_evidence.as_ref() {
-            if evidence.actor_id != body.requester
+            if evidence.actor_id.as_str() != body.requester.as_str()
                 || &evidence.device_id != device_id
-                || evidence.verification_method != authorization.verification_method.as_str()
+                || evidence.verification_method != verification_method.as_str()
                 || evidence
                     .current_device_projection
                     .device_record
                     .device_authorize_event_id
                     .as_ref()
-                    .is_none_or(|event_id| {
-                        event_id.as_str() != authorization.device_authorize_event_id.as_str()
-                    })
+                    .is_none_or(|event_id| event_id.as_str() != device_authorize_event_id.as_str())
             {
                 return reject("federated_evidence_binding");
             }
@@ -953,9 +1067,12 @@ async fn verify_peer_claim_participant_authorization(
                 .as_ref()
                 .map(ToString::to_string)
                 .as_deref()
-                != Some(authorization.device_authorize_event_id.as_str())
-                || authorization.verification_method.as_str()
-                    != format!("{}#{}", body.requester, device_id).as_str()
+                != Some(device_authorize_event_id.as_str())
+                || !verification_method_binds_core_device(
+                    verification_method,
+                    &body.requester,
+                    device_id,
+                )
             {
                 return reject("local_device_directory_binding");
             }
@@ -973,7 +1090,7 @@ async fn verify_peer_claim_participant_authorization(
     let signature_valid = crate::routing::identity::device_signing::ed25519_verify(
         &key,
         &signing_bytes,
-        authorization.signature.sig.as_str(),
+        signature.sig.as_str(),
     );
     if !signature_valid {
         return reject("signature_invalid");
@@ -1025,7 +1142,8 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
         }
-        PeerKeyPackageClaimPurpose::DirectConversation => {
+        PeerKeyPackageClaimPurpose::DirectConversation
+        | PeerKeyPackageClaimPurpose::DirectConversationRepair => {
             let scope = "direct_message";
             let contact = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
@@ -1053,9 +1171,11 @@ async fn peer_claim_policy_authorized(
                     .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
-                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    body.target_principal_id.clone(),
+                    arkret_wire::ActorId::from(body.requester.clone()),
+                ),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
+                    arkret_wire::ActorId::from(body.target_principal_id.clone()),
                 ),
             )
             .map_err(|_| peer_claim_failed())?;
@@ -1082,16 +1202,17 @@ async fn build_peer_claim_outcome(
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
         .map_err(|error| AppError::internal(format!("peer claims digest: {error}")))?;
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let service_full_id = state.service_resolution_commitment().full_id.clone();
+    let verification_method = format!("{service_full_id}#notary-key");
     let mut receipt = PeerKeyPackageClaimReceipt {
         claim_request_id: body.claim_request_id.clone(),
         request_digest: Hash::new(request_digest.to_owned())
             .map_err(|error| AppError::internal(format!("request digest invalid: {error}")))?,
         claims_digest: Hash::new(claims_digest)
             .map_err(|error| AppError::internal(format!("claims digest invalid: {error}")))?,
-        source_service_id: Did::new(source_service_id.to_owned())
+        source_service_id: arkret_wire::CoreId::new(source_service_id.to_owned())
             .map_err(|error| AppError::internal(format!("source service id invalid: {error}")))?,
-        destination_service_id: Did::new(state.service_id().clone())
+        destination_service_id: arkret_wire::CoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         request: body.unsigned_request(),
         claimed_at: unix_timestamp_datetime(
@@ -1150,10 +1271,11 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     {
         return Err("peer_claim_welcome_invalid");
     }
-    let receipt = welcome
-        .peer_claim_receipt
-        .as_ref()
-        .ok_or("peer_claim_welcome_invalid")?;
+    let arkret_models_collaboration::events_payloads::MlsWelcomeClaimReceipt::PeerClaim(receipt) =
+        &welcome.claim_receipt
+    else {
+        return Err("peer_claim_welcome_invalid");
+    };
     let request = &receipt.request;
     if receipt.claim_request_id != request.claim_request_id
         || receipt.source_service_id.as_str() != source_service_id
@@ -1170,7 +1292,10 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     {
         return Err("peer_claim_welcome_invalid");
     }
-    let expected_method = format!("{}#notary-key", state.service_id());
+    let expected_method = format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    );
     if receipt.signature.kid.as_str() != expected_method
         || receipt
             .signature
@@ -1209,7 +1334,7 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     }
     let claim = &outcome.claims[0];
     if claim.principal_id != welcome.recipient_principal_id
-        || claim.device_id != welcome.recipient_device_id.as_str()
+        || claim.device_id.as_ref() != welcome_recipient_device_id(&welcome)
         || claim.claim_id != welcome.claim_id.as_str()
         || claim.keypackage_ref != welcome.keypackage_ref
         || claim.keypackage_digest != welcome.keypackage_digest
@@ -1235,7 +1360,7 @@ async fn record_peer_claim_failed(
         })?,
         KeyPackageClaimTerminalState::NeverClaimed,
         None,
-        Did::new(source_service_id.to_owned())
+        arkret_wire::CoreId::new(source_service_id.to_owned())
             .map_err(|error| AppError::internal(format!("peer service DID invalid: {error}")))?,
         now(),
     )?;
@@ -1276,10 +1401,13 @@ fn build_peer_claim_terminal_receipt(
     request_digest: Hash,
     terminal_state: KeyPackageClaimTerminalState,
     key_package_refs: Option<Vec<String>>,
-    source_service_id: Did,
+    source_service_id: arkret_wire::CoreId,
     terminal_at: DateTime<Utc>,
 ) -> Result<KeyPackageClaimTerminalReceipt, AppError> {
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method = format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    );
     let mut receipt = KeyPackageClaimTerminalReceipt {
         domain: arkret_wire::NonEmptyString::new("ak.keypackage.claim-terminal-receipt.v1")
             .expect("terminal receipt domain is non-empty"),
@@ -1288,7 +1416,7 @@ fn build_peer_claim_terminal_receipt(
         terminal_state,
         key_package_refs,
         source_service_id,
-        destination_service_id: Did::new(state.service_id().clone())
+        destination_service_id: arkret_wire::CoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         terminal_at,
         signature: KeyOperationSignature {
@@ -1405,8 +1533,7 @@ async fn claim_keypackages_for_request_inner(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    let authority = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
+    let authority = state.service_resolution_commitment().full_id.clone();
     let proof = &body.holder_acceptance_proof;
     let binding = body
         .validate_proof_shape(&authority, Utc::now())
@@ -1452,7 +1579,10 @@ async fn claim_keypackages_for_request_inner(
     }
     let required_capabilities = required_capability_set(&body.required_capabilities)?;
 
-    let target_principal_did = body.target_principal_id.clone();
+    let target_principal_did = arkret_wire::project_full_id_to_core_id(&body.target_principal_id)
+        .map_err(|error| {
+        AppError::invalid_param(format!("target_principal_id cannot be projected: {error}"))
+    })?;
     let target_principal_id = body.target_principal_id.to_string();
     let target_device_ids = body
         .target_device_ids
@@ -1525,8 +1655,10 @@ async fn claim_keypackages_for_request_inner(
         } else {
             soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
         };
+        let claims = Vec::new();
         let outcome = KeyPackagesClaimOutcome {
-            claims: Vec::new(),
+            claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
+            claims,
             failures: vec![KeypackageFailure {
                 keypackage_ref: None,
                 device_id: target_device_ids.iter().next().cloned(),
@@ -1560,8 +1692,11 @@ async fn claim_keypackages_for_request_inner(
         predicted.claimed_at = Some(now_secs);
         predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
         predicted.consumed_at = None;
+        let claims =
+            vec![keypackage_claim_record(state, &predicted, body.claim_nonce.as_str()).await?];
         let outcome = KeyPackagesClaimOutcome {
-            claims: vec![keypackage_claim_record(&predicted, &body.claim_nonce)?],
+            claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
+            claims,
             failures: Vec::new(),
             // The immutable terminal response must retain the count observed
             // at the successful transition; replay must not recompute it.
@@ -1609,8 +1744,10 @@ async fn claim_keypackages_for_request_inner(
         }
     }
 
+    let claims = Vec::new();
     let outcome = KeyPackagesClaimOutcome {
-        claims: Vec::new(),
+        claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
+        claims,
         failures: vec![KeypackageFailure {
             keypackage_ref: None,
             device_id: target_device_ids.iter().next().cloned(),
@@ -1768,7 +1905,13 @@ async fn consume_keypackages(
             "owner_account_id must match the calling principal",
         ));
     }
-    if body.consumer_device_id.to_string() != session.device_id {
+    let arkret_models_crypto::KeyPackageConsumer::Device { consumer_device_id } = &body.consumer
+    else {
+        return Err(AppError::capability_denied(
+            "authenticated device sessions cannot consume as a Native Agent",
+        ));
+    };
+    if consumer_device_id.as_str() != session.device_id {
         return Err(AppError::capability_denied(
             "consumer_device_id must match the calling session",
         ));
@@ -1921,13 +2064,23 @@ async fn validate_recipient_durable_receipt(
         ));
     }
     let receipt = &body.recipient_durable_receipt;
+    let arkret_models_crypto::RecipientMlsDurableSigner::Device {
+        recipient_device_id,
+        device_verification_method,
+    } = &receipt.recipient
+    else {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "authenticated device consume requires a device durable signer",
+        ));
+    };
     if receipt.domain.as_str() != "ak.mls.recipient-durable-receipt.v1"
         || receipt.key_package_ref.as_str() != body.key_package_refs[0]
         || receipt.recipient_principal_id.as_str() != session.actor
-        || receipt.recipient_device_id.as_str() != session.device_id
+        || recipient_device_id.as_str() != session.device_id
         || receipt.recipient_service_id.as_str() != state.service_id()
         || receipt.welcome_ref.as_str() != body.welcome_ref.as_str()
-        || receipt.signature.kid.as_str() != receipt.device_verification_method.as_str()
+        || receipt.signature.kid.as_str() != device_verification_method.as_str()
         || body
             .realm_id
             .as_ref()
@@ -1972,8 +2125,17 @@ async fn validate_recipient_durable_receipt(
     .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
     let welcome_digest = arkret_canonical::canonical_sha256(&stored.envelope)
         .map_err(|error| AppError::internal(format!("Welcome digest failed: {error}")))?;
+    let welcome_recipient_device_id = match &welcome.recipient {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
+            recipient_device_id,
+        } => Some(recipient_device_id),
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            ..
+        } => None,
+    };
     if welcome.recipient_principal_id.as_str() != session.actor
-        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome_recipient_device_id
+            .is_none_or(|device_id| device_id.as_str() != session.device_id)
         || welcome.keypackage_ref != body.key_package_refs[0]
         || welcome.claim_id.as_str() != body.claim_ids[0].as_str()
         || welcome.mls_group_id.as_str() != receipt.mls_group_id.as_str()
@@ -2006,7 +2168,10 @@ fn build_keypackage_consume_receipt(
     consumed: Vec<String>,
     consumed_at: DateTime<Utc>,
 ) -> Result<KeyPackageConsumeReceipt, AppError> {
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method = format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    );
     let mut receipt = KeyPackageConsumeReceipt {
         domain: arkret_wire::NonEmptyString::new("ak.keypackage.consume-receipt.v1")
             .expect("receipt domain is non-empty"),
@@ -2018,7 +2183,7 @@ fn build_keypackage_consume_receipt(
         realm_id: body.recipient_durable_receipt.realm_id.clone(),
         mls_group_id: body.recipient_durable_receipt.mls_group_id.clone(),
         mls_epoch: body.recipient_durable_receipt.mls_epoch,
-        source_service_id: Did::new(state.service_id().clone())
+        source_service_id: arkret_wire::CoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
         consumed_at,
         signature: KeyOperationSignature {
@@ -2167,7 +2332,8 @@ async fn validate_direct_keypackage_consume(
     let claim_id = &body.claim_ids[0];
     let key_package_id = &body.key_package_refs[0];
     if welcome.recipient_principal_id.as_str() != session.actor
-        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome_recipient_device_id(&welcome)
+            .is_none_or(|device_id| device_id.as_str() != session.device_id)
         || welcome.mls_group_id.as_str() != active_group_id.as_str()
         || Some(welcome.epoch) != body.epoch
         || !direct_welcome_claim_matches_consume(
@@ -2330,7 +2496,8 @@ async fn validate_sidecar_keypackage_consume(
         || body.realm_id.as_ref().map(ToString::to_string).as_deref()
             != Some(sidecar.realm_id.as_str())
         || welcome.recipient_principal_id.as_str() != session.actor
-        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome_recipient_device_id(&welcome)
+            .is_none_or(|device_id| device_id.as_str() != session.device_id)
         || welcome.keypackage_ref.as_str() != key_package_id
         || welcome.claim_id.as_str() != claim_id.as_str()
         || !claim_id.starts_with(&format!("{key_package_id}:"))
@@ -2602,7 +2769,7 @@ fn entry_signature(
 
 async fn validate_agent_keypackage_upload(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
     authorize_event_id: &str,
     key_package_bytes: &[u8],
     signature: &KeyOperationSignature,
@@ -2677,7 +2844,7 @@ async fn validate_agent_keypackage_upload(
 
 async fn verify_device_keypackage_signature(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
     device_id: &str,
     signature: &KeyOperationSignature,
     signing_input: &[u8],
@@ -2741,7 +2908,7 @@ async fn verify_session_keypackage_write_signature(
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), AppError> {
-    let principal = arkret_identifiers::Did::new(session.actor.clone())
+    let principal = arkret_wire::CoreId::new(session.actor.clone())
         .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
     if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
         let authorize_event_id = binding
@@ -2815,7 +2982,7 @@ fn capabilities_satisfy(published: &[String], required: &BTreeSet<String>) -> bo
 
 async fn current_agent_keypackage_trust_binding(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
 ) -> Result<Option<KeyPackageTrustBinding>, AppError> {
     let Some(agent) = state
         .agent_pairings()
@@ -2907,7 +3074,7 @@ async fn current_agent_keypackage_trust_binding(
 
 pub(crate) async fn current_agent_key_authorization_matches(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
     authorize_event_id: &str,
 ) -> bool {
     current_agent_keypackage_trust_binding(state, principal)
@@ -2921,7 +3088,7 @@ pub(crate) async fn current_agent_key_authorization_matches(
 
 async fn current_keypackage_trust_binding(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
     device_id: &str,
 ) -> Result<KeyPackageTrustBinding, AppError> {
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
@@ -2953,7 +3120,7 @@ async fn current_keypackage_trust_binding(
 
 async fn current_keypackage_claim_trust_selector(
     state: &AppState,
-    principal: &arkret_identifiers::Did,
+    principal: &arkret_wire::CoreId,
     target_device_ids: &BTreeSet<String>,
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(binding) = current_agent_keypackage_trust_binding(state, principal).await? {
@@ -3121,7 +3288,7 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
     actor_id: &str,
     intended_realm_id: &str,
 ) -> bool {
-    let Ok(principal) = arkret_identifiers::Did::new(actor_id.to_owned()) else {
+    let Ok(principal) = arkret_wire::CoreId::new(actor_id.to_owned()) else {
         return false;
     };
     let target_device_ids = BTreeSet::new();
@@ -3172,7 +3339,7 @@ pub(crate) async fn current_authorized_claimed_group_actors(
     let mut actors = BTreeSet::new();
     let mut locally_consumed_welcome_actors = BTreeSet::new();
     for row in &rows {
-        let principal = arkret_identifiers::Did::new(row.actor_id.clone())
+        let principal = arkret_wire::CoreId::new(row.actor_id.clone())
             .map_err(|error| format!("claimed KeyPackage actor invalid: {error}"))?;
         let selector = current_keypackage_claim_trust_selector(state, &principal, &BTreeSet::new())
             .await
@@ -3244,15 +3411,31 @@ async fn keypackage_claim_record(
     claim_nonce: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
     let trust_binding = KeyPackageTrustBinding::from_row(record)?;
-    let principal_id = Did::new(record.actor_id.clone())
+    let principal_id = arkret_wire::CoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
+    let device_id = arkret_wire::DeviceId::new(record.device_id.clone())
+        .map_err(|error| AppError::internal(format!("invalid device_id: {error}")))?;
     let target_device_signing_key_evidence = if trust_binding.device_authorize_event_id.is_some() {
-        let verification_method = format!("{}#{}", principal_id, record.device_id);
+        let resolution = state
+            .persistence()
+            .current_principal_resolution(&principal_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("principal resolution lookup failed: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "target principal resolution is unavailable",
+                )
+                .with_wire_code("target_device_signing_key_evidence_unavailable")
+            })?;
+        let verification_method = format!("{}#{}", resolution.projection.full_id, device_id);
         Some(
             crate::jws_verify::federated_device_signing_key_evidence(
                 state,
-                &principal_id,
-                &record.device_id,
+                &arkret_wire::ActorId::from(principal_id.clone()),
+                &device_id,
                 &verification_method,
             )
             .await
@@ -3264,6 +3447,29 @@ async fn keypackage_claim_record(
     } else {
         None
     };
+    let (device_id, agent_id, agent_verification_method) = if trust_binding
+        .agent_key_authorize_event_id
+        .is_some()
+    {
+        let agent = state
+            .agent_pairings()
+            .agent(principal_id.as_str())
+            .await
+            .map_err(|error| AppError::internal(format!("target Agent lookup failed: {error}")))?
+            .ok_or_else(|| AppError::internal("target Agent projection is unavailable"))?;
+        let method = agent
+            .authorized_verification_method
+            .ok_or_else(|| AppError::internal("target Agent verification method is unavailable"))?;
+        (
+            None,
+            Some(principal_id.clone()),
+            Some(arkret_wire::DidUrl::new(method).map_err(|error| {
+                AppError::internal(format!("target Agent verification method invalid: {error}"))
+            })?),
+        )
+    } else {
+        (Some(device_id), None, None)
+    };
     let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
     Ok(KeyPackageClaimRecord {
         claim_id: format!("{}:{claim_nonce}", record.id),
@@ -3271,13 +3477,27 @@ async fn keypackage_claim_record(
         keypackage_digest: Hash::new(record.keypackage_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid keypackage_digest: {error}")))?,
         principal_id,
-        device_id: record.device_id.clone(),
+        device_id,
+        agent_id,
+        agent_verification_method,
         key_package,
         capabilities: record.capabilities.clone(),
         capabilities_digest: Hash::new(record.capabilities_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
-        device_authorize_event_id: trust_binding.device_authorize_event_id,
-        agent_key_authorize_event_id: trust_binding.agent_key_authorize_event_id,
+        device_authorize_event_id: trust_binding
+            .device_authorize_event_id
+            .map(arkret_wire::EventId::new)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("device authorization Event id invalid: {error}"))
+            })?,
+        agent_key_authorize_event_id: trust_binding
+            .agent_key_authorize_event_id
+            .map(arkret_wire::EventId::new)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("Agent authorization Event id invalid: {error}"))
+            })?,
         target_device_signing_key_evidence,
         // Native Agent evidence is supplied by the closed snapshot producer;
         // fail-closed outcome validation below prevents an Agent leaf from
@@ -3394,6 +3614,7 @@ mod trust_binding_tests {
             soland_storage_postgres::Db { pool: None },
         );
         let principal = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let principal_core = arkret_wire::project_full_id_to_core_id(&principal).unwrap();
         let device = arkret_identifiers::DeviceId::new(
             "ak:device:01904100-0000-7000-8000-00000000000f".to_owned(),
         )
@@ -3416,7 +3637,7 @@ mod trust_binding_tests {
         let authorize_event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            principal.clone(),
+            arkret_wire::ActorId::from(principal_core.clone()),
             1,
             arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),
             json!({
@@ -3473,7 +3694,7 @@ mod trust_binding_tests {
 
         validate_agent_keypackage_upload(
             &state,
-            &principal,
+            &principal_core,
             &authorize_event_id,
             &key_package_bytes,
             &upload.device_signature,

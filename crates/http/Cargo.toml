@@ -48,7 +48,7 @@ arkret-push-policy.workspace = true
 arkret-rate-limit.workspace = true
 arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
 arkret-server.workspace = true
-arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
+arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "service-identity", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["openapi"] }
 arkret-wire.workspace = true
 ed25519-dalek.workspace = true

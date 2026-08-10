@@ -278,7 +278,11 @@ where
             .filter(|(audit, audit_payload)| {
                 matches!(audit_payload.access_kind, AuditAccessedKind::WatchSetOthers)
                     && audit_payload.writer_actor_id.as_str() == actor_id
-                    && audit_payload.target_actor_id.as_ref() == Some(&payload.watcher_actor_id)
+                    && audit_payload.target_actor_id.as_ref().is_some_and(|target| {
+                        arkret_wire::project_full_id_to_core_id(target).is_ok_and(|core| {
+                            arkret_wire::ActorId::from(core) == payload.watcher_actor_id
+                        })
+                    })
                     && audit_payload.target_ref == payload.strand_id.as_str()
                     && audit_payload.target_cell_id.as_ref() == Some(&target_cell_id)
                     && audit_payload

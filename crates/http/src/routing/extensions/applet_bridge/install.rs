@@ -1659,7 +1659,7 @@ mod tests {
         let registration_event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::AppletRegistration.as_str(),
             scope_ref.clone(),
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             1,
             arkret_identifiers::Hlc::new("019041000000-0001-aabbccdd").unwrap(),
             registration_payload_from_package(package).unwrap(),
@@ -1674,7 +1674,7 @@ mod tests {
                 arkret_wire::test_support::raw_event_at(
                     arkret_wire::EventKind::CapabilityGrant.as_str(),
                     scope_ref.clone(),
-                    actor_id.clone(),
+                    crate::test_actor_id(&actor_id),
                     offset as u64 + 2,
                     arkret_identifiers::Hlc::new(format!(
                         "019041000000-{:04x}-aabbccdd",

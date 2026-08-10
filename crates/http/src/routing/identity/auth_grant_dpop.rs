@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_identifiers::{DeviceId, Did};
+use arkret_identifiers::{DeviceId, Did, ServiceId};
 use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
 use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;
@@ -76,12 +76,12 @@ fn unauthenticated(message: &'static str) -> AuthError {
     (StatusCode::UNAUTHORIZED, "unauthenticated", message)
 }
 
-fn configured_service_audience(state: &AppState) -> Result<Did, AuthError> {
-    Did::new(state.service_id().clone()).map_err(|_| {
+fn configured_service_audience(state: &AppState) -> Result<ServiceId, AuthError> {
+    ServiceId::new(state.service_id().clone()).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth_misconfigured",
-            "runtime principal service_id is not a DID",
+            "runtime principal service_id is not a core_id",
         )
     })
 }
@@ -819,7 +819,12 @@ mod tests {
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
-            audience: Did::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
+            audience: arkret_wire::ServiceId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &arkret_wire::FullId::new("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service").unwrap(),
+                )
+                .unwrap(),
+            ),
             scopes: vec![
                 PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
                 format!("{DEVICE_SCOPE_PREFIX}ak:device:0196419b-0000-7000-8000-000000000001"),

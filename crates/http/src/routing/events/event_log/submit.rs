@@ -329,7 +329,7 @@ pub(in crate::routing) struct InternalEventAdmission {
 
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct VerifiedFederatedAgentSignerEvidence {
-    agent_id: arkret_identifiers::Did,
+    agent_id: arkret_wire::ActorId,
     verification_method: arkret_wire::DidUrl,
     public_key: [u8; 32],
 }
@@ -944,7 +944,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain_id.clone(),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(founder.clone()),
-                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(peer),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
+                    peer,
+                ),
             ).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
             (
                 pair_key,
@@ -974,7 +976,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 format!("source service binding is invalid: {error}"),
             )
         })?;
-    if submission.source_service_binding.principal_id != founder_id
+    if submission.source_service_binding.principal_id.as_str() != founder_id.as_str()
         || submission.source_service_binding.service_id.as_str() != state.service_id()
     {
         return Err(SubmitOneError::new(
@@ -1137,13 +1139,14 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             })?;
         }
     }
-    let issuer_service_id = Did::new(state.service_id().clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("service DID is invalid: {error}"),
-        )
-    })?;
+    let issuer_service_id =
+        arkret_wire::ServiceId::new(state.service_id().clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("service DID is invalid: {error}"),
+            )
+        })?;
     verify_accepted_principal_service_binding(&submission.source_service_binding, state)
         .await
         .map_err(|error| {
@@ -1153,7 +1156,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 format!("source service binding is invalid: {error}"),
             )
         })?;
-    if submission.source_service_binding.principal_id != founder_id
+    if submission.source_service_binding.principal_id.as_str() != founder_id.as_str()
         || submission.source_service_binding.service_id != issuer_service_id
         || submission.source_service_binding.accepted_at > accepted_at
         || submission
@@ -1672,7 +1675,7 @@ async fn existing_pcr_genesis_outcome(
         .find(|receipt| {
             receipt.issuer.as_str() == state.service_id()
                 && receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                    scope.principal_id == request.principal_id
+                    scope.principal_id == request.identity_creation_control_proof.full_id
                         && scope.realm_id == request.pcr_realm_id
                         && scope.audience == request.account_authority_id
                         && scope.did_version_id == request.did_version_id
@@ -1718,7 +1721,7 @@ async fn validate_identity_creation_control_proof(
     }
     let mut history = state
         .dids()
-        .log_events(request.principal_id.as_str())
+        .log_events(request.identity_creation_control_proof.full_id.as_str())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -1741,7 +1744,7 @@ async fn validate_identity_creation_control_proof(
                 "PCR genesis requires the accepted pinned DID version",
             )
         })?;
-    if pinned.did != request.principal_id.as_str() {
+    if pinned.did != request.identity_creation_control_proof.full_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
@@ -1779,7 +1782,7 @@ async fn validate_identity_creation_control_proof(
         .map(|entry| entry.operation.clone())
         .collect::<Vec<_>>();
     let history_point = arkret_signatures::webvh::validate_webvh_history_at(
-        &request.principal_id,
+        &request.identity_creation_control_proof.full_id,
         &native_history,
         pinned_version_time,
     )
@@ -2285,7 +2288,12 @@ pub(crate) async fn submit_federation_events(
                 .signing_key_binding;
             let Some(event) = events.iter().find(|event| {
                 event.applet_id.is_none()
-                    && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
+                    && event
+                        .executed_by
+                        .as_ref()
+                        .unwrap_or(&event.actor_id)
+                        .as_str()
+                        == binding.agent_id.as_str()
                     && event.proofs.iter().any(|proof| {
                         proof.verification_method == binding.verification_method.as_str()
                     })
@@ -3033,7 +3041,7 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let source_service_id_typed = match Did::new(source_service_id.to_owned()) {
+    let source_service_id_typed = match arkret_wire::ServiceId::new(source_service_id.to_owned()) {
         Ok(value) => value,
         Err(_) => {
             render_error(
@@ -3061,7 +3069,8 @@ async fn submit_direct_conversation_federation(
             .source_service_continuity
             .accepted_binding
             .principal_id
-            != receipt.founder_id
+            .as_str()
+            != receipt.founder_id.as_str()
         || submission
             .source_service_continuity
             .accepted_binding
@@ -3270,7 +3279,7 @@ async fn verify_accepted_principal_service_binding(
 
 async fn verify_principal_service_binding_continuity(
     continuity: &arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingContinuity,
-    transport_source: &Did,
+    transport_source: &arkret_wire::ServiceId,
     state: &AppState,
 ) -> Result<(), String> {
     continuity
@@ -3282,11 +3291,26 @@ async fn verify_principal_service_binding_continuity(
         let input = edge
             .signing_input_bytes()
             .map_err(|error| error.to_string())?;
-        for (proof, issuer) in [
-            (&edge.principal_proof, &edge.principal_id),
-            (&edge.previous_service_proof, &edge.previous_service_id),
-            (&edge.new_service_proof, &edge.new_service_id),
+        for (proof, issuer_core) in [
+            (&edge.principal_proof, edge.principal_id.as_str()),
+            (
+                &edge.previous_service_proof,
+                edge.previous_service_id.as_str(),
+            ),
+            (&edge.new_service_proof, edge.new_service_id.as_str()),
         ] {
+            let issuer = arkret_identity::verification_method_did(&proof.verification_method)
+                .map_err(|error| error.to_string())?;
+            if arkret_wire::project_full_id_to_core_id(&issuer)
+                .map_err(|error| error.to_string())?
+                .as_str()
+                != issuer_core
+            {
+                return Err(
+                    "service-binding cutover proof controller does not project to issuer core_id"
+                        .to_owned(),
+                );
+            }
             crate::jws_verify::verify_did_controlled_ed25519_signature_async(
                 &input,
                 proof.jws.as_str(),
@@ -3470,14 +3494,13 @@ mod managed_agent_pcr_batch_tests {
         let mut event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            agent_id,
+            crate::test_actor_id(&agent_id),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             payload,
         )
         .unwrap();
-        event.executed_by =
-            Some(arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap());
+        event.executed_by = Some(crate::test_actor_id_str("did:web:alice.example"));
         event.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );

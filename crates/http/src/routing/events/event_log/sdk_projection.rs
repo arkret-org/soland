@@ -380,7 +380,7 @@ fn sdk_event_from_record(
     let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
     let event_id = EventId::new(record.event_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let actor_id = arkret_identifiers::Did::new(record.actor_id.clone())
+    let actor_id = arkret_wire::ActorId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let created_at = object
         .get("created_at")
@@ -484,7 +484,7 @@ fn sdk_event_from_record(
         executed_by: object
             .get("executed_by")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::Did::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_wire::ActorId::new(value.to_owned()).ok()),
         authorization_ref: object
             .get("authorization_ref")
             .and_then(Value::as_str)

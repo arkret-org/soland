@@ -677,7 +677,7 @@ fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEven
 
 fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
-    actor_id: Did,
+    actor_id: arkret_wire::ActorId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
@@ -824,7 +824,7 @@ async fn prepare_sidecar(
         });
     }
 
-    let controller_id = Did::new(session.actor.clone())
+    let controller_id = arkret_wire::ActorId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
@@ -1350,7 +1350,7 @@ mod tests {
                 .unwrap();
         let event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarCreate>(
             arkret_wire::ScopeRef::Realm { realm_id },
-            Did::new("did:web:example.com:users:alice").unwrap(),
+            crate::test_actor_id_str("did:web:example.com:users:alice"),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             Vec::new(),

@@ -72,8 +72,8 @@ pub fn protocol_router() -> Router {
         .push(
             Router::with_path("gate")
                 .push(auth::protocol_account_router())
-                // Spec `account_auth` surface group: account registration on
-                // the gate trust segment (`ak.gate.account.command.register`).
+                // Deployment-private durable account projection, invoked by
+                // the Account Authority after canonical registration.
                 .push(account::protocol_gate_router())
                 .push(Router::with_path("account").push(agents::agent_key_pair_router())),
         )

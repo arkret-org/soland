@@ -705,7 +705,7 @@ pub async fn verify_principal_authorized_ed25519_signature_async(
 pub async fn verify_principal_authorized_event_proof_async(
     proof: &arkret_wire::Proof,
     envelope_bytes: &[u8],
-    actor_id: &Did,
+    actor_id: &arkret_wire::ActorId,
     verification_method: &str,
     principal_id: &str,
     state: &AppState,
@@ -921,14 +921,23 @@ pub async fn federated_event_signer_evidence(
     state: &AppState,
     event: &arkret_wire::Event,
 ) -> Result<Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>, String> {
-    let actor_id = event.actor_id.as_str();
-    let prefix = format!("{actor_id}#");
     let mut evidence = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for proof in &event.proofs {
-        let Some(device_id) = proof.verification_method.strip_prefix(&prefix) else {
+        let Some((method_full_id, device_id)) = proof.verification_method.rsplit_once('#') else {
             continue;
         };
+        let Ok(method_full_id) = arkret_wire::FullId::new(method_full_id.to_owned()) else {
+            continue;
+        };
+        let Ok(method_actor_id) = arkret_wire::project_full_id_to_core_id(&method_full_id)
+            .map(arkret_wire::ActorId::from)
+        else {
+            continue;
+        };
+        if method_actor_id != event.actor_id {
+            continue;
+        }
         let Ok(device_id) = arkret_identifiers::DeviceId::new(device_id.to_owned()) else {
             // DID-control methods remain independently resolvable and do not
             // use principal device-directory evidence.
@@ -952,7 +961,7 @@ pub async fn federated_event_signer_evidence(
 
 pub async fn federated_device_signing_key_evidence(
     state: &AppState,
-    actor_id: &arkret_identifiers::Did,
+    actor_id: &arkret_wire::ActorId,
     device_id: &arkret_identifiers::DeviceId,
     verification_method: &str,
 ) -> Result<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence, String> {
@@ -964,8 +973,22 @@ pub async fn federated_device_signing_key_evidence(
         FederatedDeviceStatus,
     };
 
-    if verification_method != format!("{actor_id}#{device_id}") {
-        return Err("device signing verification method is not actor_id#device_id".to_owned());
+    let (method_full_id, method_fragment) = verification_method
+        .rsplit_once('#')
+        .ok_or_else(|| "device signing verification method has no fragment".to_owned())?;
+    let method_full_id = arkret_wire::FullId::new(method_full_id.to_owned()).map_err(|error| {
+        format!("device signing verification method controller is invalid: {error}")
+    })?;
+    let method_actor_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+            format!("device signing verification method controller cannot be projected: {error}")
+        })?,
+    );
+    if &method_actor_id != actor_id || method_fragment != device_id.as_str() {
+        return Err(
+            "device signing verification method controller/fragment does not bind actor and device"
+                .to_owned(),
+        );
     }
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
@@ -1077,10 +1100,17 @@ pub async fn federated_device_signing_key_evidence(
         .into_iter()
         .find(|receipt| {
             receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                scope.principal_id == *actor_id && scope.realm_id == control_realm
+                arkret_wire::project_full_id_to_core_id(&scope.principal_id).is_ok_and(|core| {
+                    arkret_wire::ActorId::from(core) == *actor_id && scope.realm_id == control_realm
+                })
             })
         })
         .ok_or_else(|| "PCR genesis receipt is unavailable".to_owned())?;
+    let principal_full_id = genesis_receipt
+        .pcr_genesis_scope()
+        .map_err(|error| format!("PCR genesis receipt scope is invalid: {error}"))?
+        .principal_id
+        .clone();
     let realm_id = control_realm;
     let chain_digests = authorization_chain
         .iter()
@@ -1116,7 +1146,7 @@ pub async fn federated_device_signing_key_evidence(
         })?;
 
     let projection = FederatedCurrentDeviceProjection {
-        principal_id: actor_id.clone(),
+        principal_id: principal_full_id,
         device_id: device_id.clone(),
         device_record: FederatedDeviceRecord {
             algorithms: BTreeMap::new(),
@@ -1221,8 +1251,11 @@ fn federated_range_completeness_evidence(
     let (root, covered_event_ids) =
         arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
             .map_err(|error| format!("PCR range root failed: {error}"))?;
-    let issuer = arkret_identifiers::Did::new(state.service_id().clone())
-        .map_err(|error| format!("service issuer DID is invalid: {error}"))?;
+    let issuer = state.service_resolution_commitment().full_id.clone();
+    let issuer_actor = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&issuer)
+            .map_err(|error| format!("service issuer projection is invalid: {error}"))?,
+    );
     let verification_method = arkret_wire::DidUrl::new(format!("{issuer}#notary-key"))
         .map_err(|error| format!("service notary method is invalid: {error}"))?;
     let observed_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
@@ -1284,7 +1317,7 @@ fn federated_range_completeness_evidence(
         jws: String::new(),
     };
     let binding = proof
-        .canonical_binding_bytes(&issuer)
+        .canonical_binding_bytes(&issuer_actor)
         .map_err(|error| error.to_string())?;
     proof.jws = signer
         .sign_payload(&binding)
@@ -1298,7 +1331,7 @@ fn federated_range_completeness_evidence(
     };
     let actor_seq = accepted_events
         .iter()
-        .filter(|event| event.actor_id == issuer)
+        .filter(|event| event.actor_id == issuer_actor)
         .map(|event| event.actor_seq)
         .max()
         .map_or(0, |seq| seq.saturating_add(1));
@@ -1310,7 +1343,7 @@ fn federated_range_completeness_evidence(
         scope_ref: ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        actor_id: issuer,
+        actor_id: issuer_actor,
         executed_by: None,
         authorization_ref: None,
         applet_id: None,
@@ -1940,7 +1973,10 @@ mod did_binding_tests {
         seed_binding(&state, &did, &verification_method, &document);
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
-        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let actor_id = crate::test_actor_id(&did);
+        let binding_bytes = proof
+            .canonical_binding_bytes(&actor_id)
+            .expect("binding bytes");
         let jws = detached_jws_with_header(
             &key,
             &serde_json::json!({"alg": "Ed25519", "kid": verification_method}),
@@ -1963,7 +1999,7 @@ mod did_binding_tests {
         verify_principal_authorized_event_proof_async(
             &proof,
             &envelope_bytes,
-            &did,
+            &actor_id,
             &verification_method,
             did.as_str(),
             &state,
@@ -1984,7 +2020,10 @@ mod did_binding_tests {
         seed_binding(&state, &did, &verification_method, &document);
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
-        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let actor_id = crate::test_actor_id(&did);
+        let binding_bytes = proof
+            .canonical_binding_bytes(&actor_id)
+            .expect("binding bytes");
         let jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "ES256"}), &binding_bytes);
         proof.jws = jws.clone();
@@ -2002,7 +2041,7 @@ mod did_binding_tests {
         verify_principal_authorized_event_proof_async(
             &proof,
             &envelope_bytes,
-            &did,
+            &actor_id,
             &verification_method,
             did.as_str(),
             &state,
@@ -2024,14 +2063,17 @@ mod did_binding_tests {
         seed_binding(&state, &did, &verification_method, &document);
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
-        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let actor_id = crate::test_actor_id(&did);
+        let binding_bytes = proof
+            .canonical_binding_bytes(&actor_id)
+            .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
 
         verify_principal_authorized_event_proof_async(
             &proof,
             &envelope_bytes,
-            &did,
+            &actor_id,
             &verification_method,
             did.as_str(),
             &state,
@@ -2053,14 +2095,17 @@ mod did_binding_tests {
         seed_binding(&state, &did, &verification_method, &document);
 
         let (_, mut proof) = event_proof_fixture(&verification_method);
-        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let actor_id = crate::test_actor_id(&did);
+        let binding_bytes = proof
+            .canonical_binding_bytes(&actor_id)
+            .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
 
         verify_principal_authorized_event_proof_async(
             &proof,
             br#"{"actor_id":"did:web:principal.example","kind":"ak.other.event"}"#,
-            &did,
+            &actor_id,
             &verification_method,
             did.as_str(),
             &state,

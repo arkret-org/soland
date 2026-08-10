@@ -33,8 +33,9 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     )
     .unwrap();
     let now = chrono::Utc::now();
-    let alice = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
-    let bob = arkret_identifiers::Did::new("did:web:bob.example".to_owned()).unwrap();
+    let alice_full = arkret_identifiers::FullId::new("did:web:alice.example".to_owned()).unwrap();
+    let alice = crate::test_actor_id(&alice_full);
+    let bob = crate::test_actor_id_str("did:web:bob.example");
     let mut realm_create = op(
         realm_id.clone(),
         "000000000691",
@@ -44,7 +45,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
             arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
                 .unwrap(),
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(alice.clone()),
+            arkret_wire::notary::NotaryValue::single_did(alice_full),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
         ).unwrap())
@@ -131,7 +132,7 @@ fn apply_with_registered_cell_writes(
         arkret_wire::ScopeRef::Realm {
             realm_id: operation.realm_id.clone(),
         },
-        arkret_identifiers::Did::new(actor).unwrap(),
+        operation.context.sender.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
         operation.payload.clone(),
@@ -994,7 +995,12 @@ async fn register_native_agent_membership_context(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        arkret_identifiers::Did::new(agent.to_owned()).unwrap(),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_identifiers::FullId::new(agent.to_owned()).unwrap(),
+            )
+            .unwrap(),
+        ),
         1,
         arkret_identifiers::Hlc::new("019041000000-0001-000007d2").unwrap(),
         authorize_payload.clone(),

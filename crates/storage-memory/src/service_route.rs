@@ -47,6 +47,119 @@ fn artifact_key(key: &ServiceResolutionArtifactKey) -> PersistenceResult<String>
         .map_err(|error| PersistenceError::Internal(error.to_string()))
 }
 
+fn record_digest(value: &ServiceResolutionRecord) -> PersistenceResult<Hash> {
+    Hash::new(
+        arkret_canonical::canonical_sha256(value)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn notice_digest(value: &ServiceRouteHandoverNotice) -> PersistenceResult<Hash> {
+    Hash::new(
+        arkret_canonical::canonical_sha256(value)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn advance_mirror_sequence(
+    state: &mut RouteState,
+    entry: &ServiceResolutionMirrorEntry,
+) -> Result<(), ServiceResolutionMirrorCommit> {
+    if let Some(record) = entry.request.service_resolution_record.as_ref() {
+        let digest = record_digest(record)
+            .expect("validated service-resolution artifacts are canonically serializable");
+        let key = service_key(&record.record.service_id, &record.record.service_kind);
+        match state.floors.get(&key) {
+            None if record.record.record_sequence == 0 => {}
+            Some(current)
+                if current.record_sequence == record.record.record_sequence
+                    && current.record_digest == digest =>
+            {
+                return Ok(());
+            }
+            Some(current) if current.record_sequence == record.record.record_sequence => {
+                return Err(ServiceResolutionMirrorCommit::SequenceConflict {
+                    accepted_digest: current.record_digest.clone(),
+                });
+            }
+            Some(current)
+                if record.record.record_sequence == current.record_sequence + 1
+                    && record.record.previous_record_digest.as_ref()
+                        == Some(&current.record_digest) => {}
+            _ => return Err(ServiceResolutionMirrorCommit::SequenceRejected),
+        }
+        state.floors.insert(
+            key,
+            ServiceResolutionLastSeenFloor {
+                service_id: record.record.service_id.clone(),
+                service_kind: record.record.service_kind.clone(),
+                record_sequence: record.record.record_sequence,
+                record_digest: digest,
+                verified_at: entry.accepted_at,
+            },
+        );
+        return Ok(());
+    }
+
+    if let Some(notice) = entry.request.service_route_handover_notice.as_ref() {
+        let floor_key = service_key(&notice.notice.service_id, &notice.notice.service_kind);
+        let Some(floor) = state.floors.get(&floor_key) else {
+            return Err(ServiceResolutionMirrorCommit::SequenceRejected);
+        };
+        if notice.notice.from_record_sequence != floor.record_sequence
+            || notice.notice.from_record_digest != floor.record_digest
+        {
+            return Err(ServiceResolutionMirrorCommit::SequenceRejected);
+        }
+        let digest = notice_digest(notice)
+            .expect("validated service-route notices are canonically serializable");
+        let key = (
+            notice.notice.service_id.as_str().to_owned(),
+            notice.notice.service_kind.clone(),
+            notice.notice.handover_id.clone(),
+        );
+        match state.notices.get(&key) {
+            None if notice.notice.notice_revision == 0 => {}
+            Some(current)
+                if current.notice_revision == notice.notice.notice_revision
+                    && current.notice_digest == digest =>
+            {
+                return Ok(());
+            }
+            Some(current) if current.notice_revision == notice.notice.notice_revision => {
+                return Err(ServiceResolutionMirrorCommit::SequenceConflict {
+                    accepted_digest: current.notice_digest.clone(),
+                });
+            }
+            Some(current)
+                if notice.notice.notice_revision == current.notice_revision + 1
+                    && notice.notice.previous_notice_digest.as_ref()
+                        == Some(&current.notice_digest) => {}
+            _ => return Err(ServiceResolutionMirrorCommit::SequenceRejected),
+        }
+        state.notices.insert(
+            key,
+            ServiceRouteNoticeState {
+                service_id: notice.notice.service_id.clone(),
+                service_kind: notice.notice.service_kind.clone(),
+                handover_id: notice.notice.handover_id.clone(),
+                notice_revision: notice.notice.notice_revision,
+                notice_digest: digest,
+                state: notice.notice.state,
+                from_record_sequence: notice.notice.from_record_sequence,
+                from_record_digest: notice.notice.from_record_digest.clone(),
+                expires_at: notice.notice.expires_at,
+                verified_at: entry.accepted_at,
+            },
+        );
+        return Ok(());
+    }
+
+    Err(ServiceResolutionMirrorCommit::SequenceRejected)
+}
+
 #[async_trait]
 impl ServiceRouteStore for MemoryServiceRouteStore {
     async fn last_seen_floor(
@@ -146,6 +259,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
         &self,
         entry: ServiceResolutionMirrorEntry,
     ) -> PersistenceResult<ServiceResolutionMirrorCommit> {
+        entry.validate()?;
         let transport = (
             entry.source_service_id.as_str().to_owned(),
             entry.realm_id.as_str().to_owned(),
@@ -172,6 +286,9 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
             return Ok(ServiceResolutionMirrorCommit::ArtifactConflict {
                 accepted_digest: current.artifact_digest.clone(),
             });
+        }
+        if let Err(outcome) = advance_mirror_sequence(&mut state, &entry) {
+            return Ok(outcome);
         }
         state
             .request_by_artifact
@@ -295,7 +412,7 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::{ServiceResolutionPublishAckCore, ServiceResolutionRecordCore};
-    use arkret_wire::{Base64UrlString, DidUrl, FullId, ProtocolSignature, RequestId};
+    use arkret_wire::{Base64UrlString, DidUrl, FullId, Hash, ProtocolSignature, RequestId};
     use chrono::{Duration, TimeZone as _, Utc};
 
     use super::*;
@@ -471,12 +588,50 @@ mod tests {
             store.commit_mirror(first.clone()).await.unwrap(),
             ServiceResolutionMirrorCommit::Stored(_)
         ));
+        let floor = store
+            .last_seen_floor(
+                &first
+                    .request
+                    .service_resolution_record
+                    .as_ref()
+                    .unwrap()
+                    .record
+                    .service_id,
+                "principal_server",
+            )
+            .await
+            .unwrap()
+            .expect("stored ACK and floor commit atomically");
+        assert_eq!(floor.record_sequence, 0);
+        assert_eq!(floor.record_digest, artifact_digest);
         assert!(matches!(
             store.commit_mirror(first.clone()).await.unwrap(),
             ServiceResolutionMirrorCommit::Replay(_)
         ));
         let mut transport_conflict = first.clone();
-        transport_conflict.request_digest = hash('b');
+        transport_conflict
+            .request
+            .service_resolution_record
+            .as_mut()
+            .unwrap()
+            .record
+            .base_url = "https://conflicting-route.example/".to_owned();
+        let conflicting_artifact_digest = Hash::new(
+            arkret_canonical::canonical_sha256(
+                transport_conflict
+                    .request
+                    .service_resolution_record
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        transport_conflict.request.artifact_digest = conflicting_artifact_digest.clone();
+        transport_conflict.artifact_digest = conflicting_artifact_digest.clone();
+        transport_conflict.request_digest = transport_conflict.request.canonical_digest().unwrap();
+        transport_conflict.ack.ack.request_digest = transport_conflict.request_digest.clone();
+        transport_conflict.ack.ack.artifact_digest = conflicting_artifact_digest;
         assert_eq!(
             store.commit_mirror(transport_conflict).await.unwrap(),
             ServiceResolutionMirrorCommit::TransportConflict

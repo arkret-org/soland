@@ -67,7 +67,7 @@ pub struct NotaryOutcome {
 #[derive(Clone, Debug)]
 struct AcceptedControlMove {
     event_digest: Hash,
-    actor_id: arkret_identifiers::Did,
+    actor_id: arkret_wire::ActorId,
     effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 
@@ -1616,7 +1616,7 @@ mod tests {
         let event_ops = vec![(
             notary_cell.clone(),
             IssuedOp {
-                issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                issuer: crate::test_actor_id_str("did:web:alice.example"),
                 op: SealedOp::new(
                     move_id.clone(),
                     arkret_wire::cba::LatticeOp {
@@ -1645,7 +1645,7 @@ mod tests {
         let remote_event_ops = vec![(
             notary_cell,
             IssuedOp {
-                issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                issuer: crate::test_actor_id_str("did:web:alice.example"),
                 op: SealedOp::new(
                     move_id,
                     arkret_wire::cba::LatticeOp {

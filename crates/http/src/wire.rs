@@ -545,7 +545,6 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
-    "ak.gate.account.command.register",
     "ak.gate.account.command.pair_device",
     "ak.gate.account.command.logout",
     "ak.gate.account.command.revoke_session",
@@ -855,6 +854,10 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
+    let service_id = arkret_wire::ServiceId::from(
+        arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
+            .expect("service resolution FullId must project to a stable service id"),
+    );
     let plaintext_visibility = arkret_models_discovery::service_description::PlaintextVisibility {
         data_classes: vec![
             arkret_wire::PlaintextDataClassKind::MessageContent,
@@ -897,10 +900,7 @@ pub fn describe(
     };
 
     let mut description = ServiceDescribe {
-        service_id: arkret_wire::ServiceId::from(
-            arkret_wire::project_full_id_to_core_id(&service_resolution.full_id)
-                .expect("service resolution FullId must project to a stable service id"),
-        ),
+        service_id: service_id.clone(),
         service_resolution: service_resolution.clone(),
         trust_domain: trust_domain
             .parse()

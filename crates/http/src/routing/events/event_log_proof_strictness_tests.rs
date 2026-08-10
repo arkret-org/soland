@@ -993,7 +993,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
             )
             .unwrap(),
         },
-        arkret_identifiers::Did::new(session.actor.clone()).unwrap(),
+        crate::test_actor_id_str(&session.actor),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
         json!({"object": {"id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC"}}),
@@ -1022,7 +1022,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
             )
             .unwrap(),
         },
-        arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
         7,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
         json!({"z": 1, "a": {"b": 2, "a": 1}}),
@@ -1051,7 +1051,7 @@ fn event_canonical_bytes_reject_fractional_numbers() {
             )
             .unwrap(),
         },
-        arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
         7,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
         json!({"rank": 1}),
@@ -2357,8 +2357,7 @@ fn strictness_issued(
     op: arkret_state::lattice::SealedOp,
 ) -> arkret_state::lattice::ordered_log::IssuedOp {
     arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example".to_owned())
-            .unwrap(),
+        issuer: crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
         op,
     }
 }

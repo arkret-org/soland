@@ -3,7 +3,9 @@ use arkret_models_identity::{
     OrganizationRegistrationOutcome, OrganizationRegistrationReceipt,
     OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
-use arkret_wire::{Did, Hash, PayloadProof, ProofContextId};
+use arkret_wire::{
+    CoreId, Did, FullId, Hash, PayloadProof, ProofContextId, ServiceId, project_full_id_to_core_id,
+};
 use chrono::{Duration, Utc};
 
 use super::{
@@ -35,7 +37,9 @@ pub async fn assert_organization_registration_store_contract(
     // millisecond wire format, so a sub-millisecond `now` would compare
     // unequal after a durable JSON round-trip.
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
-    let organization_id = test_did("zOrg", namespace);
+    let organization_full_id = test_full_id("zOrg", namespace);
+    let organization_id = project_full_id_to_core_id(&organization_full_id)
+        .expect("organization full DID projects through the registered adapter");
     let first_admin = test_did("zAdmin", namespace);
     let second_admin = test_did("zAdminNext", namespace);
     let first_scopes = vec![OrganizationRegistrationScope::OrganizationProfileManage];
@@ -48,6 +52,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-1",
         &organization_id,
+        &organization_full_id,
         &first_admin,
         &first_scopes,
         now,
@@ -63,6 +68,7 @@ pub async fn assert_organization_registration_store_contract(
     let digest_1 = test_hash(&format!("{namespace}:request:ensure-1"));
     let first_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &first_admin,
         &first_scopes,
         1,
@@ -119,6 +125,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-unchanged",
         &organization_id,
+        &organization_full_id,
         &first_admin,
         &first_scopes,
         now + Duration::seconds(3),
@@ -147,6 +154,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-2",
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(5),
@@ -157,6 +165,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare replacement challenge");
     let second_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         2,
@@ -277,6 +286,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "refresh-2",
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(9),
@@ -287,6 +297,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare refresh challenge");
     let refreshed_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         2,
@@ -323,6 +334,7 @@ pub async fn assert_organization_registration_store_contract(
         .clone();
     let revoked_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         2,
@@ -360,6 +372,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "refresh-revoked",
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(12),
@@ -370,6 +383,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare terminal refresh challenge");
     let impossible_refresh = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         2,
@@ -411,6 +425,7 @@ pub async fn assert_organization_registration_store_contract(
         namespace,
         "ensure-3",
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         now + Duration::seconds(14),
@@ -421,6 +436,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("prepare post-revocation generation");
     let third_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         3,
@@ -441,6 +457,7 @@ pub async fn assert_organization_registration_store_contract(
         .expect("revocation opens the next generation");
     let deactivated_outcome = registration_outcome(
         &organization_id,
+        &organization_full_id,
         &second_admin,
         &second_scopes,
         3,
@@ -517,19 +534,25 @@ fn test_hash_hex(seed: &str) -> String {
         .to_owned()
 }
 
-fn test_did(label: &str, namespace: &str) -> Did {
-    Did::new(format!(
+fn test_full_id(label: &str, namespace: &str) -> FullId {
+    FullId::new(format!(
         "did:webvh:{label}:{}.example",
         &test_hash_hex(namespace)[..20]
     ))
-    .expect("contract test DID is valid")
+    .expect("contract test full DID is valid")
+}
+
+fn test_did(label: &str, namespace: &str) -> CoreId {
+    project_full_id_to_core_id(&test_full_id(label, namespace))
+        .expect("contract test full DID projects to a core id")
 }
 
 fn registration_challenge(
     namespace: &str,
     label: &str,
-    organization_id: &Did,
-    local_admin_subject: &Did,
+    organization_id: &CoreId,
+    organization_full_id: &FullId,
+    local_admin_subject: &CoreId,
     scopes: &[OrganizationRegistrationScope],
     created_at: chrono::DateTime<Utc>,
 ) -> OrganizationRegistrationChallenge {
@@ -537,9 +560,10 @@ fn registration_challenge(
     OrganizationRegistrationChallenge {
         challenge_id: format!("ak:organization-registration-challenge:{challenge_hash}"),
         organization_id: organization_id.clone(),
+        full_id: organization_full_id.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
-        audience: Did::new("did:webvh:zService:service.example").expect("valid service DID"),
+        audience: ServiceId::new("ak:did_core:webvh:zService").expect("valid service core id"),
         origin: "https://service.example/".to_owned(),
         trust_domain: "service.example".to_owned(),
         local_admin_subject: local_admin_subject.clone(),
@@ -551,8 +575,9 @@ fn registration_challenge(
 
 #[allow(clippy::too_many_arguments)]
 fn registration_outcome(
-    organization_id: &Did,
-    local_admin_subject: &Did,
+    organization_id: &CoreId,
+    organization_full_id: &FullId,
+    local_admin_subject: &CoreId,
     scopes: &[OrganizationRegistrationScope],
     generation: u64,
     status: OrganizationRegistrationStatus,
@@ -560,10 +585,12 @@ fn registration_outcome(
     issued_at: chrono::DateTime<Utc>,
     created: bool,
 ) -> OrganizationRegistrationOutcome {
-    let issuer = Did::new("did:webvh:zService:service.example").expect("valid service DID");
+    let issuer = ServiceId::new("ak:did_core:webvh:zService").expect("valid service core id");
+    let issuer_full = FullId::new("did:webvh:zService:service.example").expect("valid service DID");
     let mut receipt = OrganizationRegistrationReceipt {
         registration_receipt_id: "ak:organization-registration-receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
+        full_id: organization_full_id.clone(),
         registration_generation: generation,
         version_id: version_id.to_owned(),
         log_head_digest: test_hash(&format!(
@@ -583,7 +610,7 @@ fn registration_outcome(
         issuer_service_id: issuer.clone(),
         proof: PayloadProof {
             kind: "detached_jws".to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!("{issuer}#registry-key-1"))
+            verification_method: arkret_wire::DidUrl::new(format!("{issuer_full}#registry-key-1"))
                 .expect("registry verification method is a DID URL"),
             payload_digest: test_hash("placeholder-payload"),
             created_at: issued_at,
@@ -601,6 +628,7 @@ fn registration_outcome(
         .expect("derive registration receipt digest");
     let outcome = OrganizationRegistrationOutcome {
         organization_id: organization_id.clone(),
+        full_id: organization_full_id.clone(),
         registration_generation: generation,
         version_id: version_id.to_owned(),
         registration_receipt: receipt,
@@ -758,7 +786,12 @@ fn canonical_wire_event_record(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("contract realm id"),
         },
-        Did::new(actor_id.to_owned()).expect("contract actor DID"),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &Did::new(actor_id.to_owned()).expect("contract actor DID"),
+            )
+            .expect("contract actor DID projects through a registered adapter"),
+        ),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

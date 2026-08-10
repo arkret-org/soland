@@ -2228,12 +2228,12 @@ mod tests {
         );
         let realm_id = arkret_identifiers::RealmId::from_event_id(&create.event_id);
 
-        let payload = fixture_founding_authorize_payload(&create.actor_id, create.created_at);
-        let authorize_verification_method = format!("{}#{}", create.actor_id, payload.device_id);
+        let payload = fixture_founding_authorize_payload(&principal, create.created_at);
+        let authorize_verification_method = format!("{}#{}", principal, payload.device_id);
         let mut authorize = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            principal,
+            crate::test_actor_id(&principal),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
             serde_json::to_value(payload).unwrap(),
@@ -2277,8 +2277,7 @@ mod tests {
     fn managed_agent_create_cannot_get_self_principal_pcr_context() {
         let mut envelopes = sdk_canonical_self_principal_bootstrap_unit();
         let mut create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
-        create.executed_by =
-            Some(arkret_identifiers::Did::new("did:web:controller.example").unwrap());
+        create.executed_by = Some(crate::test_actor_id_str("did:web:controller.example"));
         create.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
@@ -2302,7 +2301,7 @@ mod tests {
                 )
                 .unwrap(),
             },
-            actor.clone(),
+            crate::test_actor_id(&actor),
             actor_seq,
             arkret_identifiers::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
             envelope

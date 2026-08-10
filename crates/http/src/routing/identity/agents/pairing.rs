@@ -839,17 +839,29 @@ pub(super) fn service_pairing_controller_device_id(
     controller_id: &str,
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
-    if submission.event.actor_id != body.agent_id
+    let agent_core = arkret_wire::project_full_id_to_core_id(&body.agent_id).map_err(|error| {
+        AppError::invalid_param(format!("agent_id cannot be projected: {error}"))
+    })?;
+    if submission.event.actor_id != arkret_wire::ActorId::from(agent_core.clone())
         || submission
             .authorization_lease
             .as_ref()
-            .is_some_and(|lease| lease.actor_id != body.agent_id)
+            .is_some_and(|lease| {
+                arkret_wire::project_full_id_to_core_id(&lease.actor_id)
+                    .map_or(true, |core| core != agent_core)
+            })
     {
         return Err(AppError::capability_denied(
             "delegated pairing Event and any delayed authorization lease must name the managed Agent",
         ));
     }
-    if submission.event.executed_by.as_ref().map(Did::as_str) != Some(controller_id) {
+    if submission
+        .event
+        .executed_by
+        .as_ref()
+        .map(arkret_wire::ActorId::as_str)
+        != Some(controller_id)
+    {
         return Err(AppError::capability_denied(
             "delegated pairing Event executor must match the controller",
         ));
@@ -961,6 +973,10 @@ async fn validate_agent_signing_key_binding_parts(
     runtime_public_key_digest: &str,
     state: &AppState,
 ) -> Result<(), AppError> {
+    let agent_core = arkret_wire::project_full_id_to_core_id(agent_id).map_err(|error| {
+        AppError::invalid_param(format!("agent_id cannot be projected: {error}"))
+    })?;
+    let agent_actor_id = arkret_wire::ActorId::from(agent_core);
     let payload = &authorize_event.payload;
     let expected_binding_digest = payload
         .get("signing_key_binding_digest")
@@ -979,7 +995,7 @@ async fn validate_agent_signing_key_binding_parts(
         ));
     }
     for (matches, field) in [
-        (binding.agent_id == *agent_id, "agent_id"),
+        (binding.agent_id == agent_actor_id, "agent_id"),
         (
             payload.get("key_id").and_then(Value::as_str) == Some(binding.agent_key_id.as_str()),
             "agent_key_id",
@@ -1671,7 +1687,7 @@ fn verify_runtime_key_proof_of_possession(
 ) -> Result<(), AppError> {
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let service_id = Did::new(service_id.to_owned())
+    let service_id = arkret_wire::ServiceId::new(service_id.to_owned())
         .map_err(|error| AppError::internal(format!("configured service_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
     if proof_of_possession.audience != service_id {
@@ -1812,8 +1828,9 @@ pub(super) fn pairing_request_binding_digest(
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
-    let audience = Did::new(service_id.to_owned())
-        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
+    let audience = arkret_wire::ServiceId::new(service_id.to_owned()).map_err(|error| {
+        AppError::internal(format!("configured service core_id invalid: {error}"))
+    })?;
     let runtime_key_binding_digest = Hash::new(
         agent_record
             .runtime_key_binding_digest

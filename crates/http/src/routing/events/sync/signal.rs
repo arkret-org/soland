@@ -404,9 +404,12 @@ async fn verify_signal_agent_proof(
     state: &AppState,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
+    let sender_actor_id = arkret_wire::project_full_id_to_core_id(&envelope.sender_actor_id)
+        .map(arkret_wire::ActorId::from)
+        .map_err(|_| signal_proof_invalid("Signal sender_actor_id cannot be projected"))?;
     let record = state
         .agent_pairings()
-        .agent(envelope.sender_actor_id.as_str())
+        .agent(sender_actor_id.as_str())
         .await
         .map_err(|error| {
             tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
@@ -420,7 +423,7 @@ async fn verify_signal_agent_proof(
         .authorized_signing_key_binding
         .as_ref()
         .ok_or_else(|| signal_proof_invalid("Signal sender Agent has no active signing key"))?;
-    if binding.agent_id != envelope.sender_actor_id
+    if binding.agent_id != sender_actor_id
         || binding.verification_method != envelope.proof.verification_method
         || record.authorized_event_ref.as_deref()
             != Some(binding.agent_key_authorize_event_id.as_str())
@@ -435,7 +438,7 @@ async fn verify_signal_agent_proof(
     let active = state
         .projections()
         .snapshot()
-        .active_agent_key_authorizations(envelope.sender_actor_id.as_str());
+        .active_agent_key_authorizations(sender_actor_id.as_str());
     if !active.iter().any(|(key_id, event_id)| {
         key_id == binding.agent_key_id.as_str()
             && event_id == binding.agent_key_authorize_event_id.as_str()

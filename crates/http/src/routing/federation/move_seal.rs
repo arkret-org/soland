@@ -1782,7 +1782,7 @@ mod seal_delta_tests {
         let mut event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             1,
             arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
             serde_json::json!({}),

@@ -967,8 +967,8 @@ async fn events_frontier(
     // Actor selectors are split deliberately: combined Realm+actor is the
     // only authoring surface; actor-only is a read-only per-Realm aggregate.
     let actor = actor_id.expect("selector presence checked above");
-    let actor_id = Did::new(actor.clone())
-        .map_err(|_| AppError::invalid_param("actor_id must be a valid DID"))?;
+    let actor_id = arkret_wire::ActorId::new(actor.clone())
+        .map_err(|_| AppError::invalid_param("actor_id must be a valid core identity"))?;
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
@@ -1086,7 +1086,7 @@ async fn events_frontier(
 pub(crate) async fn load_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: Did,
+    actor_id: arkret_wire::ActorId,
 ) -> Result<RealmActorFrontierView, AppError> {
     let records = state
         .event_queries()
@@ -1128,7 +1128,7 @@ pub(crate) async fn load_realm_actor_frontier(
 pub(super) fn build_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: Did,
+    actor_id: arkret_wire::ActorId,
     next_actor_seq: u64,
     frontier_event_ids: Vec<EventId>,
 ) -> Result<RealmActorFrontierView, AppError> {

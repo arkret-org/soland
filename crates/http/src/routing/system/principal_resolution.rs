@@ -68,11 +68,12 @@ async fn open_principal_resolution(
             arkret_state::lattice::CellState::Bottom(_) => None,
         })
         .ok_or_else(|| AppError::not_found("principal resolution cell is unavailable"))?;
-    let sealed_projection = serde_json::from_value(sealed_value.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "sealed principal resolution cell is invalid: {error}"
-        ))
-    })?;
+    let sealed_projection: arkret_models_identity::PrincipalResolutionProjection =
+        serde_json::from_value(sealed_value.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "sealed principal resolution cell is invalid: {error}"
+            ))
+        })?;
     if sealed_projection != record.projection {
         return Err(AppError::internal(
             "principal resolution read index does not match the accepted Seal",

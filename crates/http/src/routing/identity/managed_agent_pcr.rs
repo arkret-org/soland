@@ -741,7 +741,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
     let agent_id = event.actor_id.as_str();
     let record = managed_agent_record(state, agent_id).await?;
     if record.controller_id != controller_id
-        || event.executed_by.as_ref().map(Did::as_str) != Some(controller_id)
+        || event.executed_by.as_ref().map(arkret_wire::ActorId::as_str) != Some(controller_id)
         || event.realm_id.as_str() != record.principal_control_realm_id
         || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
     {
@@ -1262,7 +1262,7 @@ mod tests {
         let mut event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
-            Did::new(AGENT).unwrap(),
+            crate::test_actor_id_str(AGENT),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({"object": pcr_genesis()}),

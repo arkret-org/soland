@@ -1601,7 +1601,7 @@ mod tests {
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),
                 },
-                actor_id.clone(),
+                crate::test_actor_id(&actor_id),
                 1,
                 arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
                 serde_json::json!({"fixture_suffix": suffix}),

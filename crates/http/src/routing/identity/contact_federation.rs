@@ -44,6 +44,11 @@ use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::ContactRecord;
 use uuid::Uuid;
 
+fn full_id_projects_to_actor(full_id: &Did, actor_id: &arkret_wire::ActorId) -> bool {
+    arkret_wire::project_full_id_to_core_id(full_id)
+        .is_ok_and(|core| arkret_wire::ActorId::from(core) == *actor_id)
+}
+
 use super::now;
 use crate::state::AppState;
 
@@ -187,7 +192,10 @@ async fn peer_contacts_submit(
                 ))
             })?;
             if request_receipt.core.request_event_ref != signed_event.event_id
-                || request_receipt.core.holder.subject_id() != &signed_event.actor_id
+                || !full_id_projects_to_actor(
+                    request_receipt.core.holder.subject_id(),
+                    &signed_event.actor_id,
+                )
                 || request_receipt.core.issuer.as_str() != source_service_id
                 || request_receipt.core.request_digest
                     != Hash::new(signed_event.event_digest().map_err(|error| {
@@ -235,7 +243,7 @@ async fn peer_contacts_submit(
                     ))
                 })?;
             if response_receipt.response_event_ref != signed_event.event_id
-                || response_receipt.issuer != signed_event.actor_id
+                || !full_id_projects_to_actor(&response_receipt.issuer, &signed_event.actor_id)
                 || response_receipt.response_digest
                     != Hash::new(signed_event.event_digest().map_err(|error| {
                         AppError::internal(format!("Contact response Event digest: {error}"))
@@ -282,7 +290,7 @@ async fn peer_contacts_submit(
                     ))
                 })?;
             if reject_receipt.reject_event_ref != signed_event.event_id
-                || reject_receipt.issuer != signed_event.actor_id
+                || !full_id_projects_to_actor(&reject_receipt.issuer, &signed_event.actor_id)
                 || reject_receipt.reject_digest
                     != Hash::new(signed_event.event_digest().map_err(|error| {
                         AppError::internal(format!("Contact reject Event digest: {error}"))
@@ -370,7 +378,7 @@ async fn peer_contacts_submit(
         | PeerContactSubmitRequestBody::Tombstone { current_proof, .. } => Some(current_proof),
         _ => None,
     } {
-        if current_proof.issuer != signed_event.actor_id
+        if !full_id_projects_to_actor(&current_proof.issuer, &signed_event.actor_id)
             || current_proof.head_event_ref != signed_event.event_id
             || current_proof.head_digest
                 != Hash::new(signed_event.event_digest().map_err(|error| {
@@ -1365,7 +1373,7 @@ fn validate_contact_lineage_carrier(
     terminal: bool,
 ) -> Result<(), AppError> {
     if lineage.event_ref != event.event_id
-        || lineage.issuer.subject_id() != &event.actor_id
+        || !full_id_projects_to_actor(lineage.issuer.subject_id(), &event.actor_id)
         || lineage.basis_id != current_proof.basis_id
         || current_proof.head_event_ref != event.event_id
         || terminal != lineage.terminal.unwrap_or(false)
@@ -1664,9 +1672,9 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
             subject_id: Did::new(peer.to_owned()).map_err(|error| {
                 AppError::internal(format!("glare recipient DID invalid: {error}"))
             })?,
-            recipient_service_id: Did::new(peer_service_id.to_owned()).map_err(|error| {
-                AppError::internal(format!("glare recipient service DID invalid: {error}"))
-            })?,
+            recipient_service_id: arkret_wire::ServiceId::new(peer_service_id.to_owned()).map_err(
+                |error| AppError::internal(format!("glare recipient service DID invalid: {error}")),
+            )?,
             recipient_service_kind: None,
         },
     };

@@ -4,7 +4,7 @@
 //! online locator resolver from `sync/invite-addressing.md`.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{Did, Hash, InviteLocatorId};
+use arkret_identifiers::{CoreId, Did, Hash, InviteLocatorId, ServiceId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
     InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody, InviteLocatorIssueOutcome,
@@ -20,9 +20,9 @@ use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
 use arkret_models_discovery::DirectoryIntent;
-use arkret_models_identity::HandleClaim;
 use arkret_models_identity::handle::{Handle, HandleBindingState};
 use arkret_models_identity::proof::DetachedPayloadProof;
+use arkret_models_identity::{HandleClaim, ServiceResolutionCarrier};
 use arkret_wire::{
     AccountDataKey, InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface,
     UnknownInviteAction,
@@ -271,7 +271,7 @@ async fn peer_invites_submit(
     // `consent_grant` to `explicit_address` when the grant cannot be
     // verified), then apply blocklist + allowlist + behavior to pick a
     // receive action and a graded-disclosure outcome.
-    let policy = resolve_invite_receive_policy(state, &subject_id);
+    let policy = resolve_core_invite_receive_policy(state, &subject_id)?;
     let decision = evaluate_invite_receive(
         state,
         &policy,
@@ -536,20 +536,29 @@ async fn resolve_invite_locator(
         .map_err(|error| AppError::internal(format!("invite locator resolve: {error}")))?
         .ok_or_else(invite_locator_not_found)?;
     let subject_id =
-        Did::new(locator_ref.subject_id.clone()).map_err(|_| invite_locator_not_found())?;
+        CoreId::new(locator_ref.subject_id.clone()).map_err(|_| invite_locator_not_found())?;
     let issued_at = locator_ref.issued_at;
     let expires_at = locator_ref.expires_at;
     let locator_ref_digest = Hash::new(locator_ref.token_digest.clone())
         .map_err(|error| AppError::internal(format!("locator_ref_digest invalid: {error}")))?;
     let display_hint = locator_ref.display_hint;
-    let recipient_service_id = Did::new(locator_ref.recipient_service_id).map_err(|error| {
-        AppError::internal(format!(
-            "configured service DID invalid for principal locator: {error}"
-        ))
-    })?;
+    let recipient_service_id =
+        ServiceId::new(locator_ref.recipient_service_id).map_err(|error| {
+            AppError::internal(format!(
+                "configured service DID invalid for principal locator: {error}"
+            ))
+        })?;
     let mut locator = PrincipalLocator {
         schema: arkret_wire::SchemaId::PRINCIPAL_LOCATOR_V1.to_owned(),
         subject_id,
+        service_resolution: ServiceResolutionCarrier::CurrentRecordUrl {
+            current_record_url: format!(
+                "{}/_arkret/open/services/{recipient_service_id}/resolution",
+                state.config().public_base_url.trim_end_matches('/')
+            ),
+            pinned_record_digest: None,
+        },
+        route_assistance: None,
         recipient_service_id,
         recipient_service_kind: None,
         issued_at,
@@ -582,7 +591,7 @@ async fn resolve_invite_locator(
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
-                state.service_id()
+                state.service_resolution_commitment().full_id
             ))
             .map_err(|error| {
                 AppError::internal(format!(
@@ -834,6 +843,30 @@ pub(crate) fn resolve_invite_receive_policy(
         .contacts()
         .invite_policy(subject.as_str())
         .unwrap_or_else(|| InviteReceivePolicy::spec_default(subject.clone()))
+}
+
+fn resolve_core_invite_receive_policy(
+    state: &AppState,
+    subject: &CoreId,
+) -> Result<InviteReceivePolicy, AppError> {
+    if let Some(policy) = state.contacts().invite_policy(subject.as_str()) {
+        return Ok(policy);
+    }
+    let projection = state.projections().snapshot();
+    let full_id = projection
+        .principal_resolution_for_actor(subject.as_str())
+        .and_then(|value| value.get("full_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "recipient principal resolution is unavailable",
+            )
+        })?;
+    let full_id = Did::new(full_id.to_owned()).map_err(|error| {
+        AppError::internal(format!("projected recipient full_id is invalid: {error}"))
+    })?;
+    Ok(InviteReceivePolicy::spec_default(full_id))
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.

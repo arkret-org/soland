@@ -182,11 +182,12 @@ async fn introspect_session_grant_for_logout(
             "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
         ));
     };
-    let audience = arkret_identifiers::Did::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!(
-            "runtime principal service_id is not a DID: {error}"
-        ))
-    })?;
+    let audience =
+        arkret_identifiers::ServiceId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!(
+                "runtime principal service_id is not a core_id: {error}"
+            ))
+        })?;
     let request = SessionGrantIntrospectRequestBody::ByJwt(
         arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
             grant_jwt: grant_jwt.to_owned(),

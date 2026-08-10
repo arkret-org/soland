@@ -5,7 +5,7 @@ use arkret_models_identity::{
     OrganizationRegistrationOutcome, OrganizationRegistrationScope, OrganizationRegistrationStatus,
     next_organization_registration_generation, organization_registration_replay_outcome,
 };
-use arkret_wire::{Did, Hash};
+use arkret_wire::{CoreId, FullId, Hash};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -48,9 +48,10 @@ impl OrganizationRegistrationChallengeRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizationRegistrationGenerationRecord {
-    pub organization_id: Did,
+    pub organization_id: CoreId,
+    pub full_id: FullId,
     pub registration_generation: u64,
-    pub local_admin_subject: Did,
+    pub local_admin_subject: CoreId,
     pub delegated_scopes: Vec<OrganizationRegistrationScope>,
     pub status: OrganizationRegistrationStatus,
     pub current_outcome_id: String,
@@ -62,7 +63,7 @@ pub struct OrganizationRegistrationGenerationRecord {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizationRegistrationStateRecord {
-    pub organization_id: Did,
+    pub organization_id: CoreId,
     pub current_generation: u64,
     pub generations: BTreeMap<u64, OrganizationRegistrationGenerationRecord>,
 }
@@ -136,7 +137,7 @@ pub struct OrganizationRegistrationRefreshCommit {
 
 #[derive(Clone, Debug)]
 pub struct OrganizationRegistrationLifecycleCommit {
-    pub organization_id: Did,
+    pub organization_id: CoreId,
     pub expected_current_generation: u64,
     pub expected_current_outcome_id: String,
     pub outcome: OrganizationRegistrationOutcome,
@@ -158,12 +159,12 @@ pub trait OrganizationRegistrationStore: Send + Sync {
 
     async fn get_current(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
     ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>>;
 
     async fn get_generation(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         generation: u64,
     ) -> PersistenceResult<Option<OrganizationRegistrationGenerationRecord>>;
 
@@ -184,7 +185,7 @@ pub trait OrganizationRegistrationStore: Send + Sync {
 
     async fn mark_stale(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         expected_current_generation: u64,
         expected_current_outcome_id: &str,
         changed_at: DateTime<Utc>,
@@ -207,6 +208,7 @@ pub fn validate_prepared_challenge(
 ) -> PersistenceResult<()> {
     let request = OrganizationRegistrationChallengeRequestBody {
         organization_id: challenge.organization_id.clone(),
+        full_id: challenge.full_id.clone(),
         local_admin_subject: challenge.local_admin_subject.clone(),
         requested_scopes: challenge.requested_scopes.clone(),
     };
@@ -307,6 +309,7 @@ pub fn apply_organization_registration_ensure(
                 generation,
                 OrganizationRegistrationGenerationRecord {
                     organization_id: receipt.organization_id.clone(),
+                    full_id: receipt.full_id.clone(),
                     registration_generation: generation,
                     local_admin_subject: receipt.local_admin_subject.clone(),
                     delegated_scopes: receipt.delegated_scopes.clone(),
@@ -324,6 +327,7 @@ pub fn apply_organization_registration_ensure(
             let organization_id = receipt.organization_id.clone();
             let generation_record = OrganizationRegistrationGenerationRecord {
                 organization_id: organization_id.clone(),
+                full_id: receipt.full_id.clone(),
                 registration_generation: generation,
                 local_admin_subject: receipt.local_admin_subject.clone(),
                 delegated_scopes: receipt.delegated_scopes.clone(),
@@ -380,6 +384,7 @@ pub fn apply_organization_registration_refresh(
         return Err(PersistenceError::Conflict(REGISTRATION_REVOKED.to_owned()));
     }
     if challenge.challenge.organization_id != state.organization_id
+        || challenge.challenge.full_id != current.full_id
         || challenge.challenge.local_admin_subject != current.local_admin_subject
         || challenge.challenge.requested_scopes != current.delegated_scopes
     {
@@ -404,6 +409,7 @@ pub fn apply_organization_registration_refresh(
         .get_mut(&state.current_generation)
         .expect("validated current generation exists");
     mutable_current.status = OrganizationRegistrationStatus::Active;
+    mutable_current.full_id = commit.outcome.full_id.clone();
     mutable_current.current_outcome_id.clone_from(&outcome_id);
     mutable_current.terminal_reason = None;
     mutable_current.updated_at = commit.committed_at;
@@ -420,7 +426,7 @@ pub fn apply_organization_registration_refresh(
 pub fn apply_organization_registration_stale(
     state: &mut OrganizationRegistrationStateRecord,
     outcomes: &BTreeMap<String, OrganizationRegistrationOutcome>,
-    organization_id: &Did,
+    organization_id: &CoreId,
     expected_current_generation: u64,
     expected_current_outcome_id: &str,
     changed_at: DateTime<Utc>,
@@ -507,6 +513,7 @@ pub fn apply_organization_registration_lifecycle(
         .get_mut(&state.current_generation)
         .expect("validated current generation exists");
     mutable_current.status = OrganizationRegistrationStatus::Revoked;
+    mutable_current.full_id = commit.outcome.full_id.clone();
     mutable_current.current_outcome_id = outcome_id;
     mutable_current.terminal_reason = Some(commit.reason);
     mutable_current.updated_at = commit.committed_at;
@@ -519,6 +526,7 @@ fn validate_challenge_at(
 ) -> PersistenceResult<()> {
     let request = OrganizationRegistrationChallengeRequestBody {
         organization_id: record.challenge.organization_id.clone(),
+        full_id: record.challenge.full_id.clone(),
         local_admin_subject: record.challenge.local_admin_subject.clone(),
         requested_scopes: record.challenge.requested_scopes.clone(),
     };
@@ -570,6 +578,7 @@ fn validate_new_generation_outcome(
     let receipt = &outcome.registration_receipt;
     if !outcome.created
         || outcome.organization_id != challenge.organization_id
+        || outcome.full_id != challenge.full_id
         || outcome.registration_generation != expected_generation
         || receipt.local_admin_subject != challenge.local_admin_subject
         || receipt.delegated_scopes != challenge.requested_scopes

@@ -3368,6 +3368,20 @@ mod tests {
         ) -> ServiceResult<bool> {
             Ok(true)
         }
+
+        async fn issue_provisioning_abandonment_challenge(
+            &self,
+            _command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
+        ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+            Ok(soland_storage::AgentProvisioningAbandonmentWriteOutcome::NotFound)
+        }
+
+        async fn confirm_provisioning_abandonment(
+            &self,
+            _command: &soland_storage::ConfirmAgentProvisioningAbandonment,
+        ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
+            Ok(soland_storage::AgentProvisioningAbandonmentWriteOutcome::NotFound)
+        }
     }
 
     #[async_trait]

@@ -71,8 +71,12 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         .unwrap_or(0);
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("moderation Realm id invalid: {error}")))?;
-    let service_did = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let service_did = state.service_resolution_commitment().full_id.clone();
+    let service_actor_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
+            AppError::internal(format!("service DID cannot be projected: {error}"))
+        })?,
+    );
     let created_at = now();
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?;
@@ -85,7 +89,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            service_did.clone(),
+            service_actor_id,
             typed_payload,
         )
         .and_then(|draft| draft.author(actor_seq, hlc, created_at))
@@ -123,14 +127,12 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         key_epoch: 0,
         credential_epoch: None,
     });
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "service notary verification method is invalid: {error}"
-                ))
-            },
-        )?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
+        .map_err(|error| {
+            AppError::internal(format!(
+                "service notary verification method is invalid: {error}"
+            ))
+        })?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,

@@ -1136,7 +1136,7 @@ mod consent_proof_tests {
         let consent_event = arkret_wire::test_support::raw_event_at(
             EventKind::ConsentGrant.as_str(),
             ScopeRef::Realm { realm_id },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             1,
             Hlc::new(state.hlc().now()).unwrap(),
             json!({

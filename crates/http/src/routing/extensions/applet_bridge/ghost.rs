@@ -232,6 +232,16 @@ pub(super) async fn validate_signed_ghost_provision_events(
 ) -> Result<String, AppError> {
     let accountability = &provision.accountability_grant_event;
     let profile = &provision.profile_event;
+    let service_actor_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&provision.service_id).map_err(|error| {
+            AppError::invalid_param(format!("service_id cannot be projected: {error}"))
+        })?,
+    );
+    let ghost_actor_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&provision.ghost_actor_id).map_err(|error| {
+            AppError::invalid_param(format!("ghost_actor_id cannot be projected: {error}"))
+        })?,
+    );
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let registration_verification_method =
         super::signature::applet_registration_verification_method(
@@ -244,7 +254,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
     };
     if accountability.kind != arkret_wire::EventKind::IdentityAccountabilityGrant
         || accountability.realm_id != provision.realm_id
-        || accountability.actor_id != provision.service_id
+        || accountability.actor_id != service_actor_id
         || accountability.executed_by.is_some()
         || !applet_matches(accountability)
     {
@@ -254,8 +264,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
     }
     if profile.kind != arkret_wire::EventKind::ProfileCreate
         || profile.realm_id != provision.realm_id
-        || profile.actor_id != provision.ghost_actor_id
-        || profile.executed_by.as_ref() != Some(&provision.service_id)
+        || profile.actor_id != ghost_actor_id
+        || profile.executed_by.as_ref() != Some(&service_actor_id)
         || !applet_matches(profile)
     {
         return Err(AppError::invalid_param(
@@ -364,8 +374,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
         "external_ref": provision.external_ref,
     });
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
-        && actor_profile.accountable_principal_ids[0] == provision.service_id;
-    if actor_profile.principal_id != provision.ghost_actor_id
+        && actor_profile.accountable_principal_ids[0].as_str() == service_actor_id.as_str();
+    if actor_profile.principal_id.as_str() != ghost_actor_id.as_str()
         || actor_profile.realm_id.as_ref() != Some(&provision.realm_id)
         || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
         || actor_profile.display_name != expected_display_name

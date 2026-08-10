@@ -595,7 +595,9 @@ mod tests {
         let event = arkret_wire::test_support::raw_event_at(
             kind.as_ref(),
             authorization_lease.scope_ref.clone(),
-            authorization_lease.actor_id.clone(),
+            arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(&authorization_lease.actor_id).unwrap(),
+            ),
             1,
             Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({"fixture": seed}),

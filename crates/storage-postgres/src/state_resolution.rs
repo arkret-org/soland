@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
+use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
@@ -392,8 +392,9 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .get("issuer")
         .and_then(Value::as_str)
         .ok_or_else(|| StoreError::Backend("sealed op missing issuer".to_owned()))
-        .and_then(|did| {
-            Did::new(did.to_owned()).map_err(|error| StoreError::Backend(error.to_string()))
+        .and_then(|actor_id| {
+            arkret_wire::ActorId::new(actor_id.to_owned())
+                .map_err(|error| StoreError::Backend(error.to_string()))
         })?;
     let move_id = value
         .get("move_id")
@@ -1889,7 +1890,13 @@ mod event_seal_commit_tests {
     /// fsm cells, where the issuer travels but is not part of the slot key.
     fn test_issued(op: super::SealedOp) -> super::IssuedOp {
         super::IssuedOp {
-            issuer: super::Did::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap(),
+            issuer: arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example".to_owned())
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
             op,
         }
     }
@@ -1959,7 +1966,12 @@ mod event_seal_commit_tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                )
+                .unwrap(),
+            ),
             increment as u64,
             arkret_wire::Hlc::new(format!("0189c4d2af00-0000-aabbccd{increment}")).unwrap(),
             json!({"marker": marker.to_string()}),

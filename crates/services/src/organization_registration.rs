@@ -10,7 +10,7 @@ use arkret_models_identity::{
     OrganizationRegistrationStatus, next_organization_registration_generation,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_wire::{Did, DidUrl, Hash, PayloadProof, ProofContextId};
+use arkret_wire::{CoreId, Did, DidUrl, FullId, Hash, PayloadProof, ProofContextId, ServiceId};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use soland_storage::{
@@ -67,7 +67,7 @@ impl OrganizationRegistrationError {
 }
 
 pub trait OrganizationRegistrationReceiptSigner: Send + Sync {
-    fn issuer_service_id(&self) -> &Did;
+    fn issuer_service_id(&self) -> &ServiceId;
     /// `did-usage-and-verification.md` §2.2 / §6: a receipt-signing key is a
     /// concrete verification method, so the identifier is a typed DID URL and
     /// a bare DID cannot be handed in.
@@ -144,7 +144,7 @@ impl OrganizationRegistrationService {
         request: OrganizationRegistrationChallengeRequestBody,
         origin: &str,
         trust_domain: &str,
-        issuer_service_id: &Did,
+        issuer_service_id: &ServiceId,
         now: DateTime<Utc>,
     ) -> Result<OrganizationRegistrationChallenge, OrganizationRegistrationError> {
         request
@@ -152,7 +152,7 @@ impl OrganizationRegistrationService {
             .map_err(|error| schema(error.to_string()))?;
         let pinned = self
             .resolver
-            .resolve_current_webvh_state(&request.organization_id)
+            .resolve_current_webvh_state(&request.full_id)
             .await
             .map_err(|error| OrganizationRegistrationError::proof(error.to_string()))?;
         if pinned.status == PinnedDidVersionStatus::Deactivated {
@@ -166,6 +166,7 @@ impl OrganizationRegistrationService {
         let nonce = arkret_canonical::base64url_encode(nonce_bytes.as_bytes());
         let challenge_digest = arkret_canonical::canonical_sha256(&json!({
             "organization_id": &request.organization_id,
+            "full_id": &request.full_id,
             "local_admin_subject": &request.local_admin_subject,
             "requested_scopes": &request.requested_scopes,
             "nonce": &nonce,
@@ -180,6 +181,7 @@ impl OrganizationRegistrationService {
                     .unwrap_or(&challenge_digest)
             ),
             organization_id: request.organization_id,
+            full_id: request.full_id,
             purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
             nonce,
             audience: issuer_service_id.clone(),
@@ -194,6 +196,7 @@ impl OrganizationRegistrationService {
             .validate_for_at(
                 &OrganizationRegistrationChallengeRequestBody {
                     organization_id: challenge.organization_id.clone(),
+                    full_id: challenge.full_id.clone(),
                     local_admin_subject: challenge.local_admin_subject.clone(),
                     requested_scopes: challenge.requested_scopes.clone(),
                 },
@@ -224,7 +227,7 @@ impl OrganizationRegistrationService {
             let pinned = self
                 .resolver
                 .resolve_pinned_webvh_state(
-                    &request.organization_id,
+                    &request.full_id,
                     &request.version_id,
                     &request.log_head_digest,
                 )
@@ -251,7 +254,7 @@ impl OrganizationRegistrationService {
         let pinned = self
             .resolver
             .resolve_pinned_webvh_state(
-                &request.organization_id,
+                &request.full_id,
                 &request.version_id,
                 &request.log_head_digest,
             )
@@ -282,6 +285,7 @@ impl OrganizationRegistrationService {
             Some(sign_outcome(
                 signer,
                 &request.organization_id,
+                &request.full_id,
                 generation,
                 &request.version_id,
                 &request.log_head_digest,
@@ -310,7 +314,7 @@ impl OrganizationRegistrationService {
 
     pub async fn current(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
     ) -> Result<Option<OrganizationRegistrationCurrent>, OrganizationRegistrationError> {
         self.store()
             .get_current(organization_id)
@@ -320,7 +324,7 @@ impl OrganizationRegistrationService {
 
     pub async fn get(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
     ) -> Result<OrganizationRegistrationOutcome, OrganizationRegistrationError> {
         let mut outcome = self
             .current(organization_id)
@@ -353,7 +357,7 @@ impl OrganizationRegistrationService {
             let pinned = self
                 .resolver
                 .resolve_pinned_webvh_state(
-                    &request.organization_id,
+                    &request.full_id,
                     &request.version_id,
                     &request.log_head_digest,
                 )
@@ -389,7 +393,7 @@ impl OrganizationRegistrationService {
         let pinned = self
             .resolver
             .resolve_pinned_webvh_state(
-                &request.organization_id,
+                &request.full_id,
                 &request.version_id,
                 &request.log_head_digest,
             )
@@ -402,6 +406,7 @@ impl OrganizationRegistrationService {
         let outcome = sign_outcome(
             signer,
             &request.organization_id,
+            &request.full_id,
             current.generation.registration_generation,
             &request.version_id,
             &request.log_head_digest,
@@ -445,6 +450,7 @@ impl OrganizationRegistrationService {
         let outcome = sign_outcome(
             signer,
             &request.organization_id,
+            &current.generation.full_id,
             current.generation.registration_generation,
             &receipt.version_id,
             &receipt.log_head_digest,
@@ -621,6 +627,7 @@ impl OrganizationRegistrationService {
                     let outcome = sign_outcome(
                         signer,
                         &current.generation.organization_id,
+                        &current.generation.full_id,
                         current.generation.registration_generation,
                         &receipt.version_id,
                         &receipt.log_head_digest,
@@ -702,6 +709,7 @@ fn verify_control_proof(
         proof,
         &request.challenge_id,
         &request.organization_id,
+        &request.full_id,
         &request.local_admin_subject,
         &request.version_id,
         &request.log_head_digest,
@@ -749,6 +757,7 @@ fn verify_refresh_control_proof(
         proof,
         &request.challenge_id,
         &request.organization_id,
+        &request.full_id,
         &current.generation.local_admin_subject,
         &request.version_id,
         &request.log_head_digest,
@@ -763,6 +772,7 @@ fn validate_ensure_challenge_binding(
 ) -> Result<(), OrganizationRegistrationError> {
     let challenge_request = OrganizationRegistrationChallengeRequestBody {
         organization_id: request.organization_id.clone(),
+        full_id: request.full_id.clone(),
         local_admin_subject: request.local_admin_subject.clone(),
         requested_scopes: request.requested_scopes.clone(),
     };
@@ -778,6 +788,7 @@ fn validate_ensure_challenge_binding(
         &request.control_proof,
         &request.challenge_id,
         &request.organization_id,
+        &request.full_id,
         &request.local_admin_subject,
         &request.version_id,
         &request.log_head_digest,
@@ -793,6 +804,7 @@ fn validate_refresh_challenge_binding(
 ) -> Result<(), OrganizationRegistrationError> {
     let challenge_request = OrganizationRegistrationChallengeRequestBody {
         organization_id: request.organization_id.clone(),
+        full_id: request.full_id.clone(),
         local_admin_subject: current.generation.local_admin_subject.clone(),
         requested_scopes: current.generation.delegated_scopes.clone(),
     };
@@ -808,6 +820,7 @@ fn validate_refresh_challenge_binding(
         &request.control_proof,
         &request.challenge_id,
         &request.organization_id,
+        &request.full_id,
         &current.generation.local_admin_subject,
         &request.version_id,
         &request.log_head_digest,
@@ -819,8 +832,9 @@ fn validate_refresh_challenge_binding(
 fn validate_control_proof_challenge_binding(
     proof: &OrganizationControlProof,
     challenge_id: &str,
-    organization_id: &Did,
-    local_admin_subject: &Did,
+    organization_id: &CoreId,
+    full_id: &FullId,
+    local_admin_subject: &CoreId,
     version_id: &str,
     log_head_digest: &Hash,
     challenge: &OrganizationRegistrationChallenge,
@@ -829,6 +843,7 @@ fn validate_control_proof_challenge_binding(
         .validate_transcript_bindings(
             challenge_id,
             organization_id,
+            full_id,
             local_admin_subject,
             version_id,
             log_head_digest,
@@ -862,8 +877,9 @@ fn control_proof_error(
 fn verify_control_proof_inner(
     proof: &OrganizationControlProof,
     challenge_id: &str,
-    organization_id: &Did,
-    local_admin_subject: &Did,
+    organization_id: &CoreId,
+    full_id: &FullId,
+    local_admin_subject: &CoreId,
     version_id: &str,
     log_head_digest: &Hash,
     pinned: &PinnedDidDocumentState,
@@ -882,6 +898,7 @@ fn verify_control_proof_inner(
         .validate_transcript_bindings(
             challenge_id,
             organization_id,
+            full_id,
             local_admin_subject,
             version_id,
             log_head_digest,
@@ -891,10 +908,10 @@ fn verify_control_proof_inner(
     let document = pinned.document.as_object().ok_or_else(|| {
         OrganizationRegistrationError::proof("pinned DID document is not an object")
     })?;
-    let methods = verification_methods(document, organization_id)?;
+    let methods = verification_methods(document, full_id)?;
     let authorized = match proof.proof_kind {
         OrganizationControlProofKind::ResolvedVerificationMethod => {
-            resolved_control_methods(document, pinned, organization_id)?
+            resolved_control_methods(document, pinned, full_id)?
         }
         OrganizationControlProofKind::GovernanceQuorum => {
             governance_control_methods(document, proof.quorum_threshold)?
@@ -927,6 +944,7 @@ fn verify_control_proof_inner(
         let transcript = control_transcript_bytes(
             challenge_id,
             organization_id,
+            full_id,
             local_admin_subject,
             version_id,
             log_head_digest,
@@ -999,7 +1017,7 @@ fn verify_control_proof_inner(
 fn resolved_control_methods(
     document: &Map<String, Value>,
     pinned: &PinnedDidDocumentState,
-    organization_id: &Did,
+    full_id: &FullId,
 ) -> Result<BTreeSet<String>, OrganizationRegistrationError> {
     let mut methods = BTreeSet::new();
     for relationship in ["authentication", "assertionMethod", "capabilityInvocation"] {
@@ -1030,7 +1048,7 @@ fn resolved_control_methods(
             .split_once('#')
             .map(|(did, _)| did)
             .expect("DidUrl always carries a fragment");
-        root == organization_id.as_str() || root.starts_with("did:key:")
+        root == full_id.as_str() || root.starts_with("did:key:")
     });
     if methods.is_empty() {
         return Err(OrganizationRegistrationError::proof(
@@ -1112,7 +1130,7 @@ fn governance_policy(
 
 fn verification_methods(
     document: &Map<String, Value>,
-    organization_id: &Did,
+    full_id: &FullId,
 ) -> Result<BTreeMap<String, PublicKeyMaterial>, OrganizationRegistrationError> {
     let mut methods = BTreeMap::new();
     for method in document
@@ -1127,7 +1145,7 @@ fn verification_methods(
         let id = object.get("id").and_then(Value::as_str).ok_or_else(|| {
             OrganizationRegistrationError::proof("verificationMethod id is missing")
         })?;
-        if object.get("controller").and_then(Value::as_str) != Some(organization_id.as_str()) {
+        if object.get("controller").and_then(Value::as_str) != Some(full_id.as_str()) {
             continue;
         }
         let material =
@@ -1199,8 +1217,9 @@ fn canonical_public_key_bytes(
 
 fn control_transcript_bytes(
     challenge_id: &str,
-    organization_id: &Did,
-    local_admin_subject: &Did,
+    organization_id: &CoreId,
+    full_id: &FullId,
+    local_admin_subject: &CoreId,
     version_id: &str,
     log_head_digest: &Hash,
     proof: &PayloadProof,
@@ -1209,6 +1228,7 @@ fn control_transcript_bytes(
         "context": ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1,
         "challenge_id": challenge_id,
         "organization_id": organization_id,
+        "full_id": full_id,
         "local_admin_subject": local_admin_subject,
         "version_id": version_id,
         "log_head_digest": log_head_digest,
@@ -1221,13 +1241,14 @@ fn control_transcript_bytes(
 #[allow(clippy::too_many_arguments)]
 fn sign_outcome(
     signer: &dyn OrganizationRegistrationReceiptSigner,
-    organization_id: &Did,
+    organization_id: &CoreId,
+    full_id: &FullId,
     registration_generation: u64,
     version_id: &str,
     log_head_digest: &Hash,
     control_proof_kind: OrganizationControlProofKind,
     control_key_digest: &Hash,
-    local_admin_subject: &Did,
+    local_admin_subject: &CoreId,
     delegated_scopes: &[arkret_models_identity::OrganizationRegistrationScope],
     status: OrganizationRegistrationStatus,
     now: DateTime<Utc>,
@@ -1237,6 +1258,7 @@ fn sign_outcome(
     let mut receipt = OrganizationRegistrationReceipt {
         registration_receipt_id: "ak:organization-registration-receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
+        full_id: full_id.clone(),
         registration_generation,
         version_id: version_id.to_owned(),
         log_head_digest: log_head_digest.clone(),
@@ -1275,6 +1297,7 @@ fn sign_outcome(
         .map_err(|error| internal(error.to_string()))?;
     let outcome = OrganizationRegistrationOutcome {
         organization_id: organization_id.clone(),
+        full_id: full_id.clone(),
         registration_generation,
         version_id: version_id.to_owned(),
         registration_receipt: receipt,

@@ -1087,8 +1087,11 @@ async fn range_completeness_for_query(
         arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
 
-    let issuer = arkret_identifiers::Did::new(state.service_id().clone())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let issuer = state.service_resolution_commitment().full_id.clone();
+    let issuer_actor = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&issuer)
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
+    );
     let verification_method =
         arkret_wire::DidUrl::new(format!("{issuer}#notary-key")).map_err(|error| {
             soland_http::error::AppError::internal(format!(
@@ -1160,7 +1163,7 @@ async fn range_completeness_for_query(
         jws: String::new(),
     };
     let proof_binding = payload_proof
-        .canonical_binding_bytes(&issuer)
+        .canonical_binding_bytes(&issuer_actor)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let signature = signer
         .sign_payload(&proof_binding)
@@ -1170,7 +1173,7 @@ async fn range_completeness_for_query(
 
     let actor_seq = accepted_events
         .iter()
-        .filter(|event| event.actor_id == issuer)
+        .filter(|event| event.actor_id == issuer_actor)
         .map(|event| event.actor_seq)
         .max()
         .map_or(0, |sequence| sequence.saturating_add(1));
@@ -1182,7 +1185,7 @@ async fn range_completeness_for_query(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        issuer,
+        issuer_actor,
         payload,
     )
     .map(|draft| draft.with_prev_refs(to_frontier))
@@ -1372,7 +1375,7 @@ mod tests {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
                 sidecar_id: arkret_identifiers::SidecarId::new(sidecar_id.to_owned()).unwrap(),
             },
-            arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap(),
+            crate::test_actor_id_str(TEST_ACTOR),
             41,
             arkret_identifiers::Hlc::new("01970e589d21-0041-a13f9c2e").unwrap(),
             json!({
@@ -1439,7 +1442,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
             },
-            arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap(),
+            crate::test_actor_id_str(TEST_ACTOR),
             2,
             arkret_identifiers::Hlc::new("019041000000-0000-a13f9c2e").unwrap(),
             json!({"contact_id": "ak:contact:no-hlc"}),
@@ -1552,7 +1555,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             1,
             arkret_identifiers::Hlc::new("019041000000-0000-00000000").unwrap(),
             json!({
@@ -1570,7 +1573,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             2,
             arkret_identifiers::Hlc::new("019041000000-0001-00000000").unwrap(),
             json!({
@@ -1586,7 +1589,7 @@ mod tests {
         let redaction_event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::MessageRedact.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            actor_id,
+            crate::test_actor_id(&actor_id),
             3,
             arkret_identifiers::Hlc::new("019041000000-0002-00000000").unwrap(),
             json!({

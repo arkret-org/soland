@@ -2580,7 +2580,7 @@ mod control_governance_health_tests {
     use arkret_state::state::{
         MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
     };
-    use arkret_wire::{Did, Hlc, ScopeRef};
+    use arkret_wire::{ActorId, Did, Hlc, ScopeRef, project_full_id_to_core_id};
 
     use super::*;
 
@@ -2618,7 +2618,10 @@ mod control_governance_health_tests {
             ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            Did::new("did:web:alice.example".to_owned()).unwrap(),
+            ActorId::from(
+                project_full_id_to_core_id(&Did::new("did:web:alice.example".to_owned()).unwrap())
+                    .unwrap(),
+            ),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"seed": seed}),

@@ -1118,7 +1118,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            actor.clone(),
+            crate::test_actor_id(&actor),
             8,
             arkret_identifiers::Hlc::new("019041000000-0000-a13f9c2e").unwrap(),
             json!({

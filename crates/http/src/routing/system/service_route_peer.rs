@@ -1,8 +1,8 @@
+use arkret_identifiers::Did;
 use arkret_models_identity::{
-    ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionPublishAckCore,
-    ServiceResolutionPublishOutcome, ServiceResolutionPublishRequest,
-    ServiceResolutionResolveOutcome, ServiceResolutionResolveRequest, ServiceRouteHandoverState,
-    ServiceRouteNoticeState,
+    ServiceResolutionArtifactKey, ServiceResolutionPublishAckCore, ServiceResolutionPublishOutcome,
+    ServiceResolutionPublishRequest, ServiceResolutionResolveOutcome,
+    ServiceResolutionResolveRequest, ServiceRouteHandoverState,
 };
 use arkret_wire::{FullId, Hash, ServiceId};
 use chrono::Utc;
@@ -12,8 +12,7 @@ use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{
-    MonotonicRouteWrite, ServiceResolutionForkEvidence, ServiceResolutionMirrorCommit,
-    ServiceResolutionMirrorEntry,
+    ServiceResolutionForkEvidence, ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry,
 };
 
 use crate::state::AppState;
@@ -61,10 +60,9 @@ async fn peer_publish(
     {
         return Err(AppError::capability_denied("peer route visibility denied"));
     }
-    verify_target_artifact(state, &request, target)?;
+    verify_target_artifact(state, &request, target).await?;
 
     let now = Utc::now();
-    validate_sequence_state(state, &request, now).await?;
     let request_digest = request.canonical_digest().map_err(protocol_violation)?;
     let (receiver, _) = super::service_resolution::service_ids(state)?;
     let stored = state
@@ -88,7 +86,7 @@ async fn peer_publish(
     .map_err(|error| AppError::internal(error.to_string()))?;
 
     let committed = state
-        .persistence
+        .persistence()
         .commit_service_route_mirror(ServiceResolutionMirrorEntry {
             source_service_id: source,
             realm_id: request.realm_id.clone(),
@@ -116,9 +114,15 @@ async fn peer_publish(
                 "artifact key is already bound to other bytes",
             ));
         }
+        ServiceResolutionMirrorCommit::SequenceConflict { accepted_digest } => {
+            quarantine_sequence_conflict(state, &request, accepted_digest, now).await?;
+            return Err(blinded_not_found());
+        }
+        ServiceResolutionMirrorCommit::SequenceRejected => return Err(blinded_not_found()),
     };
-    // The ACK is returned only after the monotonic safety state is durable.
-    persist_sequence_state(state, &request, now).await?;
+    // `commit_service_route_mirror` stores the artifact, monotonic floor/notice
+    // state, and exact ACK on one lock/transaction. Returning the ACK earlier
+    // would permit a crash to retain replay authority without its safety floor.
     json_ok(ServiceResolutionPublishOutcome { ack: durable_ack })
 }
 
@@ -149,7 +153,7 @@ async fn peer_resolve(
         return Err(AppError::capability_denied("peer route visibility denied"));
     }
     if state
-        .persistence
+        .persistence()
         .service_route_is_quarantined(&request.target_service_id, &request.target_service_kind)
         .await
         .map_err(route_service_error)?
@@ -163,7 +167,7 @@ async fn peer_resolve(
         .max_response_bytes
         .map_or(MAX_RESOLVE_CANONICAL_BYTES, |v| v as usize);
     let mut records = state
-        .persistence
+        .persistence()
         .service_route_successors(
             &source,
             &request.realm_id,
@@ -174,7 +178,7 @@ async fn peer_resolve(
         )
         .await
         .map_err(route_service_error)?;
-    let mut has_more = records.len() > record_limit;
+    let has_more = records.len() > record_limit;
     records.truncate(record_limit);
     let mut sequence = request.known_record_sequence;
     let mut predecessor = request.known_record_digest.clone();
@@ -188,7 +192,7 @@ async fn peer_resolve(
         predecessor = digest(record)?;
     }
     let mut notice = state
-        .persistence
+        .persistence()
         .latest_service_route_notice(
             &source,
             &request.realm_id,
@@ -223,7 +227,6 @@ async fn peer_resolve(
                 "one route artifact exceeds max_response_bytes",
             ));
         }
-        has_more = true;
         outcome.has_more = true;
     }
     if outcome.successor_records.is_empty() && outcome.has_more {
@@ -235,134 +238,55 @@ async fn peer_resolve(
     json_ok(outcome)
 }
 
-async fn validate_sequence_state(
+async fn quarantine_sequence_conflict(
     state: &AppState,
     request: &ServiceResolutionPublishRequest,
+    accepted_digest: Hash,
     now: chrono::DateTime<Utc>,
 ) -> Result<(), AppError> {
-    if let Some(record) = request.service_resolution_record.as_ref() {
-        let actual = digest(record)?;
-        match state
-            .persistence
-            .service_route_floor(&record.record.service_id, &record.record.service_kind)
-            .await
-            .map_err(route_service_error)?
-        {
-            None if record.record.record_sequence == 0 => {}
-            None => return Err(blinded_not_found()),
-            Some(floor)
-                if floor.record_sequence == record.record.record_sequence
-                    && floor.record_digest == actual => {}
-            Some(floor) if floor.record_sequence == record.record.record_sequence => {
-                state
-                    .persistence
-                    .quarantine_service_route_fork(ServiceResolutionForkEvidence {
-                        service_id: record.record.service_id.clone(),
-                        service_kind: record.record.service_kind.clone(),
-                        artifact_family: "service_resolution_record".to_owned(),
-                        artifact_key: record.record.record_sequence.to_string(),
-                        accepted_digest: floor.record_digest,
-                        conflicting_digest: actual,
-                        evidence: serde_json::json!({"request_id": request.request_id}),
-                        quarantined_at: now,
-                    })
-                    .await
-                    .map_err(route_service_error)?;
-                return Err(blinded_not_found());
-            }
-            Some(floor)
-                if record.record.record_sequence == floor.record_sequence + 1
-                    && record.record.previous_record_digest.as_ref()
-                        == Some(&floor.record_digest) => {}
-            Some(_) => return Err(blinded_not_found()),
-        }
-    } else if let Some(notice) = request.service_route_handover_notice.as_ref() {
-        let floor = state
-            .persistence
-            .service_route_floor(&notice.notice.service_id, &notice.notice.service_kind)
-            .await
-            .map_err(route_service_error)?
-            .ok_or_else(blinded_not_found)?;
-        if notice.notice.from_record_sequence != floor.record_sequence
-            || notice.notice.from_record_digest != floor.record_digest
-        {
-            return Err(blinded_not_found());
-        }
-        let previous = state
-            .persistence
-            .service_route_notice_state(
-                &notice.notice.service_id,
-                &notice.notice.service_kind,
-                &notice.notice.handover_id,
+    let (service_id, service_kind, family, key) =
+        if let Some(record) = request.service_resolution_record.as_ref() {
+            (
+                record.record.service_id.clone(),
+                record.record.service_kind.clone(),
+                "service_resolution_record",
+                record.record.record_sequence.to_string(),
             )
-            .await
-            .map_err(route_service_error)?;
-        match previous {
-            None if notice.notice.notice_revision == 0 => {}
-            Some(previous)
-                if notice.notice.notice_revision == previous.notice_revision
-                    && digest(notice)? == previous.notice_digest => {}
-            Some(previous)
-                if notice.notice.notice_revision == previous.notice_revision + 1
-                    && notice.notice.previous_notice_digest.as_ref()
-                        == Some(&previous.notice_digest) => {}
-            _ => return Err(blinded_not_found()),
-        }
-    }
-    Ok(())
+        } else if let Some(notice) = request.service_route_handover_notice.as_ref() {
+            (
+                notice.notice.service_id.clone(),
+                notice.notice.service_kind.clone(),
+                "service_route_handover_notice",
+                format!(
+                    "{}:{}",
+                    notice.notice.handover_id, notice.notice.notice_revision
+                ),
+            )
+        } else {
+            return Err(protocol_violation("publish must contain one artifact"));
+        };
+    state
+        .persistence()
+        .quarantine_service_route_fork(ServiceResolutionForkEvidence {
+            service_id,
+            service_kind,
+            artifact_family: family.to_owned(),
+            artifact_key: key,
+            accepted_digest,
+            conflicting_digest: request.artifact_digest.clone(),
+            evidence: serde_json::json!({"request_id": request.request_id}),
+            quarantined_at: now,
+        })
+        .await
+        .map_err(route_service_error)
 }
 
-async fn persist_sequence_state(
-    state: &AppState,
-    request: &ServiceResolutionPublishRequest,
-    now: chrono::DateTime<Utc>,
-) -> Result<(), AppError> {
-    let outcome = if let Some(record) = request.service_resolution_record.as_ref() {
-        state
-            .persistence
-            .advance_service_route_floor(ServiceResolutionLastSeenFloor {
-                service_id: record.record.service_id.clone(),
-                service_kind: record.record.service_kind.clone(),
-                record_sequence: record.record.record_sequence,
-                record_digest: digest(record)?,
-                verified_at: now,
-            })
-            .await
-            .map_err(route_service_error)?
-    } else if let Some(notice) = request.service_route_handover_notice.as_ref() {
-        state
-            .persistence
-            .advance_service_route_notice(ServiceRouteNoticeState {
-                service_id: notice.notice.service_id.clone(),
-                service_kind: notice.notice.service_kind.clone(),
-                handover_id: notice.notice.handover_id.clone(),
-                notice_revision: notice.notice.notice_revision,
-                notice_digest: digest(notice)?,
-                state: notice.notice.state,
-                from_record_sequence: notice.notice.from_record_sequence,
-                from_record_digest: notice.notice.from_record_digest.clone(),
-                expires_at: notice.notice.expires_at,
-                verified_at: now,
-            })
-            .await
-            .map_err(route_service_error)?
-    } else {
-        return Err(protocol_violation("publish must contain one artifact"));
-    };
-    match outcome {
-        MonotonicRouteWrite::Applied | MonotonicRouteWrite::Replay => Ok(()),
-        MonotonicRouteWrite::Stale | MonotonicRouteWrite::Conflict { .. } => {
-            Err(blinded_not_found())
-        }
-    }
-}
-
-fn verify_target_artifact(
+async fn verify_target_artifact(
     state: &AppState,
     request: &ServiceResolutionPublishRequest,
     expected: &ServiceId,
 ) -> Result<(), AppError> {
-    let (proof, bytes, full_id, issued_at, expires_at) =
+    let (proof, bytes, full_id, method_history_head, issued_at, expires_at) =
         if let Some(record) = request.service_resolution_record.as_ref() {
             if record.record.service_id != *expected
                 || record.record.issued_at > record.record.refresh_after
@@ -377,6 +301,7 @@ fn verify_target_artifact(
                 &record.proof,
                 record.proof_signing_bytes().map_err(protocol_violation)?,
                 record.record.full_id.clone(),
+                Some(record.record.method_history_head.as_str()),
                 record.record.issued_at,
                 record.record.expires_at,
             )
@@ -387,6 +312,7 @@ fn verify_target_artifact(
                 &notice.proof,
                 notice.proof_signing_bytes().map_err(protocol_violation)?,
                 bare,
+                None,
                 notice.notice.issued_at,
                 notice.notice.expires_at,
             )
@@ -409,14 +335,33 @@ fn verify_target_artifact(
             "proof verification method is not based on artifact full_id",
         ));
     }
-    let key = state
-        .federation_peer_verification_method_key(proof.verification_method.as_str())
-        .or_else(|| state.federation_peer_verifying_key(expected.as_str()))
-        .ok_or_else(|| AppError::capability_denied("target assertion key unavailable"))?;
+
+    // A federation transport key authenticates only the peer connection. The
+    // target route assertion is third-party authority material and therefore
+    // MUST resolve through the registered DID adapter and the exact method in
+    // the target's verified document. Unsupported/stale history fails closed;
+    // there is deliberately no transport-key fallback.
+    let did = Did::new(full_id.as_str().to_owned()).map_err(protocol_violation)?;
+    let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did_fresh(
+        state,
+        &did,
+        proof.verification_method.as_str(),
+    )
+    .await
+    .map_err(|error| {
+        AppError::capability_denied(format!("target DID verification unavailable: {error}"))
+    })?;
+    if method_history_head.is_some_and(|declared| declared != resolved.key_log_head.as_str()) {
+        return Err(AppError::capability_denied(
+            "target route method history head does not match verified DID history",
+        ));
+    }
     let signature_bytes =
         arkret_canonical::base64url_decode(proof.jws.as_str()).map_err(protocol_violation)?;
     let signature = Signature::from_slice(&signature_bytes).map_err(protocol_violation)?;
-    key.verify(&bytes, &signature)
+    resolved
+        .public_key
+        .verify(&bytes, &signature)
         .map_err(|_| AppError::capability_denied("invalid target route proof"))
 }
 
@@ -537,7 +482,7 @@ mod tests {
             let error = blinded_not_found();
             assert_eq!(error.http_status(), StatusCode::NOT_FOUND);
             assert_eq!(error.wire_code(), "not_found");
-            assert_eq!(error.message, "not found");
+            assert_eq!(error.message.as_ref(), "not found");
         }
     }
 }

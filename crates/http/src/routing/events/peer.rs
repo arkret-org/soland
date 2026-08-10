@@ -176,7 +176,7 @@ async fn trusted_account_authority_service_id(state: &AppState) -> Result<Did, A
                 "Account Authority service identity registration is invalid: {error}"
             ))
         })?;
-    Ok(registration.service_id)
+    Ok(registration.full_id)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]

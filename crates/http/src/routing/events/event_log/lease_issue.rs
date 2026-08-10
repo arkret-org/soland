@@ -595,9 +595,28 @@ fn sign_lease(
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthorizationLease, AppError> {
+    let actor_id = event
+        .proofs
+        .iter()
+        .find_map(|proof| {
+            let (controller, _) = proof.verification_method.rsplit_once('#')?;
+            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+            (arkret_wire::project_full_id_to_core_id(&full_id)
+                .map(arkret_wire::ActorId::from)
+                .ok()
+                == Some(event.actor_id.clone()))
+            .then_some(full_id)
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::InvalidSignature,
+                "Event has no proof controller that projects to actor_id",
+            )
+            .with_status(StatusCode::FORBIDDEN)
+        })?;
     sign_lease_fields(
         state,
-        event.actor_id.clone(),
+        actor_id,
         arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
             AppError::new(
                 ErrorCode::PolicyViolation,
@@ -708,7 +727,7 @@ mod tests {
             ScopeRef::Realm {
                 realm_id: RealmId::new(REALM).expect("fixture Realm id"),
             },
-            Did::new(ACTOR).expect("fixture actor DID"),
+            crate::test_actor_id_str(ACTOR),
             actor_seq,
             Hlc::new(format!("019fbb72ef34-{actor_seq:04x}-a13f9c2e")).expect("fixture HLC"),
             payload,

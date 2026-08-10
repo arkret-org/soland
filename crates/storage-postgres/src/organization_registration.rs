@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arkret_models_identity::{OrganizationRegistrationChallenge, OrganizationRegistrationOutcome};
-use arkret_wire::{Did, Hash};
+use arkret_wire::{CoreId, Hash};
 use soland_storage::{
     OrganizationRegistrationChallengeRecord, OrganizationRegistrationCurrent,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationGenerationRecord,
@@ -184,7 +184,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
 
     async fn get_current(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
     ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>> {
         let mut conn = pg_conn(&self.pool).await?;
         let Some(state) = load_state(&mut conn, organization_id.as_str(), false).await? else {
@@ -206,7 +206,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
 
     async fn get_generation(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         generation: u64,
     ) -> PersistenceResult<Option<OrganizationRegistrationGenerationRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
@@ -286,7 +286,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
 
     async fn mark_stale(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         expected_current_generation: u64,
         expected_current_outcome_id: &str,
         changed_at: chrono::DateTime<chrono::Utc>,

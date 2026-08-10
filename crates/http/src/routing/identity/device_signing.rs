@@ -151,9 +151,10 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     if let Some(evidence) = signer_key_evidence {
         let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
             .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-        if replayed.principal_id != envelope.requester_did
+        if arkret_wire::project_full_id_to_core_id(&replayed.principal_id)
+            .map_or(true, |core| core != envelope.requester_did)
             || replayed.device_id.as_str() != requester_device_id
-            || evidence.actor_id != envelope.requester_did
+            || evidence.actor_id.as_str() != envelope.requester_did.as_str()
             || evidence.device_id.as_str() != requester_device_id
             || evidence.verification_method != envelope.signature.kid.as_str()
         {

@@ -1,4 +1,4 @@
-use arkret_identifiers::Did;
+use arkret_identifiers::{CoreId, ServiceId};
 use arkret_models_identity::{
     OrganizationRegistrationChallenge, OrganizationRegistrationChallengeRequestBody,
     OrganizationRegistrationEnsureRequestBody, OrganizationRegistrationOutcome,
@@ -23,23 +23,22 @@ use super::AuthArgs;
 use crate::state::AppState;
 
 struct CurrentReceiptSigner {
-    issuer_service_id: Did,
+    issuer_service_id: ServiceId,
     verification_method: arkret_wire::DidUrl,
     signer: Ed25519DetachedJwsSigner,
 }
 
 impl CurrentReceiptSigner {
     fn from_state(state: &AppState) -> Result<Self, AppError> {
-        let issuer_service_id = Did::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
-        let verification_method = arkret_wire::DidUrl::new(format!(
-            "{issuer_service_id}#notary-key"
-        ))
-        .map_err(|error| {
-            AppError::internal(format!(
-                "service notary verification method is invalid: {error}"
-            ))
-        })?;
+        let issuer_service_id = ServiceId::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
+        let issuer_full_id = state.service_resolution_commitment().full_id.clone();
+        let verification_method = arkret_wire::DidUrl::new(format!("{issuer_full_id}#notary-key"))
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            })?;
         let signer = Ed25519DetachedJwsSigner::new(
             state.notary_signing_key().as_ref().clone(),
             verification_method.as_str().to_owned(),
@@ -53,7 +52,7 @@ impl CurrentReceiptSigner {
 }
 
 impl OrganizationRegistrationReceiptSigner for CurrentReceiptSigner {
-    fn issuer_service_id(&self) -> &Did {
+    fn issuer_service_id(&self) -> &ServiceId {
         &self.issuer_service_id
     }
 
@@ -80,8 +79,8 @@ pub(crate) async fn prepare(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_registry_admin(state, &aa.authenticated_session(state, req).await?.actor)?;
     let body = parse_registration_body(req).await?;
-    let issuer = Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
+    let issuer = ServiceId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
     let origin = format!("{}/", state.config().public_base_url.trim_end_matches('/'));
     let challenge = state
         .organization_registrations()
@@ -133,7 +132,7 @@ pub(crate) async fn get(
 ) -> JsonResult<OrganizationRegistrationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let actor = aa.authenticated_session(state, req).await?.actor;
-    let organization_id = Did::new(organization_id.into_inner())
+    let organization_id = CoreId::new(organization_id.into_inner())
         .map_err(|error| AppError::invalid_param(format!("invalid organization_id: {error}")))?;
     let current = state
         .organization_registrations()
@@ -204,7 +203,7 @@ async fn require_registration_manager(
     state: &AppState,
     aa: &AuthArgs,
     req: &mut Request,
-    organization_id: &Did,
+    organization_id: &CoreId,
 ) -> Result<(), AppError> {
     let actor = aa.authenticated_session(state, req).await?.actor;
     let current = state

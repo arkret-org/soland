@@ -1124,7 +1124,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(CANCEL_REALM).unwrap(),
             },
-            Did::new(CANCEL_INVITER).unwrap(),
+            crate::test_actor_id_str(CANCEL_INVITER),
             0,
             arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             payload,
@@ -1395,7 +1395,7 @@ mod tests {
                 .unwrap();
         operation.context.event_id = event_id.clone();
         operation.context.accepted_event_id = event_id;
-        operation.context.sender = arkret_identifiers::Did::new(inviter).unwrap();
+        operation.context.sender = crate::test_actor_id_str(&inviter);
         operation.created_at = created_at;
 
         project_invite_create_operation(&state, inviter, &operation).await;

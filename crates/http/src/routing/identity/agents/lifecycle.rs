@@ -7,6 +7,15 @@ const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
 const AGENT_PROVISION_ALLOCATION_DOMAIN: &str = "ak.agent-provision-allocation-v1";
 const AGENT_PROVISIONING_ABANDONMENT_TTL_SECONDS: i64 = 300;
 
+fn agent_pairing_is_abandoned(record: &soland_services::identity::AgentPairingState) -> bool {
+    record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("provisioning_abandonment"))
+        .and_then(|state| state.get("terminal_outcome"))
+        .is_some_and(|outcome| !outcome.is_null())
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AgentProvisioningAbandonmentChallengeRequestBody {
@@ -294,7 +303,7 @@ pub(super) async fn provision_agent(
                                 ))
                             })?
                             .as_ref()
-                            .is_some_and(soland_storage::agent_provisioning_is_abandoned)
+                            .is_some_and(agent_pairing_is_abandoned)
                     {
                         // Abandonment suppresses every holder-readable trace of
                         // the old allocation. The durable record remains only
@@ -545,7 +554,7 @@ pub(super) async fn provision_agent(
                 .find(|record| record.id == agent_id.as_str())
                 .cloned();
             if let Some(record) = existing_record.as_ref() {
-                if soland_storage::agent_provisioning_is_abandoned(record) {
+                if agent_pairing_is_abandoned(record) {
                     return Err(AppError::not_found("Agent provision allocation not found"));
                 }
                 let replay_matches = record.controller_id == controller_id

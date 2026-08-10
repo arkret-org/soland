@@ -11,10 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{BlobRef, DeviceId, Did, EventId, Hash, RealmId, StrandId};
+use arkret_identifiers::{
+    BlobRef, CoreId, DeviceId, Did, EventId, FullId, Hash, RealmId, StrandId,
+};
 use arkret_models_collaboration::account_lifecycle::{
-    AccountRegisterOutcome, AccountRegisterRequestBody, AccountUpdateProfileRequestBody,
-    AccountView,
+    AccountUpdateProfileRequestBody, AccountView,
 };
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
@@ -73,6 +74,54 @@ use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
+
+/// Deployment-local Principal Server projection result. The Account
+/// Authority owns `AccountRegisterOutcome` and its signed binding receipt;
+/// this internal edge only confirms the durable local projection.
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+struct AccountProjectionRegisterOutcome {
+    principal_id: CoreId,
+    state: AccountStatus,
+    #[salvo(schema(value_type = serde_json::Value))]
+    devices: Vec<AccountDeviceSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Option<serde_json::Value>))]
+    primary_handle_claim: Option<arkret_models_identity::HandleClaim>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[salvo(schema(value_type = Option<serde_json::Value>))]
+    profile: Option<ActorProfile>,
+    registration_audit: AccountRegistrationAudit,
+}
+
+/// Closed deployment-private command accepted only from the configured
+/// Account Authority bearer after it has independently verified `full_id`.
+/// It intentionally carries no public registration proof or identity-creation
+/// branch: this edge only persists the Principal Server projection.
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct AccountProjectionRegisterRequestBody {
+    principal_id: CoreId,
+    full_id: FullId,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    device_id: Option<DeviceId>,
+}
+
+impl AccountProjectionRegisterRequestBody {
+    fn validate_verified_projection(&self) -> Result<(), AppError> {
+        let projected =
+            arkret_identifiers::project_full_id_to_core_id(&self.full_id).map_err(|error| {
+                AppError::invalid_param(format!("full_id cannot be projected: {error}"))
+            })?;
+        if projected != self.principal_id {
+            return Err(AppError::invalid_param(
+                "full_id must project to principal_id",
+            ));
+        }
+        Ok(())
+    }
+}
 
 pub(crate) async fn record_handle_release(
     state: &AppState,
@@ -492,7 +541,8 @@ fn account_registration_retry_after_ms(
 
 async fn enforce_account_registration_policy(
     state: &AppState,
-    did: &str,
+    principal_id: &str,
+    full_id: &str,
     handle: Option<&str>,
     evidence: Option<&AccountRegistrationPolicyEvidence>,
 ) -> Result<AccountRegistrationAudit, AppError> {
@@ -506,7 +556,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -515,7 +565,7 @@ async fn enforce_account_registration_policy(
         .await);
     }
     if let Some(retry_after_ms) =
-        account_registration_retry_after_ms(state, did, policy.rate_limit.as_ref())
+        account_registration_retry_after_ms(state, principal_id, policy.rate_limit.as_ref())
     {
         let audit = account_registration_audit(
             &policy,
@@ -525,7 +575,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::RateLimited,
@@ -548,7 +598,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -568,7 +618,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -576,7 +626,7 @@ async fn enforce_account_registration_policy(
         )
         .await);
     }
-    if !organization_allowed(did, &policy, evidence) {
+    if !organization_allowed(full_id, &policy, evidence) {
         let audit = account_registration_audit(
             &policy,
             evidence,
@@ -585,7 +635,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -608,7 +658,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -627,7 +677,7 @@ async fn enforce_account_registration_policy(
         )?;
         return Err(reject_account_registration(
             state,
-            did,
+            principal_id,
             handle,
             audit,
             soland_http::error::ErrorCode::FailedPrecondition,
@@ -1055,35 +1105,39 @@ async fn account_viewer_impl(
     })
 }
 
-/// `POST /_arkret/gate/account/register` — spec-canonical registration
-/// binding (`ak.gate.account.command.register`, surface group `account_auth`).
+/// `POST /_arkret/gate/account/register` — deployment-local Principal Server
+/// projection invoked only after the Account Authority has completed the
+/// canonical registration operation.
 ///
 /// This Principal Server endpoint is the deployment projection edge used by
-/// the Account Authority after it has verified the identity-creation protocol.
+/// the Account Authority after it has verified the published-DID registration
+/// branch.
 /// It requires the configured service bearer, never accepts the client-facing
 /// `identity_creation` branch, and does not create a handle as a side effect.
-#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.register", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.register"))]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.gate.account.command.project",
+    tags("identity")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.gate.account.command.project")
+)]
 async fn gate_account_register(
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<AccountRegisterRequestBody>,
-) -> JsonResult<AccountRegisterOutcome> {
+    body: JsonBody<AccountProjectionRegisterRequestBody>,
+) -> JsonResult<AccountProjectionRegisterOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_embedded_webvh_registration_bearer(state, req)?;
     let body = body.into_inner();
-    if body.identity_creation.is_some() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "identity_creation must be verified by the Account Authority",
-        )
-        .with_status(StatusCode::CONFLICT));
-    }
+    body.validate_verified_projection()?;
     let did = body.principal_id.as_str().to_owned();
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(
+        state,
+        body.full_id.as_str(),
+    )?;
     let registration_audit =
-        enforce_account_registration_policy(state, &did, None, body.policy_evidence.as_ref())
-            .await?;
+        enforce_account_registration_policy(state, &did, body.full_id.as_str(), None, None).await?;
     let existing = state
         .identities()
         .account(&did)
@@ -1115,18 +1169,13 @@ async fn gate_account_register(
         let primary_handle_claim = account_primary_handle_claim(state, &existing_account)
             .await
             .and_then(|value| serde_json::from_value(value).ok());
-        return json_ok(AccountRegisterOutcome {
+        return json_ok(AccountProjectionRegisterOutcome {
             principal_id: body.principal_id,
             state: AccountStatus::Active,
             devices,
             primary_handle_claim,
-            primary_handle_claim_ref: None,
-            handle_claim_digests: Vec::new(),
             profile: None,
-            registration_audit: Some(registration_audit),
-            binding_receipt: None,
-            pcr_genesis_receipt: None,
-            session_grant_outcome: None,
+            registration_audit,
         });
     }
     let account = AccountRecord {
@@ -1178,18 +1227,13 @@ async fn gate_account_register(
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
         .and_then(|value| serde_json::from_value(value).ok());
-    json_ok(AccountRegisterOutcome {
+    json_ok(AccountProjectionRegisterOutcome {
         principal_id: body.principal_id,
         state: AccountStatus::Active,
         devices,
         primary_handle_claim,
-        primary_handle_claim_ref: None,
-        handle_claim_digests: Vec::new(),
         profile: None,
-        registration_audit: Some(registration_audit),
-        binding_receipt: None,
-        pcr_genesis_receipt: None,
-        session_grant_outcome: None,
+        registration_audit,
     })
 }
 
@@ -1871,6 +1915,49 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn projection_body_json() -> Value {
+        json!({
+            "principal_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
+            "full_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example:webvh:alice",
+            "display_name": "Alice",
+            "device_id": "ak:device:01904100-0000-7000-8000-000000000001"
+        })
+    }
+
+    #[test]
+    fn account_projection_body_accepts_only_matching_verified_full_id() {
+        let body: AccountProjectionRegisterRequestBody =
+            serde_json::from_value(projection_body_json()).unwrap();
+        body.validate_verified_projection().unwrap();
+
+        let mut mismatched = projection_body_json();
+        mismatched["principal_id"] = json!("ak:did_core:webvh:z6MkmismatchedPrincipalScid");
+        let body: AccountProjectionRegisterRequestBody =
+            serde_json::from_value(mismatched).unwrap();
+        assert!(body.validate_verified_projection().is_err());
+    }
+
+    #[test]
+    fn account_projection_body_is_closed_and_rejects_public_registration_branches() {
+        for field in ["proof", "identity_creation", "policy_evidence"] {
+            let mut value = projection_body_json();
+            value[field] = json!({});
+            assert!(
+                serde_json::from_value::<AccountProjectionRegisterRequestBody>(value).is_err(),
+                "deployment-private projection DTO must reject {field}"
+            );
+        }
+
+        let mut did_url = projection_body_json();
+        did_url["full_id"] = json!(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:alice.example#device-1"
+        );
+        assert!(
+            serde_json::from_value::<AccountProjectionRegisterRequestBody>(did_url).is_err(),
+            "full_id must be a bare DID, not a DID URL"
+        );
+    }
 
     #[test]
     fn managed_agent_direct_basis_uses_provisioning_and_runtime_key_facts() {

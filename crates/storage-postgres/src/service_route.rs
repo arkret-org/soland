@@ -1,18 +1,18 @@
 use arkret_models_identity::{
-    ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionPublishAck,
-    ServiceResolutionPublishRequest, ServiceResolutionRecord, ServiceRouteCacheEntry,
-    ServiceRouteHandoverNotice, ServiceRouteNoticeState,
+    ServiceResolutionArtifactKey, ServiceResolutionLastSeenFloor, ServiceResolutionPublishRequest,
+    ServiceResolutionRecord, ServiceRouteCacheEntry, ServiceRouteHandoverNotice,
+    ServiceRouteNoticeState,
 };
 use arkret_wire::{Hash, RealmId, ServiceId};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     MonotonicRouteWrite, PersistenceError, PersistenceResult, ServiceResolutionForkEvidence,
     ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry, ServiceRouteStore,
 };
 
-use crate::{PgPool, async_trait, pg_conn};
+use crate::{PgPool, PgTransactionError, async_trait, pg_conn};
 
 pub struct PgServiceRouteStore {
     pub pool: PgPool,
@@ -85,6 +85,160 @@ impl MirrorRow {
             accepted_at: self.accepted_at,
         })
     }
+}
+
+async fn lock_route_sequence(
+    conn: &mut AsyncPgConnection,
+    service_id: &ServiceId,
+    service_kind: &str,
+) -> Result<(), PgTransactionError> {
+    let key = format!("service-route-sequence:{service_id}:{service_kind}");
+    lock_transaction_key(conn, &key).await
+}
+
+async fn lock_transaction_key(
+    conn: &mut AsyncPgConnection,
+    key: &str,
+) -> Result<(), PgTransactionError> {
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(key)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+async fn advance_mirror_sequence(
+    conn: &mut AsyncPgConnection,
+    entry: &ServiceResolutionMirrorEntry,
+) -> Result<Option<ServiceResolutionMirrorCommit>, PgTransactionError> {
+    if let Some(record) = entry.request.service_resolution_record.as_ref() {
+        lock_route_sequence(conn, &record.record.service_id, &record.record.service_kind).await?;
+        let digest = Hash::new(
+            arkret_canonical::canonical_sha256(record)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        )
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let current = sql_query("SELECT floor AS value FROM service_resolution_last_seen_floors WHERE service_id=$1 AND service_kind=$2 FOR UPDATE")
+            .bind::<Text, _>(record.record.service_id.as_str())
+            .bind::<Text, _>(&record.record.service_kind)
+            .get_result::<JsonRow>(conn)
+            .await
+            .optional()?
+            .map(|row| decode::<ServiceResolutionLastSeenFloor>(row.value))
+            .transpose()?;
+        match current.as_ref() {
+            None if record.record.record_sequence == 0 => {}
+            Some(current)
+                if current.record_sequence == record.record.record_sequence
+                    && current.record_digest == digest =>
+            {
+                return Ok(None);
+            }
+            Some(current) if current.record_sequence == record.record.record_sequence => {
+                return Ok(Some(ServiceResolutionMirrorCommit::SequenceConflict {
+                    accepted_digest: current.record_digest.clone(),
+                }));
+            }
+            Some(current)
+                if record.record.record_sequence == current.record_sequence + 1
+                    && record.record.previous_record_digest.as_ref()
+                        == Some(&current.record_digest) => {}
+            _ => return Ok(Some(ServiceResolutionMirrorCommit::SequenceRejected)),
+        }
+        let floor = ServiceResolutionLastSeenFloor {
+            service_id: record.record.service_id.clone(),
+            service_kind: record.record.service_kind.clone(),
+            record_sequence: record.record.record_sequence,
+            record_digest: digest,
+            verified_at: entry.accepted_at,
+        };
+        let value = encode(&floor)?;
+        sql_query("INSERT INTO service_resolution_last_seen_floors(service_id,service_kind,floor,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(service_id,service_kind) DO UPDATE SET floor=EXCLUDED.floor,updated_at=EXCLUDED.updated_at")
+            .bind::<Text, _>(floor.service_id.as_str())
+            .bind::<Text, _>(&floor.service_kind)
+            .bind::<Jsonb, _>(value)
+            .bind::<Timestamptz, _>(floor.verified_at)
+            .execute(conn)
+            .await?;
+        return Ok(None);
+    }
+
+    if let Some(notice) = entry.request.service_route_handover_notice.as_ref() {
+        lock_route_sequence(conn, &notice.notice.service_id, &notice.notice.service_kind).await?;
+        let floor = sql_query("SELECT floor AS value FROM service_resolution_last_seen_floors WHERE service_id=$1 AND service_kind=$2 FOR UPDATE")
+            .bind::<Text, _>(notice.notice.service_id.as_str())
+            .bind::<Text, _>(&notice.notice.service_kind)
+            .get_result::<JsonRow>(conn)
+            .await
+            .optional()?
+            .map(|row| decode::<ServiceResolutionLastSeenFloor>(row.value))
+            .transpose()?;
+        let Some(floor) = floor else {
+            return Ok(Some(ServiceResolutionMirrorCommit::SequenceRejected));
+        };
+        if notice.notice.from_record_sequence != floor.record_sequence
+            || notice.notice.from_record_digest != floor.record_digest
+        {
+            return Ok(Some(ServiceResolutionMirrorCommit::SequenceRejected));
+        }
+        let digest = Hash::new(
+            arkret_canonical::canonical_sha256(notice)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        )
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let current = sql_query("SELECT notice_state AS value FROM service_route_notice_states WHERE service_id=$1 AND service_kind=$2 AND handover_id=$3 FOR UPDATE")
+            .bind::<Text, _>(notice.notice.service_id.as_str())
+            .bind::<Text, _>(&notice.notice.service_kind)
+            .bind::<Text, _>(&notice.notice.handover_id)
+            .get_result::<JsonRow>(conn)
+            .await
+            .optional()?
+            .map(|row| decode::<ServiceRouteNoticeState>(row.value))
+            .transpose()?;
+        match current.as_ref() {
+            None if notice.notice.notice_revision == 0 => {}
+            Some(current)
+                if current.notice_revision == notice.notice.notice_revision
+                    && current.notice_digest == digest =>
+            {
+                return Ok(None);
+            }
+            Some(current) if current.notice_revision == notice.notice.notice_revision => {
+                return Ok(Some(ServiceResolutionMirrorCommit::SequenceConflict {
+                    accepted_digest: current.notice_digest.clone(),
+                }));
+            }
+            Some(current)
+                if notice.notice.notice_revision == current.notice_revision + 1
+                    && notice.notice.previous_notice_digest.as_ref()
+                        == Some(&current.notice_digest) => {}
+            _ => return Ok(Some(ServiceResolutionMirrorCommit::SequenceRejected)),
+        }
+        let state = ServiceRouteNoticeState {
+            service_id: notice.notice.service_id.clone(),
+            service_kind: notice.notice.service_kind.clone(),
+            handover_id: notice.notice.handover_id.clone(),
+            notice_revision: notice.notice.notice_revision,
+            notice_digest: digest,
+            state: notice.notice.state,
+            from_record_sequence: notice.notice.from_record_sequence,
+            from_record_digest: notice.notice.from_record_digest.clone(),
+            expires_at: notice.notice.expires_at,
+            verified_at: entry.accepted_at,
+        };
+        let value = encode(&state)?;
+        sql_query("INSERT INTO service_route_notice_states(service_id,service_kind,handover_id,notice_state,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind,handover_id) DO UPDATE SET notice_state=EXCLUDED.notice_state,updated_at=EXCLUDED.updated_at")
+            .bind::<Text, _>(state.service_id.as_str())
+            .bind::<Text, _>(&state.service_kind)
+            .bind::<Text, _>(&state.handover_id)
+            .bind::<Jsonb, _>(value)
+            .bind::<Timestamptz, _>(state.verified_at)
+            .execute(conn)
+            .await?;
+        return Ok(None);
+    }
+
+    Ok(Some(ServiceResolutionMirrorCommit::SequenceRejected))
 }
 
 #[async_trait]
@@ -183,39 +337,88 @@ impl ServiceRouteStore for PgServiceRouteStore {
         &self,
         entry: ServiceResolutionMirrorEntry,
     ) -> PersistenceResult<ServiceResolutionMirrorCommit> {
-        let artifact_key = key_json(&entry.artifact_key)?;
-        let request = encode(&entry.request)?;
-        let ack = encode(&entry.ack)?;
+        entry.validate()?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let inserted = sql_query("INSERT INTO service_resolution_mirror_ledger(source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING")
-            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str())
-            .bind::<Text,_>(entry.request_id.as_str()).bind::<Text,_>(entry.request_digest.as_str())
-            .bind::<Text,_>(&artifact_key).bind::<Text,_>(entry.artifact_digest.as_str())
-            .bind::<Jsonb,_>(&request).bind::<Jsonb,_>(&ack).bind::<Timestamptz,_>(entry.accepted_at)
-            .execute(&mut *conn).await.map_err(PersistenceError::database)? > 0;
-        if inserted {
-            return Ok(ServiceResolutionMirrorCommit::Stored(entry.ack));
-        }
-        let by_request = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND request_id=$3")
-            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str()).bind::<Text,_>(entry.request_id.as_str())
-            .get_result::<MirrorRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-        if let Some(current) = by_request {
-            let current = current.decode()?;
-            return Ok(if current.request_digest == entry.request_digest {
-                ServiceResolutionMirrorCommit::Replay(current.ack)
-            } else {
-                ServiceResolutionMirrorCommit::TransportConflict
-            });
-        }
-        let current = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND artifact_key=$3")
-            .bind::<Text,_>(entry.source_service_id.as_str()).bind::<Text,_>(entry.realm_id.as_str()).bind::<Text,_>(&artifact_key)
-            .get_result::<MirrorRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
-            .ok_or_else(|| PersistenceError::Internal("mirror conflict row disappeared".to_owned()))?.decode()?;
-        Ok(ServiceResolutionMirrorCommit::ArtifactConflict {
-            accepted_digest: current.artifact_digest,
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let artifact_key = key_json(&entry.artifact_key)?;
+            let (target_service_id, target_service_kind) =
+                if let Some(record) = entry.request.service_resolution_record.as_ref() {
+                    (&record.record.service_id, record.record.service_kind.as_str())
+                } else if let Some(notice) =
+                    entry.request.service_route_handover_notice.as_ref()
+                {
+                    (&notice.notice.service_id, notice.notice.service_kind.as_str())
+                } else {
+                    return Ok(ServiceResolutionMirrorCommit::SequenceRejected);
+                };
+            // Serialize both initial inserts and successors before inspecting
+            // either idempotency index. This makes concurrent exact requests
+            // deterministically observe and replay the first durable ACK.
+            lock_route_sequence(conn, target_service_id, target_service_kind).await?;
+            let mut idempotency_locks = [
+                format!(
+                    "service-route-artifact:{}:{}:{artifact_key}",
+                    entry.source_service_id, entry.realm_id
+                ),
+                format!(
+                    "service-route-transport:{}:{}:{}",
+                    entry.source_service_id, entry.realm_id, entry.request_id
+                ),
+            ];
+            idempotency_locks.sort();
+            for key in &idempotency_locks {
+                lock_transaction_key(conn, key).await?;
+            }
+            let by_request = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND request_id=$3 FOR UPDATE")
+                .bind::<Text, _>(entry.source_service_id.as_str())
+                .bind::<Text, _>(entry.realm_id.as_str())
+                .bind::<Text, _>(entry.request_id.as_str())
+                .get_result::<MirrorRow>(conn)
+                .await
+                .optional()?;
+            if let Some(current) = by_request {
+                let current = current.decode()?;
+                return Ok(if current.request_digest == entry.request_digest {
+                    ServiceResolutionMirrorCommit::Replay(current.ack)
+                } else {
+                    ServiceResolutionMirrorCommit::TransportConflict
+                });
+            }
+            let by_artifact = sql_query("SELECT source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at FROM service_resolution_mirror_ledger WHERE source_service_id=$1 AND realm_id=$2 AND artifact_key=$3 FOR UPDATE")
+                .bind::<Text, _>(entry.source_service_id.as_str())
+                .bind::<Text, _>(entry.realm_id.as_str())
+                .bind::<Text, _>(&artifact_key)
+                .get_result::<MirrorRow>(conn)
+                .await
+                .optional()?;
+            if let Some(current) = by_artifact {
+                return Ok(ServiceResolutionMirrorCommit::ArtifactConflict {
+                    accepted_digest: current.decode()?.artifact_digest,
+                });
+            }
+            if let Some(rejected) = advance_mirror_sequence(conn, &entry).await? {
+                return Ok(rejected);
+            }
+            let request = encode(&entry.request)?;
+            let ack = encode(&entry.ack)?;
+            sql_query("INSERT INTO service_resolution_mirror_ledger(source_service_id,realm_id,request_id,request_digest,artifact_key,artifact_digest,artifact,ack,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+                .bind::<Text, _>(entry.source_service_id.as_str())
+                .bind::<Text, _>(entry.realm_id.as_str())
+                .bind::<Text, _>(entry.request_id.as_str())
+                .bind::<Text, _>(entry.request_digest.as_str())
+                .bind::<Text, _>(&artifact_key)
+                .bind::<Text, _>(entry.artifact_digest.as_str())
+                .bind::<Jsonb, _>(request)
+                .bind::<Jsonb, _>(ack)
+                .bind::<Timestamptz, _>(entry.accepted_at)
+                .execute(conn)
+                .await?;
+            Ok(ServiceResolutionMirrorCommit::Stored(entry.ack))
         })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn successor_records(

@@ -187,7 +187,14 @@ impl ProjectionState {
                 reason: "realm_authority_root_missing".to_owned(),
             };
         };
-        if operation.context.sender != root.controller_id {
+        let Ok(controller_core) = arkret_wire::project_full_id_to_core_id(&root.controller_id)
+            .map(arkret_wire::ActorId::from)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        if operation.context.sender != controller_core {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_controller_mismatch".to_owned(),
             };

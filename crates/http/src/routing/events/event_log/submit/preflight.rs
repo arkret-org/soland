@@ -76,7 +76,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         .and_then(|claim_ref| claim_ref.get("agent_key_authorize_event_id"))
         .and_then(Value::as_str)
     {
-        let Ok(recipient) = arkret_identifiers::Did::new(recipient_actor_id.to_owned()) else {
+        let Ok(recipient) = arkret_identifiers::CoreId::new(recipient_actor_id.to_owned()) else {
             return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
         };
         let authorization_matches = crate::routing::mls::current_agent_key_authorization_matches(

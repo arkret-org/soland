@@ -16,6 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::Signer as _;
+use salvo::Writer as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::{Depot, Request};
@@ -332,6 +333,14 @@ async fn prepare_binding_core(
     let endpoint_origin = public_base.origin().ascii_serialization();
     let placeholder = Hash::new(format!("sha256:{}", "0".repeat(64)))
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let service_resolution = arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
+        current_record_url: format!(
+            "{}/_arkret/open/services/{}/resolution",
+            state.config().public_base_url.trim_end_matches('/'),
+            service_id
+        ),
+        pinned_record_digest: None,
+    };
     let mut core = AcceptedAtServiceBindingCore {
         principal_id: PrincipalId::from(principal_id.clone()),
         service_id: ServiceId::from(service_id),
@@ -348,6 +357,7 @@ async fn prepare_binding_core(
         endpoint_origins: vec![endpoint_origin],
         document_digest: authority.document_digest,
         authority_evidence: authority.receipt,
+        service_resolution,
         authorization_challenge: challenge_id,
         history_head: Some(authority.history_head),
         version_id: Some(authority.version_id),
@@ -558,6 +568,7 @@ pub(super) async fn commit(
             endpoint_origins: draft.endpoint_origins.clone(),
             document_digest: draft.document_digest.clone(),
             authority_evidence: draft.authority_evidence.clone(),
+            service_resolution: draft.service_resolution.clone(),
             authorization_challenge: draft.authorization_challenge.clone(),
             history_head: draft.history_head.clone(),
             version_id: draft.version_id.clone(),

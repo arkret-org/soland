@@ -58,6 +58,21 @@ pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String
     arkret_canonical::canonical_sha256(value).ok()
 }
 
+#[cfg(test)]
+pub(crate) fn test_actor_id(full_id: &arkret_identifiers::FullId) -> arkret_identifiers::ActorId {
+    arkret_identifiers::ActorId::from(
+        arkret_identifiers::project_full_id_to_core_id(full_id)
+            .expect("test full_id must project to an Actor core_id"),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::ActorId {
+    let full_id = arkret_identifiers::FullId::new(full_id.to_owned())
+        .expect("test actor must be an explicit bare full_id");
+    test_actor_id(&full_id)
+}
+
 use salvo::catcher::Catcher;
 use salvo::prelude::{CatchPanic, Service};
 

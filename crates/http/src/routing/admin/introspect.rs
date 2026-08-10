@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use arkret_identifiers::Did;
+use arkret_identifiers::ServiceId;
 use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
 };
@@ -165,12 +165,10 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         ADMIN_READ.to_owned(),
     ];
     let principal_id = arkret_identifiers::Did::new(session.actor.clone()).unwrap_or_else(|_| {
-        // Fallback: synthesize a stable did:key when the actor isn't
-        // a valid DID. This only kicks in for dev-login tokens whose
-        // actor field is a handle, not a DID — production sessions
-        // always carry a DID.
-        arkret_identifiers::Did::new(format!("did:web:{}", state.service_id()))
-            .expect("service_id is a valid DID")
+        // Dev-login actors may be handles rather than full DIDs. Reuse the
+        // configured, verified service full_id; never reconstruct one from
+        // the service core_id.
+        state.service_resolution_commitment().full_id.clone()
     });
     SessionGrantIntrospection {
         active: true,
@@ -221,9 +219,9 @@ pub(crate) async fn introspect_admin_scopes(
         )
         .with_status(StatusCode::UNAUTHORIZED)
     })?;
-    let audience = Did::new(state.service_id().clone()).map_err(|error| {
+    let audience = ServiceId::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!(
-            "runtime principal service_id is not a DID: {error}"
+            "runtime principal service_id is not a core_id: {error}"
         ))
     })?;
     let request = SessionGrantIntrospectRequestBody::ByJwt(

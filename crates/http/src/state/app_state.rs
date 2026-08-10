@@ -50,6 +50,7 @@ use soland_services::projection::{ProjectionService, ServiceClock};
 use soland_services::runtime_guards::{
     KeyBackupDownloadOutcome, ModerationReportRateOutcome, RuntimeGuardService,
 };
+use soland_services::service_route::ServiceRouteResolver;
 use soland_services::sync::SyncService;
 
 use super::did_resolver_chain;
@@ -123,6 +124,11 @@ pub struct AppState {
     recovery_sessions: RecoverySessionService,
     security_transactions: SecurityTransactionService,
     dids: DidService,
+    /// Unique process-wide injection point for outbound service routing.
+    /// Sending code must use this shared resolver (and fail closed while it is
+    /// absent) so cache, durable floor, and quarantine decisions cannot split
+    /// across ad-hoc resolver instances.
+    service_route_resolver: Arc<Mutex<Option<Arc<ServiceRouteResolver>>>>,
     /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
     ///
     /// This is the SDK's shared value object + store — soland deliberately does
@@ -925,6 +931,7 @@ impl AppState {
             recovery_sessions,
             security_transactions,
             dids,
+            service_route_resolver: Arc::new(Mutex::new(None)),
             did_bindings,
             organization_registrations,
             federation,
@@ -1019,6 +1026,30 @@ impl AppState {
 
     pub(crate) fn dids(&self) -> &DidService {
         &self.dids
+    }
+
+    /// Install the one shared outbound route resolver during composition.
+    /// Replacing it at runtime is forbidden because doing so could detach a
+    /// sender from the durable floor/quarantine store it previously used.
+    pub fn install_service_route_resolver(
+        &self,
+        resolver: Arc<ServiceRouteResolver>,
+    ) -> Result<(), &'static str> {
+        let mut slot = self.service_route_resolver.lock();
+        if slot.is_some() {
+            return Err("service route resolver is already installed");
+        }
+        *slot = Some(resolver);
+        Ok(())
+    }
+
+    /// Obtain the shared resolver for a production send. Absence is a hard
+    /// configuration error; callers must never fall back to a raw URL/cache.
+    pub fn service_route_resolver(&self) -> Result<Arc<ServiceRouteResolver>, &'static str> {
+        self.service_route_resolver
+            .lock()
+            .clone()
+            .ok_or("service route resolver is not installed")
     }
 
     /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
@@ -1856,7 +1887,7 @@ mod membership_hydration_tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(realm_id).unwrap(),
             },
-            Did::new(actor_id).unwrap(),
+            crate::test_actor_id_str(&actor_id),
             actor_seq,
             arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
             payload,

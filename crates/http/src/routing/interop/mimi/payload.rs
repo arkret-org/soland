@@ -46,8 +46,12 @@ pub(super) async fn persist_mimi_canonical_message_event(
         })
         .transpose()?
         .unwrap_or(0);
-    let service_did = arkret_identifiers::Did::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let service_did = state.service_resolution_commitment().full_id.clone();
+    let service_actor_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&service_did).map_err(|error| {
+            AppError::internal(format!("service DID cannot be projected: {error}"))
+        })?,
+    );
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?;
     let typed_payload: arkret_models_collaboration::events_payloads::MessageCreatePayload =
@@ -60,7 +64,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
                     |error| AppError::internal(format!("MIMI realm id invalid: {error}")),
                 )?,
             },
-            service_did.clone(),
+            service_actor_id,
             typed_payload,
         )
         .and_then(|draft| {
@@ -69,14 +73,12 @@ pub(super) async fn persist_mimi_canonical_message_event(
                 .author(actor_seq, hlc, created_at)
         })
         .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "service notary verification method is invalid: {error}"
-                ))
-            },
-        )?;
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
+        .map_err(|error| {
+            AppError::internal(format!(
+                "service notary verification method is invalid: {error}"
+            ))
+        })?;
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("MIMI Realm id invalid: {error}")))?;
     let seal = crate::notary::ensure_realm_seal_head(state, &realm)

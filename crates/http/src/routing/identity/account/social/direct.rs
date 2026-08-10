@@ -45,7 +45,13 @@ pub(super) fn direct_pair_key_participant(
         ));
     }
     Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-        did,
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(&did).map_err(|error| {
+                AppError::internal(format!(
+                    "stored direct conversation {role} DID cannot be projected: {error}"
+                ))
+            })?,
+        ),
     ))
 }
 

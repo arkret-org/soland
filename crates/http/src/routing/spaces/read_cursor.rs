@@ -109,7 +109,9 @@ fn validate_caller_signed_read_cursor(
             .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?,
     )
     .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?;
-    if cursor.actor_id != event.actor_id {
+    if arkret_wire::project_full_id_to_core_id(&cursor.actor_id).map_or(true, |core| {
+        arkret_wire::ActorId::from(core) != event.actor_id
+    }) {
         return Err(AppError::invalid_param(
             "advance_event payload.actor_id must equal event.actor_id",
         ));
@@ -281,7 +283,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("realm"),
             },
-            arkret_identifiers::Did::new(ACTOR_ID).expect("actor"),
+            crate::test_actor_id_str(ACTOR_ID),
             1,
             "019641370000-0000-00000001".parse().expect("hlc"),
             json!({

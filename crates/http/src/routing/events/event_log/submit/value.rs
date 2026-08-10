@@ -769,7 +769,8 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     if !matches!(
         notary,
         arkret_wire::notary::NotaryValue::SingleDid { ref did, .. }
-            if did == &event.actor_id
+            if arkret_wire::project_full_id_to_core_id(did)
+                .is_ok_and(|core| arkret_wire::ActorId::from(core) == event.actor_id)
     ) {
         return Ok(Some("current notary is not single_did == principal"));
     }
@@ -1094,7 +1095,7 @@ pub(super) async fn submit_event_value_with_context(
                         "validated realm_id is invalid",
                     )
                 })?,
-                Did::new(parsed.actor_id.clone()).map_err(|_| {
+                arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_error",
@@ -1221,7 +1222,7 @@ pub(super) async fn submit_event_value_with_context(
                     "validated realm_id is invalid",
                 )
             })?,
-            Did::new(parsed.actor_id.clone()).map_err(|_| {
+            arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
@@ -2057,7 +2058,7 @@ pub(super) async fn submit_event_value_with_context(
                 "validated realm_id is invalid",
             )
         })?,
-        Did::new(parsed.actor_id.clone()).map_err(|_| {
+        arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -2165,7 +2166,7 @@ pub(super) async fn submit_event_value_with_context(
                             "validated realm_id is invalid",
                         )
                     })?,
-                    Did::new(parsed.actor_id.clone()).map_err(|_| {
+                    arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "internal_error",
@@ -2241,7 +2242,7 @@ pub(super) async fn submit_event_value_with_context(
                                 "validated realm_id is invalid",
                             )
                         })?,
-                        Did::new(parsed.actor_id.clone()).map_err(|_| {
+                        arkret_wire::ActorId::new(parsed.actor_id.clone()).map_err(|_| {
                             SubmitOneError::new(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 "internal_error",

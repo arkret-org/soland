@@ -75,6 +75,11 @@ impl ServiceRouteResolver {
         now: DateTime<Utc>,
         force_refresh: bool,
     ) -> ServiceResult<ServiceRouteCacheEntry> {
+        if self.store.is_quarantined(service_id, service_kind).await? {
+            return Err(ServiceError::Conflict(
+                "service route is fork-quarantined".to_owned(),
+            ));
+        }
         if !force_refresh
             && let Some(entry) = self.store.route_cache(service_id, service_kind).await?
             && entry.is_routable_at(now)
@@ -85,39 +90,45 @@ impl ServiceRouteResolver {
             .evict_route_cache(service_id, service_kind)
             .await?;
 
-        if let Some(candidate) = self.fetcher.fetch_current(service_id, service_kind).await?
-            && let Ok(entry) = self.accept(service_id, service_kind, candidate, now).await
-        {
-            return Ok(entry);
+        if let Some(candidate) = self.fetcher.fetch_current(service_id, service_kind).await? {
+            match self.accept(service_id, service_kind, candidate, now).await {
+                Ok(entry) => return Ok(entry),
+                Err(ServiceError::SchemaViolation(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         if let Some(candidate) = self
             .fetcher
             .fetch_notice_candidate(service_id, service_kind)
             .await?
-            && let Ok(entry) = self.accept(service_id, service_kind, candidate, now).await
         {
-            return Ok(entry);
+            match self.accept(service_id, service_kind, candidate, now).await {
+                Ok(entry) => return Ok(entry),
+                Err(ServiceError::SchemaViolation(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         if let Some(candidate) = self
             .fetcher
             .fetch_realm_peer_mirror(service_id, service_kind)
             .await?
-            && let Ok(entry) = self.accept(service_id, service_kind, candidate, now).await
         {
-            return Ok(entry);
+            match self.accept(service_id, service_kind, candidate, now).await {
+                Ok(entry) => return Ok(entry),
+                Err(ServiceError::SchemaViolation(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         if let Some(candidate) = self
             .fetcher
             .fetch_configured_mirror(service_id, service_kind)
             .await?
-            && let Ok(entry) = self.accept(service_id, service_kind, candidate, now).await
         {
-            return Ok(entry);
-        }
-        if self.store.is_quarantined(service_id, service_kind).await? {
-            return Err(ServiceError::Conflict(
-                "service route is fork-quarantined".to_owned(),
-            ));
+            match self.accept(service_id, service_kind, candidate, now).await {
+                Ok(entry) => return Ok(entry),
+                Err(ServiceError::SchemaViolation(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         Err(ServiceError::NotFound(
             "verified service route unavailable".to_owned(),
@@ -131,6 +142,11 @@ impl ServiceRouteResolver {
         candidate: VerifiedRouteCandidate,
         now: DateTime<Utc>,
     ) -> ServiceResult<ServiceRouteCacheEntry> {
+        if self.store.is_quarantined(service_id, service_kind).await? {
+            return Err(ServiceError::Conflict(
+                "service route is fork-quarantined".to_owned(),
+            ));
+        }
         let record = candidate.record;
         let projected = arkret_wire::project_full_id_to_core_id(&record.record.full_id)
             .map(ServiceId::from)
@@ -193,7 +209,19 @@ impl ServiceRouteResolver {
             MonotonicRouteWrite::Stale => {
                 return Err(ServiceError::Conflict("service route rollback".to_owned()));
             }
-            MonotonicRouteWrite::Conflict { .. } => {
+            MonotonicRouteWrite::Conflict { accepted_digest } => {
+                self.store
+                    .quarantine_fork(ServiceResolutionForkEvidence {
+                        service_id: service_id.clone(),
+                        service_kind: service_kind.to_owned(),
+                        artifact_family: "service_resolution_record".to_owned(),
+                        artifact_key: record.record.record_sequence.to_string(),
+                        accepted_digest,
+                        conflicting_digest: digest,
+                        evidence: serde_json::json!({"source": format!("{:?}", candidate.source), "race": true}),
+                        quarantined_at: now,
+                    })
+                    .await?;
                 return Err(ServiceError::Conflict("service route fork".to_owned()));
             }
         }
@@ -397,6 +425,96 @@ mod tests {
                 RouteSource::RealmPeerMirror,
                 RouteSource::ConfiguredMirror,
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantine_is_checked_before_disposable_cache() {
+        let store = Arc::new(MemoryServiceRouteStore::new());
+        let accepted = record("did:webvh:z6mkquarantined:route.example", 0, None);
+        let expected = accepted.record.service_id.clone();
+        let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
+        let seed_fetcher = Arc::new(FakeFetcher {
+            current: Some(accepted.clone()),
+            notice: None,
+            peer: None,
+            configured: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        ServiceRouteResolver::new(store.clone(), seed_fetcher)
+            .resolve(&expected, "principal_server", now, true)
+            .await
+            .unwrap();
+        store
+            .quarantine_fork(ServiceResolutionForkEvidence {
+                service_id: expected.clone(),
+                service_kind: "principal_server".to_owned(),
+                artifact_family: "service_resolution_record".to_owned(),
+                artifact_key: "0".to_owned(),
+                accepted_digest: record_digest(&accepted),
+                conflicting_digest: hash('f'),
+                evidence: serde_json::json!({"test": "cache_must_not_bypass_quarantine"}),
+                quarantined_at: now,
+            })
+            .await
+            .unwrap();
+        let fetcher = Arc::new(FakeFetcher {
+            current: None,
+            notice: None,
+            peer: None,
+            configured: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        let error = ServiceRouteResolver::new(store, fetcher.clone())
+            .resolve(&expected, "principal_server", now, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServiceError::Conflict(_)));
+        assert!(fetcher.calls.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fork_fails_closed_without_trying_later_sources() {
+        let store = Arc::new(MemoryServiceRouteStore::new());
+        let accepted = record("did:webvh:z6mkforked:old.example", 0, None);
+        let expected = accepted.record.service_id.clone();
+        let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
+        let seed_fetcher = Arc::new(FakeFetcher {
+            current: Some(accepted.clone()),
+            notice: None,
+            peer: None,
+            configured: None,
+            calls: Mutex::new(Vec::new()),
+        });
+        ServiceRouteResolver::new(store.clone(), seed_fetcher)
+            .resolve(&expected, "principal_server", now, true)
+            .await
+            .unwrap();
+
+        let fork = record("did:webvh:z6mkforked:new.example", 0, None);
+        let fetcher = Arc::new(FakeFetcher {
+            current: Some(fork),
+            notice: None,
+            peer: None,
+            configured: Some(accepted),
+            calls: Mutex::new(Vec::new()),
+        });
+        let error = ServiceRouteResolver::new(store.clone(), fetcher.clone())
+            .resolve(
+                &expected,
+                "principal_server",
+                now + Duration::seconds(1),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServiceError::Conflict(_)));
+        assert_eq!(*fetcher.calls.lock(), vec![RouteSource::CurrentRecord]);
+        assert!(
+            store
+                .is_quarantined(&expected, "principal_server")
+                .await
+                .unwrap()
         );
     }
 }

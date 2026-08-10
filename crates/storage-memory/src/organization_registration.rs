@@ -1,5 +1,5 @@
 use arkret_models_identity::{OrganizationRegistrationChallenge, OrganizationRegistrationOutcome};
-use arkret_wire::Did;
+use arkret_wire::CoreId;
 use soland_storage::{
     OrganizationRegistrationChallengeRecord, OrganizationRegistrationCurrent,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationGenerationRecord,
@@ -59,14 +59,14 @@ impl OrganizationRegistrationStore for MemoryOrganizationRegistrationStore {
 
     async fn get_current(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
     ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>> {
         current_from_state(&self.state.lock(), organization_id)
     }
 
     async fn get_generation(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         generation: u64,
     ) -> PersistenceResult<Option<OrganizationRegistrationGenerationRecord>> {
         Ok(self
@@ -148,7 +148,7 @@ impl OrganizationRegistrationStore for MemoryOrganizationRegistrationStore {
 
     async fn mark_stale(
         &self,
-        organization_id: &Did,
+        organization_id: &CoreId,
         expected_current_generation: u64,
         expected_current_outcome_id: &str,
         changed_at: chrono::DateTime<chrono::Utc>,
@@ -250,7 +250,7 @@ fn challenge_organization_id(
 
 fn current_from_state(
     state: &MemoryOrganizationRegistrationState,
-    organization_id: &Did,
+    organization_id: &CoreId,
 ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>> {
     let Some(registration) = state.registrations.get(organization_id.as_str()) else {
         return Ok(None);

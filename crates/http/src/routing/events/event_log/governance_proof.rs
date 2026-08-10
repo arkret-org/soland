@@ -1578,7 +1578,7 @@ mod tests {
 
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
-            issuer: arkret_identifiers::Did::new("did:web:alice.example").unwrap(),
+            issuer: crate::test_actor_id_str("did:web:alice.example"),
             op: SealedOp::new(
                 Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
                 LatticeOp {
@@ -1695,7 +1695,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
             serde_json::json!({
@@ -1774,7 +1774,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            actor_id.clone(),
+            crate::test_actor_id(&actor_id),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
             serde_json::json!({
@@ -1814,7 +1814,7 @@ mod tests {
                 Vec::new()
             } else {
                 vec![IssuedOp {
-                    issuer: actor_id.clone(),
+                    issuer: crate::test_actor_id(&actor_id),
                     op: SealedOp::new(
                         move_id.clone(),
                         LatticeOp {

@@ -399,7 +399,10 @@ async fn verify_federated_range_attestation(
     event
         .validate_proof_bindings()
         .map_err(|error| format!("PCR range Event proof binding failed: {error}"))?;
-    if event.proofs.is_empty() || &event.actor_id != expected_issuer {
+    let expected_issuer_core = arkret_wire::project_full_id_to_core_id(expected_issuer)
+        .map(arkret_wire::ActorId::from)
+        .map_err(|error| format!("PCR range issuer cannot be projected: {error}"))?;
+    if event.proofs.is_empty() || event.actor_id != expected_issuer_core {
         return Err("PCR range attestation actor does not match receipt issuer".to_owned());
     }
     let digest_payload = event
@@ -457,7 +460,7 @@ async fn verify_federated_range_attestation(
             return Err("PCR range payload proof digest is invalid".to_owned());
         }
         let binding = proof
-            .canonical_binding_bytes(expected_issuer)
+            .canonical_binding_bytes(&expected_issuer_core)
             .map_err(|error| format!("PCR range payload proof transcript failed: {error}"))?;
         verify_federated_service_jws(
             state,

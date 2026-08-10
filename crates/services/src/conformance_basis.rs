@@ -431,7 +431,10 @@ fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
 
 fn issued_op(issuer: &Did, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
     IssuedOp {
-        issuer: issuer.clone(),
+        issuer: arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(issuer)
+                .expect("embedded conformance issuer projects through a registered adapter"),
+        ),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
     }
 }

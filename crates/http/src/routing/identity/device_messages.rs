@@ -569,7 +569,7 @@ async fn active_agent_keypackage_endpoint(
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
-    let principal = arkret_identifiers::Did::new(principal_id.to_owned())
+    let principal = arkret_identifiers::CoreId::new(principal_id.to_owned())
         .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?;
     for row in &rows {
         let lifecycle = row.lifecycle().map_err(|error| {

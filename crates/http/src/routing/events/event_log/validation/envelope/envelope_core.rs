@@ -1080,7 +1080,7 @@ mod security_frontier_material_tests {
         let mut event = arkret_wire::test_support::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
-            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            crate::test_actor_id_str("did:web:alice.example"),
             0,
             arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e".to_owned()).unwrap(),
             serde_json::json!({"body": "hello"}),
@@ -1116,7 +1116,7 @@ mod security_frontier_material_tests {
         let mut event = arkret_wire::test_support::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
-            arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap(),
+            crate::test_actor_id_str("did:web:alice.example"),
             0,
             arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e".to_owned()).unwrap(),
             serde_json::json!({"body": "accepted"}),

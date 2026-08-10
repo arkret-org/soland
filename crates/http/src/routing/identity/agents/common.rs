@@ -667,21 +667,33 @@ pub(super) fn agent_key_state_from_record(
         .active_binding
         .as_ref()
         .map(|binding| binding.authorized_event_ref.clone());
-    let agent_id = Did::new(record.id.clone())
+    let agent_full_id = Did::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
-    let controller_id = Did::new(record.controller_id.clone()).map_err(|error| {
+    let controller_full_id = Did::new(record.controller_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "persisted Agent controller DID is invalid: {error}"
         ))
     })?;
     let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
-        &agent_id,
-        &controller_id,
+        &agent_full_id,
+        &controller_full_id,
         &requested_scope,
     )
     .map_err(|error| {
         AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
     })?;
+    let agent_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&agent_full_id).map_err(|error| {
+            AppError::internal(format!("persisted Agent DID cannot be projected: {error}"))
+        })?,
+    );
+    let controller_id = arkret_wire::ActorId::from(
+        arkret_wire::project_full_id_to_core_id(&controller_full_id).map_err(|error| {
+            AppError::internal(format!(
+                "persisted Agent controller DID cannot be projected: {error}"
+            ))
+        })?,
+    );
     // pairing handle presence and its branch are a projection of the single
     // derived runtime_state (key-management.md §3.6.1): an open handle appears
     // exactly for pending_runtime_key (bootstrap) and replacing (replacement).

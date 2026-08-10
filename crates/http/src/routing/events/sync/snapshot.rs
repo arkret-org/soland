@@ -1001,12 +1001,23 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
             loser_event_digests.push(digest);
         }
         if is_equivocation {
+            let Some(issuer) = winner_event.proofs.iter().find_map(|proof| {
+                let (controller, _) = proof.verification_method.rsplit_once('#')?;
+                let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+                (arkret_wire::project_full_id_to_core_id(&full_id)
+                    .map(arkret_wire::ActorId::from)
+                    .ok()
+                    == Some(winner_event.actor_id.clone()))
+                .then_some(full_id)
+            }) else {
+                continue;
+            };
             conflicts.push(
                 arkret_models_collaboration::sync_frames::account_sync::OrderedLogConflictDiagnostic {
                     cell: format!(
                         "ak:cell:ak.component.strand.discussion.timeline.v1:{strand_id}"
                     ),
-                    issuer: winner_event.actor_id.clone(),
+                    issuer,
                     issuer_seq,
                     reason: "issuer_equivocation".to_owned(),
                     winner_event_id: winner_event.event_id.clone(),
@@ -1335,7 +1346,7 @@ async fn notification_account_data_events(
         let Ok(Value::Object(payload)) = serde_json::to_value(row.notification) else {
             continue;
         };
-        event.actor_id = match arkret_identifiers::Did::new(session.actor.clone()) {
+        event.actor_id = match arkret_wire::ActorId::new(session.actor.clone()) {
             Ok(actor_id) => actor_id,
             Err(_) => continue,
         };

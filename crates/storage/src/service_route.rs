@@ -21,12 +21,48 @@ pub struct ServiceResolutionMirrorEntry {
     pub accepted_at: DateTime<Utc>,
 }
 
+impl ServiceResolutionMirrorEntry {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        let artifact_key = self
+            .request
+            .validate()
+            .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
+        let request_digest = self
+            .request
+            .canonical_digest()
+            .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
+        self.ack
+            .validate_request_binding(&self.source_service_id, &self.request)
+            .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
+        if self.request_id != self.request.request_id
+            || self.realm_id != self.request.realm_id
+            || self.request_digest != request_digest
+            || self.artifact_key != artifact_key
+            || self.artifact_digest != self.request.artifact_digest
+            || self.accepted_at != self.ack.ack.accepted_at
+        {
+            return Err(super::PersistenceError::SchemaViolation(
+                "service resolution mirror entry cross-binding mismatch".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServiceResolutionMirrorCommit {
     Stored(ServiceResolutionPublishAck),
     Replay(ServiceResolutionPublishAck),
     TransportConflict,
-    ArtifactConflict { accepted_digest: Hash },
+    ArtifactConflict {
+        accepted_digest: Hash,
+    },
+    /// The artifact is a fork at an already-accepted sequence/revision.
+    SequenceConflict {
+        accepted_digest: Hash,
+    },
+    /// The artifact is a rollback, gap, or is based on the wrong durable floor.
+    SequenceRejected,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,9 +113,15 @@ pub trait ServiceRouteStore: Send + Sync {
         state: ServiceRouteNoticeState,
     ) -> PersistenceResult<MonotonicRouteWrite>;
 
-    /// Atomically binds both transport `(source, realm, request_id)` and
-    /// artifact `(source, realm, artifact_key)` idempotency keys to one durable
+    /// Atomically validates and advances the record/notice monotonic floor,
+    /// stores the exact mirrored artifact, binds both transport
+    /// `(source, realm, request_id)` and artifact
+    /// `(source, realm, artifact_key)` idempotency keys, and durably stores the
     /// signed ACK. Only an identical request digest may replay that ACK.
+    ///
+    /// Implementations MUST perform the complete write on one lock/transaction;
+    /// returning `Stored` means a crash cannot retain the ACK without its
+    /// corresponding monotonic safety state (or vice versa).
     async fn commit_mirror(
         &self,
         entry: ServiceResolutionMirrorEntry,

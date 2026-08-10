@@ -295,7 +295,14 @@ async fn validate_request_acceptance_receipt(
     )?;
     if request_event.kind != arkret_wire::EventKind::ContactRequested
         || request_event.event_id != receipt.core.request_event_ref
-        || request_event.actor_id != *receipt.core.holder.subject_id()
+        || request_event.actor_id
+            != arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(receipt.core.holder.subject_id()).map_err(
+                    |error| {
+                        AppError::internal(format!("receipt holder cannot be projected: {error}"))
+                    },
+                )?,
+            )
         || requested_payload.peer != receipt.core.peer
         || request_digest != receipt.core.request_digest
         || expected_checkpoint != receipt.core.source_checkpoint
@@ -362,7 +369,11 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
 ) -> Result<Event, AppError> {
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
-        holder.subject_id().clone(),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(holder.subject_id()).map_err(|error| {
+                AppError::internal(format!("Contact holder cannot be projected: {error}"))
+            })?,
+        ),
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
@@ -555,7 +566,13 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         realm_id.clone(),
-        holder.subject_id().clone(),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(holder.subject_id()).map_err(|error| {
+                AppError::internal(format!(
+                    "contact holder full_id cannot be projected: {error}"
+                ))
+            })?,
+        ),
     )
     .await?;
     let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {
@@ -788,6 +805,21 @@ fn signed_current_proof(
     basis_id: Hash,
     event: &Event,
 ) -> Result<ContactCurrentProof, AppError> {
+    let issuer = event
+        .proofs
+        .iter()
+        .find_map(|proof| {
+            let (controller, _) = proof.verification_method.rsplit_once('#')?;
+            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+            (arkret_wire::project_full_id_to_core_id(&full_id)
+                .map(arkret_wire::ActorId::from)
+                .ok()
+                == Some(event.actor_id.clone()))
+            .then_some(full_id)
+        })
+        .ok_or_else(|| {
+            AppError::invalid_param("Contact Event has no actor-bound proof controller")
+        })?;
     let terminal = event.kind == arkret_wire::EventKind::ContactTombstoned;
     let head_digest = Hash::new(
         event
@@ -798,7 +830,7 @@ fn signed_current_proof(
     let fresh_until = now() + chrono::Duration::minutes(10);
     let unsigned = json!({
         "basis_id": basis_id,
-        "issuer": event.actor_id,
+        "issuer": issuer,
         "terminal": terminal,
         "head_event_ref": event.event_id,
         "head_digest": head_digest,
@@ -808,7 +840,7 @@ fn signed_current_proof(
     });
     Ok(ContactCurrentProof {
         basis_id,
-        issuer: event.actor_id.clone(),
+        issuer,
         terminal,
         head_event_ref: event.event_id.clone(),
         head_digest,
@@ -945,6 +977,7 @@ async fn plan_contact_commit(
             granted_to_peer_scopes,
             previous_terminal_basis_id,
             introduction_evidence,
+            ..
         } => {
             let request_receipt = sign_request_receipt(state, reservation, event)?;
             let peer_service_id = contact_request_delivery_address(
@@ -1387,11 +1420,10 @@ fn prepare_contact_federation_delivery(
             };
             Some(PeerContactAddress {
                 subject_id: peer.clone(),
-                recipient_service_id: Did::new(recipient_service_id.to_owned()).map_err(
-                    |error| {
+                recipient_service_id: arkret_wire::ServiceId::new(recipient_service_id.to_owned())
+                    .map_err(|error| {
                         AppError::internal(format!("Contact recipient service invalid: {error}"))
-                    },
-                )?,
+                    })?,
                 recipient_service_kind: Some("principal_server".to_owned()),
             })
         }
@@ -1513,7 +1545,10 @@ fn contact_request_delivery_address(
                     format!("Contact principal locator invalid: {error}"),
                 )
             })?;
-            if &principal_locator.subject_id != peer || principal_locator.expires_at <= now() {
+            if arkret_wire::project_full_id_to_core_id(peer)
+                .map_or(true, |core| core != principal_locator.subject_id)
+                || principal_locator.expires_at <= now()
+            {
                 return Err(AppError::new(
                     ErrorCode::FailedPrecondition,
                     "Contact principal locator does not bind the current peer",
@@ -1547,7 +1582,7 @@ fn contact_request_delivery_address(
                 return Ok(None);
             };
             (
-                Did::new(service_id.to_owned()).map_err(|error| {
+                arkret_wire::ServiceId::new(service_id.to_owned()).map_err(|error| {
                     AppError::internal(format!("Contact member delivery service invalid: {error}"))
                 })?,
                 Some("principal_server".to_owned()),
@@ -1574,13 +1609,20 @@ fn contact_request_delivery_address(
                 return Ok(None);
             }
             (
-                binding.recipient_service_id.clone(),
+                arkret_wire::ServiceId::from(
+                    arkret_wire::project_full_id_to_core_id(&binding.recipient_service_id)
+                        .map_err(|error| {
+                            AppError::internal(format!(
+                                "handle delivery service full_id cannot be projected: {error}"
+                            ))
+                        })?,
+                ),
                 Some("principal_server".to_owned()),
             )
         }
         ContactIntroductionEvidence::SamePrincipalServer => (
-            Did::new(state.service_id().clone()).map_err(|error| {
-                AppError::internal(format!("local Contact service DID invalid: {error}"))
+            arkret_wire::ServiceId::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("local Contact service core id invalid: {error}"))
             })?,
             Some("principal_server".to_owned()),
         ),

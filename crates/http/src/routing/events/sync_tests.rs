@@ -9,7 +9,7 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
             )
             .unwrap(),
         },
-        arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
         actor_seq,
         arkret_identifiers::Hlc::new(hlc).unwrap(),
         json!({
@@ -794,7 +794,7 @@ fn canonical_event_record_received_at(
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         },
-        arkret_identifiers::Did::new(actor_id.to_owned()).unwrap(),
+        crate::test_actor_id_str(actor_id),
         actor_seq,
         arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000001")).unwrap(),
         payload,

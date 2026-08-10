@@ -227,10 +227,7 @@ pub(super) fn validate_durable_agent_lifecycle(
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
         || event.actor_id.as_str() != agent_id
-        || event
-            .executed_by
-            .as_ref()
-            .map(arkret_identifiers::Did::as_str)
+        || event.executed_by.as_ref().map(arkret_wire::ActorId::as_str)
             != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {

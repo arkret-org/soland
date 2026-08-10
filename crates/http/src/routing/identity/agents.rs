@@ -238,7 +238,10 @@ mod tests {
         })
     }
 
-    fn initial_submission(event: arkret_wire::Event) -> arkret_wire::EventInitialSubmission {
+    fn initial_submission(
+        event: arkret_wire::Event,
+        actor_full_id: arkret_identifiers::FullId,
+    ) -> arkret_wire::EventInitialSubmission {
         use arkret_wire::{
             AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
             AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
@@ -278,7 +281,7 @@ mod tests {
                 basis_ref: LeaseBasisRef::Seal(
                     SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
                 ),
-                actor_id: event.actor_id.clone(),
+                actor_id: actor_full_id,
                 device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap(),
                 scope_ref: event.scope_ref.clone(),
                 action: event.kind.as_str().to_owned(),
@@ -415,7 +418,7 @@ mod tests {
                 verification_method: verification_method.clone(),
                 signature_algorithm: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::Ed25519,
                 challenge: pairing_request_id.clone(),
-                audience: Did::new(service_id).unwrap(),
+                audience: arkret_wire::ServiceId::new(service_id).unwrap(),
                 created_at,
                 expires_at,
                 runtime_key_binding_digest,
@@ -470,14 +473,14 @@ mod tests {
                 )
                 .unwrap(),
             },
-            arkret_identifiers::Did::new("did:web:agent.example").unwrap(),
+            crate::test_actor_id(&agent_id),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({}),
         )
         .unwrap();
         let authorize_event_id = authorize_event.event_id.clone();
-        let authorize_event = initial_submission(authorize_event);
+        let authorize_event = initial_submission(authorize_event, agent_id.clone());
         let signing_public_key_digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
             signing_key.verifying_key().as_bytes(),
         ))
@@ -546,8 +549,7 @@ mod tests {
         let mut proof = body.requested_scope_disclosure.proofs[0].clone();
         proof.verification_method =
             arkret_wire::DidUrl::new(format!("{controller_id}#{device_id}")).unwrap();
-        body.authorize_event.event.executed_by =
-            Some(Did::new(controller_id.to_owned()).expect("controller DID"));
+        body.authorize_event.event.executed_by = Some(crate::test_actor_id_str(controller_id));
         body.authorize_event.event.proofs = vec![proof];
     }
 
@@ -557,7 +559,7 @@ mod tests {
         let mut body = key_pair_request_body(
             "did:web:agent.example",
             "did:web:agent.example#runtime-key",
-            "did:web:soland.example",
+            "ak:did_core:web:soland.example",
         );
         bind_pairing_request_to_controller_device(&mut body, controller_id);
 

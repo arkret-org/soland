@@ -211,10 +211,13 @@ pub(crate) async fn verify_control_proposal_ack(
     }
 
     if !profile.proposal_quorum_met(&signers) {
-        let delegated_controller = event
-            .executed_by
-            .as_ref()
-            .filter(|controller| signers.len() == 1 && signers.contains(*controller));
+        let delegated_controller = event.executed_by.as_ref().filter(|controller| {
+            signers.len() == 1
+                && signers.iter().any(|signer| {
+                    arkret_wire::project_full_id_to_core_id(signer)
+                        .is_ok_and(|core| &arkret_wire::ActorId::from(core) == *controller)
+                })
+        });
         let delegated_quorum = if let Some(controller) = delegated_controller {
             let envelope = serde_json::to_value(event)
                 .map_err(|error| error.to_string())?
@@ -228,7 +231,21 @@ pub(crate) async fn verify_control_proposal_ack(
             )
             .await
             .is_ok()
-                && profile.proposal_quorum_met(&BTreeSet::from([event.actor_id.clone()]))
+                && profile.proposal_quorum_met(
+                    &event
+                        .proofs
+                        .iter()
+                        .filter_map(|proof| {
+                            let (controller, _) = proof.verification_method.rsplit_once('#')?;
+                            let full_id = arkret_wire::FullId::new(controller.to_owned()).ok()?;
+                            (arkret_wire::project_full_id_to_core_id(&full_id)
+                                .map(arkret_wire::ActorId::from)
+                                .ok()
+                                == Some(event.actor_id.clone()))
+                            .then_some(full_id)
+                        })
+                        .collect(),
+                )
         } else {
             false
         };
