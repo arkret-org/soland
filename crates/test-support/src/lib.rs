@@ -141,6 +141,16 @@ pub fn app_state_with_identity(
         .expect("fixture has a serving identity")
         .service_id
         .to_string();
+    let service_resolution_commitment = {
+        let identity = service_identity
+            .identity()
+            .expect("fixture has a serving identity");
+        arkret_models_identity::ResolutionCommitment {
+            full_id: identity.full_id.clone(),
+            method_history_head: format!("sha256:{}", "0".repeat(64)),
+            version_id: identity.version_id.clone(),
+        }
+    };
     let projections = ProjectionService::new(
         control_event_store,
         seal_store.clone(),
@@ -166,6 +176,7 @@ pub fn app_state_with_identity(
             storage_mode: "memory",
         },
         service_identity,
+        service_resolution_commitment,
         resolved_signing_seed,
     );
     state_test_registry().lock().insert(

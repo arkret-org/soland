@@ -249,6 +249,9 @@ impl<'a> CallerSignedEvent<'a> {
     pub fn build(self) -> Event {
         let now = chrono::Utc::now();
         let actor = Did::new(self.actor_id.to_owned()).expect("fixture actor DID");
+        let actor_id = arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(&actor).expect("fixture actor projection"),
+        );
         let verification_method = self.verification_method();
         let mut event = arkret_wire::test_support::raw_event_at(
             self.kind,
@@ -259,7 +262,7 @@ impl<'a> CallerSignedEvent<'a> {
                     realm_id: RealmId::new(self.realm_id.to_owned()).expect("fixture Realm id"),
                 }
             },
-            actor.clone(),
+            actor_id,
             self.actor_seq,
             Hlc::new(format!(
                 "{:012x}-0000-00000000",

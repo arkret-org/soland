@@ -118,7 +118,12 @@ pub async fn seed_sealed_capability_grant(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        Did::new(fixture.issuer.to_owned()).expect("fixture grant issuer DID"),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &Did::new(fixture.issuer.to_owned()).expect("fixture grant issuer DID"),
+            )
+            .expect("fixture grant issuer projection"),
+        ),
         0,
         fixture_hlc(fixture.grant_id),
         json!({ "object": body.clone() }),
@@ -335,7 +340,12 @@ fn grant_cell_op(grant_id: &str, issuer: &str, move_id: &Hash, body: Value) -> (
     ))
     .expect("capability grant cell ref");
     let op = IssuedOp {
-        issuer: Did::new(issuer.to_owned()).expect("fixture grant issuer DID"),
+        issuer: arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &Did::new(issuer.to_owned()).expect("fixture grant issuer DID"),
+            )
+            .expect("fixture grant issuer projection"),
+        ),
         op: arkret_state::lattice::SealedOp::new(
             move_id.clone(),
             arkret_wire::LatticeOp {

@@ -436,7 +436,12 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+            )
+            .expect("fixture genesis actor projection"),
+        ),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -551,7 +556,12 @@ pub async fn seed_event_derived_realm_genesis_event(
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
-        Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        arkret_wire::ActorId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+            )
+            .expect("fixture genesis actor projection"),
+        ),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -626,7 +636,12 @@ async fn persist_and_project_realm_genesis_event(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            Did::new(subject.to_owned()).expect("fixture bootstrap actor DID"),
+            arkret_wire::ActorId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &Did::new(subject.to_owned()).expect("fixture bootstrap actor DID"),
+                )
+                .expect("fixture bootstrap actor projection"),
+            ),
             actor_seq,
             Hlc::new(format!("0196419b0000-{actor_seq:04x}-51c0a1ed"))
                 .expect("fixture bootstrap HLC"),
@@ -732,7 +747,13 @@ pub fn apply_registered_cba_plane_seal(
         Some("data") => {
             event.seal_ref = Some(seal_id);
             event.auth_context = Some(arkret_wire::AuthContext {
-                did: event.actor_id.clone(),
+                did: Did::new(
+                    verification_method
+                        .split_once('#')
+                        .map_or(verification_method, |(did, _)| did)
+                        .to_owned(),
+                )
+                .expect("fixture verification method DID"),
                 key_id: verification_method
                     .split_once('#')
                     .map_or_else(|| verification_method.to_owned(), |(_, key)| key.to_owned()),
