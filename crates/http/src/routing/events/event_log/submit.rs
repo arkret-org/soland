@@ -1631,6 +1631,16 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
             did_version_id: request.did_version_id.clone(),
             log_head_digest: request.log_head_digest.clone(),
             control_key_digest: request.control_key_digest.clone(),
+            registration_evidence_digest: request
+                .registration_did_evidence
+                .canonical_digest()
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "historical_did_evidence_invalid",
+                        format!("registration evidence digest is invalid: {error}"),
+                    )
+                })?,
         }),
     )
     .await?;
@@ -1675,6 +1685,10 @@ async fn existing_pcr_genesis_outcome(
                         && scope.did_version_id == request.did_version_id
                         && scope.log_head_digest == request.log_head_digest
                         && scope.control_key_digest == request.control_key_digest
+                        && request
+                            .registration_did_evidence
+                            .canonical_digest()
+                            .is_ok_and(|digest| digest == scope.registration_evidence_digest)
                 })
         });
     let Some(receipt) = receipt else {
@@ -1706,6 +1720,7 @@ async fn validate_identity_creation_control_proof(
         || proof.expires_at <= now
         || proof.expires_at - proof.issued_at > Duration::minutes(5)
         || proof.audience.as_str() != state.service_id().as_str()
+        || request.registration_did_evidence.accepted_at > now
     {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1713,143 +1728,28 @@ async fn validate_identity_creation_control_proof(
             "identity creation control proof is expired or has the wrong audience",
         ));
     }
-    let mut history = state
-        .dids()
-        .log_events(request.full_id.as_str())
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "stale_did_document",
-                format!("PCR genesis DID history is unavailable: {error}"),
-            )
-        })?;
-    history.sort_by_key(|entry| entry.seq);
-    let pinned = history
-        .iter()
-        .find(|entry| {
-            entry.operation.get("versionId").and_then(Value::as_str)
-                == Some(request.did_version_id.as_str())
-        })
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "failed_precondition",
-                "PCR genesis requires the accepted pinned DID version",
-            )
-        })?;
-    if pinned.did != request.full_id.as_str() {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "PCR genesis DID history belongs to a different principal",
-        ));
-    }
-    let pinned_digest = arkret_wire::Hash::new(pinned.event_digest.clone()).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("stored DID entry digest is invalid: {error}"),
-        )
-    })?;
-    if pinned_digest != request.log_head_digest {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "PCR genesis DID version and log head digest do not name the same accepted entry",
-        ));
-    }
-    let pinned_version_time = pinned
-        .operation
-        .get("versionTime")
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                "pinned DID version has no canonical versionTime",
-            )
-        })?;
-    let native_history = history
-        .iter()
-        .map(|entry| entry.operation.clone())
-        .collect::<Vec<_>>();
-    let history_point = arkret_signatures::webvh::validate_webvh_history_at(
-        &request.full_id,
-        &native_history,
-        pinned_version_time,
+    arkret_signatures::webvh::verify_identity_creation_control_proof(
+        &request.registration_did_operation,
+        proof,
     )
     .map_err(|error| {
         SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "invalid_proof",
-            format!("pinned DID history is invalid: {error}"),
+            format!("identity creation proof is invalid: {error}"),
         )
     })?;
-    if history_point.version_id != request.did_version_id {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "pinned DID version does not resolve to the requested history point",
-        ));
-    }
-    let active_update_key = history_point.active_update_key_multibase;
-    if proof.verification_key_multibase != active_update_key {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation proof is not signed by the pinned version's active update key",
-        ));
-    }
-    let key_material = arkret_signatures::proof::PublicKeyMaterial::Ed25519Multibase {
-        value: active_update_key,
-    };
-    let key_bytes = key_material.ed25519_bytes().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("pinned DID update key is invalid: {error}"),
-        )
-    })?;
-    let control_key_digest = arkret_wire::Hash::new(format!(
-        "sha256:{}",
-        arkret_canonical::sha256_hex(&key_bytes)
-    ))
+    arkret_signatures::webvh::verify_registration_did_evidence_draft(
+        &request.registration_did_operation,
+        &request.registration_did_evidence.draft(),
+    )
     .map_err(|error| {
         SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("pinned DID update key digest is invalid: {error}"),
+            StatusCode::FORBIDDEN,
+            "historical_did_evidence_invalid",
+            format!("frozen registration DID evidence is invalid: {error}"),
         )
     })?;
-    if control_key_digest != request.control_key_digest
-        || control_key_digest != proof.control_key_digest
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation proof control key digest does not match the pinned update key",
-        ));
-    }
-    let signing_bytes = proof.canonical_signing_bytes().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("identity creation proof transcript is invalid: {error}"),
-        )
-    })?;
-    if !arkret_signatures::proof::verify_detached_ed25519_signature(
-        &key_material,
-        &signing_bytes,
-        &proof.signature,
-    ) {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "identity creation control signature is invalid",
-        ));
-    }
     Ok(())
 }
 

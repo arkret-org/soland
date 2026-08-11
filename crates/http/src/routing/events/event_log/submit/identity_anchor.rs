@@ -6,6 +6,7 @@ pub(super) struct PcrGenesisPins {
     pub did_version_id: String,
     pub log_head_digest: Hash,
     pub control_key_digest: Hash,
+    pub registration_evidence_digest: Hash,
 }
 
 pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
@@ -1756,6 +1757,7 @@ fn build_pcr_genesis_batch_receipt(
                 did_version_id: pins.did_version_id.clone(),
                 log_head_digest: pins.log_head_digest.clone(),
                 control_key_digest: pins.control_key_digest.clone(),
+                registration_evidence_digest: pins.registration_evidence_digest.clone(),
                 create_digest: create_digest.clone(),
                 founding_authorize_digest: authorize_digest.clone(),
                 accepted_device_id: descriptor.device_id,

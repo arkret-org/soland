@@ -1061,6 +1061,7 @@ pub(crate) async fn identity_submit_did_operation(
                 next_seq,
                 &version_id,
                 &event_digest,
+                existing_event.created_at,
             );
         }
         return Err(AppError::new(
@@ -1149,7 +1150,7 @@ pub(crate) async fn identity_submit_did_operation(
                 event_digest: event_digest.clone(),
                 did: did.clone(),
                 seq: next_seq,
-                operation,
+                operation: operation.clone(),
                 created_at: submitted_at,
             },
         )
@@ -1163,12 +1164,26 @@ pub(crate) async fn identity_submit_did_operation(
             ));
         }
         WebvhLogCommitOutcome::Duplicate => {
+            let accepted_at = state
+                .dids()
+                .log_events(&did)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .into_iter()
+                .find(|event| event.event_digest == event_digest && event.operation == operation)
+                .map(|event| event.created_at)
+                .ok_or_else(|| {
+                    AppError::internal(
+                        "duplicate DID operation has no durable original acceptance row",
+                    )
+                })?;
             return did_operation_submit_outcome(
                 arkret_models_identity::identity::DidOperationSubmitStatus::Duplicate,
                 typed_did,
                 next_seq,
                 &version_id,
                 &event_digest,
+                accepted_at,
             );
         }
         WebvhLogCommitOutcome::Accepted => {}
@@ -1194,6 +1209,7 @@ pub(crate) async fn identity_submit_did_operation(
         next_seq,
         &version_id,
         &event_digest,
+        submitted_at,
     )
 }
 
@@ -1203,6 +1219,7 @@ fn did_operation_submit_outcome(
     seq: u64,
     version_id: &str,
     event_digest: &str,
+    accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> JsonResult<DidOperationSubmitOutcome> {
     let head_event_digest = Hash::new(event_digest.to_owned()).map_err(|error| {
         AppError::internal(format!(
@@ -1213,6 +1230,7 @@ fn did_operation_submit_outcome(
     json_ok(DidOperationSubmitOutcome {
         status,
         did,
+        accepted_at,
         seq: Some(seq),
         head_event_digest: Some(head_event_digest),
         operation_ref: Some(operation_ref),
