@@ -210,8 +210,8 @@ fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::V
     json!({
         "schema": "ak.schema.accountability_grant.v1",
         "sender": "ak:did_core:web:alice.example",
-        "issuer": "did:web:alice.example",
-        "subject": "did:web:agent.example",
+        "issuer": "ak:did_core:web:alice.example",
+        "subject": "ak:did_core:web:agent.example",
         "accountability_scope": "agent_operator",
         "not_before": "2026-01-01T00:00:00.000Z",
         "expires_at": expires_at,
@@ -2008,9 +2008,9 @@ async fn profile_accountable_principal_accepts_active_atomic_grant() {
         "ak.profile.create",
         json!({
             "sender": "ak:did_core:web:agent.example",
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
 
@@ -2077,9 +2077,9 @@ async fn profile_accountability_uses_signed_frozen_time() {
         "ak.profile.update",
         json!({
             "sender": "ak:did_core:web:agent.example",
-            "principal_id": "did:web:agent.example",
+            "principal_id": "ak:did_core:web:agent.example",
             "display_name": "Agent",
-            "accountable_principal_ids": ["did:web:alice.example"]
+            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
         }),
     );
     profile.created_at = chrono::DateTime::parse_from_rfc3339("2026-05-01T00:00:00.000Z")

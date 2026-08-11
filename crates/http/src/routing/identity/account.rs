@@ -12,10 +12,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{
-    BlobRef, DeviceId, DidCoreId, DidFullId, EventId, Hash, RealmId, StrandId,
+    ActorProfileId, BlobRef, CellRef, DeviceId, DidCoreId, DidFullId, EventId, Hash, RealmId,
+    StrandId,
 };
 use arkret_models_collaboration::account_lifecycle::{
-    AccountUpdateProfileRequestBody, AccountView,
+    AccountProfileAcceptedBasis, AccountUpdateProfileRequestBody, AccountView,
 };
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
@@ -35,7 +36,9 @@ use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairAuthorization, DirectConversationRepairDispatchRequest,
     DirectConversationRepairEnqueueOutcome,
 };
-use arkret_models_collaboration::events_payloads::MemberRepairRequester;
+use arkret_models_collaboration::events_payloads::{
+    ActorProfileCreatePayload, MemberRepairRequester,
+};
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
@@ -48,8 +51,9 @@ use arkret_models_identity::account::{
     AccountRegistrationPolicyEvidence, AccountRegistrationRateLimitPolicy,
     AccountUpdateProfileOutcome,
 };
-use arkret_models_identity::actor_profile::ActorProfile;
-use arkret_wire::{ActorKind, ErrorCode, Patch, PatchOpKind};
+use arkret_models_identity::actor_profile::{AccountMaterializedProfile, ActorProfile};
+use arkret_state::lattice::CellState;
+use arkret_wire::ErrorCode;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -191,7 +195,6 @@ pub(crate) async fn local_account_primary_handle_claim(
 use crate::{JsonResult, json_ok};
 
 mod social;
-use arkret_wire::SchemaId;
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, direct_binding_conflict,
@@ -1106,7 +1109,7 @@ async fn account_viewer_impl(
     let primary_handle_claim = account_primary_handle_claim(state, &account)
         .await
         .and_then(|value| serde_json::from_value(value).ok());
-    let profile = Some(actor_profile_from_account(state, &account, None).await?);
+    let profile = accepted_account_profile(state, &session.actor).await?;
     let is_server_admin = state.is_admin_principal(&session.actor);
     json_ok(AccountView {
         principal_id,
@@ -1263,152 +1266,284 @@ async fn update_profile(
     req: &mut Request,
     body: JsonBody<AccountUpdateProfileRequestBody>,
 ) -> JsonResult<AccountUpdateProfileOutcome> {
-    // Spec: discovery/profiles-presence.md §2 — actor profile updates
-    // fan out through the directory's actor projection. We store the
-    // updates on the `AccountRecord` directly; `demo_actors()` reads
-    // them when serving `/_arkret/find/directory/search-actors`.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let mut current = state
+    let account_exists = state
         .identities()
         .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("account not found"))?;
-    let patch = body.patch;
-    if let Some(value) = patch_string(&patch, "display_name")? {
-        current.display_name = value.and_then(empty_to_none);
+        .is_some();
+    if !account_exists {
+        return Err(AppError::not_found("account not found"));
     }
-    if let Some(value) = patch_string(&patch, "profile_fields.bio")? {
-        current.bio = value.and_then(empty_to_none);
-    }
-    if patch
-        .iter()
-        .any(|(path, _)| path == "profile_fields.avatar_url")
-    {
-        return Err(AppError::invalid_param(
-            "avatar_url is not accepted on the profile update protocol",
-        )
-        .with_wire_code("invalid_avatar_url"));
-    }
-    if let Some(avatar_blob_ref) = patch_blob_ref(&patch, "avatar_blob_ref")? {
-        current.avatar_blob_ref = avatar_blob_ref;
-    }
-    state
-        .identities()
-        .save_account(current.clone())
+
+    let event = &body.profile_event.event;
+    let principal_id = DidCoreId::new(session.actor.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "authenticated session principal id is invalid: {error}"
+        ))
+    })?;
+    let pcr_realm_id = event.realm_id.clone();
+    require_current_profile_authority(state, &principal_id, &pcr_realm_id).await?;
+    let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id).await?;
+    let profile_id = body
+        .profile_id()
+        .map_err(|error| AppError::invalid_param(format!("profile_event: {error}")))?;
+    let accepted_basis = profile_context_validation_basis(
+        accepted.as_ref().map(|accepted| &accepted.basis),
+        &event.kind,
+        &profile_id,
+    );
+    body.validate_authoring_context(&principal_id, &pcr_realm_id, accepted_basis)
+        .map_err(|error| AppError::invalid_param(format!("profile_event: {error}")))?;
+    let event_digest = Hash::new(event.event_digest().map_err(|error| {
+        AppError::invalid_param(format!("profile_event: invalid Event digest: {error}"))
+    })?)
+    .map_err(|error| {
+        AppError::invalid_param(format!("profile_event: invalid Event digest: {error}"))
+    })?;
+    let submission = body.profile_event;
+    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "account.profile_update",
-        json!({
-            "display_name": current.display_name.clone(),
-            "bio": current.bio.clone(),
-            "avatar_blob_ref": current.avatar_blob_ref.clone(),
-        }),
-        "accepted",
-    )
-    .await;
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                "account profile Event submit failed",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
+    let covering_seal_found = state
+        .projections()
+        .seal_covering_event(&event_digest)
+        .map_err(|error| {
+            profile_frontier_unavailable(format!(
+                "account profile Event covering Seal lookup failed: {error}"
+            ))
+        })?
+        .is_some();
+    require_profile_event_settled(covering_seal_found)?;
+    let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id)
+        .await?
+        .ok_or_else(|| {
+            profile_frontier_unavailable(
+                "accepted account profile Event did not materialize its sealed profile cell",
+            )
+        })?;
+    if accepted.basis.profile_id != profile_id {
+        return Err(profile_projection_precondition(
+            "accepted account profile projection does not match the submitted profile Event",
+        ));
+    }
     json_ok(AccountUpdateProfileOutcome {
-        profile: actor_profile_from_account(state, &current, Some(now())).await?,
+        profile: accepted.profile,
     })
 }
 
-fn empty_to_none(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+struct AcceptedAccountProfile {
+    basis: AccountProfileAcceptedBasis,
+    profile: AccountMaterializedProfile,
+}
+
+fn profile_context_validation_basis<'a>(
+    accepted_basis: Option<&'a AccountProfileAcceptedBasis>,
+    event_kind: &arkret_wire::EventKind,
+    submitted_profile_id: &ActorProfileId,
+) -> Option<&'a AccountProfileAcceptedBasis> {
+    if event_kind == &arkret_wire::EventKind::ProfileCreate
+        && accepted_basis.is_some_and(|basis| &basis.profile_id == submitted_profile_id)
+    {
+        // The same create-derived id may be an exact replay. Validate its
+        // actor/PCR/payload as a create, then let ordinary admission decide
+        // exact duplicate versus duplicate conflict from the signed bytes.
         None
     } else {
-        Some(trimmed.to_owned())
+        accepted_basis
     }
 }
 
-fn patch_value<'a>(patch: &'a Patch, field: &str) -> Result<Option<Option<&'a Value>>, AppError> {
-    let Some((_, operation)) = patch.iter().find(|(path, _)| path.as_str() == field) else {
-        return Ok(None);
-    };
-    match operation.op() {
-        PatchOpKind::Set => Ok(Some(Some(operation.value().ok_or_else(|| {
-            AppError::invalid_param(format!(
-                "profile patch {field} set operation requires value"
-            ))
-        })?))),
-        PatchOpKind::Unset => Ok(Some(None)),
-        PatchOpKind::Add | PatchOpKind::Remove => Err(AppError::invalid_param(format!(
-            "profile patch {field} does not support collection operations"
-        ))),
+fn profile_projection_precondition(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("failed_precondition")
+}
+
+fn profile_frontier_unavailable(message: impl Into<String>) -> AppError {
+    AppError::new(ErrorCode::FrontierUnavailable, message)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+}
+
+fn require_profile_event_settled(covering_seal_found: bool) -> Result<(), AppError> {
+    if covering_seal_found {
+        Ok(())
+    } else {
+        Err(profile_frontier_unavailable(
+            "accepted account profile Event is not yet covered by a settled Seal",
+        ))
     }
 }
 
-fn patch_string(patch: &Patch, field: &str) -> Result<Option<Option<String>>, AppError> {
-    patch_value(patch, field)?
-        .map(|value| match value {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(value)) => Ok(Some(value.clone())),
-            Some(_) => Err(AppError::invalid_param(format!(
-                "profile patch {field} must be a string"
-            ))),
-        })
-        .transpose()
-}
-
-fn patch_blob_ref(patch: &Patch, field: &str) -> Result<Option<Option<BlobRef>>, AppError> {
-    patch_value(patch, field)?
-        .map(|value| match value {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(value)) => BlobRef::new(value.clone())
-                .map(Some)
-                .map_err(|_| AppError::invalid_param(format!("profile patch {field} is invalid"))),
-            Some(_) => Err(AppError::invalid_param(format!(
-                "profile patch {field} must be a blob ref string"
-            ))),
-        })
-        .transpose()
-}
-
-async fn actor_profile_from_account(
+async fn require_current_profile_authority(
     state: &AppState,
-    account: &AccountRecord,
-    updated_at: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<ActorProfile, AppError> {
-    let principal_id = arkret_wire::DidCoreId::new(account.did.clone()).map_err(|error| {
+    principal_id: &DidCoreId,
+    pcr_realm_id: &RealmId,
+) -> Result<(), AppError> {
+    let resolution = state
+        .persistence()
+        .principal_resolution_for_realm(pcr_realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("load principal authority instance: {error}")))?
+        .ok_or_else(|| {
+            profile_projection_precondition(
+                "account profile Event requires an accepted exact PCR authority instance",
+            )
+        })?;
+    if resolution.authority_instance.principal_id != *principal_id
+        || resolution.authority_instance.pcr_realm_id != *pcr_realm_id
+    {
+        return Err(profile_projection_precondition(
+            "account profile Event PCR does not belong to the authenticated principal",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn accepted_account_profile(
+    state: &AppState,
+    principal: &str,
+) -> Result<Option<AccountMaterializedProfile>, AppError> {
+    let principal_id = DidCoreId::new(principal.to_owned()).map_err(|error| {
         AppError::internal(format!("stored account principal id is invalid: {error}"))
     })?;
-    let mut profile_fields = BTreeMap::new();
-    if let Some(bio) = account.bio.clone() {
-        profile_fields.insert("bio".to_owned(), Value::String(bio));
+    let projected = state
+        .event_queries()
+        .projected_events_for_actor(principal)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let realms = projected
+        .iter()
+        .filter(|event| {
+            event.event_kind == arkret_wire::EventKind::ProfileCreate
+                && event.sender.as_deref() == Some(principal)
+        })
+        .map(|event| event.realm_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut profiles = Vec::new();
+    for realm in realms {
+        let realm_id = RealmId::new(realm).map_err(|error| {
+            profile_projection_precondition(format!(
+                "accepted profile create has an invalid PCR realm: {error}"
+            ))
+        })?;
+        if let Some(accepted) =
+            accepted_account_profile_in_realm(state, &principal_id, &realm_id).await?
+        {
+            profiles.push(accepted.profile);
+        }
     }
-    Ok(ActorProfile {
-        // This view is synthesised from the account record; no
-        // `ak.profile.create` stands behind it, so there is no id to report.
-        // Minting one produced a different value on every request — an id that
-        // nothing could resolve and no receiver could re-derive.
-        id: None,
-        schema: SchemaId::ACTOR_PROFILE_V1.to_owned(),
-        realm_id: None,
-        principal_id: principal_id.clone(),
-        actor_kind: ActorKind::User,
-        display_name: account
-            .display_name
-            .clone()
-            .unwrap_or_else(|| account.localpart.clone()),
-        handle: Some(account.handle()),
-        agent_slug: None,
-        avatar_blob_ref: account.avatar_blob_ref.clone(),
-        status: None,
-        accountable_principal_ids: vec![principal_id.clone()],
-        // A profile read keyed only by principal_id cannot select between
-        // independently valid PCR authority instances. Resolution evidence is
-        // exposed only by an exact authority-instance/PCR read.
-        resolution: None,
-        profile_fields,
-        created_at: account.created_at,
-        updated_by: Some(principal_id),
-        updated_at,
-    })
+    match profiles.len() {
+        0 => Ok(None),
+        1 => Ok(profiles.pop()),
+        // This read has no authority-instance selector. More than one accepted
+        // PCR lineage is therefore intentionally represented as an absent
+        // profile instead of selecting one by timestamp or iteration order.
+        _ => Ok(None),
+    }
+}
+
+async fn accepted_account_profile_in_realm(
+    state: &AppState,
+    principal_id: &DidCoreId,
+    pcr_realm_id: &RealmId,
+) -> Result<Option<AcceptedAccountProfile>, AppError> {
+    require_current_profile_authority(state, principal_id, pcr_realm_id).await?;
+    let projected = state
+        .event_queries()
+        .projected_events_for_realm(pcr_realm_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut creates = projected
+        .iter()
+        .filter(|event| {
+            event.event_kind == arkret_wire::EventKind::ProfileCreate
+                && event.sender.as_deref() == Some(principal_id.as_str())
+        })
+        .filter_map(|event| {
+            let payload =
+                serde_json::from_value::<ActorProfileCreatePayload>(event.payload.clone()).ok()?;
+            (payload.object.principal_id == *principal_id).then_some(event)
+        });
+    let Some(create) = creates.next() else {
+        return Ok(None);
+    };
+    if creates.next().is_some() {
+        return Err(profile_projection_precondition(
+            "multiple accepted profile create Events exist in the selected PCR",
+        ));
+    }
+    let create_event_id = EventId::new(create.event_id.clone()).map_err(|error| {
+        profile_projection_precondition(format!(
+            "accepted profile create has an invalid Event id: {error}"
+        ))
+    })?;
+    let profile_id = ActorProfileId::from_event_id(&create_event_id);
+    let cell = CellRef::new(format!(
+        "ak:cell:{}:{profile_id}",
+        arkret_wire::CellFamilyId::PROFILE_CREATE_V1
+    ))
+    .map_err(|error| AppError::internal(format!("profile cell id is invalid: {error}")))?;
+    let snapshot = state.projections().snapshot();
+    let cell_value = match snapshot.realm_cell(pcr_realm_id.as_str(), &cell) {
+        Some(CellState::Value(value)) => value.clone(),
+        Some(CellState::Bottom(_)) => {
+            return Err(AppError::new(
+                ErrorCode::FailedPrecondition,
+                "accepted account profile cell is in Bottom",
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("failed_bottom"));
+        }
+        None => {
+            return Err(profile_frontier_unavailable(
+                "accepted profile create has no settled profile cell",
+            ));
+        }
+    };
+    drop(snapshot);
+    let mut profile: ActorProfile = serde_json::from_value(cell_value).map_err(|error| {
+        profile_projection_precondition(format!("settled account profile cell is invalid: {error}"))
+    })?;
+    if profile.principal_id != *principal_id
+        || profile
+            .id
+            .as_ref()
+            .is_some_and(|stored| stored != &profile_id)
+        || profile
+            .realm_id
+            .as_ref()
+            .is_some_and(|stored| stored != pcr_realm_id)
+    {
+        return Err(profile_projection_precondition(
+            "settled account profile cell does not match its create Event basis",
+        ));
+    }
+    profile.id = Some(profile_id.clone());
+    profile.realm_id = Some(pcr_realm_id.clone());
+    let profile = AccountMaterializedProfile::try_from(profile).map_err(|error| {
+        profile_projection_precondition(format!(
+            "settled account profile is not materialized: {error}"
+        ))
+    })?;
+    Ok(Some(AcceptedAccountProfile {
+        basis: AccountProfileAcceptedBasis {
+            profile_id,
+            principal_id: principal_id.clone(),
+            principal_control_realm_id: pcr_realm_id.clone(),
+        },
+        profile,
+    }))
 }
 
 #[salvo::oapi::endpoint(
@@ -2151,6 +2286,64 @@ mod tests {
             serde_json::from_value::<AccountProjectionRegisterRequestBody>(did_url).is_err(),
             "full_id must be a bare DID, not a DID URL"
         );
+    }
+
+    #[test]
+    fn exact_profile_create_replay_reaches_ordinary_admission() {
+        let accepted_id = ActorProfileId::new(
+            "ak:actor_profile:ASZ8VNF9qzH4Hcjd-1qOOKONYlZmfQOIRvMYdkQ0XXBH".to_owned(),
+        )
+        .unwrap();
+        let different_id = ActorProfileId::new(
+            "ak:actor_profile:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned(),
+        )
+        .unwrap();
+        let basis = AccountProfileAcceptedBasis {
+            profile_id: accepted_id.clone(),
+            principal_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            principal_control_realm_id: RealmId::new(
+                "ak:realm:ASZ8VNF9qzH4Hcjd-1qOOKONYlZmfQOIRvMYdkQ0XXBH".to_owned(),
+            )
+            .unwrap(),
+        };
+
+        assert!(
+            profile_context_validation_basis(
+                Some(&basis),
+                &arkret_wire::EventKind::ProfileCreate,
+                &accepted_id,
+            )
+            .is_none(),
+            "same create-derived id must be passed to ordinary admission for replay classification"
+        );
+        assert!(
+            profile_context_validation_basis(
+                Some(&basis),
+                &arkret_wire::EventKind::ProfileCreate,
+                &different_id,
+            )
+            .is_some(),
+            "a different create id must still observe the existing accepted basis"
+        );
+        assert!(
+            profile_context_validation_basis(
+                Some(&basis),
+                &arkret_wire::EventKind::ProfileUpdate,
+                &accepted_id,
+            )
+            .is_some(),
+            "update replay must validate against the accepted create basis"
+        );
+    }
+
+    #[test]
+    fn account_profile_write_requires_its_exact_covering_seal() {
+        require_profile_event_settled(true).unwrap();
+
+        let error = require_profile_event_settled(false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::FrontierUnavailable);
+        assert_eq!(error.status, Some(StatusCode::PRECONDITION_FAILED));
+        assert!(error.wire_code_override.is_none());
     }
 
     #[test]

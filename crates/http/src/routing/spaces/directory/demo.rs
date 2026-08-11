@@ -68,15 +68,32 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
+        let profile =
+            crate::routing::identity::account::accepted_account_profile(state, &account.did)
+                .await
+                .ok()
+                .flatten();
+        let display_name = profile
+            .as_ref()
+            .map(|profile| profile.display_name.clone())
+            .unwrap_or_else(|| account.did.clone());
+        let bio = profile
+            .as_ref()
+            .and_then(|profile| profile.profile_fields.get("bio"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let avatar_blob_ref = profile
+            .as_ref()
+            .and_then(|profile| profile.avatar_blob_ref.clone());
         actors.push(json!({
             "did": account.did,
             "handle": account.handle(),
-            "display_name": account.display_name.as_deref().unwrap_or(account.did.as_str()),
+            "display_name": display_name,
             "state": account_state.clone(),
             "account_state": account_state,
-            "bio": account.bio,
+            "bio": bio,
             "organization_id": "ak:org:demo",
-            "avatar_blob_ref": account.avatar_blob_ref,
+            "avatar_blob_ref": avatar_blob_ref,
         }));
     }
 
