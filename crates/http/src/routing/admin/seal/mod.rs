@@ -2,7 +2,7 @@
 //!
 //! Endpoints:
 //! - `GET  /_soland/admin/realms/{realm_id}/notary` — typed notary cell value (`{kind,
-//!   single_did?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
+//!   single_actor_id?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
 //!   paused}`).
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.

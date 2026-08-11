@@ -192,40 +192,42 @@ pub(super) async fn resolve_event_root_anchor_method(
             "device re-anchor DID anchor reference must equal payload.did_version_id",
         ));
     }
-    // Event actor_id is stable core state. did:webvh history lookup must use
-    // the separately carried/resolved full identity; reconstructing a URL or
-    // DID from the core id is forbidden.
+    // Event actor_id and the notary cell are stable core state. did:webvh
+    // history lookup uses the full identity from the signed proof's
+    // verification method; reconstructing it from either core id is forbidden.
     let principal_full_id = if role == DID_INCEPTION_REF_ROLE {
-        let value = object
-            .get("payload")
-            .and_then(|payload| payload.pointer("/object/notary/did"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "missing_param",
-                    "principal-control genesis must carry its full notary DID",
-                )
-            })?;
-        let full_id = arkret_wire::DidFullId::new(value.to_owned()).map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                format!("principal-control genesis notary DID is invalid: {error}"),
-            )
-        })?;
-        if arkret_wire::project_full_id_to_core_id(&full_id)
-            .ok()
-            .as_ref()
-            != Some(&actor_core_id)
+        let mut matching_full_ids = std::collections::BTreeSet::new();
+        for proof in object
+            .get("proofs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
         {
+            let Some(verification_method) =
+                proof.get("verification_method").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let Some((full_id, _)) = verification_method.rsplit_once('#') else {
+                continue;
+            };
+            let Ok(full_id) = arkret_wire::DidFullId::new(full_id.to_owned()) else {
+                continue;
+            };
+            if arkret_wire::project_full_id_to_core_id(&full_id)
+                .is_ok_and(|core_id| core_id == actor_core_id)
+            {
+                matching_full_ids.insert(full_id);
+            }
+        }
+        if matching_full_ids.len() != 1 {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "invalid_proof",
-                "principal-control genesis full DID does not project to actor_id",
+                "principal-control genesis must have exactly one signed full DID projecting to actor_id",
             ));
         }
-        full_id
+        matching_full_ids.pop_first().expect("length checked")
     } else {
         let realm_id = object
             .get("realm_id")

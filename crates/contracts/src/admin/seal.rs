@@ -28,19 +28,19 @@ impl NotaryKind {
 pub struct AdminNotaryValue {
     pub kind_raw: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub single_did: Option<String>,
+    pub single_actor_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold_k: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold_n: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub threshold_dids: Vec<String>,
+    pub threshold_actor_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_set_members: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mixed_primary: Option<String>,
+    pub mixed_primary_actor_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_recovery: Vec<String>,
+    pub mixed_recovery_actor_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_freshness_window_ms: Option<u64>,
     #[serde(default)]
@@ -68,7 +68,10 @@ impl AdminNotaryValue {
     pub fn summary(&self) -> String {
         match self.kind() {
             Some(NotaryKind::SingleDid) => {
-                format!("single_did({})", self.single_did.as_deref().unwrap_or("?"))
+                format!(
+                    "single_did({})",
+                    self.single_actor_id.as_deref().unwrap_or("?")
+                )
             }
             Some(NotaryKind::Threshold) => {
                 let k = self.threshold_k.unwrap_or(0);
@@ -80,8 +83,8 @@ impl AdminNotaryValue {
             }
             Some(NotaryKind::Mixed) => format!(
                 "mixed(primary={}, recovery_n={})",
-                self.mixed_primary.as_deref().unwrap_or("?"),
-                self.mixed_recovery.len()
+                self.mixed_primary_actor_id.as_deref().unwrap_or("?"),
+                self.mixed_recovery_actor_ids.len()
             ),
             None => format!("unknown({})", self.kind_raw),
         }

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{DidFullId, Hash, RealmId};
+use arkret_identifiers::{Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentPcrRecoveryState, agent_requested_scope_digest,
 };
@@ -882,17 +882,11 @@ pub(crate) fn validate_agent_pcr_genesis_object(
         .get("genesis_salt")
         .and_then(Value::as_str)
         .ok_or_else(|| schema_error("managed Agent PCR genesis_salt is missing"))?;
-    let agent_full_id = object
-        .pointer("/notary/did")
-        .and_then(Value::as_str)
-        .and_then(|value| DidFullId::new(value.to_owned()).ok())
-        .ok_or_else(|| schema_error("managed Agent PCR notary full-id is missing"))?;
+    let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
+        .map_err(|error| schema_error(format!("managed Agent core id is invalid: {error}")))?;
     let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
-            agent_id: arkret_identifiers::DidCoreId::new(agent_id.to_owned()).map_err(|error| {
-                schema_error(format!("managed Agent core id is invalid: {error}"))
-            })?,
-            agent_full_id,
+            agent_id,
             controller_id: arkret_identifiers::DidCoreId::new(controller_id.to_owned()).map_err(
                 |error| schema_error(format!("managed Agent controller DID is invalid: {error}")),
             )?,
@@ -1187,7 +1181,6 @@ mod tests {
     use super::*;
 
     const AGENT: &str = "ak:did_core:web:agent.example";
-    const AGENT_FULL: &str = "did:web:agent.example";
     const CONTROLLER: &str = "ak:did_core:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
     const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
@@ -1210,7 +1203,6 @@ mod tests {
         let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
             arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
-                agent_full_id: DidFullId::new(AGENT_FULL).unwrap(),
                 controller_id: arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

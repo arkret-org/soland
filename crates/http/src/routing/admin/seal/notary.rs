@@ -53,7 +53,7 @@ fn admin_notary_value_from_sdk(
     match value {
         SdkNotaryValue::SingleDid { actor_id, .. } => AdminNotaryValue {
             kind_raw: "single_did".to_owned(),
-            single_did: Some(actor_id.as_str().to_owned()),
+            single_actor_id: Some(actor_id.as_str().to_owned()),
             revocation_freshness_window_ms,
             paused,
             ..Default::default()
@@ -64,7 +64,7 @@ fn admin_notary_value_from_sdk(
             kind_raw: "threshold".to_owned(),
             threshold_k: Some(threshold),
             threshold_n: Some(members.len() as u32),
-            threshold_dids: members
+            threshold_actor_ids: members
                 .into_iter()
                 .map(|did| did.as_str().to_owned())
                 .collect(),
@@ -87,8 +87,8 @@ fn admin_notary_value_from_sdk(
             recovery_members,
         } => AdminNotaryValue {
             kind_raw: "mixed".to_owned(),
-            mixed_primary: Some(primary.as_str().to_owned()),
-            mixed_recovery: recovery_members
+            mixed_primary_actor_id: Some(primary.as_str().to_owned()),
+            mixed_recovery_actor_ids: recovery_members
                 .into_iter()
                 .map(|did| did.as_str().to_owned())
                 .collect(),

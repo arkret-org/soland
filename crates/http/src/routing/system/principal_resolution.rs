@@ -151,6 +151,35 @@ async fn open_principal_resolution(
             "principal resolution index genesis is not a Realm create Event",
         ));
     }
+    let principal_genesis_receipt = state
+        .event_queries()
+        .canonical_batch_receipts_for_event(record.genesis_event.event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "principal resolution genesis receipt lookup failed: {error}"
+            ))
+        })?
+        .into_iter()
+        .find(|receipt| {
+            let digest_matches = arkret_canonical::canonical_sha256(receipt)
+                .ok()
+                .and_then(|digest| Hash::new(digest).ok())
+                .is_some_and(|digest| {
+                    digest == record.authority_instance.principal_genesis_receipt_digest
+                });
+            digest_matches
+                && receipt.issuer == record.authority_instance.principal_server_id
+                && receipt.pcr_genesis_scope().is_ok_and(|scope| {
+                    scope.principal_id == record.authority_instance.principal_id
+                        && scope.realm_id == record.authority_instance.pcr_realm_id
+                })
+        })
+        .ok_or_else(|| {
+            AppError::internal(
+                "principal resolution genesis receipt does not match the authority instance",
+            )
+        })?;
     let current_resolution_event = if record.current_event.event_id == record.genesis_event.event_id
     {
         PrincipalCurrentResolutionEvent::Genesis(PrincipalGenesisEvent(
@@ -176,9 +205,11 @@ async fn open_principal_resolution(
     )
     .await?;
 
-    json_ok(PrincipalResolutionEvidence {
-        principal_id: record.authority_instance.principal_id,
-        principal_control_realm_id: record.authority_instance.pcr_realm_id,
+    let evidence = PrincipalResolutionEvidence {
+        principal_id: record.authority_instance.principal_id.clone(),
+        authority_instance: record.authority_instance.clone(),
+        principal_control_realm_id: record.authority_instance.pcr_realm_id.clone(),
+        principal_genesis_receipt,
         principal_genesis_event: PrincipalGenesisEvent(record.genesis_event),
         current_resolution_event,
         predecessor_resolution_events: predecessors,
@@ -194,7 +225,13 @@ async fn open_principal_resolution(
         },
         accepted_seal,
         method_history_evidence: Some(method_history_evidence),
-    })
+    };
+    evidence.validate_authority_binding().map_err(|error| {
+        AppError::internal(format!(
+            "principal resolution authority binding is invalid: {error}"
+        ))
+    })?;
+    json_ok(evidence)
 }
 
 fn bounded_resolution_predecessors(
