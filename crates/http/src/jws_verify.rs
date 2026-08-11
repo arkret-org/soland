@@ -917,8 +917,8 @@ fn federated_range_completeness_evidence(
     };
     use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
     use arkret_wire::{
-        Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, Proof,
-        ScopeRef, proof_kind,
+        Event, EventId, EventKind, EventRequirements, PayloadProof, PayloadProofPurpose,
+        PayloadSigner, ScopeRef, proof_kind,
     };
 
     let mut accepted_events = records
@@ -1001,10 +1001,10 @@ fn federated_range_completeness_evidence(
         .remove("proofs");
     let canonical =
         arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| error.to_string())?;
-    let mut proof = Proof {
+    let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         verification_method: verification_method.clone(),
-        event_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
+        payload_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
             .map_err(|error| error.to_string())?,
         created_at: observed_at,
         domain: None,
@@ -1012,8 +1012,8 @@ fn federated_range_completeness_evidence(
         proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
         jws: String::new(),
     };
-    let binding = proof
-        .canonical_binding_bytes(&issuer_actor)
+    let binding = payload
+        .proof_binding_bytes(&proof)
         .map_err(|error| error.to_string())?;
     proof.jws = signer
         .sign_payload(&binding)

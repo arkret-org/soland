@@ -1843,19 +1843,8 @@ async fn build_reanchor_batch_receipt(
 fn sign_event_batch_receipt(
     state: &AppState,
     receipt: &arkret_wire::EventBatchReceipt,
-) -> Result<Proof, SubmitOneError> {
-    let mut receipt_value = serde_json::to_value(receipt).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Event Batch Receipt encode failed: {error}"),
-        )
-    })?;
-    receipt_value
-        .as_object_mut()
-        .expect("typed Event Batch Receipt is an object")
-        .remove("proofs");
-    let receipt_digest = canonical::canonical_sha256(&receipt_value).map_err(|error| {
+) -> Result<arkret_wire::PayloadProof, SubmitOneError> {
+    let receipt_digest = receipt.payload_digest().map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1873,14 +1862,17 @@ fn sign_event_batch_receipt(
             format!("service notary verification method is invalid: {error}"),
         )
     })?;
-    let binding = json!({
-        "context": "ak.receipt-proof-v1",
-        "payload_digest": receipt_digest.as_str(),
-        "issuer": receipt.issuer.as_str(),
-        "verification_method": verification_method.as_str(),
-        "created_at": receipt.created_at,
-    });
-    let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
+    let mut proof = arkret_wire::PayloadProof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        proof_purpose: None,
+        verification_method,
+        payload_digest: receipt_digest,
+        created_at: receipt.created_at,
+        domain: None,
+        audience: None,
+        jws: String::new(),
+    };
+    let binding_bytes = receipt.proof_binding_bytes(&proof).map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -1898,22 +1890,8 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt signing failed: {error}"),
         )
     })?;
-    Ok(Proof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        proof_purpose: None,
-        verification_method,
-        event_digest: Hash::new(receipt_digest).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Event Batch Receipt digest is invalid: {error}"),
-            )
-        })?,
-        created_at: receipt.created_at,
-        domain: None,
-        audience: None,
-        jws,
-    })
+    proof.jws = jws;
+    Ok(proof)
 }
 
 fn unit_error(message: impl Into<String>) -> SubmitOneError {

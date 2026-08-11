@@ -309,17 +309,12 @@ async fn verify_federated_genesis_receipt(
     receipt
         .validate()
         .map_err(|error| format!("PCR genesis receipt is invalid: {error}"))?;
-    let mut unsigned = serde_json::to_value(receipt)
-        .map_err(|error| format!("PCR genesis receipt encode failed: {error}"))?;
-    unsigned
-        .as_object_mut()
-        .ok_or_else(|| "PCR genesis receipt is not an object".to_owned())?
-        .remove("proofs");
-    let digest = arkret_canonical::canonical_sha256(&unsigned)
+    let digest = receipt
+        .payload_digest()
         .map_err(|error| format!("PCR genesis receipt digest failed: {error}"))?;
     for proof in &receipt.proofs {
         if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
-            || proof.event_digest.as_str() != digest
+            || proof.payload_digest != digest
             || proof.created_at != receipt.created_at
         {
             return Err("PCR genesis receipt proof binding is invalid".to_owned());
@@ -331,14 +326,8 @@ async fn verify_federated_genesis_receipt(
         {
             return Err("PCR genesis receipt signer does not match issuer".to_owned());
         }
-        let binding = json!({
-            "context": "ak.receipt-proof-v1",
-            "payload_digest": digest,
-            "issuer": receipt.issuer,
-            "verification_method": proof.verification_method,
-            "created_at": receipt.created_at,
-        });
-        let binding = arkret_canonical::canonical_json_bytes(&binding)
+        let binding = receipt
+            .proof_binding_bytes(proof)
             .map_err(|error| format!("PCR genesis receipt proof transcript failed: {error}"))?;
         verify_federated_service_jws(
             state,
@@ -443,23 +432,18 @@ async fn verify_federated_range_attestation(
     {
         return Err("PCR range payload binding is invalid".to_owned());
     }
-    let mut unsigned = serde_json::to_value(&payload)
-        .map_err(|error| format!("PCR range payload encode failed: {error}"))?;
-    unsigned
-        .as_object_mut()
-        .ok_or_else(|| "PCR range payload is not an object".to_owned())?
-        .remove("proofs");
-    let payload_digest = arkret_canonical::canonical_sha256(&unsigned)
+    let payload_digest = payload
+        .payload_digest()
         .map_err(|error| format!("PCR range payload digest failed: {error}"))?;
     if payload.proofs.is_empty() {
         return Err("PCR range payload has no issuer proof".to_owned());
     }
     for proof in &payload.proofs {
-        if proof.event_digest.as_str() != payload_digest {
+        if proof.payload_digest != payload_digest {
             return Err("PCR range payload proof digest is invalid".to_owned());
         }
-        let binding = proof
-            .canonical_binding_bytes(expected_issuer)
+        let binding = payload
+            .proof_binding_bytes(proof)
             .map_err(|error| format!("PCR range payload proof transcript failed: {error}"))?;
         verify_federated_service_jws(
             state,

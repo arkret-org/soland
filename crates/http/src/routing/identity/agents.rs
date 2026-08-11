@@ -46,8 +46,9 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
-    AgentParticipationEntry, AgentParticipationOutcome, ParticipationBits,
-    ParticipationReplaceRequestBody, ParticipationScope,
+    AgentParticipationEntry, AgentParticipationOutcome, MAX_PARTICIPATION_REPLACE_EXPECTED_VERSION,
+    ParticipationBits, ParticipationNextReplaceInput, ParticipationReplaceRequestBody,
+    ParticipationScope,
 };
 use arkret_models_identity::validate_agent_slug;
 use base64::Engine as _;
