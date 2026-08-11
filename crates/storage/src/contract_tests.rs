@@ -1344,7 +1344,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_uuid = uuid::Uuid::now_v7();
     let rollback_idempotency_key = format!("event-rollback:{namespace}:{rollback_uuid}");
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
-    let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 1, now);
+    let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 4, now);
     let rollback_event_id = rollback_event.event_id.clone();
     let rollback_ack = contract_control_proposal_ack(&rollback_event, &realm_id, now);
     let failed = EventCommitRequest {

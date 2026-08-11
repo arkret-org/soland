@@ -735,7 +735,7 @@ mod tests {
         advanced.resource.accepted_steps.push(AcceptedStep {
             step: SecurityTransactionStep::Revoke,
             prepared_material_digest: hash('4'),
-            acceptor_id: "ak:did_core:web:principal.example".to_owned(),
+            acceptor_id: "did:web:principal.example".to_owned(),
             output_ref: "ak:event:AaAkIzblCDjqaSCE04n-JnjSzLVYVVT9LyvaLdLiTJrW".to_owned(),
             output_digest: hash('5'),
             accepted_at: Utc::now(),

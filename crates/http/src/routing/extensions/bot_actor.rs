@@ -40,10 +40,10 @@ pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
     if DidCoreId::new(did.to_owned()).is_ok() || DidFullId::new(did.to_owned()).is_ok() {
         return Ok(());
     }
-    Err(AppError::invalid_param(
-        "bot or ghost actor identity is neither a Core DID nor a Full DID",
+    Err(
+        AppError::invalid_param("bot or ghost actor identity is neither a Core DID nor a Full DID")
+            .with_wire_code("schema_violation"),
     )
-    .with_wire_code("schema_violation"))
 }
 
 #[cfg(test)]

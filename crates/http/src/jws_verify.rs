@@ -1142,15 +1142,14 @@ pub fn validate_verification_method_controller(
 ) -> Result<(), String> {
     let method_controller = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| format!("verification method is not a DID URL: {error}"))?;
-    let controller_matches = if let Ok(controller_core) =
-        arkret_wire::DidCoreId::new(controller_id.to_owned())
-    {
-        arkret_wire::project_full_id_to_core_id(&method_controller)
-            .is_ok_and(|method_core| method_core == controller_core)
-    } else {
-        DidFullId::new(controller_id.to_owned())
-            .is_ok_and(|controller_full| method_controller == controller_full)
-    };
+    let controller_matches =
+        if let Ok(controller_core) = arkret_wire::DidCoreId::new(controller_id.to_owned()) {
+            arkret_wire::project_full_id_to_core_id(&method_controller)
+                .is_ok_and(|method_core| method_core == controller_core)
+        } else {
+            DidFullId::new(controller_id.to_owned())
+                .is_ok_and(|controller_full| method_controller == controller_full)
+        };
     if !controller_matches {
         return Err("verification method controller does not match DID".to_owned());
     }

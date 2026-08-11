@@ -236,7 +236,6 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             &request.event.event_id,
             request.device_pairing_authorization.as_ref(),
         )?;
-        stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
 
         ids::validated_event_identity_parts(
             &request.event.event_id,
@@ -304,6 +303,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
+        stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
         let event_id = request.event.event_id.clone();
         stage_canonical_event(&mut staged_events, request.event)?;
 
