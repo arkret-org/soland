@@ -39,6 +39,14 @@ fn test_signer_did(seed: [u8; 32]) -> String {
     )
 }
 
+fn core_actor_id(actor: &str) -> String {
+    arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id")
+    .to_string()
+}
+
 fn test_config() -> AppConfig {
     AppConfig {
         development_mode: true,
@@ -67,10 +75,7 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
-    )
-    .expect("fixture actor core id");
+    let actor_core = core_actor_id(actor);
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": actor_core,
@@ -98,9 +103,7 @@ async fn seed_realm(
         soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
             .await;
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
-    let owner_did =
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(owner.to_owned()).unwrap())
-            .unwrap();
+    let owner_did = arkret_identifiers::DidCoreId::new(core_actor_id(owner)).unwrap();
     let now = chrono::Utc::now();
 
     let mut entry = RealmDirectoryEntry::new(
@@ -124,7 +127,7 @@ async fn seed_realm(
         .put(
             &realm_id,
             &RealmMetaRecord {
-                owner: owner.to_owned(),
+                owner: core_actor_id(owner),
                 deleted: false,
                 discoverability: "public".to_owned(),
                 history_visibility: history_visibility.to_owned(),
@@ -192,9 +195,10 @@ async fn admit_member(
     new_member_did: &str,
     realm_id: &str,
 ) {
+    let new_member_core = core_actor_id(new_member_did);
     let payload = json!({
         "realm_id": realm_id,
-        "actor_id": new_member_did,
+        "actor_id": new_member_core,
         "membership": "join",
         "delivery_status": "unroutable",
     });
@@ -231,6 +235,8 @@ async fn seed_pending_invite(
     invitee: &str,
 ) -> String {
     let now = chrono::Utc::now();
+    let inviter_core = core_actor_id(inviter);
+    let invitee_core = core_actor_id(invitee);
     let invite_event_id = EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
         .expect("fixture invite producer Event id");
     let invite_id = InviteId::from_event_id(&invite_event_id).to_string();
@@ -240,8 +246,8 @@ async fn seed_pending_invite(
         .put(RealmInviteRecord {
             invite_id: invite_id.clone(),
             realm_id: realm_id.to_owned(),
-            inviter: inviter.to_owned(),
-            invitee: Some(invitee.to_owned()),
+            inviter: inviter_core,
+            invitee: Some(invitee_core.clone()),
             invite_delivery_target: Some(json!({
                 "recipient_service_id": state.service_id().clone(),
                 "recipient_service_kind": "principal_server"
@@ -259,9 +265,9 @@ async fn seed_pending_invite(
         .await
         .unwrap();
     state.test_projection().lock().members.insert(
-        (realm_id.to_owned(), invitee.to_owned()),
+        (realm_id.to_owned(), invitee_core.clone()),
         SolandMembershipState {
-            member: invitee.to_owned(),
+            member: invitee_core,
             realm_id: realm_id.to_owned(),
             state: "invite".to_owned(),
             role: "member".to_owned(),
@@ -360,7 +366,7 @@ fn install_projected_circle_scope(
     let now = chrono::Utc::now();
     let members = members
         .iter()
-        .map(|member| (*member).to_owned())
+        .map(|member| core_actor_id(member))
         .collect::<BTreeSet<_>>();
     state.test_projection().lock().circles.insert(
         circle_id.to_owned(),
@@ -380,7 +386,7 @@ fn install_projected_circle_scope(
             mls_group_ref: Some(format!("ak:mls:mls_rfc9420:{circle_id}")),
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: created_by.to_owned(),
+            created_by: core_actor_id(created_by),
             created_at: now,
             updated_by: None,
             updated_at: None,
@@ -436,7 +442,7 @@ fn install_projected_strand_scope(
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
-            created_by: created_by.to_owned(),
+            created_by: core_actor_id(created_by),
             created_at: now,
             history_basis_seals: Vec::new(),
             updated_by: None,
@@ -977,11 +983,12 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
         &invite_id,
     )
     .await;
+    let bob_core = core_actor_id(bob_did);
     assert!(
         state
             .test_projection()
             .lock()
-            .member(&realm_id, bob_did)
+            .member(&realm_id, &bob_core)
             .is_some_and(|member| member.state == "join"),
         "ak.invite.accept must project joined membership"
     );
@@ -1204,6 +1211,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
+    let bob_core = core_actor_id(bob_did);
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
     let realm_id = seed_realm(&state, alice_did, "chat projection metadata", "shared").await;
@@ -1231,10 +1239,10 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
                 "kind": "ak.content.text",
                 "body": "root mentions bob",
                 "mention_routing_hint": {
-                    "mentioned": [bob_did]
+                    "mentioned": [bob_core]
                 },
                 "mentions": [{
-                    "subject_id": bob_did,
+                    "subject_id": bob_core,
                     "mention_text_original": "@bob"
                 }]
             }
@@ -1310,11 +1318,11 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
     assert_eq!(
         root["payload"]["content"]["mention_routing_hint"]["mentioned"],
-        json!([bob_did])
+        json!([bob_core])
     );
     assert_eq!(
         root["payload"]["content"]["mentions"][0]["subject_id"],
-        bob_did
+        bob_core
     );
 
     {
@@ -1322,12 +1330,14 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
         let reactions = projection.reactions_for_event(&root_event_id);
         assert!(
             reactions.iter().any(|reaction| {
-                reaction.actor == alice_did && reaction.key == "+1" && reaction.active
+                reaction.actor == core_actor_id(alice_did)
+                    && reaction.key == "+1"
+                    && reaction.active
             }),
             "{reactions:?}"
         );
         assert!(
-            reactions.iter().all(|reaction| reaction.actor != bob_did),
+            reactions.iter().all(|reaction| reaction.actor != bob_core),
             "{reactions:?}"
         );
     }
@@ -1346,9 +1356,11 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
+    let bob_core = core_actor_id(bob_did);
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000022";
     let bob = dev_token(state.clone(), bob_did, "b0b000000022").await;
     let carol_did = CAROL_DID.as_str();
+    let carol_core = core_actor_id(carol_did);
     let carol_device_id = "ak:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
     let realm_id = seed_realm(&state, alice_did, "poll content reducer", "shared").await;
@@ -1481,7 +1493,7 @@ async fn poll_content_projection_replaces_votes_and_rejects_after_close() {
                 .all(|choices| !choices.contains("now")),
             "{poll_state:?}"
         );
-        let mut expected_backup_voters = vec![bob_did, carol_did];
+        let mut expected_backup_voters = vec![bob_core.as_str(), carol_core.as_str()];
         expected_backup_voters.sort_unstable();
         assert_eq!(
             poll_state

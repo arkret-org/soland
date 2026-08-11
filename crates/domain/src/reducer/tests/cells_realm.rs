@@ -1394,7 +1394,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
     });
     let mut state = ProjectionState::new();
 
-    let (_, writes) = projected_cell_writes_for_actor(
+    let (event_id, writes) = projected_cell_writes_for_actor(
         arkret_wire::EventKind::RealmCreate,
         realm_id,
         0,
@@ -1407,6 +1407,10 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         payload.clone(),
     );
     operation.context.sender = agent_id.clone();
+    operation.context.accepted_event_id = event_id;
+    operation.created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
     let effect = state.apply_projected(&operation, &writes, &ServerHlc::new("test"));
     assert!(
         !matches!(effect, ProjectionEffect::Rejected { .. }),

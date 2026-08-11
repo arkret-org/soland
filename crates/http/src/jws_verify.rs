@@ -1140,12 +1140,24 @@ pub fn validate_verification_method_controller(
     controller_id: &str,
     verification_method: &str,
 ) -> Result<(), String> {
-    let Some(fragment) = verification_method
-        .strip_prefix(controller_id)
-        .and_then(|rest| rest.strip_prefix('#'))
-    else {
-        return Err("verification method controller does not match DID".to_owned());
+    let method_controller = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| format!("verification method is not a DID URL: {error}"))?;
+    let controller_matches = if let Ok(controller_core) =
+        arkret_wire::DidCoreId::new(controller_id.to_owned())
+    {
+        arkret_wire::project_full_id_to_core_id(&method_controller)
+            .is_ok_and(|method_core| method_core == controller_core)
+    } else {
+        DidFullId::new(controller_id.to_owned())
+            .is_ok_and(|controller_full| method_controller == controller_full)
     };
+    if !controller_matches {
+        return Err("verification method controller does not match DID".to_owned());
+    }
+    let fragment = verification_method
+        .split_once('#')
+        .map(|(_, fragment)| fragment)
+        .expect("verification_method_did accepted a DID URL with a fragment");
     if fragment.trim().is_empty() {
         return Err("verification method fragment is empty".to_owned());
     }

@@ -23,7 +23,7 @@
 //! `applet_bridge::build_ghost_accountability_grant_event`; bot-actor inception
 //! grants remain a follow-up).
 
-use arkret_identifiers::DidFullId;
+use arkret_identifiers::{DidCoreId, DidFullId};
 use soland_http::error::AppError;
 
 /// Validate that an extension actor DID is a bare DID scalar (no DID URL
@@ -37,10 +37,13 @@ pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
         )
         .with_wire_code("schema_violation"));
     }
-    DidFullId::new(did.to_owned()).map(|_| ()).map_err(|error| {
-        AppError::invalid_param(format!("bot or ghost actor DID is invalid: {error}"))
-            .with_wire_code("schema_violation")
-    })
+    if DidCoreId::new(did.to_owned()).is_ok() || DidFullId::new(did.to_owned()).is_ok() {
+        return Ok(());
+    }
+    Err(AppError::invalid_param(
+        "bot or ghost actor identity is neither a Core DID nor a Full DID",
+    )
+    .with_wire_code("schema_violation"))
 }
 
 #[cfg(test)]
@@ -56,5 +59,11 @@ mod tests {
     #[test]
     fn bot_did_scalar_is_accepted() {
         validate_extension_actor_did("did:web:alice.example").expect("bare DID scalar is valid");
+    }
+
+    #[test]
+    fn bot_core_did_is_accepted() {
+        validate_extension_actor_did("ak:did_core:web:alice.example")
+            .expect("Core DID actor identity is valid");
     }
 }

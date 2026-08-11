@@ -1789,7 +1789,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now,
             )
@@ -1865,7 +1865,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(2),
             )
@@ -1898,7 +1898,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(2),
             )
@@ -1940,7 +1940,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(2),
             )
@@ -1982,7 +1982,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(2),
             )
@@ -2030,7 +2030,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(4),
             )
@@ -2066,7 +2066,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(5),
             )
@@ -2116,7 +2116,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, realm.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(6),
             )
@@ -2163,7 +2163,7 @@ mod tests {
             .prepare(
                 challenge_request(&fixture, realm.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 fixture.receipt_signer.issuer_service_id(),
                 fixture.now + Duration::minutes(8),
             )
@@ -2203,7 +2203,7 @@ mod tests {
             .prepare(
                 challenge_request(&stale_fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 stale_fixture.receipt_signer.issuer_service_id(),
                 stale_fixture.now,
             )
@@ -2246,7 +2246,7 @@ mod tests {
             .prepare(
                 challenge_request(&stale_fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 stale_fixture.receipt_signer.issuer_service_id(),
                 expired_at + Duration::minutes(2),
             )
@@ -2305,7 +2305,7 @@ mod tests {
             .prepare(
                 challenge_request(&rotation_fixture, profile.clone()),
                 "https://registry.example/",
-                "registry.example",
+                "ak:trust_domain:registry.example",
                 rotation_fixture.receipt_signer.issuer_service_id(),
                 rotation_fixture.now,
             )

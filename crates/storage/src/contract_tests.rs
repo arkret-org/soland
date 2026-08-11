@@ -908,13 +908,17 @@ fn canonical_wire_event_record(
     actor_seq: u64,
     now: chrono::DateTime<Utc>,
 ) -> CanonicalEventRecord {
+    let actor_id = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(actor_id.to_owned()).expect("contract actor full id"),
+    )
+    .expect("contract actor core id");
     let event = arkret_wire::test_support::raw_event_at(
         "ak.message.create",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("contract realm id"),
         },
-        arkret_identifiers::DidCoreId::new(actor_id.to_owned()).expect("contract actor core id"),
+        actor_id.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -933,7 +937,7 @@ fn canonical_wire_event_record(
     .expect("contract canonical bytes");
     CanonicalEventRecord {
         event_id: event.event_id.as_str().to_owned(),
-        actor_id: actor_id.to_owned(),
+        actor_id: actor_id.to_string(),
         actor_seq,
         realm_id: Some(realm_id.to_owned()),
         kind: "ak.message.create".to_owned(),

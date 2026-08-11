@@ -2839,7 +2839,7 @@ mod tests {
         )
     }
 
-    const ACTIVE_BINDING_AGENT_ID: &str = "did:web:agent.example";
+    const ACTIVE_BINDING_AGENT_ID: &str = "ak:did_core:web:agent.example";
     const ACTIVE_BINDING_VERIFICATION_METHOD: &str = "did:web:agent.example#key-1";
     const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 
@@ -2859,7 +2859,7 @@ mod tests {
                 "public_key_digest": format!("sha256:{}", "00".repeat(32)),
                 "agent_key_authorize_event_id": ACTIVE_BINDING_EVENT_ID,
                 "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_id": "did:web:alice.example",
+                "controller_id": "ak:did_core:web:alice.example",
                 "controller_proof": {
                     "kind": "controller_signature",
                     "verification_method": "did:web:alice.example#key-1",
@@ -2879,7 +2879,7 @@ mod tests {
     ) -> AgentPairingState {
         let mut record = AgentPairingState::new(
             ACTIVE_BINDING_AGENT_ID.to_owned(),
-            "did:web:alice.example".to_owned(),
+            "ak:did_core:web:alice.example".to_owned(),
             "ak:realm:personal".to_owned(),
             DidUrl::new("did:web:alice.example#key-1".to_owned()).unwrap(),
             AgentLifecycleState::Active,
@@ -3486,7 +3486,7 @@ mod tests {
     async fn pairing_activation_is_one_atomic_port_call() {
         let service = AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
         let command = ActivateAgentRuntimeCommand {
-            agent_id: "did:web:agent.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
             runtime_key_binding_digest: "sha256:binding".to_owned(),
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
@@ -3496,7 +3496,7 @@ mod tests {
             authorized_public_key_digest: "sha256:key".to_owned(),
             authorized_signing_key_binding: serde_json::from_value(serde_json::json!({
                 "schema": "ak.schema.agent_signing_key_binding.v1",
-                "agent_id": "did:web:agent.example",
+                "agent_id": "ak:did_core:web:agent.example",
                 "agent_key_id": "runtime-1",
                 "verification_method": "did:web:agent.example#key-1",
                 "public_key": {
@@ -3508,7 +3508,7 @@ mod tests {
                 "agent_key_authorize_event_id":
                     "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_id": "did:web:alice.example",
+                "controller_id": "ak:did_core:web:alice.example",
                 "controller_proof": {
                     "kind": "controller_signature",
                     "verification_method": "did:web:alice.example#key-1",

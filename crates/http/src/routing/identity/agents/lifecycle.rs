@@ -1697,7 +1697,7 @@ pub(super) async fn attach_agent_grant(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::invalid_param(error.to_string()))?;

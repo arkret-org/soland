@@ -2413,7 +2413,7 @@ mod tests {
     ) -> CanonicalEventRecord {
         CanonicalEventRecord {
             event_id: event_id.to_owned(),
-            actor_id: "did:web:controller.example".to_owned(),
+            actor_id: "ak:did_core:web:controller.example".to_owned(),
             actor_seq,
             realm_id: Some("ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
@@ -2421,11 +2421,11 @@ mod tests {
             canonical_digest: format!("sha256:{actor_seq}"),
             canonical_bytes: Vec::new(),
             envelope: serde_json::json!({
-                "executed_by": "did:web:controller.example",
+                "executed_by": "ak:did_core:web:controller.example",
                 "payload": {
                     "schema": "ak.schema.accountability_grant.v1",
-                    "issuer": "did:web:controller.example",
-                    "subject": "did:web:agent.example",
+                    "issuer": "ak:did_core:web:controller.example",
+                    "subject": "ak:did_core:web:agent.example",
                     "accountability_scope": accountability_scope,
                     "not_before": "2026-01-01T00:00:00.000Z",
                     "expires_at": "2099-01-01T00:00:00.000Z",
@@ -2456,8 +2456,8 @@ mod tests {
         );
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: original.event_id.clone(),
-            controller_id: "did:web:controller.example".to_owned(),
-            agent_id: "did:web:agent.example".to_owned(),
+            controller_id: "ak:did_core:web:controller.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             accepted_at,
         };
         assert!(active_agent_accountability(
@@ -2518,8 +2518,8 @@ mod tests {
         let events = [superset.clone(), singleton, reordered_revoke];
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: superset.event_id.clone(),
-            controller_id: "did:web:controller.example".to_owned(),
-            agent_id: "did:web:agent.example".to_owned(),
+            controller_id: "ak:did_core:web:controller.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             accepted_at,
         };
         assert!(!active_agent_accountability(&superset, &events, &query));
@@ -2557,8 +2557,8 @@ mod tests {
         let events = [superset.clone(), subset_revoke];
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: superset.event_id.clone(),
-            controller_id: "did:web:controller.example".to_owned(),
-            agent_id: "did:web:agent.example".to_owned(),
+            controller_id: "ak:did_core:web:controller.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             accepted_at,
         };
         assert!(active_agent_accountability(&superset, &events, &query));

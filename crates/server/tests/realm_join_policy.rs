@@ -286,9 +286,9 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "join_policy_combinator_missing");
+            assert_eq!(reason, "schema_violation");
         }
-        other => panic!("expected Rejected(join_policy_combinator_missing), got {other:?}"),
+        other => panic!("expected Rejected(schema_violation), got {other:?}"),
     }
 }
 

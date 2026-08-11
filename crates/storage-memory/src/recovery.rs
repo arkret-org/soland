@@ -426,8 +426,8 @@ mod tests {
         AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
         AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidCoreId, DidFullId, DidUrl, Event,
-        EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
+        BackupSeriesId, CanonicalPublicMaterial, DeviceId, DidCoreId, DidFullId, DidUrl, EventId,
+        EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
         PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
         SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
@@ -453,7 +453,7 @@ mod tests {
                 .iter()
                 .map(|backup| {
                     json!({
-                        "actor_id": "did:web:alice.example",
+                        "actor_id": "ak:did_core:web:alice.example",
                         "backup_id": backup.backup_id,
                         "backup_kind": backup_kind,
                         "ciphertext_digest": backup.ciphertext_digest,
@@ -735,7 +735,7 @@ mod tests {
         advanced.resource.accepted_steps.push(AcceptedStep {
             step: SecurityTransactionStep::Revoke,
             prepared_material_digest: hash('4'),
-            acceptor_id: "did:web:principal.example".to_owned(),
+            acceptor_id: "ak:did_core:web:principal.example".to_owned(),
             output_ref: "ak:event:AaAkIzblCDjqaSCE04n-JnjSzLVYVVT9LyvaLdLiTJrW".to_owned(),
             output_digest: hash('5'),
             accepted_at: Utc::now(),

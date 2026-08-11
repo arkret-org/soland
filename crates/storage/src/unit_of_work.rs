@@ -60,16 +60,19 @@ pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event
     {
         return false;
     }
-    let prefix = format!("{}#", event.actor_id);
-    event.proofs[0]
-        .verification_method
-        .as_str()
-        .strip_prefix(&prefix)
-        .is_some_and(|fragment| {
-            fragment
+    let Some((controller, fragment)) = event.proofs[0].verification_method.as_str().split_once('#')
+    else {
+        return false;
+    };
+    let Ok(controller) = arkret_wire::DidFullId::new(controller.to_owned()) else {
+        return false;
+    };
+    arkret_wire::project_full_id_to_core_id(&controller).is_ok_and(|controller| {
+        controller == event.actor_id
+            && fragment
                 .strip_prefix("ak:device:")
                 .is_some_and(|device| !device.is_empty())
-        })
+    })
 }
 
 /// Applet projection mutation committed with a closed Event aggregate.

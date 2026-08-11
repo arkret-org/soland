@@ -1,4 +1,4 @@
-use arkret_identifiers::{DidFullId, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -14,6 +14,13 @@ fn test_event_signer_did() -> String {
         "did:key:{}",
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
+}
+
+fn actor_core_id(actor: &str) -> DidCoreId {
+    arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor full DID projects to a core id")
 }
 
 fn test_config() -> AppConfig {
@@ -381,10 +388,11 @@ fn read_cursor_payload(
     event_id: &str,
     hlc: &str,
 ) -> Value {
+    let actor_id = actor_core_id(actor);
     json!({
         "id": arkret_identifiers::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ak.schema.read_cursor.v1",
-        "actor_id": actor,
+        "actor_id": actor_id,
         "device_id": device_id,
         "realm_id": realm_id,
         "read_scope": {
@@ -454,6 +462,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
     let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
+    let actor_core = actor_core_id(&actor);
     // Principal Control Realms use their distinct subject-derived bootstrap
     // path. Materialize its create-locked reducer cells through the SDK's PCR
     // genesis builder rather than through an ordinary Realm bootstrap.
@@ -537,8 +546,8 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         event["kind"],
         arkret_wire::EventKind::AccountDataSet.as_str()
     );
-    assert_eq!(event["actor_id"].as_str(), Some(actor.as_str()));
-    assert_eq!(event["payload"]["owner"], actor);
+    assert_eq!(event["actor_id"].as_str(), Some(actor_core.as_str()));
+    assert_eq!(event["payload"]["owner"], actor_core.as_str());
     assert_eq!(event["payload"]["expected_revision"], 1);
     assert_eq!(event["payload"]["body"], "second");
     assert!(
@@ -607,6 +616,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
 async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
     let state = soland_test_support::app_state(test_config());
     let alice_actor = test_event_signer_did();
+    let alice_actor_core = actor_core_id(&alice_actor);
     let alice_desktop = dev_token(
         state.clone(),
         &alice_actor,
@@ -659,7 +669,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor,
+            "owner": alice_actor_core.as_str(),
             "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00.000Z",
         }),
@@ -683,8 +693,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
          not by an unrelated error: {put}"
     );
 
-    let encrypted_blocklist =
-        encrypted_account_data_value(&alice_actor, "ak.account.blocklist", &plaintext_blocklist);
+    let encrypted_blocklist = encrypted_account_data_value(
+        alice_actor_core.as_str(),
+        "ak.account.blocklist",
+        &plaintext_blocklist,
+    );
     let put = submit_actor_private_event(
         state.clone(),
         &alice_desktop,
@@ -695,7 +708,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor,
+            "owner": alice_actor_core.as_str(),
             "body": encrypted_blocklist.clone(),
             "updated_at": "2026-05-21T00:00:00.000Z",
         }),
@@ -708,7 +721,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let stored_account_data = state
         .test_persistence()
         .account_data()
-        .list_for_actor(&alice_actor)
+        .list_for_actor(alice_actor_core.as_str())
         .await
         .unwrap();
     assert!(
@@ -727,9 +740,9 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": alice_actor,
+            "owner": alice_actor_core.as_str(),
             "body": encrypted_account_data_value(
-                &alice_actor,
+                alice_actor_core.as_str(),
                 "ak.account.blocklist",
                 &json!({"version": 1, "entries": []}),
             ),
@@ -750,7 +763,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     let current = state
         .test_persistence()
         .account_data()
-        .get(&alice_actor, "ak.account.blocklist")
+        .get(alice_actor_core.as_str(), "ak.account.blocklist")
         .await
         .unwrap()
         .unwrap();
@@ -799,6 +812,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
 async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     let state = soland_test_support::app_state(test_config());
     let alice_actor = test_event_signer_did();
+    let alice_actor_core = actor_core_id(&alice_actor);
     let alice_desktop = dev_token(
         state.clone(),
         &alice_actor,
@@ -867,13 +881,13 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         "marker_b response: {marker_b}"
     );
 
-    let markers_a = projected_read_markers(&state, &alice_actor, Some(&realm_a));
+    let markers_a = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_a));
     assert_eq!(markers_a.len(), 1);
     assert_eq!(markers_a[0]["position"]["event_id"], event_a);
     assert_eq!(markers_a[0]["realm_id"], realm_a);
     assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");
 
-    let markers_b = projected_read_markers(&state, &alice_actor, Some(&realm_b));
+    let markers_b = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_b));
     assert_eq!(markers_b.len(), 1);
     assert_eq!(markers_b[0]["position"]["event_id"], event_b);
     assert_eq!(markers_b[0]["realm_id"], realm_b);
@@ -901,7 +915,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
             && event["content"]["position"]["event_id"] == event_b
     }));
 
-    let bob_markers = projected_read_markers(&state, "did:web:bob.example", None);
+    let bob_actor_core = actor_core_id("did:web:bob.example");
+    let bob_markers = projected_read_markers(&state, bob_actor_core.as_str(), None);
     assert!(bob_markers.is_empty());
     let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)

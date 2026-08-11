@@ -102,6 +102,12 @@ async fn prepare_alice(state: &AppState) -> String {
     token
 }
 
+fn alice_core_id() -> String {
+    arkret_wire::project_full_id_to_core_id(&arkret_identifiers::DidFullId::new(ALICE).unwrap())
+        .unwrap()
+        .to_string()
+}
+
 /// Bootstrap a Realm through the real `ak.realm.create` genesis batch, with this
 /// deployment as its `single_did` notary, and grant the caller `ak.realm.link`.
 ///
@@ -136,11 +142,12 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     }
     // Realm genesis grants nothing beyond the authority root, so the explicit
     // `ak.realm.link` grant the admission gate requires is registered here.
+    let alice_core = alice_core_id();
     soland_http::authz::install_projected_grant(
         state.test_authz(),
         realm_id.clone(),
-        ALICE.to_owned(),
-        ALICE.to_owned(),
+        alice_core.clone(),
+        alice_core,
         realm_id.clone(),
         vec![arkret_wire::CapabilityActionId::REALM_LINK.to_owned()],
         Vec::new(),
@@ -187,7 +194,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": ALICE, "realm_id": realm_id}))
+            .json(&serde_json::json!({"actor_id": alice_core_id(), "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
             .await
@@ -312,7 +319,6 @@ fn project_inheritance_policy(
     source_realm_id: &str,
     allowed_policies: &[&str],
 ) {
-    use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::OperationId;
     let op = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),

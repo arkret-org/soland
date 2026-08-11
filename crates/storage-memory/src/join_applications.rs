@@ -220,7 +220,7 @@ mod tests {
     use super::MemoryJoinApplicationStore;
 
     const REALM: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
-    const APPLICANT: &str = "did:web:alice.example";
+    const APPLICANT: &str = "ak:did_core:web:alice.example";
     const KNOCK: &str = "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
 
     fn at(second: u32) -> DateTime<Utc> {
@@ -278,6 +278,12 @@ mod tests {
         second: u32,
     ) -> JoinApplicationReviewReceipt {
         let digest = hash(digest_fill);
+        let reviewer_verification_method = format!(
+            "did:{}#device",
+            reviewer
+                .strip_prefix("ak:did_core:")
+                .expect("reviewer fixture is a core DID")
+        );
         serde_json::from_value(json!({
             "candidate_kind": "member.application.review",
             "realm_id": REALM,
@@ -294,7 +300,7 @@ mod tests {
             "review_receipt_digest": digest,
             "proof": {
                 "kind": "detached_jws",
-                "verification_method": format!("{reviewer}#device"),
+                "verification_method": reviewer_verification_method,
                 "payload_digest": digest,
                 "created_at": format!("2026-07-24T00:00:{second:02}.000Z"),
                 "jws": "eyJhbGciOiJFZDI1NTE5In0..AQ"
@@ -345,7 +351,7 @@ mod tests {
         );
 
         let first = accept_review(
-            "did:web:reviewer-one.example",
+            "ak:did_core:web:reviewer-one.example",
             "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
             '1',
             1,
@@ -374,7 +380,7 @@ mod tests {
         assert!(record.required_accept_refs.is_empty());
 
         let second = accept_review(
-            "did:web:reviewer-two.example",
+            "ak:did_core:web:reviewer-two.example",
             "ak:grant:AeWYNl1hiGDuy4WCQ03g5lgs2NZzf_SFYgjsfhG-t9cg",
             '2',
             2,
@@ -460,7 +466,7 @@ mod tests {
             .await
             .unwrap();
         let mut review_value = serde_json::to_value(accept_review(
-            "did:web:reviewer.example",
+            "ak:did_core:web:reviewer.example",
             "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
             '3',
             1,

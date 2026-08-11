@@ -33,8 +33,12 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
-const SEEDED_DEMO_REALM_ID: &str = DEMO_REALM_ID;
+const DEMO_REALM_ID: &str = "ak:realm:Aa2em0bde2hPUNK_oL2A-fZATOTI4CHLT7X23s7s9xRe";
+const SEEDED_DIRECTORY_DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
+// The shared demo directory and `new_with_demo_data` metadata still use two
+// historical fixture Realm ids. Clone both into the Realm derived from this
+// suite's current canonical genesis before exercising authenticated routes.
+const SEEDED_METADATA_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 
 fn test_config() -> AppConfig {
@@ -111,7 +115,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         let meta = state
             .test_persistence()
             .realm_meta()
-            .get(SEEDED_DEMO_REALM_ID)
+            .get(SEEDED_METADATA_DEMO_REALM_ID)
             .await
             .unwrap()
             .expect("seeded demo Realm metadata");
@@ -129,7 +133,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     {
         let mut realms = state.test_realms().lock();
         let mut realm = realms.get(&typed_realm_id).cloned().unwrap_or_else(|| {
-            let seeded_realm_id = RealmId::new(SEEDED_DEMO_REALM_ID.to_owned()).unwrap();
+            let seeded_realm_id = RealmId::new(SEEDED_DIRECTORY_DEMO_REALM_ID.to_owned()).unwrap();
             let mut seeded = realms
                 .get(&seeded_realm_id)
                 .cloned()
@@ -276,7 +280,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "grant_id": ADMIN_GRANT_ID,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": DEMO_REALM_ID,
-                    "issuer": "did:web:alice.example",
+                    "issuer": "ak:did_core:web:alice.example",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": DEMO_REALM_ID,
@@ -284,7 +288,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": "did:web:alice.example",
+                    "subject": "ak:did_core:web:alice.example",
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",
@@ -767,10 +771,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let service_token =
         dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000002").await;
 
-    let ghost_actor_id = format!(
-        "did:web:{}.applet.example:ghost:u123",
-        safe_did_token(&namespace)
-    );
+    let ghost_actor_id = ghost_actor_core_id(&namespace, "u123");
     let mut rejected_body = signed_ghost_provision_body(
         &package,
         &install,
@@ -1006,10 +1007,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let service_token =
         dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000003").await;
 
-    let ghost_actor_id = format!(
-        "did:web:{}.applet.example:ghost:u-denied",
-        safe_did_token(&namespace)
-    );
+    let ghost_actor_id = ghost_actor_core_id(&namespace, "u-denied");
     let rejected: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
@@ -1357,10 +1355,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let message_grant_ref =
         capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
 
-    let ghost_actor_id = format!(
-        "did:web:{}.applet.example:ghost:ext-user-x",
-        safe_did_token(&namespace)
-    );
+    let ghost_actor_id = ghost_actor_core_id(&namespace, "ext-user-x");
     let mut provision_response = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
@@ -1527,7 +1522,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
 
     let revoked_doc = canonical_did_document(&app, &ghost_actor_id).await;
     assert_eq!(revoked_doc["status"], json!("revoked"));
-    assert!(bot_actor_id.starts_with("did:web:bot-"));
+    assert!(bot_actor_id.starts_with("ak:did_core:web:bot-"));
 }
 
 fn capability_grant_ref_for_action(
@@ -1593,7 +1588,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
             actors: vec![AppletNamespaceEntry::exclusive(format!(
-                "did:web:{}.applet.example:ghost:*",
+                "ak:did_core:web:ghost-*-{}.applet.example",
                 safe_did_token(namespace)
             ))],
             handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
@@ -2071,6 +2066,18 @@ fn safe_did_token(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn ghost_actor_core_id(namespace: &str, external_id: &str) -> String {
+    let full_id = DidFullId::new(format!(
+        "did:web:ghost-{}-{}.applet.example",
+        safe_did_token(external_id),
+        safe_did_token(namespace)
+    ))
+    .expect("fixture ghost Full DID");
+    arkret_wire::project_full_id_to_core_id(&full_id)
+        .expect("fixture ghost Core DID projection")
+        .to_string()
 }
 
 // S-00 regression: the sovereign deployment surface

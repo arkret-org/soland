@@ -37,7 +37,7 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
         &operation(
             ORG_REALM,
             json!({
-                "policy_server_did": "did:web:org-policy.example",
+                "policy_server_service_id": "ak:did_core:web:org-policy.example",
                 "policy_server_url": "https://org-policy.example/_arkret/self/policy/check"
             }),
         ),
@@ -47,7 +47,7 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
         &operation(
             CHILD_REALM,
             json!({
-                "policy_server_did": "did:web:child-policy.example",
+                "policy_server_service_id": "ak:did_core:web:child-policy.example",
                 "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
             }),
         ),
@@ -80,7 +80,7 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
                     "preconditions": [{
                         "cell": CELL_ID,
                         "predicate": {"op": "head_eq", "value": {
-                            "policy_server_did": "did:web:child-policy.example",
+                            "policy_server_service_id": "ak:did_core:web:child-policy.example",
                             "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
                         }},
                     }],
@@ -110,11 +110,11 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
 #[test]
 fn same_basis_replace_and_delete_siblings_join_bottom_in_either_order() {
     let declaration = json!({
-        "policy_server_did": "did:web:child-policy.example",
+        "policy_server_service_id": "ak:did_core:web:child-policy.example",
         "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
     });
     let replace = json!({
-        "policy_server_did": "did:web:next-policy.example",
+        "policy_server_service_id": "ak:did_core:web:next-policy.example",
         "policy_server_url": "https://next-policy.example/_arkret/self/policy/check",
         "preconditions": [{
             "cell": CELL_ID,
