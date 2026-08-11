@@ -103,28 +103,40 @@ cargo install just
 
 Run `just` to see every available recipe.
 
-### Run with the in-memory store (no database)
+### Run the local persistent profile
 
 ```bash
 just start
 ```
 
-`DATABASE_URL` is optional. Without it, soland runs with an in-memory store
-and demo Space data while keeping the same HTTP API. `SOLAND_DEVELOPMENT_MODE`
-**defaults to `false`**; turn it on explicitly when you need `dev_login`,
-the admin snapshot endpoints, or the relaxed DID-document validation that
-the development workflow relies on. The `just start` recipe sets it to `true`
-for local runs unless you override it.
+`just start` (an alias of `just dev`) loads the checked-in local `.env`,
+idempotently provisions the encrypted-file KeyStore master key, and then starts
+Soland against the configured PostgreSQL database. Local custody artifacts are
+kept outside Git:
 
-### Run against PostgreSQL
+```text
+.local/secrets/soland-keystore-master-key  # separately stored master key
+.local/keystore/soland.v1                  # encrypted private-key material
+.local/identity-bundle/                    # public recovery evidence + KeyRefs
+```
+
+Realm, Event, account, and other application rows remain in PostgreSQL; Soland
+does not currently provide a file-backed relational database under `.local`.
+`SOLAND_DEVELOPMENT_MODE` defaults to `false` in the server, while the `just`
+development recipes set it to `true` unless overridden.
+
+### Let Docker provide PostgreSQL
 
 ```bash
 just start-db
 ```
 
 `just start-db` starts a local `postgres:16` container named `soland-postgres`,
-waits for it to accept connections, then starts soland with the connection
-string below. This path requires Docker:
+idempotently provisions `./.local/secrets/soland-keystore-master-key` with the
+cross-platform `soland-keystore-keygen` helper, waits for PostgreSQL to accept
+connections, then starts soland with the connection string below. Existing
+valid keys are retained and malformed files fail closed. This path requires
+Docker:
 
 ```dotenv
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland
@@ -137,25 +149,47 @@ idempotently. To stop the local database container:
 just db-down
 ```
 
-If you prefer a persistent `.env`, copy the example, configure one of the
-documented durable KeyStore backends, and uncomment or replace `DATABASE_URL`:
+If `.env` is absent, create it from the example, enable the encrypted-file
+KeyStore settings and `DATABASE_URL`, and provision the local key:
 
 ```bash
 just init-env
+just init-dev
 ```
 
-Then `just start` will use the database configured in `.env`.
+Then `just start` will use the durable configuration in that file. Calling
+`just init-dev` again validates and retains the existing key.
 
 Manual equivalent:
 
 ```bash
 DATABASE_URL=postgres://soland:soland@localhost:5432/soland \
-  SOLAND_KEYSTORE_BACKEND=platform \
+  SOLAND_KEYSTORE_BACKEND=encrypted_file \
+  SOLAND_KEYSTORE_PATH=./.local/keystore/soland.v1 \
+  SOLAND_KEYSTORE_MASTER_KEY_FILE=./.local/secrets/soland-keystore-master-key \
   SOLAND_DEVELOPMENT_MODE=true \
   cargo run -- --bind 127.0.0.1:8698
 ```
 
 ### Run with Docker
+
+Provision the master key explicitly before the first container start. The
+release image includes the same cross-platform helper used by `just init-dev`;
+this Linux example creates the host directory for the image's UID `10001` and
+never overwrites an existing key:
+
+```bash
+sudo install -d -m 0700 -o 10001 -g 10001 /secure/soland
+docker run --rm \
+  --entrypoint /usr/local/bin/soland-keystore-keygen \
+  --mount type=bind,source=/secure/soland,target=/secrets \
+  ghcr.io/arkret/soland:<tag> \
+  --output /secrets/soland-keystore-master-key
+sudo chmod 0400 /secure/soland/soland-keystore-master-key
+```
+
+Then mount that file read-only while keeping the encrypted KeyStore on a
+persistent volume:
 
 ```bash
 docker run --rm -p 8698:8698 \
@@ -172,16 +206,17 @@ docker run --rm -p 8698:8698 \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
-  -v soland-data:/var/lib/soland \
-  -v /secure/soland-keystore-master-key:/run/secrets/soland-keystore-master-key:ro \
-  ghcr.io/arkret/soland:latest
+  --mount type=volume,source=soland-data,target=/var/lib/soland \
+  --mount type=bind,source=/secure/soland/soland-keystore-master-key,target=/run/secrets/soland-keystore-master-key,readonly \
+  ghcr.io/arkret/soland:<tag>
 ```
 
-Generate the mounted master key once with a cryptographically secure source
-(for example, `openssl rand -base64 32`) and back it up separately from the
-ciphertext volume. The identity bundle contains only public recovery evidence
-and KeyRefs; it is not a substitute for control-key custody. Soland fails
-closed instead of writing control seeds to PostgreSQL.
+Back up the mounted master key separately from the ciphertext volume. Remove
+`SOLAND_FIRST_PROVISIONING` after the first successful identity creation. The
+identity bundle contains only public recovery evidence and KeyRefs; it is not a
+substitute for control-key custody. Soland fails closed instead of writing
+control seeds to PostgreSQL. Windows ACL and Docker Desktop examples are in
+[DEPLOYMENT.md](DEPLOYMENT.md#provision-the-keystore-master-key).
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for a full Docker / PostgreSQL / TLS guide.
 
@@ -270,7 +305,7 @@ and the `local.host.pem` / `local.host-key.pem` file names.
     SOLAND_PUBLIC_BASE_URL=https://local.host:443
    SOLAND_KEYSTORE_BACKEND=encrypted_file
    SOLAND_KEYSTORE_PATH=./.local/keystore/soland.v1
-   SOLAND_KEYSTORE_MASTER_KEY_FILE=../.secrets/soland-keystore-master-key
+   SOLAND_KEYSTORE_MASTER_KEY_FILE=./.local/secrets/soland-keystore-master-key
     SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
    SOLAND_TLS_CERT_PATH=./local.host.pem
    SOLAND_TLS_KEY_PATH=./local.host-key.pem
@@ -282,6 +317,7 @@ and the `local.host.pem` / `local.host-key.pem` file names.
 5. Start the server:
 
    ```bash
+   just init-dev
    cargo run
    ```
 
@@ -306,7 +342,7 @@ SOLAND_BIND=127.0.0.1:8698
 SOLAND_PUBLIC_BASE_URL=https://local.host
 SOLAND_KEYSTORE_BACKEND=encrypted_file
 SOLAND_KEYSTORE_PATH=./.local/keystore/soland.v1
-SOLAND_KEYSTORE_MASTER_KEY_FILE=../.secrets/soland-keystore-master-key
+SOLAND_KEYSTORE_MASTER_KEY_FILE=./.local/secrets/soland-keystore-master-key
 SOLAND_SERVICE_IDENTITY_BUNDLE_DIR=./identity-bundle
 SOLAND_DEVELOPMENT_MODE=true
 SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
@@ -323,6 +359,9 @@ is still using an old local file with a `contrix:` section, rename that
 section to `arkret:` before restarting it; otherwise coauth will reject
 soland's introspection call and browser sign-in will end with
 `unauthenticated: invalid bearer token`.
+
+Run `just init-dev` once before starting this encrypted-file configuration;
+subsequent runs validate and retain the existing local master key.
 
 ```bash
 just caddy

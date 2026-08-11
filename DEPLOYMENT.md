@@ -28,6 +28,68 @@ soland runs Diesel migrations on startup; no manual DDL is required.
 
 ## 2. Configure environment
 
+### Provision the KeyStore master key
+
+Generate the encrypted-file KeyStore master key exactly once, outside the
+server startup path. `soland-keystore-keygen` obtains 32 bytes from the
+operating-system CSPRNG, writes the Base64 value with create-new semantics,
+validates the result, and refuses to overwrite an existing file. The
+`--if-missing` option is reserved for idempotent automation such as
+`just init-dev`; it still rejects malformed existing files.
+
+Installed-binary usage:
+
+```text
+soland-keystore-keygen --output <path>
+```
+
+From a source checkout, the command is cross-platform:
+
+```text
+cargo run --locked --release -p soland-keystore-keygen -- --output <path>
+```
+
+For a Linux Docker host, the release image contains the helper. Create a
+host directory writable by the image's UID `10001`, run the helper as an
+explicit one-shot operation, and then make the result read-only:
+
+```bash
+sudo install -d -m 0700 -o 10001 -g 10001 /secure/soland
+docker run --rm \
+  --entrypoint /usr/local/bin/soland-keystore-keygen \
+  --mount type=bind,source=/secure/soland,target=/secrets \
+  ghcr.io/arkret/soland:<tag> \
+  --output /secrets/soland-keystore-master-key
+sudo chmod 0400 /secure/soland/soland-keystore-master-key
+```
+
+On Windows or Windows Docker Desktop, use the same image and protect the host
+file with an ACL. Run these commands from PowerShell:
+
+```powershell
+$keyDir = 'D:\soland\secrets'
+New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+$keyDir = (Resolve-Path -LiteralPath $keyDir).Path
+
+docker run --rm `
+  --entrypoint /usr/local/bin/soland-keystore-keygen `
+  --mount "type=bind,source=$keyDir,target=/secrets" `
+  ghcr.io/arkret/soland:<tag> `
+  --output /secrets/soland-keystore-master-key
+
+$keyFile = Join-Path $keyDir 'soland-keystore-master-key'
+$account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $keyFile /inheritance:r /grant:r "${account}:(R)"
+```
+
+If Docker runs under a dedicated Windows service account, grant that account
+read access instead of the interactive user. Do not place the key in the image,
+the source tree, an environment file committed to Git, or the same backup as
+`SOLAND_KEYSTORE_PATH`. Preserve the original key for every restart and
+restore; losing or replacing it makes the encrypted KeyStore unreadable.
+
+### Configure runtime values
+
 Create a deploy-time `.env` (or a Kubernetes Secret / systemd EnvironmentFile):
 
 ```dotenv
@@ -192,8 +254,8 @@ docker run --name soland --restart=always -d \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
   -e SOLAND_OBJECT_STORAGE_LOCAL_ROOT=/var/lib/soland/objects \
   -e RUST_LOG=soland=info \
-  -v soland-data:/var/lib/soland \
-  -v /secure/soland-keystore-master-key:/run/secrets/soland-keystore-master-key:ro \
+  --mount type=volume,source=soland-data,target=/var/lib/soland \
+  --mount type=bind,source=/secure/soland/soland-keystore-master-key,target=/run/secrets/soland-keystore-master-key,readonly \
   ghcr.io/arkret/soland:<tag>
 ```
 
@@ -201,7 +263,10 @@ The image runs as UID `10001`. Mounted volumes for
 `SOLAND_OBJECT_STORAGE_LOCAL_ROOT` must be chowned to that UID (or use a named
 Docker volume so Docker handles it). The mounted KeyStore master-key file must
 be readable by UID `10001`; generate and back it up separately from the named
-ciphertext volume. S3-compatible backends do not need a media volume.
+ciphertext volume. After the first successful identity creation, recreate the
+container without `SOLAND_FIRST_PROVISIONING`; it is a one-time authorization,
+not a permanent runtime setting. S3-compatible backends do not need a media
+volume.
 
 ### Helm
 
@@ -212,17 +277,21 @@ so secrets and network ranges are explicit in the release artifact:
 helm template soland ./deploy/helm/soland \
   --namespace arkret \
   --set image.tag=<tag> \
+  --set existingSecret=soland-runtime \
   --set env.SOLAND_PUBLIC_BASE_URL=https://soland.example \
   --set env.SOLAND_FIRST_PROVISIONING=true \
   --set env.SOLAND_KEYSTORE_BACKEND=encrypted_file \
   --set env.SOLAND_KEYSTORE_PATH=/var/lib/soland/keystore/soland.v1 \
-  --set secretEnv.SOLAND_KEYSTORE_MASTER_KEY='<base64-random-32-byte-key>' \
   --set env.SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
-  --set env.SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk... \
-  --set secretEnv.DATABASE_URL='postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full' \
-  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
-  --set secretEnv.SOLAND_SESSION_GRANT_INTROSPECTION_BEARER='<shared-secret-configured-in-coauth>'
+  --set env.SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
 ```
+
+Create `soland-runtime` through the cluster's secret-management path before
+rendering or installing the chart. It must provide every key listed under
+`secretEnv` in `values.yaml`, including `SOLAND_KEYSTORE_MASTER_KEY`. Prefer an
+external secret controller or encrypted GitOps secret; do not pass secret
+values through Helm `--set`, where they can leak into shell history and release
+metadata.
 
 Install the same values with:
 

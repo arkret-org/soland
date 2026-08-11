@@ -5319,6 +5319,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "soland-keystore-keygen"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "soland-services"
 version = "0.3.0"
 dependencies = [

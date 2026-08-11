@@ -1,0 +1,18 @@
+[package]
+name = "soland-keystore-keygen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Cross-platform master-key generator for the Soland encrypted-file KeyStore."
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+uuid = { workspace = true, features = ["v4"] }

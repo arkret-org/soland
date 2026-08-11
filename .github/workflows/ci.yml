@@ -90,6 +90,12 @@ jobs:
         run: cargo +1.97 clippy --all-targets --locked -- -D warnings
         working-directory: soland
 
+      - name: KeyStore keygen
+        run: |
+          cargo +1.97 clippy --locked -p soland-keystore-keygen --all-targets -- -D warnings
+          cargo +1.97 test --locked -p soland-keystore-keygen
+        working-directory: soland
+
       - name: Clippy with OpenTelemetry
         run: cargo +1.97 clippy --features otel --all-targets --locked -- -D warnings
         working-directory: soland

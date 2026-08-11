@@ -3,6 +3,11 @@ set dotenv-load := true
 bind := env_var_or_default("SOLAND_BIND", "127.0.0.1:8698")
 database_url := env_var_or_default("DATABASE_URL", "")
 local_database_url := env_var_or_default("SOLAND_LOCAL_DATABASE_URL", "postgres://soland:soland@localhost:5432/soland")
+keystore_backend := env_var_or_default("SOLAND_KEYSTORE_BACKEND", "")
+keystore_path := env_var_or_default("SOLAND_KEYSTORE_PATH", "")
+keystore_master_key_file := env_var_or_default("SOLAND_KEYSTORE_MASTER_KEY_FILE", "")
+dev_keystore_path := env_var_or_default("SOLAND_KEYSTORE_PATH", "./.local/keystore/soland.v1")
+dev_keystore_master_key_file := env_var_or_default("SOLAND_KEYSTORE_MASTER_KEY_FILE", "./.local/secrets/soland-keystore-master-key")
 postgres_container := env_var_or_default("SOLAND_POSTGRES_CONTAINER", "soland-postgres")
 postgres_image := env_var_or_default("SOLAND_POSTGRES_IMAGE", "postgres:16")
 postgres_port := env_var_or_default("SOLAND_POSTGRES_PORT", "5432")
@@ -17,6 +22,9 @@ postgres_db := env_var_or_default("SOLAND_POSTGRES_DB", "soland")
 gate_jobs := env_var_or_default("SOLAND_GATE_JOBS", "1")
 gate_dir := env_var_or_default("SOLAND_GATE_DIR", "target/gate")
 export DATABASE_URL := database_url
+export SOLAND_KEYSTORE_BACKEND := keystore_backend
+export SOLAND_KEYSTORE_PATH := keystore_path
+export SOLAND_KEYSTORE_MASTER_KEY_FILE := keystore_master_key_file
 export SOLAND_DEVELOPMENT_MODE := env_var_or_default("SOLAND_DEVELOPMENT_MODE", "true")
 export RUST_LOG := env_var_or_default("RUST_LOG", "soland=info")
 
@@ -28,8 +36,12 @@ default:
 init-env:
     @if test -f .env; then echo ".env already exists"; else cp .env.example .env && echo "created .env"; fi
 
+# Provision the local PostgreSQL KeyStore key idempotently; invalid files fail.
+init-dev:
+    cargo run --quiet -p soland-keystore-keygen -- --output "{{ dev_keystore_master_key_file }}" --if-missing
+
 # Run soland locally. Uses DATABASE_URL from .env when set; otherwise uses memory storage.
-dev:
+dev: init-dev
     CARGO_TARGET_DIR=target/dev cargo run -- --bind {{ bind }}
 
 # Alias for `dev`.
@@ -40,8 +52,8 @@ caddy:
     caddy run --config Caddyfile
 
 # Start a local Postgres container, wait for it, then run soland against it.
-dev-db: db-up db-ready
-    just --set database_url "{{ local_database_url }}" dev
+dev-db: init-dev db-up db-ready
+    just --set database_url "{{ local_database_url }}" --set keystore_backend "encrypted_file" --set keystore_path "{{ dev_keystore_path }}" --set keystore_master_key_file "{{ dev_keystore_master_key_file }}" dev
 
 # Alias for `dev-db`.
 start-db: dev-db
@@ -89,6 +101,7 @@ clippy:
 # Run the Rust test suite.
 test:
     CARGO_TARGET_DIR=target/test cargo test --locked
+    CARGO_TARGET_DIR=target/test cargo test --locked -p soland-keystore-keygen
 
 # Run the HTTP API integration suite in an isolated target directory so a
 # long-running `just dev` process cannot lock its test binary on Windows.

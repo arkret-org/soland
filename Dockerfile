@@ -13,8 +13,10 @@ WORKDIR /workspace/soland
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/soland/target \
-    cargo build --locked --release && \
-    cp target/release/soland /usr/local/bin/soland
+    cargo build --locked --release --bin soland && \
+    cargo build --locked --release -p soland-keystore-keygen && \
+    cp target/release/soland /usr/local/bin/soland && \
+    cp target/release/soland-keystore-keygen /usr/local/bin/soland-keystore-keygen
 
 FROM debian:bookworm-slim AS runtime
 
@@ -30,6 +32,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/soland /usr/local/bin/soland
+COPY --from=builder /usr/local/bin/soland-keystore-keygen /usr/local/bin/soland-keystore-keygen
 
 RUN install -d -o 10001 -g 10001 /var/lib/soland
 

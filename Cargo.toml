@@ -6,6 +6,7 @@ members = [
     "crates/domain",
     "crates/services",
     "crates/http",
+    "crates/keystore-keygen",
     "crates/test-support",
     "crates/storage",
     "crates/storage-memory",
@@ -65,6 +66,7 @@ diesel_migrations = "2.3.2"
 dotenvy = "0.15.7"
 ed25519-dalek = "2.2.0"
 futures-util = "0.3.32"
+getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.13"
 metrics = "0.24"
