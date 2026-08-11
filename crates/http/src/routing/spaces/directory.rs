@@ -29,6 +29,8 @@ use arkret_hlc::CursorPurpose;
 use arkret_identifiers::{
     BlobRef, DidFullId, EventId, MessageId, RealmId, StrandId, SubscriptionId,
 };
+use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload;
+use arkret_models_collaboration::objects::realm_alias::RealmAlias;
 use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
     DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome,
@@ -61,8 +63,8 @@ use arkret_server::{
 };
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AddressLinkKind, Audience, JoinRule, PayloadProof, PayloadSigner, RealmRef, TargetDescriptor,
-    parse_address, proof_kind, target_digest,
+    AddressLinkKind, Audience, CellFamilyId, JoinRule, PayloadProof, PayloadSigner, RealmRef,
+    TargetDescriptor, parse_address, proof_kind, target_digest,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -74,6 +76,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::projection::ProjectionSnapshot;
 
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,

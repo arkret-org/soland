@@ -609,8 +609,8 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     // `mimi-interop.md` §11 is about *attribution*: the report must name the
     // principal the facade resolved, not the provider that asserted it. The
     // facade holds no key for that principal, so it authors the envelope under
-    // its own service DID and carries the resolved reporter in the payload.
-    // See `review/spec-open` for the unresolved half of this.
+    // its own service DID and carries the resolved reporter in the payload, as
+    // required by `mimi-interop.md` §11.
     assert_eq!(report_event["payload"]["reporter"], "did:web:alice.example");
     assert_eq!(report_event["actor_id"], *state.service_id());
 

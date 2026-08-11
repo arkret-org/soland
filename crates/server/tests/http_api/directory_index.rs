@@ -190,7 +190,8 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     config.public_base_url = "https://local.host".to_owned();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
     let service_id = "did:webvh:zqmsolandlocal".to_owned();
-    config.trust_domain = trust_domain_from_service_id(&service_id);
+    config.trust_domain =
+        arkret_identifiers::TrustDomainId::new(trust_domain_from_service_id(&service_id)).unwrap();
     let mut state = soland_test_support::app_state(config);
     state.test_set_service_id(service_id);
     let did = "did:web:registered-handle.example";

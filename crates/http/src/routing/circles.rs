@@ -34,10 +34,10 @@
 
 use arkret_identifiers::{CircleId, DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
-    CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberRequestBody,
-    CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval, CircleRestoreRequestBody,
-    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleTombstoneRequestBody, CircleView,
-    EncryptionFloor,
+    CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval,
+    CircleRestoreRequestBody, CircleScopeRotateOutcome, CircleScopeRotateRequestBody,
+    CircleTombstoneRequestBody, CircleView, EncryptionFloor,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -584,6 +584,44 @@ fn caller_signed_circle_member_target(
     })
 }
 
+/// Bind the caller-signed leave Event to every identifier selected by the
+/// DELETE surface before ordinary Event admission receives it.
+fn caller_signed_circle_member_delete_target(
+    actor: &str,
+    circle_id: &str,
+    actor_id: &str,
+    realm_id: &str,
+    event: &Event,
+) -> Result<CircleMemberTarget, AppError> {
+    let target = caller_signed_circle_member_target(actor, circle_id, event)?;
+    if event.realm_id.as_str() != realm_id {
+        return Err(AppError::invalid_param(
+            "member_event.event.realm_id must equal the path Circle's parent Realm",
+        ));
+    }
+    if target.actor_id.as_str() != actor_id {
+        return Err(AppError::invalid_param(
+            "member_event payload.actor_id must equal the path actor_id",
+        ));
+    }
+    if target.membership != CircleMembership::Leave {
+        return Err(AppError::invalid_param(
+            "member_event payload.membership must be leave",
+        ));
+    }
+    if event
+        .payload
+        .get("expected_membership")
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        return Err(AppError::missing_param(
+            "member_event payload.expected_membership must carry the current membership",
+        ));
+    }
+    Ok(target)
+}
+
 #[endpoint(
     operation_id = "ak.self.circle.member.resource.delete",
     summary = "Remove a circle member",
@@ -594,6 +632,7 @@ async fn delete_circle_member(
     aa: AuthArgs,
     circle_id: PathParam<String>,
     actor_id: PathParam<String>,
+    body: JsonBody<CircleMemberDeleteRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<CircleMembershipOutcome> {
@@ -601,22 +640,22 @@ async fn delete_circle_member(
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
     let actor_id = actor_id.into_inner();
-    let realm_scope = circle_realm_scope(state, &circle_id)?;
-    if actor_id != session.actor {
-        let realm_id = realm_scope.to_string();
-        ensure_circle_capability(
-            state,
-            &session.actor,
-            "ak.circle.member.manage",
-            &circle_id,
-            &realm_id,
-            CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED,
-        )
-        .await?;
-    }
-    Err(AppError::unsupported_feature(
-        "circle member removal requires a caller-signed ak.circle.member.state Event",
-    ))
+    let circle = circle_projection_snapshot(state, &circle_id)?;
+    let submission = body.into_inner().member_event;
+    let target = caller_signed_circle_member_delete_target(
+        &session.actor,
+        &circle_id,
+        &actor_id,
+        &circle.realm_id,
+        &submission.event,
+    )?;
+    submit_caller_signed_circle_event(state, &session, submission).await?;
+    json_ok(CircleMembershipOutcome {
+        circle_id: CircleId::new(circle_id)
+            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+        actor_id: target.actor_id,
+        membership: target.membership,
+    })
 }
 
 #[endpoint(
@@ -835,83 +874,6 @@ fn caller_signed_circle_lifecycle_target(
     Ok(())
 }
 
-async fn ensure_circle_capability(
-    state: &AppState,
-    actor: &str,
-    action: &str,
-    circle_id: &str,
-    realm_id: &str,
-    reason_code: &'static str,
-) -> Result<(), AppError> {
-    let (owner, members) = circle_authz_principals(state, realm_id).await;
-    let verdict = state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action,
-            resource: circle_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        });
-    if verdict.allowed {
-        Ok(())
-    } else {
-        Err(
-            AppError::capability_denied(format!("{action} required for this Circle"))
-                .with_wire_code(reason_code),
-        )
-    }
-}
-
-/// AKP-0007 §8 — canonical reducer reason code when the requester lacks
-/// `ak.circle.member.manage` for a cross-actor add. Kept in sync with the
-/// reducer constant of the same name so the HTTP 403 and the reducer 422
-/// surface the same wire code.
-const CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED: &str = "circle_member_manage_capability_required";
-
-/// Resolve the `(owner, members)` pair the `SolandAuthzEngine::check` default-rule
-/// path needs for a Realm. Mirrors the lookup in `routing/access/authz.rs`.
-async fn circle_authz_principals(
-    state: &AppState,
-    realm_id: &str,
-) -> (Option<String>, Vec<String>) {
-    let owner = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner);
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        RealmId::new(realm_id.to_owned())
-            .ok()
-            .and_then(|realm_id| realms.get(&realm_id))
-            .map(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .map(|member| member.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
-    (owner, members)
-}
-
-fn circle_realm_scope(state: &AppState, circle_id: &str) -> Result<RealmId, AppError> {
-    let projection = state.projections().snapshot();
-    let realm_id = projection
-        .circles
-        .get(circle_id)
-        .map(|c| c.realm_id.clone())
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
-    drop(projection);
-    RealmId::new(realm_id).map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))
-}
-
 /// Map a reducer rejection reason string to an `AppError` whose wire
 /// `code` is the canonical AKP-0007 reason (e.g. `circle_realm_mismatch`,
 /// `circle_member_must_be_realm_member`). Returned as 422
@@ -929,7 +891,9 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 mod tests {
     use super::*;
 
-    const ACTOR: &str = "did:web:alice.example";
+    const ACTOR: &str = "ak:did_core:web:alice.example";
+    const BOB: &str = "ak:did_core:web:bob.example";
+    const MALLORY: &str = "ak:did_core:web:mallory.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const CREATE_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
@@ -996,21 +960,22 @@ mod tests {
 
     #[test]
     fn a_create_event_signed_by_someone_else_is_rejected() {
-        caller_signed_circle_create_id(
-            "did:web:bob.example",
-            &circle_create_event(circle_object()),
-        )
-        .expect_err("the submitted Event must be authored by the authenticated caller");
+        caller_signed_circle_create_id(BOB, &circle_create_event(circle_object()))
+            .expect_err("the submitted Event must be authored by the authenticated caller");
     }
 
     const CIRCLE: &str = "ak:circle:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
     fn member_state_event(actor: &str, payload: Value) -> Event {
+        member_state_event_in_realm(actor, REALM, payload)
+    }
+
+    fn member_state_event_in_realm(actor: &str, realm_id: &str, payload: Value) -> Event {
         serde_json::from_value(json!({
             "event_id": "ak:event:AQjIQt4hWgG0gHmho_Q8M--CUwYCFv3bpsg0dgfdcgs-",
             "kind": arkret_wire::EventKind::CircleMemberState,
-            "realm_id": REALM,
-            "scope_ref": { "kind": "realm", "realm_id": REALM },
+            "realm_id": realm_id,
+            "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
@@ -1045,13 +1010,13 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": CIRCLE,
-                "actor_id": "did:web:bob.example",
+                "actor_id": BOB,
                 "membership": "join",
             }),
         );
         let target = caller_signed_circle_member_target(ACTOR, CIRCLE, &event).unwrap();
 
-        assert_eq!(target.actor_id.as_str(), "did:web:bob.example");
+        assert_eq!(target.actor_id.as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Join);
     }
 
@@ -1063,12 +1028,69 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
-                "actor_id": "did:web:bob.example",
+                "actor_id": BOB,
                 "membership": "join",
             }),
         );
         caller_signed_circle_member_target(ACTOR, CIRCLE, &event)
             .expect_err("payload.circle_id must equal the path circle_id");
+    }
+
+    #[test]
+    fn member_delete_binds_path_payload_realm_and_leave_transition() {
+        let event = member_state_event(
+            ACTOR,
+            json!({
+                "circle_id": CIRCLE,
+                "actor_id": BOB,
+                "membership": "leave",
+                "expected_membership": "join",
+            }),
+        );
+        let target =
+            caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &event).unwrap();
+
+        assert_eq!(target.actor_id.as_str(), BOB);
+        assert_eq!(target.membership, CircleMembership::Leave);
+    }
+
+    #[test]
+    fn member_delete_rejects_each_unsigned_path_rebinding() {
+        let payload = json!({
+            "circle_id": CIRCLE,
+            "actor_id": BOB,
+            "membership": "leave",
+        });
+        let event = member_state_event(ACTOR, payload.clone());
+        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, MALLORY, REALM, &event)
+            .expect_err("payload actor must equal the DELETE path actor");
+
+        let other_realm = "ak:realm:ATGd5JrukD5xsqzxo2mPDYgWsgsvKfW0RmWdOZLa_hOO";
+        let wrong_realm_event = member_state_event_in_realm(ACTOR, other_realm, payload.clone());
+        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &wrong_realm_event)
+            .expect_err("Event realm must equal the path Circle's parent Realm");
+
+        let wrong_transition = member_state_event(
+            ACTOR,
+            json!({
+                "circle_id": CIRCLE,
+                "actor_id": BOB,
+                "membership": "ban",
+            }),
+        );
+        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &wrong_transition)
+            .expect_err("DELETE must carry a signed leave transition");
+
+        let missing_head = member_state_event(
+            ACTOR,
+            json!({
+                "circle_id": CIRCLE,
+                "actor_id": BOB,
+                "membership": "leave",
+            }),
+        );
+        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &missing_head)
+            .expect_err("DELETE must carry its signed membership head_eq guard");
     }
 
     #[test]

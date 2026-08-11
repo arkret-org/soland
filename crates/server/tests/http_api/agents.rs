@@ -538,18 +538,9 @@ async fn provision_agent_sdk_commit_attempt(
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
-            agent_full_id: arkret_identifiers::DidFullId::new(agent_id.as_str().replacen(
-                "ak:did_core:",
-                "did:",
-                1,
-            ))
-            .unwrap(),
             controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
-            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
-                state.config().trust_domain.clone(),
-            )
-            .unwrap(),
+            trust_domain: state.config().trust_domain.clone(),
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
             created_at: now,

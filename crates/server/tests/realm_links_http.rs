@@ -39,7 +39,7 @@ fn test_config() -> AppConfig {
         development_mode: true,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: std::collections::BTreeMap::new(),
-        trust_domain: TRUST_DOMAIN.to_owned(),
+        trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
         ..soland_test_support::app_config()
     }
 }

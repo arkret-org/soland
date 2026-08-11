@@ -96,12 +96,14 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
 
     if is_realm_genesis {
         if object.contains_key("realm_id") {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
+            let mut error = event_validation_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
                 arkret_wire::ErrorCode::SchemaViolation.as_str(),
-                "realm_id_not_event_derived: ak.realm.create MUST omit realm_id; \
+                "ak.realm.create MUST omit realm_id; \
                  it is derived from the genesis event_id",
-            ));
+            );
+            error.reason_code = Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED);
+            return Err(error);
         }
         return derive_realm_id_from_event_id(object);
     }
@@ -152,6 +154,43 @@ fn derive_realm_id_from_event_id(
         )
     })?;
     Ok(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
+}
+
+#[cfg(test)]
+mod event_derived_id_tests {
+    use super::*;
+
+    #[test]
+    fn realm_genesis_uses_the_common_carried_object_id_reason() {
+        let object = serde_json::json!({
+            "kind": "ak.realm.create",
+            "event_id": "ak:event:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM",
+            "realm_id": "ak:realm:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"
+        })
+        .as_object()
+        .expect("object fixture")
+        .clone();
+        let error = event_realm_id(&object).expect_err("realm_id is reducer-derived");
+        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error.code, "schema_violation");
+        assert_eq!(
+            error.reason_code,
+            Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED)
+        );
+    }
+
+    #[test]
+    fn non_genesis_realm_id_with_reserved_header_bits_is_rejected() {
+        let object = serde_json::json!({
+            "kind": "ak.message.create",
+            "realm_id": "ak:realm:_V1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"
+        })
+        .as_object()
+        .expect("object fixture")
+        .clone();
+        let error = event_realm_id(&object).expect_err("reserved header bits must fail closed");
+        assert_eq!(error.code, "invalid_param");
+    }
 }
 
 mod applet;

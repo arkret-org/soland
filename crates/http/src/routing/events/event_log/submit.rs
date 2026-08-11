@@ -3249,8 +3249,8 @@ pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Optio
 ///
 /// `ak.realm.create` carries no wire `realm_id` (`zh/models/realm-and-space.md`
 /// section 2.5.0) — the id is derived from the genesis Event itself, and an
-/// envelope that does carry one is rejected upstream as
-/// `realm_id_not_event_derived`. A flat `realm_id` read is therefore *always*
+/// envelope that does carry one is rejected upstream with the common
+/// `object_id_not_event_derived` reason. A flat `realm_id` read is therefore *always*
 /// `None` on a genesis create, so every caller that needs a Realm id for a batch
 /// that may begin with one must go through this instead of
 /// `event_string_field_from_value(.., "realm_id")`.

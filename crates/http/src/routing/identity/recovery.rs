@@ -15,9 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{
-    DidFullId, Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId,
-};
+use arkret_identifiers::{DidFullId, Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId};
 use arkret_models_crypto::{
     DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,

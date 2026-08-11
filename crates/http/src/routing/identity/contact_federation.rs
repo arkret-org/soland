@@ -3342,10 +3342,8 @@ mod tests {
             compaction_min_witnesses: 0,
             compaction_preserve_genesis: false,
             compaction_prune_only_singleton_successors: false,
-            trust_domain: arkret_identifiers::TrustDomainId::new(
-                "ak:trust_domain:recipient.local",
-            )
-            .unwrap(),
+            trust_domain: arkret_identifiers::TrustDomainId::new("ak:trust_domain:recipient.local")
+                .unwrap(),
             ..AppConfig::test_default()
         }
     }

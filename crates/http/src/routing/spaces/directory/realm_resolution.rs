@@ -31,10 +31,11 @@ pub(super) async fn search_realms(
     if has_more {
         results.truncate(requested_limit);
     }
+    let projection = state.projections().snapshot();
     json_ok(DirectoryRealmSearchOutcome {
         realms: results
             .iter()
-            .map(realm_preview_from_directory_entry)
+            .map(|entry| realm_preview_from_directory_entry(&projection, entry))
             .collect(),
         next_cursor: None,
         has_more,
@@ -73,12 +74,17 @@ pub(super) async fn resolve_realm(
             .cloned()
             .collect()
     };
-    // `ak.realm.alias` is not a registered Event kind and there is no
-    // `ak.component.realm.alias.v1` cell family, so no Realm can carry a
-    // projected alias and an alias-only request resolves to nothing.
-    let alias_query: Option<String> = None;
+    let projection = state.projections().snapshot();
+    let alias_query = body
+        .alias
+        .as_deref()
+        .map(RealmAlias::parse_display)
+        .transpose()
+        .map_err(|_| AppError::not_found("not found"))?
+        .map(|alias| alias.canonical().to_owned());
     let mut matched_realm = None;
     for entry in candidates {
+        let effective_alias = effective_realm_alias(&projection, entry.realm_id.as_str());
         let matches_query = body
             .realm_id
             .as_ref()
@@ -86,7 +92,10 @@ pub(super) async fn resolve_realm(
             || invite_realm_id
                 .as_deref()
                 .is_some_and(|id| id == entry.realm_id.as_str())
-            || alias_query.is_some();
+            || alias_query
+                .as_deref()
+                .zip(effective_alias.as_deref())
+                .is_some_and(|(requested, effective)| requested == effective);
         if matches_query
             && realm_resolvable_to(
                 state,
@@ -97,16 +106,19 @@ pub(super) async fn resolve_realm(
             )
             .await
         {
-            matched_realm = Some(entry);
+            matched_realm = Some((entry, effective_alias));
             break;
         }
     }
     match matched_realm {
-        Some(realm) => {
+        Some((realm, effective_alias)) => {
             let discoverability = realm_discoverability(state, realm.realm_id.as_str()).await;
             let join_rule = realm_join_rule(state, realm.realm_id.as_str());
             json_ok(DirectoryRealmResolutionOutcome {
-                realm_preview: realm_preview_from_directory_entry(&realm),
+                realm_preview: realm_preview_from_directory_entry_with_alias(
+                    &realm,
+                    effective_alias,
+                ),
                 stripped_state: Vec::new(),
                 join_rule: Some(join_rule_enum(&join_rule)),
                 join_candidates: join_candidates_for_resolved_realm(
@@ -298,9 +310,16 @@ pub(super) async fn resolve_realm_for_address(
             .cloned()
             .collect()
     };
+    let projection = state.projections().snapshot();
     candidates.into_iter().find(|entry| match &parsed.realm {
         RealmRef::RealmId(token) => entry.realm_id.as_str() == format!("ak:realm:{token}"),
-        RealmRef::Alias(alias) => entry.title.eq_ignore_ascii_case(alias),
+        RealmRef::Alias(alias) => RealmAlias::parse_display(alias)
+            .ok()
+            .is_some_and(|requested| {
+                effective_realm_alias(&projection, entry.realm_id.as_str())
+                    .as_deref()
+                    .is_some_and(|effective| effective == requested.canonical())
+            }),
     })
 }
 
@@ -316,7 +335,20 @@ pub(super) fn target_kind_for_address(
     }
 }
 
-pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) -> RealmPreview {
+pub(super) fn realm_preview_from_directory_entry(
+    projection: &ProjectionSnapshot,
+    entry: &RealmDirectoryEntry,
+) -> RealmPreview {
+    realm_preview_from_directory_entry_with_alias(
+        entry,
+        effective_realm_alias(projection, entry.realm_id.as_str()),
+    )
+}
+
+fn realm_preview_from_directory_entry_with_alias(
+    entry: &RealmDirectoryEntry,
+    alias: Option<String>,
+) -> RealmPreview {
     let discoverability = if entry.public {
         "public"
     } else {
@@ -324,7 +356,7 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
     };
     RealmPreview {
         realm_id: entry.realm_id.clone(),
-        alias: None,
+        alias,
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
         organization_principal_id: None,
@@ -346,6 +378,21 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
         stale: None,
         divergent: None,
     }
+}
+
+fn effective_realm_alias(projection: &ProjectionSnapshot, realm_id: &str) -> Option<String> {
+    projection
+        .realm_null_subject_cell_value(realm_id, CellFamilyId::REALM_ALIAS_V1)
+        .and_then(realm_alias_from_cell_value)
+}
+
+fn realm_alias_from_cell_value(value: &Value) -> Option<String> {
+    serde_json::from_value::<RealmAliasPayload>(value.clone())
+        .ok()?
+        .validate()
+        .ok()?
+        .alias()
+        .map(|alias| alias.canonical().to_owned())
 }
 
 pub(super) fn default_join_rule() -> &'static str {
@@ -576,9 +623,15 @@ pub(super) async fn realm_preview_for_policy(
                 .collect::<Vec<&str>>()
         })
         .filter(|fields| !fields.is_empty())
-        .unwrap_or_else(|| vec!["title", "summary", "join_rule"]);
+        .unwrap_or_else(|| vec!["alias", "title", "summary", "join_rule"]);
 
     let mut preview = serde_json::Map::new();
+    if fields.contains(&"alias") {
+        let projection = state.projections().snapshot();
+        if let Some(alias) = effective_realm_alias(&projection, realm_entry.realm_id.as_str()) {
+            preview.insert("alias".to_owned(), json!(alias));
+        }
+    }
     if fields.contains(&"title") {
         preview.insert("title".to_owned(), json!(realm_entry.title));
     }
@@ -919,5 +972,30 @@ fn join_candidate_endpoint_kind_role(
         _ => return None,
     };
     Some((service_kind, role))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realm_alias_cell_value_reads_declaration_and_tombstone() {
+        assert_eq!(
+            realm_alias_from_cell_value(&json!({"alias": "General:Acme.Example"})),
+            None
+        );
+        assert_eq!(
+            realm_alias_from_cell_value(&json!({"alias": "general:acme.example"})),
+            Some("general:acme.example".to_owned())
+        );
+        assert_eq!(
+            realm_alias_from_cell_value(&json!({"tombstone": true})),
+            None
+        );
+        assert_eq!(
+            realm_alias_from_cell_value(&json!({"tombstone": false})),
+            None
+        );
+    }
 }
 use arkret_identifiers::DidCoreId;

@@ -66,11 +66,61 @@ pub(super) fn validate_pre_schema_wire_shape(
     payload: &Value,
 ) -> Result<(), EventValidationError> {
     scan_sidecar_forbidden_wire_fields(payload)?;
+    reject_carried_event_derived_object_id(kind, payload)?;
     if kind == arkret_wire::event_kind_str::MEMBER_IDENTITY_UPDATE {
         soland_http::wire_validators::member_identity::validate_member_identity_update_payload(
             payload,
         )
         .map_err(wire_rejection_to_validation_error)?;
+    }
+    Ok(())
+}
+
+fn reject_carried_event_derived_object_id(
+    event_kind: &str,
+    payload: &Value,
+) -> Result<(), EventValidationError> {
+    let derived_id_kinds = arkret_schema::event_derived_id_kinds_for_kind(event_kind);
+    if derived_id_kinds.is_empty() {
+        return Ok(());
+    }
+    let forbidden: Vec<(String, String)> = derived_id_kinds
+        .into_iter()
+        .map(|id_kind| (format!("{id_kind}_id"), format!("ak:{id_kind}:")))
+        .collect();
+
+    fn scan(value: &Value, forbidden: &[(String, String)]) -> Option<String> {
+        match value {
+            Value::Object(object) => {
+                for (key, nested) in object {
+                    if let Some(text) = nested.as_str()
+                        && forbidden.iter().any(|(field, prefix)| {
+                            (key == field || key == "id") && text.starts_with(prefix)
+                        })
+                    {
+                        return Some(key.clone());
+                    }
+                    if let Some(field) = scan(nested, forbidden) {
+                        return Some(field);
+                    }
+                }
+                None
+            }
+            Value::Array(values) => values.iter().find_map(|value| scan(value, forbidden)),
+            _ => None,
+        }
+    }
+
+    if let Some(field) = scan(payload, &forbidden) {
+        let mut error = event_validation_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+            format!(
+                "{field} must be omitted for {event_kind}; the object id is derived from the create Event"
+            ),
+        );
+        error.reason_code = Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED);
+        return Err(error);
     }
     Ok(())
 }
@@ -315,6 +365,44 @@ mod tests {
             &control,
         )
         .expect("conforming exchange control outer payloads carry no plaintext exchange material");
+    }
+
+    #[test]
+    fn registry_declared_create_rejects_carried_object_id_with_stable_reason() {
+        for (kind, payload) in [
+            (
+                "ak.circle.create",
+                json!({"object": {"id": "ak:circle:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"}}),
+            ),
+            (
+                "ak.message.create",
+                json!({"message_id": "ak:message:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"}),
+            ),
+            (
+                "ak.self.moderation.report",
+                json!({"moderation_queue_item_id": "ak:moderation_queue_item:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"}),
+            ),
+        ] {
+            let error = validate_pre_schema_wire_shape(kind, &payload)
+                .expect_err("a create payload cannot carry its derived object id");
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.code, "schema_violation");
+            assert_eq!(
+                error.reason_code,
+                Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED)
+            );
+        }
+    }
+
+    #[test]
+    fn non_create_reference_to_an_event_derived_id_is_not_rejected() {
+        validate_pre_schema_wire_shape(
+            "ak.message.update",
+            &json!({
+                "message_id": "ak:message:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"
+            }),
+        )
+        .expect("only registry-declared create ids are producer-forbidden");
     }
 
     /// The ordinary-Realm half of the restricted-history rule is a batch check

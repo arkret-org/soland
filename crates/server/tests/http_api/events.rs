@@ -1496,7 +1496,6 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
-            agent_full_id: DidFullId::new(agent_id.replacen("ak:did_core:", "did:", 1)).unwrap(),
             controller_id: arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

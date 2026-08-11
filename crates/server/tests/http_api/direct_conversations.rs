@@ -246,8 +246,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     let destination_service_id = state.service_id().to_owned();
     let (signing_key, authorize_event_id) =
         seed_remote_claim_prerequisites(&state, &source_service_id).await;
-    let trust_domain =
-        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap();
+    let trust_domain = state.config().trust_domain.clone();
     let requester = arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
     let target = arkret_identifiers::DidFullId::new(BOB_DID.to_owned()).unwrap();
     let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
