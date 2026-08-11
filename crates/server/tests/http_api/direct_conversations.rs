@@ -138,7 +138,7 @@ async fn project_authorized_device(
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": actor_core,
             "not_before": "2026-05-25T00:00:00.000Z",
-            "authorization_binding_kind": "root_anchored",
+            "authorization_binding_kind": "registration_anchor",
             "device_signature": "c2ln"
         }),
         Utc::now(),

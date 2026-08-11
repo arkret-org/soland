@@ -37,20 +37,30 @@ fn event_digests(envelopes: &[Value]) -> Result<Vec<String>, anyhow::Error> {
         .collect()
 }
 
-fn identity_anchor_candidate_device_key(envelope: &Value) -> Option<String> {
-    let payload = envelope.get("payload")?;
-    (payload
-        .get("authorization_binding_kind")
-        .and_then(Value::as_str)
-        == Some("root_anchored"))
-    .then(|| {
-        payload
-            .get("device_public_key")
-            .and_then(Value::as_str)
-            .filter(|key| key.starts_with("did:key:"))
-            .map(ToOwned::to_owned)
-    })
-    .flatten()
+fn identity_anchor_candidate_device(
+    event: &arkret_wire::Event,
+) -> Result<
+    Option<arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload>,
+    SubmitOneError,
+> {
+    if event.kind != arkret_wire::EventKind::DeviceAuthorize {
+        return Ok(None);
+    }
+    let payload = event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("invalid typed ak.device.authorize payload: {error}"),
+            )
+        })?;
+    Ok(matches!(
+        payload.authorization_binding_kind,
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
+            | arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
+    )
+    .then_some(payload))
 }
 
 pub(super) async fn submit_identity_anchor_batch(
@@ -101,6 +111,26 @@ pub(super) async fn submit_identity_anchor_batch(
             "identity anchor unit must be [ak.realm.create, ak.device.authorize] or [ak.device.reanchor, ak.device.authorize]",
         ));
     }
+    // The identity-anchor boundary is decoded into the public SDK Event DTOs
+    // once.  All security-sensitive fields below are then read from the typed
+    // payloads carried in `RealmBootstrapBatchContext`, never rediscovered by
+    // JSON pointer/string matching.
+    let typed_create =
+        serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("identity anchor first Event is not structurally valid: {error}"),
+            )
+        })?;
+    let typed_authorize = serde_json::from_value::<arkret_wire::Event>(envelopes[1].clone())
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("identity anchor authorize Event is not structurally valid: {error}"),
+            )
+        })?;
     if is_bootstrap && authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some))
     {
         return Err(unit_error(
@@ -125,7 +155,10 @@ pub(super) async fn submit_identity_anchor_batch(
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
     let identity_anchor_head_context = if is_bootstrap {
-        Some(validate_self_principal_pcr_bootstrap_context(&envelopes)?)
+        Some(validate_self_principal_pcr_bootstrap_context(
+            &typed_create,
+            &typed_authorize,
+        )?)
     } else {
         Some(RealmBootstrapBatchContext {
             realm_id: lock_realm.clone(),
@@ -133,9 +166,8 @@ pub(super) async fn submit_identity_anchor_batch(
             digest_algorithm: None,
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
             self_principal_pcr_bootstrap: false,
-            identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
-                &envelopes[1],
-            ),
+            identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
+            identity_anchor_resolution: None,
             direct_conversation_founding: false,
             authority_root: None,
         })
@@ -152,9 +184,8 @@ pub(super) async fn submit_identity_anchor_batch(
             digest_algorithm: None,
             identity_anchor_event_id: Some(first.event_id.clone()),
             self_principal_pcr_bootstrap: false,
-            identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(
-                &envelopes[1],
-            ),
+            identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
+            identity_anchor_resolution: None,
             direct_conversation_founding: false,
             authority_root: None,
         });
@@ -167,7 +198,13 @@ pub(super) async fn submit_identity_anchor_batch(
             "validated self-principal PCR context does not match the admitted create Event",
         ));
     }
-    validate_identity_anchor_candidate_preconditions(state, &first, &envelopes, is_bootstrap)?;
+    validate_identity_anchor_candidate_preconditions(
+        state,
+        &first,
+        &typed_create,
+        &typed_authorize,
+        is_bootstrap,
+    )?;
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
@@ -212,7 +249,16 @@ pub(super) async fn submit_identity_anchor_batch(
         }
         return Ok(outcome);
     }
-    validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
+    validate_unit_relationships(
+        state,
+        &first,
+        &second,
+        &typed_create,
+        &typed_authorize,
+        &envelopes,
+        is_bootstrap,
+    )
+    .await?;
 
     let existing = state
         .event_queries()
@@ -702,39 +748,24 @@ pub(super) async fn submit_identity_anchor_batch(
 fn validate_identity_anchor_candidate_preconditions(
     state: &AppState,
     first: &ValidatedEventEnvelope,
-    envelopes: &[Value],
+    anchor_event: &arkret_wire::Event,
+    authorize_event: &arkret_wire::Event,
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    let second = envelopes
-        .get(1)
-        .and_then(Value::as_object)
-        .ok_or_else(|| unit_error("identity anchor authorize Event must be an object"))?;
-    let second_actor = second
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| unit_error("identity anchor authorize Event requires actor_id"))?;
-    let second_realm = event_realm_id_from_value(&envelopes[1])
-        .ok_or_else(|| unit_error("identity anchor authorize Event requires realm_id"))?;
-    let second_actor_seq = second
-        .get("actor_seq")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| unit_error("identity anchor authorize Event requires actor_seq"))?;
-    let second_prev_refs = second
-        .get("prev_refs")
-        .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    if second_actor != first.actor_id
-        || second_realm != first.realm_id
-        || second_actor_seq != first.actor_seq.saturating_add(1)
-        || second_prev_refs != vec![first.event_id.as_str()]
+    if authorize_event.actor_id.as_str() != first.actor_id
+        || authorize_event.realm_id.as_str() != first.realm_id
+        || authorize_event.actor_seq != first.actor_seq.saturating_add(1)
+        || authorize_event.prev_refs.len() != 1
+        || authorize_event.prev_refs[0].as_str() != first.event_id
     {
         return Err(unit_error(
             "candidate device authorization does not immediately continue the verified anchor Event",
         ));
     }
 
-    let authorize = typed_device_authorize_payload(&envelopes[1])?;
+    let authorize = authorize_event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| unit_error(format!("invalid typed device authorize payload: {error}")))?;
     let authorized_by_root = matches!(
         &authorize.authorized_by,
         arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
@@ -742,26 +773,27 @@ fn validate_identity_anchor_candidate_preconditions(
     );
     if authorize.principal_id.as_str() != first.actor_id
         || authorize.authorization_binding_kind
-            != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RootAnchored
+            != if is_bootstrap {
+                arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
+            } else {
+                arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
+            }
         || !authorized_by_root
     {
         return Err(unit_error(
             "candidate device authorization is not bound to the verified principal root",
         ));
     }
-    crate::routing::identity::device_signing::validate_device_authorize_binding(
-        state,
-        envelopes[1].get("payload").unwrap_or(&Value::Null),
-    )
-    .map_err(|message| {
-        unit_error(format!(
-            "candidate device possession proof failed: {message}"
-        ))
-    })?;
+    crate::routing::identity::device_signing::validate_device_authorize_binding(state, &authorize)
+        .map_err(|message| {
+            unit_error(format!(
+                "candidate device possession proof failed: {message}"
+            ))
+        })?;
 
     let authorize_payload_digest =
-        arkret_models_collaboration::events_payloads::device_authorize_payload_digest(
-            envelopes[1].get("payload").unwrap_or(&Value::Null),
+        arkret_models_collaboration::events_payloads::typed_device_authorize_payload_digest(
+            &authorize,
             arkret_canonical::DigestSuite::Sha256,
         )
         .map_err(|error| {
@@ -770,11 +802,9 @@ fn validate_identity_anchor_candidate_preconditions(
             ))
         })?;
     if is_bootstrap {
-        let create: arkret_models_collaboration::events_payloads::RealmCreatePayload =
-            serde_json::from_value(envelopes[0].get("payload").cloned().unwrap_or(Value::Null))
-                .map_err(|error| {
-                    unit_error(format!("invalid typed PCR genesis payload: {error}"))
-                })?;
+        let create = anchor_event
+            .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+            .map_err(|error| unit_error(format!("invalid typed PCR genesis payload: {error}")))?;
         let descriptor = create
             .object
             .founding_device_descriptor
@@ -800,7 +830,11 @@ fn validate_identity_anchor_candidate_preconditions(
             ));
         }
     } else {
-        let reanchor = typed_device_reanchor_payload(&envelopes[0])?;
+        let reanchor = anchor_event
+            .typed_payload::<arkret_wire::event_spec::DeviceReanchor>()
+            .map_err(|error| {
+                unit_error(format!("invalid typed device re-anchor payload: {error}"))
+            })?;
         if reanchor.replacement_authorize_payload_digest != authorize_payload_digest {
             return Err(unit_error(
                 "device re-anchor does not commit to its candidate authorization payload",
@@ -850,27 +884,12 @@ async fn identity_anchor_fanout_records(
 }
 
 fn validate_self_principal_pcr_bootstrap_context(
-    envelopes: &[Value],
+    create: &arkret_wire::Event,
+    authorize: &arkret_wire::Event,
 ) -> Result<RealmBootstrapBatchContext, SubmitOneError> {
-    let create: arkret_wire::Event =
-        serde_json::from_value(envelopes[0].clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("self-principal PCR create is not a canonical Event: {error}"),
-            )
-        })?;
-    let authorize: arkret_wire::Event =
-        serde_json::from_value(envelopes[1].clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("self-principal PCR authorize is not a canonical Event: {error}"),
-            )
-        })?;
     arkret_bootstrap::validate_self_principal_pcr_genesis_unit(
-        &create,
-        &authorize,
+        create,
+        authorize,
         &genesis_cell_write_projector,
     )
     .map_err(|error| {
@@ -880,13 +899,24 @@ fn validate_self_principal_pcr_bootstrap_context(
             format!("self-principal PCR bootstrap unit violates the closed profile: {error}"),
         )
     })?;
+    let create_payload = create
+        .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+        .map_err(|error| unit_error(format!("invalid typed PCR create payload: {error}")))?;
+    let initial_resolution = create_payload
+        .object
+        .initial_resolution
+        .clone()
+        .ok_or_else(|| unit_error("typed principal-control PCR create omits initial_resolution"))?;
+    let candidate = identity_anchor_candidate_device(authorize)?
+        .ok_or_else(|| unit_error("typed PCR genesis authorize is not registration anchored"))?;
     Ok(RealmBootstrapBatchContext {
         realm_id: create.realm_id.to_string(),
         actor_id: create.actor_id.to_string(),
-        digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
+        digest_algorithm: Some(create_payload.object.digest_algorithm.as_str().to_owned()),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
-        identity_anchor_candidate_device_key: identity_anchor_candidate_device_key(&envelopes[1]),
+        identity_anchor_candidate_device: Some(candidate),
+        identity_anchor_resolution: Some(initial_resolution),
         direct_conversation_founding: false,
         authority_root: None,
     })
@@ -1072,6 +1102,8 @@ async fn validate_unit_relationships(
     state: &AppState,
     first: &ValidatedEventEnvelope,
     second: &ValidatedEventEnvelope,
+    anchor_event: &arkret_wire::Event,
+    authorize_event: &arkret_wire::Event,
     envelopes: &[Value],
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
@@ -1115,7 +1147,7 @@ async fn validate_unit_relationships(
             |message| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message),
         )?;
     }
-    if let Some(operation) = second_operation.as_ref() {
+    if !is_bootstrap && let Some(operation) = second_operation.as_ref() {
         validate_operation_policy(state, std::slice::from_ref(operation))
             .await
             .map_err(|message| {
@@ -1130,15 +1162,20 @@ async fn validate_unit_relationships(
                 "self-principal PCR genesis must use actor_seq=0 and an empty predecessor set",
             ));
         }
-        let create: arkret_models_collaboration::events_payloads::RealmCreatePayload =
-            serde_json::from_value(envelopes[0].get("payload").cloned().unwrap_or(Value::Null))
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        format!("invalid typed PCR genesis payload: {error}"),
-                    )
-                })?;
+        // key-management.md §5.0 defines this as one closed atomic unit. The
+        // SDK unit validator, Event proof verifier and typed possession check
+        // have already admitted both Events. Ordinary post-bootstrap policy
+        // cannot query a durable PCR projection here because the create and
+        // authorize Events become visible only at the eventual atomic commit.
+        let create = anchor_event
+            .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("invalid typed PCR genesis payload: {error}"),
+                )
+            })?;
         let descriptor = create
             .object
             .founding_device_descriptor
@@ -1150,10 +1187,14 @@ async fn validate_unit_relationships(
                 format!("invalid founding device descriptor: {error}"),
             )
         })?;
-        let authorize = typed_device_authorize_payload(&envelopes[1])?;
+        let authorize = authorize_event
+            .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+            .map_err(|error| {
+                unit_error(format!("invalid typed device authorize payload: {error}"))
+            })?;
         let authorize_payload_digest =
-            arkret_models_collaboration::events_payloads::device_authorize_payload_digest(
-                envelopes[1].get("payload").unwrap_or(&Value::Null),
+            arkret_models_collaboration::events_payloads::typed_device_authorize_payload_digest(
+                &authorize,
                 arkret_canonical::DigestSuite::Sha256,
             )
             .map_err(|error| {
@@ -1175,7 +1216,7 @@ async fn validate_unit_relationships(
         );
         if authorize.principal_id.as_str() != first.actor_id
             || authorize.authorization_binding_kind
-                != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RootAnchored
+                != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
             || !authorized_by_root
             || authorize.recovery_session_id.is_some()
             || descriptor.device_id != authorize.device_id
@@ -1193,8 +1234,12 @@ async fn validate_unit_relationships(
         return Ok(());
     }
 
-    let payload = typed_device_reanchor_payload(&envelopes[0])?;
-    let authorize = typed_device_authorize_payload(&envelopes[1])?;
+    let payload = anchor_event
+        .typed_payload::<arkret_wire::event_spec::DeviceReanchor>()
+        .map_err(|error| unit_error(format!("invalid typed device re-anchor payload: {error}")))?;
+    let authorize = authorize_event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| unit_error(format!("invalid typed device authorize payload: {error}")))?;
     // The re-anchor commits to the replacement by payload digest: the authorize
     // envelope carries the re-anchor id in prev_refs (checked above) and every
     // event_id derives from its own signed content, so an id or envelope-digest
@@ -1210,7 +1255,7 @@ async fn validate_unit_relationships(
         || payload.replacement_authorize_payload_digest != replacement_payload_digest
         || authorize.principal_id.as_str() != first.actor_id
         || authorize.authorization_binding_kind
-            != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RootAnchored
+            != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -1853,18 +1898,16 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt digest failed: {error}"),
         )
     })?;
-    let verification_method = arkret_wire::DidUrl::new(format!(
-        "{}#notary-key",
-        state.service_resolution_commitment().full_id
-    ))
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("service notary verification method is invalid: {error}"),
-        )
-    })?;
-    let mut proof = arkret_wire::PayloadProof {
+    let verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("service notary verification method is invalid: {error}"),
+            )
+        })?;
+    let unsigned_proof = arkret_wire::UnsignedPayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         proof_purpose: None,
         verification_method,
@@ -1872,15 +1915,16 @@ fn sign_event_batch_receipt(
         created_at: receipt.created_at,
         domain: None,
         audience: None,
-        jws: String::new(),
     };
-    let binding_bytes = receipt.proof_binding_bytes(&proof).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Event Batch Receipt proof binding failed: {error}"),
-        )
-    })?;
+    let binding_bytes = receipt
+        .proof_signing_bytes(&unsigned_proof)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Event Batch Receipt proof binding failed: {error}"),
+            )
+        })?;
     let jws = arkret_signatures::jws::sign_jws_ed25519(
         &binding_bytes,
         state.notary_signing_key().as_ref(),
@@ -1892,8 +1936,13 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt signing failed: {error}"),
         )
     })?;
-    proof.jws = jws;
-    Ok(proof)
+    unsigned_proof.finalize(jws).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Event Batch Receipt proof is invalid: {error}"),
+        )
+    })
 }
 
 fn unit_error(message: impl Into<String>) -> SubmitOneError {
@@ -1961,7 +2010,7 @@ mod tests {
             scopes: None,
             not_before: created_at,
             expires_at: None,
-            authorization_binding_kind: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RootAnchored,
+            authorization_binding_kind: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor,
             device_signature: arkret_models_collaboration::events_payloads::SignatureMaterial::NonEmptyString(
                 arkret_wire::NonEmptyString::new("AA".to_owned()).unwrap(),
             ),
@@ -2023,6 +2072,11 @@ mod tests {
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     arkret_bootstrap::DID_INCEPTION_REF_ROLE,
                 ),
+                initial_resolution: arkret_models_identity::ResolutionCommitment {
+                    full_id: principal_full_id.clone(),
+                    method_history_head: format!("sha256:{}", "a".repeat(64)),
+                    version_id: "1-fixture".to_owned(),
+                },
                 founding_device_descriptor: fixture_founding_device_descriptor(
                     &principal, created_at,
                 ),
@@ -2065,12 +2119,14 @@ mod tests {
     #[test]
     fn sdk_canonical_two_slot_pcr_bootstrap_gets_closed_context() {
         let envelopes = sdk_canonical_self_principal_bootstrap_unit();
-        let context = validate_self_principal_pcr_bootstrap_context(&envelopes)
+        let create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
+        let authorize: arkret_wire::Event = serde_json::from_value(envelopes[1].clone()).unwrap();
+        let context = validate_self_principal_pcr_bootstrap_context(&create, &authorize)
             .expect("SDK canonical two-slot bootstrap must be recognized");
         assert!(context.self_principal_pcr_bootstrap);
         assert_eq!(
             context.identity_anchor_event_id.as_deref(),
-            envelopes[0].get("event_id").and_then(Value::as_str)
+            Some(create.event_id.as_str())
         );
     }
 
@@ -2100,7 +2156,9 @@ mod tests {
         );
         envelopes[0] = serde_json::to_value(create).unwrap();
 
-        assert!(validate_self_principal_pcr_bootstrap_context(&envelopes).is_err());
+        let create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
+        let authorize: arkret_wire::Event = serde_json::from_value(envelopes[1].clone()).unwrap();
+        assert!(validate_self_principal_pcr_bootstrap_context(&create, &authorize).is_err());
     }
 
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {

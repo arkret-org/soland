@@ -1033,7 +1033,7 @@ async fn range_completeness_for_query(
         RangeCompletenessAttestationWitnessAttestationWitnessesItem,
     };
     use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
-    use arkret_wire::{Hash, PayloadProof, PayloadProofPurpose, PayloadSigner, proof_kind};
+    use arkret_wire::{Hash, PayloadProofPurpose, PayloadSigner, proof_kind};
 
     if !parts.include_completeness
         || realms.len() != 1
@@ -1151,7 +1151,7 @@ async fn range_completeness_for_query(
         .remove("proofs");
     let canonical_payload = arkret_canonical::canonical_json_bytes(&unsigned_payload)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let mut payload_proof = PayloadProof {
+    let unsigned_proof = arkret_wire::UnsignedPayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         verification_method: verification_method.clone(),
         payload_digest: Hash::new(arkret_canonical::canonical::sha256_digest(
@@ -1162,15 +1162,16 @@ async fn range_completeness_for_query(
         domain: None,
         audience: None,
         proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
-        jws: String::new(),
     };
     let proof_binding = payload
-        .proof_binding_bytes(&payload_proof)
+        .proof_signing_bytes(&unsigned_proof)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let signature = signer
         .sign_payload(&proof_binding)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    payload_proof.jws = signature.jws;
+    let payload_proof = unsigned_proof
+        .finalize(signature.jws)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     payload.proofs.push(payload_proof);
 
     let actor_seq = accepted_events

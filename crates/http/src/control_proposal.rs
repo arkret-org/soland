@@ -79,11 +79,7 @@ pub(crate) fn mint_control_proposal_ack(
         authority_set_ref: authority_set_ref.clone(),
         signature: PayloadSignature {
             extra: Default::default(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#notary-key",
-                state.service_id()
-            ))
-            .map_err(|error| error.to_string())?,
+            verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: received_at,
@@ -359,11 +355,7 @@ pub(crate) fn sign_control_proposal_reject(
         authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#notary-key",
-                state.service_id()
-            ))
-            .map_err(|error| error.to_string())?,
+            verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: decided_at,
@@ -417,11 +409,7 @@ pub(crate) fn sign_control_proposal_defer(
         authority_set_ref: ack.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#notary-key",
-                state.service_id()
-            ))
-            .map_err(|error| error.to_string())?,
+            verification_method: state.service_verification_method("notary-key")?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: decided_at,
@@ -448,10 +436,11 @@ pub(crate) fn sign_control_proposal_defer(
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::Hash;
-    use arkret_wire::AuthoritySetRef;
+    use arkret_identifiers::{Hash, RealmId};
+    use arkret_wire::{AuthoritySetRef, ControlProposalDecisionPolicy};
 
-    use super::select_control_proposal_ack_authority;
+    use super::{mint_control_proposal_ack, select_control_proposal_ack_authority};
+    use crate::AppState;
 
     fn authority(byte: &str) -> AuthoritySetRef {
         AuthoritySetRef {
@@ -491,6 +480,36 @@ mod tests {
             )
             .unwrap(),
             notary_authority.authority_set_digest
+        );
+    }
+
+    #[test]
+    fn proposal_ack_signer_uses_resolved_service_full_did() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let ack = mint_control_proposal_ack(
+            &state,
+            RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned())
+                .unwrap(),
+            Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+            Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+            chrono::Utc::now(),
+            ControlProposalDecisionPolicy::default(),
+        )
+        .expect("service full DID must produce a valid proposal Ack signer");
+
+        assert_eq!(
+            ack.authority_acks[0].signature.verification_method,
+            state.service_verification_method("notary-key").unwrap()
+        );
+        assert!(
+            ack.authority_acks[0]
+                .signature
+                .verification_method
+                .as_str()
+                .starts_with("did:")
         );
     }
 }

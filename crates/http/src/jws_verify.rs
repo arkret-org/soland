@@ -917,8 +917,8 @@ fn federated_range_completeness_evidence(
     };
     use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
     use arkret_wire::{
-        Event, EventId, EventKind, EventRequirements, PayloadProof, PayloadProofPurpose,
-        PayloadSigner, ScopeRef, proof_kind,
+        Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, ScopeRef,
+        proof_kind,
     };
 
     let mut accepted_events = records
@@ -1001,7 +1001,7 @@ fn federated_range_completeness_evidence(
         .remove("proofs");
     let canonical =
         arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| error.to_string())?;
-    let mut proof = PayloadProof {
+    let unsigned_proof = arkret_wire::UnsignedPayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         verification_method: verification_method.clone(),
         payload_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
@@ -1010,15 +1010,17 @@ fn federated_range_completeness_evidence(
         domain: None,
         audience: None,
         proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
-        jws: String::new(),
     };
     let binding = payload
-        .proof_binding_bytes(&proof)
+        .proof_signing_bytes(&unsigned_proof)
         .map_err(|error| error.to_string())?;
-    proof.jws = signer
+    let jws = signer
         .sign_payload(&binding)
         .map_err(|error| error.to_string())?
         .jws;
+    let proof = unsigned_proof
+        .finalize(jws)
+        .map_err(|error| error.to_string())?;
     payload.proofs.push(proof);
     let Value::Object(payload) =
         serde_json::to_value(payload).map_err(|error| error.to_string())?
@@ -1083,8 +1085,11 @@ pub fn is_local_service_notary_method(
     did: &DidFullId,
     verification_method: &str,
 ) -> bool {
-    did.as_str() == state.service_id()
-        && verification_method == format!("{}#notary-key", state.service_id())
+    let service_full_id = state.service_full_id();
+    did == &service_full_id
+        && state
+            .service_verification_method("notary-key")
+            .is_ok_and(|method| method.as_str() == verification_method)
 }
 
 /// Resolve a DID URL to its Ed25519 [`VerifyingKey`] via the AppState

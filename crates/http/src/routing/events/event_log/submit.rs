@@ -277,11 +277,20 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) digest_algorithm: Option<String>,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
-    /// The candidate device public key used to verify the second slot of a
-    /// root-anchored genesis or re-anchor unit. The surrounding root-signed
-    /// anchor commits to this payload; the value is staged only for proof
-    /// verification before the atomic relationship check completes.
-    pub(in crate::routing) identity_anchor_candidate_device_key: Option<String>,
+    /// Typed SDK payload for the candidate device in the second slot of a
+    /// registration-anchor or PCR-recovery unit.  Admission parses the wire
+    /// Event exactly once at the boundary and carries this DTO through proof
+    /// validation; downstream code must not rediscover security fields by
+    /// walking `serde_json::Value`.
+    pub(in crate::routing) identity_anchor_candidate_device: Option<
+        arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
+    >,
+    /// Resolution commitment that defines the DID URL base for the candidate
+    /// device Event proof.  For genesis this is the exact typed
+    /// `RealmCreatePayload.object.initial_resolution`; recovery may load the
+    /// same public SDK DTO from the accepted PCR resolution projection.
+    pub(in crate::routing) identity_anchor_resolution:
+        Option<arkret_models_identity::ResolutionCommitment>,
     /// This batch already passed the closed three-Event Direct Conversation
     /// founding-plan validator, so its member/Strand follow-ups may be
     /// admitted before the new Realm has a durable membership projection.
@@ -1405,7 +1414,8 @@ async fn submit_event_batch_outcome_with_leases(
             digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
             identity_anchor_event_id: None,
             self_principal_pcr_bootstrap: false,
-            identity_anchor_candidate_device_key: None,
+            identity_anchor_candidate_device: None,
+            identity_anchor_resolution: None,
             direct_conversation_founding: false,
             authority_root: None,
         });
@@ -1466,7 +1476,8 @@ async fn submit_event_batch_outcome_with_leases(
                         digest_algorithm: Some(staged_realm_digest_algorithm(&envelope)),
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
-                        identity_anchor_candidate_device_key: None,
+                        identity_anchor_candidate_device: None,
+                        identity_anchor_resolution: None,
                         direct_conversation_founding: false,
                         authority_root: None,
                     });

@@ -425,7 +425,8 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
                 None
             },
             self_principal_pcr_bootstrap,
-            identity_anchor_candidate_device_key: None,
+            identity_anchor_candidate_device: None,
+            identity_anchor_resolution: None,
             direct_conversation_founding: false,
             authority_root,
         },
@@ -535,15 +536,16 @@ pub(crate) fn authority_for_scope(
             format!("lease authority basis digest is invalid: {error}"),
         )
     })?;
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
-            |error| {
-                AppError::new(
-                    ErrorCode::InternalError,
-                    format!("lease authority verification method is invalid: {error}"),
-                )
-            },
-        )?;
+    let verification_method = arkret_wire::DidUrl::new(format!(
+        "{}#notary-key",
+        state.service_resolution_commitment().full_id
+    ))
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("lease authority verification method is invalid: {error}"),
+        )
+    })?;
     let policy = AuthoritySetPolicy {
         schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
@@ -681,8 +683,11 @@ fn sign_lease_fields(
     let digest = lease.lease_digest().map_err(lease_internal_error)?;
     let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id()))
-            .map_err(lease_internal_error)?,
+        verification_method: arkret_wire::DidUrl::new(format!(
+            "{}#notary-key",
+            state.service_resolution_commitment().full_id
+        ))
+        .map_err(lease_internal_error)?,
         payload_digest: digest,
         created_at: issued_at,
         domain: None,
@@ -715,8 +720,9 @@ fn lease_internal_error(error: impl std::fmt::Display) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{Event, EventKind, Hlc, RealmId, ScopeRef};
+    use arkret_wire::{Event, EventKind, Hlc, RealmId, ScopeRef, SealId};
     use serde_json::json;
+    use soland_storage_postgres::Db;
 
     use super::*;
 
@@ -839,5 +845,55 @@ mod tests {
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE)
         );
+    }
+
+    #[test]
+    fn lease_authority_and_proof_use_service_full_id_not_projected_core_id() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        assert!(state.service_id().starts_with("ak:did_core:"));
+
+        let scope_ref = ScopeRef::Realm {
+            realm_id: RealmId::new(REALM).expect("fixture Realm id"),
+        };
+        let basis_ref = LeaseBasisRef::Seal(
+            SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).expect("fixture Seal id"),
+        );
+        let (authority_set_ref, authority_set_policy) = authority_for_scope(
+            &state,
+            &scope_ref,
+            &basis_ref,
+            "ak.realm.create",
+            "realm_admission",
+        )
+        .expect("service FullId must form a legal authority verification method");
+
+        let expected_method = arkret_wire::DidUrl::new(format!(
+            "{}#notary-key",
+            state.service_resolution_commitment().full_id
+        ))
+        .expect("fixture service FullId method");
+        assert_eq!(
+            authority_set_policy.authorization_rules[0].issuers[0].verification_method,
+            expected_method
+        );
+
+        let issued_at = chrono::Utc::now();
+        let lease = sign_lease_fields(
+            &state,
+            arkret_wire::DidCoreId::new(ACTOR_CORE).expect("fixture actor CoreId"),
+            arkret_wire::DeviceId::new("ak:device:019f0000-0000-7000-8000-00000000de01")
+                .expect("fixture device id"),
+            scope_ref,
+            basis_ref,
+            "ak.realm.create".to_owned(),
+            "realm_admission".to_owned(),
+            RiskTier::High,
+            authority_set_ref,
+            authority_set_policy,
+            issued_at,
+            issued_at + chrono::Duration::minutes(5),
+        )
+        .expect("service FullId must form a legal lease proof method");
+        assert_eq!(lease.proofs[0].verification_method, expected_method);
     }
 }

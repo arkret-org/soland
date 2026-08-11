@@ -16,28 +16,49 @@ pub(crate) async fn validate_device_authorization_binding(
         DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
     };
 
-    let payload: DeviceAuthorizePayload = serde_json::from_value(
-        object.get("payload").cloned().unwrap_or(Value::Null),
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("invalid ak.device.authorize payload: {error}"),
-        )
-    })?;
+    let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone()))
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("invalid typed ak.device.authorize Event: {error}"),
+            )
+        })?;
+    let payload: DeviceAuthorizePayload = event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("invalid ak.device.authorize payload: {error}"),
+            )
+        })?;
     if payload.principal_id.as_str() != actor_id {
         return Err(device_authorization_invalid(
             "device authorization principal does not match actor_id",
         ));
     }
     match (&payload.authorization_binding_kind, &payload.authorized_by) {
-        (DeviceAuthorizationBindingKind::RootAnchored, DeviceOrPrincipalRef::Principal(root)) => {
+        (
+            DeviceAuthorizationBindingKind::RegistrationAnchor
+            | DeviceAuthorizationBindingKind::PcrRecovery,
+            DeviceOrPrincipalRef::Principal(root),
+        ) => {
             let staged = realm_bootstrap_contexts.iter().any(|context| {
                 context.actor_id == actor_id
                     && context.identity_anchor_event_id.is_some()
-                    && context.identity_anchor_candidate_device_key.as_deref()
-                        == Some(payload.device_public_key.as_str())
+                    && context
+                        .identity_anchor_candidate_device
+                        .as_ref()
+                        .is_some_and(|candidate| {
+                            candidate.principal_id == payload.principal_id
+                                && candidate.device_id == payload.device_id
+                                && candidate.device_public_key == payload.device_public_key
+                                && candidate.hpke_key == payload.hpke_key
+                                && candidate.algorithms == payload.algorithms
+                                && candidate.authorization_binding_kind
+                                    == payload.authorization_binding_kind
+                        })
             });
             if root.as_str() != actor_id || !staged {
                 return Err(device_authorization_invalid(
@@ -50,12 +71,10 @@ pub(crate) async fn validate_device_authorization_binding(
             DeviceOrPrincipalRef::DeviceId(authorizer),
         ) => {
             let expected_method = format!("{actor_id}#{authorizer}");
-            let proof_methods = object
-                .get("proofs")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|proof| proof.get("verification_method").and_then(Value::as_str))
+            let proof_methods = event
+                .proofs
+                .iter()
+                .map(|proof| proof.verification_method.as_str())
                 .collect::<Vec<_>>();
             if proof_methods.is_empty()
                 || proof_methods
@@ -114,11 +133,8 @@ pub(crate) async fn validate_device_authorization_binding(
             ));
         }
     }
-    crate::routing::identity::device_signing::validate_device_authorize_binding(
-        state,
-        object.get("payload").unwrap_or(&Value::Null),
-    )
-    .map_err(device_authorization_invalid)
+    crate::routing::identity::device_signing::validate_device_authorize_binding(state, &payload)
+        .map_err(device_authorization_invalid)
 }
 
 fn device_authorization_invalid(message: impl Into<String>) -> EventValidationError {

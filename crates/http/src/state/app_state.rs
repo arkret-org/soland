@@ -589,6 +589,23 @@ impl AppState {
         &self.service_id
     }
 
+    /// Return the currently resolved, version-pinned service DID.
+    ///
+    /// `service_id` is the projected Arkret core identifier and must never be
+    /// used as the base of a DID URL. Signing surfaces use this full DID so a
+    /// core-id/full-id mismatch is rejected at this single typed boundary.
+    pub fn service_full_id(&self) -> DidFullId {
+        self.service_resolution_commitment().full_id.clone()
+    }
+
+    pub fn service_verification_method(
+        &self,
+        fragment: &str,
+    ) -> Result<arkret_wire::DidUrl, String> {
+        arkret_wire::DidUrl::new(format!("{}#{fragment}", self.service_full_id()))
+            .map_err(|error| format!("service verification method is invalid: {error}"))
+    }
+
     pub fn storage_mode(&self) -> &'static str {
         self.storage_mode
     }

@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use arkret_identifiers::{CellRef, Hash, Hlc, RealmId, SealId};
+use arkret_identifiers::{CellRef, DidFullId, Hash, Hlc, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root, join_cell};
@@ -559,7 +559,8 @@ impl NotaryWorker {
         // canonical bytes, keeping the signature byte-stable.
         let zero_seal_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
             .expect("zero SealId is well-formed");
-        let zero_sig = zero_notary_sig_placeholder(&self.service_id)?;
+        let service_full_id = state.service_full_id();
+        let zero_sig = zero_notary_sig_placeholder(&service_full_id)?;
         let mut seal = Seal {
             id: zero_seal_id,
             realm_id: realm_id.clone(),
@@ -705,7 +706,9 @@ impl NotaryWorker {
             covered_event_digests: view.covered_event_digests.clone(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(zero_notary_sig_placeholder(&self.service_id)?),
+            notary_signature: NotarySig::Single(zero_notary_sig_placeholder(
+                &state.service_full_id(),
+            )?),
             sealed_at,
             hlc: Hlc::new(state.hlc().now())
                 .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
@@ -1205,13 +1208,9 @@ impl NotaryWorker {
 
         Ok(PayloadSignature {
             extra: Default::default(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#notary-key",
-                self.service_id
-            ))
-            .map_err(|e| {
-                NotaryError::Construction(format!("service notary verification method: {e}"))
-            })?,
+            verification_method: state
+                .service_verification_method("notary-key")
+                .map_err(NotaryError::Construction)?,
             payload_digest,
             created_at: chrono::Utc::now(),
             jws,
@@ -1260,14 +1259,16 @@ fn notary_cell_ref(_realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::I
     CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
 }
 
-fn zero_notary_sig_placeholder(service_id: &str) -> Result<PayloadSignature, NotaryError> {
+fn zero_notary_sig_placeholder(
+    service_full_id: &DidFullId,
+) -> Result<PayloadSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
     // `verification_method` is a typed DID URL, so the placeholder cannot be
     // the empty string any more. It carries the same method the real
     // signature will use; the whole value is still excluded from
     // `canonical_bytes_for_id` and overwritten before the Seal reaches the wire.
-    let verification_method = arkret_wire::DidUrl::new(format!("{service_id}#notary-key"))
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_full_id}#notary-key"))
         .map_err(|e| {
             NotaryError::Construction(format!("service notary verification method: {e}"))
         })?;

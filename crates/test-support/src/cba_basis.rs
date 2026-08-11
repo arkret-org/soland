@@ -200,7 +200,7 @@ fn fixture_pcr_founding_device_descriptor(
         scopes: None,
         not_before: created_at,
         expires_at: None,
-        authorization_binding_kind: DeviceAuthorizationBindingKind::RootAnchored,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RegistrationAnchor,
         device_signature: SignatureMaterial::NonEmptyString(
             arkret_wire::NonEmptyString::new("fixture-signature").unwrap(),
         ),
@@ -258,6 +258,11 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
                 format!("sha256:{}", "1".repeat(64)),
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
+            initial_resolution: arkret_models_identity::ResolutionCommitment {
+                full_id: principal_full_id.clone(),
+                method_history_head: format!("sha256:{}", "1".repeat(64)),
+                version_id: "1-fixture".to_owned(),
+            },
             founding_device_descriptor: fixture_pcr_founding_device_descriptor(
                 &principal, created_at,
             ),

@@ -47,7 +47,7 @@ fn controller_founding_authorize_payload(
         scopes: None,
         not_before: created_at,
         expires_at: None,
-        authorization_binding_kind: DeviceAuthorizationBindingKind::RootAnchored,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RegistrationAnchor,
         device_signature: SignatureMaterial::NonEmptyString(
             arkret_wire::NonEmptyString::new("pending").unwrap(),
         ),
@@ -202,6 +202,11 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
                 format!("sha256:{}", "1".repeat(64)),
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
+            initial_resolution: arkret_models_identity::ResolutionCommitment {
+                full_id: actor.clone(),
+                method_history_head: format!("sha256:{}", "1".repeat(64)),
+                version_id: "1-fixture".to_owned(),
+            },
             founding_device_descriptor,
             capability_action_registry_digest:
                 arkret_policy::current_capability_action_registry_digest().unwrap(),

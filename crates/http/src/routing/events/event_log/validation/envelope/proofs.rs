@@ -3,6 +3,22 @@ use super::minimal_metadata_author::{
 };
 use super::*;
 use crate::routing::events::event_log::submit::InternalEventAdmission;
+use arkret_event_draft::EventPayloadExt as _;
+
+fn root_anchor_event_public_key(
+    signer_controller: &str,
+) -> Result<arkret_signatures::PublicKeyMaterial, EventValidationError> {
+    let multibase = signer_controller.strip_prefix("did:key:").ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "root-anchor update authority must use canonical did:key material",
+        )
+    })?;
+    Ok(arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.to_owned(),
+    })
+}
 
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
@@ -49,28 +65,60 @@ pub(crate) async fn validate_event_proofs(
     // schema already requires `authorization_ref` whenever `executed_by` is
     // present, and the actor/executed_by DID validity + vm-DID==executed_by
     // checks ran earlier in this function.
-    let root_anchored_candidate_key = (object.get("kind").and_then(Value::as_str)
+    let typed_identity_anchor_event = if object.get("kind").and_then(Value::as_str)
         == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
-        && object
-            .get("payload")
-            .and_then(Value::as_object)
-            .and_then(|payload| payload.get("authorization_binding_kind"))
-            .and_then(Value::as_str)
-            == Some("root_anchored"))
-    .then(|| {
+    {
+        Some(
+            serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone())).map_err(
+                |error| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("device authorization must be a typed SDK Event: {error}"),
+                    )
+                },
+            )?,
+        )
+    } else {
+        None
+    };
+    let typed_candidate = if let Some(event) = typed_identity_anchor_event.as_ref() {
+        let payload = event
+            .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("invalid typed ak.device.authorize payload: {error}"),
+                )
+            })?;
+        matches!(
+            payload.authorization_binding_kind,
+            arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
+                | arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
+        )
+        .then_some(payload)
+    } else {
+        None
+    };
+    let root_anchored_candidate = typed_candidate.as_ref().and_then(|payload| {
         realm_bootstrap_contexts.iter().find_map(|context| {
-            let candidate_key = context.identity_anchor_candidate_device_key.as_ref()?;
+            let candidate = context.identity_anchor_candidate_device.as_ref()?;
             (context.actor_id == actor_id
-                && object
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .and_then(|payload| payload.get("device_public_key"))
-                    .and_then(Value::as_str)
-                    == Some(candidate_key.as_str()))
-            .then(|| candidate_key.clone())
+                && candidate.principal_id == payload.principal_id
+                && candidate.device_id == payload.device_id
+                && candidate.device_public_key == payload.device_public_key
+                && candidate.hpke_key == payload.hpke_key
+                && candidate.algorithms == payload.algorithms
+                && candidate.authorization_binding_kind == payload.authorization_binding_kind)
+                .then(|| {
+                    (
+                        candidate.clone(),
+                        context.identity_anchor_resolution.clone(),
+                    )
+                })
         })
-    })
-    .flatten();
+    });
     let ordinary_proof_root =
         event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
     let root_anchor_method = resolve_event_root_anchor_method(state, object, actor_id).await?;
@@ -154,29 +202,63 @@ pub(crate) async fn validate_event_proofs(
             .split_once('#')
             .map(|(did, _)| did)
             .expect("DidUrl always carries a fragment");
-        if root_anchored_candidate_key.is_some() {
-            let candidate_device_id = object
-                .get("payload")
-                .and_then(Value::as_object)
-                .and_then(|payload| payload.get("device_id"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "root-anchored device authorization requires device_id",
+        if let Some((candidate, staged_resolution)) = root_anchored_candidate.as_ref() {
+            let resolution = if let Some(resolution) = staged_resolution.clone() {
+                resolution
+            } else {
+                let resolution = state
+                    .projections()
+                    .snapshot()
+                    .principal_resolution_for_realm(
+                        typed_identity_anchor_event
+                            .as_ref()
+                            .expect("candidate payload came from a typed Event")
+                            .realm_id
+                            .as_str(),
                     )
-                })?;
-            let expected_method = format!("{actor_id}#{candidate_device_id}");
+                    .cloned()
+                    .ok_or_else(|| {
+                        event_validation_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "stale_did_document",
+                            "candidate device Event proof requires the accepted PCR resolution",
+                        )
+                    })?;
+                serde_json::from_value::<arkret_models_identity::ResolutionCommitment>(resolution)
+                    .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "schema_violation",
+                        format!("stored PCR resolution is not the public SDK type: {error}"),
+                    )
+                })?
+            };
+            if !arkret_wire::project_full_id_to_core_id(&resolution.full_id)
+                .is_ok_and(|principal| principal.as_str() == actor_id)
+            {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "candidate device proof resolution does not project to actor_id",
+                ));
+            }
+            let expected_method = format!("{}#{}", resolution.full_id, candidate.device_id);
             if verification_method_url.as_str() != expected_method {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
-                    "root-anchored candidate Event proof must use principal#device_id",
+                    "candidate device Event proof must use initial_resolution.full_id#device_id",
                 ));
             }
         }
-        let signer_controller = if minimal_metadata_context.is_some() {
+        let signer_controller = if root_anchored_candidate.is_some() {
+            // key-management.md §5.0.1: the founding/recovery device proof is
+            // rooted in the verified resolution FullId, not the stable CoreId.
+            // The exact FullId + device fragment was checked above and the
+            // candidate overlay below supplies its typed public key. Do not
+            // run this proof through the ordinary actor CoreId rooting gate.
+            method_root.to_owned()
+        } else if minimal_metadata_context.is_some() {
             // Pairwise authorship deliberately does not compare a resolvable
             // did:key controller string with the stable Core DidCoreId here.
             // The closed policy verifier below projects the DidFullId controller
@@ -239,14 +321,18 @@ pub(crate) async fn validate_event_proofs(
             // directory therefore cannot resolve it yet. Use a unit-local
             // overlay only after the anchor/payload/possession precheck has
             // succeeded; never reinterpret the did:key as the proof method.
-            if let Some(candidate_key) = root_anchored_candidate_key.as_deref() {
-                let multibase = candidate_key.strip_prefix("did:key:").ok_or_else(|| {
-                    event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "candidate device key must use did:key multibase encoding",
-                    )
-                })?;
+            if let Some((candidate, _)) = root_anchored_candidate.as_ref() {
+                let multibase = candidate
+                    .device_public_key
+                    .as_str()
+                    .strip_prefix("did:key:")
+                    .ok_or_else(|| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "candidate device key must use did:key multibase encoding",
+                        )
+                    })?;
                 let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
                     value: multibase.to_owned(),
                 };
@@ -263,6 +349,34 @@ pub(crate) async fn validate_event_proofs(
                         StatusCode::BAD_REQUEST,
                         "invalid_proof",
                         "candidate device Event proof verification failed",
+                    )
+                })?;
+                continue;
+            }
+            // account-lifecycle.md §2.1.2: PCR genesis is admitted before a
+            // principal grant or device-directory projection exists. Its
+            // create Event is authorized by the frozen DID entry's current
+            // active update key, which `resolve_event_root_anchor_method`
+            // selected and matched against this proof above. Verify that
+            // did:key material directly with the strict SDK Event-proof
+            // verifier; the ordinary principal-authorized path below requires
+            // already-accepted PCR-scoped device evidence and therefore cannot
+            // authorize this pre-grant root proof.
+            if root_anchor_method.is_some() {
+                let material = root_anchor_event_public_key(&signer_controller)?;
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "root-anchor Event proof verification failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "root-anchor Event proof verification failed",
                     )
                 })?;
                 continue;
@@ -728,30 +842,44 @@ mod tests {
         })
     }
 
+    #[test]
+    fn root_anchor_event_uses_the_frozen_did_key_material() {
+        let key = "z6MkfixtureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let material = root_anchor_event_public_key(&format!("did:key:{key}"))
+            .expect("a frozen did:key update authority is valid root material");
+        assert!(matches!(
+            material,
+            arkret_signatures::PublicKeyMaterial::Ed25519Multibase { value } if value == key
+        ));
+        assert!(root_anchor_event_public_key("did:webvh:fixture.example").is_err());
+    }
+
     /// `did-usage-and-verification.md` §2.2 — a proof `verification_method` is a
     /// DID URL. The bare actor DID names no key at all, so it must be refused
     /// before any signature check; a look-alike root must be refused too.
     #[tokio::test]
     async fn rejects_a_bare_actor_did_as_proof_verification_method() {
         let state = state();
-        let actor = "did:key:z6MkfixtureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let session = session(actor, &state);
+        let signer = "did:webvh:z6mkfixture:alice.example";
+        let actor = crate::test_actor_id_str(signer).to_string();
+        let session = session(&actor, &state);
         let digest = format!("sha256:{}", "1".repeat(64));
 
         for verification_method in [
             // bare DID — the exact form the old `!=` disjunct let through
-            actor.to_owned(),
+            signer.to_owned(),
             // trailing marker but still no fragment
-            format!("{actor}#"),
-            // a different root that merely starts with the actor DID
-            format!("{actor}.evil#key-1"),
+            format!("{signer}#"),
+            // a different webvh SCID, so it projects to a different core identity
+            "did:webvh:z6mkevil:alice.example#key-1".to_owned(),
         ] {
-            let event = event_with_verification_method(actor, &verification_method);
+            let mut event = event_with_verification_method(&actor, &verification_method);
+            event["executed_by"] = json!(actor);
             let error = validate_event_proofs(
                 event.as_object().unwrap(),
                 &state,
                 &session,
-                actor,
+                &actor,
                 &digest,
                 arkret_canonical::DigestSuite::Sha256,
                 ENVELOPE_BYTES,
@@ -775,16 +903,18 @@ mod tests {
     #[tokio::test]
     async fn accepts_a_rooted_did_url_and_fails_only_on_the_signature() {
         let state = state();
-        let actor = "did:key:z6MkfixtureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let session = session(actor, &state);
+        let signer = "did:webvh:z6mkfixture:alice.example";
+        let actor = crate::test_actor_id_str(signer).to_string();
+        let session = session(&actor, &state);
         let digest = format!("sha256:{}", "1".repeat(64));
-        let event = event_with_verification_method(actor, &format!("{actor}#key-1"));
+        let mut event = event_with_verification_method(&actor, &format!("{signer}#key-1"));
+        event["executed_by"] = json!(actor);
 
         let error = validate_event_proofs(
             event.as_object().unwrap(),
             &state,
             &session,
-            actor,
+            &actor,
             &digest,
             arkret_canonical::DigestSuite::Sha256,
             ENVELOPE_BYTES,

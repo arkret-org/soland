@@ -349,33 +349,48 @@ fn test_state() -> AppState {
 fn signed_device_authorize_payload(
     device_signer: &SigningKey,
     signing_key: &SigningKey,
-) -> serde_json::Value {
+) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
+    use arkret_models_collaboration::events_payloads::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, UnsignedDeviceAuthorizePayload,
+    };
+
     let device_public_key = format!(
         "did:key:{}",
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             device_signer.verifying_key().as_bytes(),
         )
     );
-    let mut payload = json!({
-        "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
-        "device_public_key": device_public_key,
-        "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
-        "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-        "device_key_algorithm": "Ed25519",
-        "authorized_by": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
-        "not_before": "2026-06-22T14:45:51.000Z",
-        "authorization_binding_kind": "root_anchored",
-        "device_signature": "cGVuZGluZw"
-    });
-    let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        serde_json::from_value(payload.clone()).expect("typed device authorize payload");
-    let input = typed
+    let principal_id = crate::test_actor_id_str("did:web:alice.example");
+    let unsigned = UnsignedDeviceAuthorizePayload::new(
+        principal_id.clone(),
+        arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6")
+            .unwrap(),
+        arkret_wire::NonEmptyString::new(device_public_key).unwrap(),
+        arkret_wire::NonEmptyString::new("z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM")
+            .unwrap(),
+        vec![
+            arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
+            arkret_wire::NonEmptyString::new("ak.mls.v1").unwrap(),
+        ],
+        Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        DeviceOrPrincipalRef::Principal(principal_id),
+        None,
+        "2026-06-22T14:45:51Z".parse().unwrap(),
+        None,
+        DeviceAuthorizationBindingKind::RegistrationAnchor,
+        None,
+    )
+    .expect("valid unsigned device authorization");
+    let input = unsigned
         .device_possession_signature_input()
         .expect("device signature input");
     let signature = signing_key.sign(&input);
-    payload["device_signature"] = json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));
-    payload
+    unsigned
+        .attach_signature(
+            arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+                .unwrap(),
+        )
+        .expect("signed typed device authorize payload")
 }
 
 #[test]

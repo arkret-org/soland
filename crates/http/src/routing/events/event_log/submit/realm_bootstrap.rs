@@ -99,7 +99,8 @@ pub(super) async fn submit_realm_bootstrap_batch(
         digest_algorithm: Some(staged_realm_digest_algorithm(&envelopes[0])),
         identity_anchor_event_id: None,
         self_principal_pcr_bootstrap: false,
-        identity_anchor_candidate_device_key: None,
+        identity_anchor_candidate_device: None,
+        identity_anchor_resolution: None,
         direct_conversation_founding: direct_conversation_founding.is_some(),
         authority_root: Some(unit.authority_root.clone()),
     };

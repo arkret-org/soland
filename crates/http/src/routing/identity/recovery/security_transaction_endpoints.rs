@@ -1,3 +1,4 @@
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_wire::{
     AcceptedStep, RecoveryBinding, RecoveryPreparedPlan, SchemaId, SecurityTransactionBinding,
@@ -1301,15 +1302,14 @@ async fn continue_issue_terminal_receipt(
         )
         .with_wire_code("security_transaction_failed_precondition"));
     }
-    let authorization_payload: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        serde_json::from_value(
-            crate::routing::identity::device_signing::device_authorize_wire_payload(
-                authorization_event
-                    .envelope
-                    .get("payload")
-                    .unwrap_or(&Value::Null),
-            ),
-        )
+    let authorization_envelope: arkret_wire::Event =
+        serde_json::from_value(authorization_event.envelope.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "accepted device authorization Event is invalid: {error}"
+            ))
+        })?;
+    let authorization_payload = authorization_envelope
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
         .map_err(|error| {
             AppError::internal(format!(
                 "accepted device authorization payload is invalid: {error}"

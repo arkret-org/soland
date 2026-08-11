@@ -72,12 +72,14 @@ pub(super) async fn issue_control_proposal_ack(
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(|error| AppError::internal(format!("Control Proposal Ack signer: {error}")))?;
     let ack_key = format!(
         "control-proposal-ack:{}:{}:{}",
         proposal_digest.as_str(),
         authority_set_ref.as_str(),
-        verification_method
+        verification_method.as_str()
     );
     if let Some(record) = state
         .jobs()

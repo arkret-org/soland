@@ -223,9 +223,12 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         // Verify the canonical device possession proof on every
         // ak.device.authorize at ingest.
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {
+            let payload = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
+            >(operation.payload.clone())
+            .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
             crate::routing::identity::device_signing::validate_device_authorize_binding(
-                state,
-                &operation.payload,
+                state, &payload,
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;

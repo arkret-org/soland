@@ -2,6 +2,7 @@
 
 use arkret_identifiers::EventId;
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
+use arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload;
 use arkret_models_crypto::DeviceStatus;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -98,14 +99,12 @@ fn value_requires_attestation(value: &Value) -> bool {
 
 pub fn validate_device_authorize_binding(
     _state: &AppState,
-    payload: &Value,
+    payload: &DeviceAuthorizePayload,
 ) -> Result<(), &'static str> {
-    let payload_shape: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        serde_json::from_value(device_authorize_wire_payload(payload))
-            .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
-    match payload_shape.authorization_binding_kind {
-        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::RootAnchored => {
-            arkret_signatures::verify_device_authorize_possession(&payload_shape)
+    match &payload.authorization_binding_kind {
+        arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::RegistrationAnchor
+        | arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::PcrRecovery => {
+            arkret_signatures::verify_device_authorize_possession(payload)
                 .map_err(|_| "device_authorize_device_signature_invalid")
         }
         arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice => {
@@ -115,15 +114,11 @@ pub fn validate_device_authorize_binding(
             // root-anchored full-payload transcript would reject the formal
             // pre-assembly protocol and, more importantly, would omit the
             // pairing challenge from the possession proof.
-            payload_shape
+            payload
                 .validate_wire_constraints()
                 .map_err(|_| "device_authorize_device_signature_invalid")
         }
     }
-}
-
-pub(crate) fn device_authorize_wire_payload(payload: &Value) -> Value {
-    payload.clone()
 }
 
 pub(crate) async fn verify_mls_welcome_claim_envelope_signature(

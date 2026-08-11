@@ -193,41 +193,12 @@ pub(super) async fn resolve_event_root_anchor_method(
         ));
     }
     // Event actor_id and the notary cell are stable core state. did:webvh
-    // history lookup uses the full identity from the signed proof's
-    // verification method; reconstructing it from either core id is forbidden.
+    // history lookup uses the full identity frozen in the PCR create's
+    // initial_resolution.  The Event proof is deliberately signed by the
+    // cold did:key identity root selected by the referenced inception entry;
+    // it is not a did:webvh signer and MUST NOT be used as full-id resolution.
     let principal_full_id = if role == DID_INCEPTION_REF_ROLE {
-        let mut matching_full_ids = std::collections::BTreeSet::new();
-        for proof in object
-            .get("proofs")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(verification_method) =
-                proof.get("verification_method").and_then(Value::as_str)
-            else {
-                continue;
-            };
-            let Some((full_id, _)) = verification_method.rsplit_once('#') else {
-                continue;
-            };
-            let Ok(full_id) = arkret_wire::DidFullId::new(full_id.to_owned()) else {
-                continue;
-            };
-            if arkret_wire::project_full_id_to_core_id(&full_id)
-                .is_ok_and(|core_id| core_id == actor_core_id)
-            {
-                matching_full_ids.insert(full_id);
-            }
-        }
-        if matching_full_ids.len() != 1 {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
-                "principal-control genesis must have exactly one signed full DID projecting to actor_id",
-            ));
-        }
-        matching_full_ids.pop_first().expect("length checked")
+        principal_control_genesis_resolution_full_id(object, &actor_core_id)?
     } else {
         let realm_id = object
             .get("realm_id")
@@ -378,6 +349,39 @@ pub(super) async fn resolve_event_root_anchor_method(
     Ok(methods.into_iter().next())
 }
 
+fn principal_control_genesis_resolution_full_id(
+    object: &serde_json::Map<String, Value>,
+    actor_core_id: &arkret_wire::DidCoreId,
+) -> Result<arkret_wire::DidFullId, EventValidationError> {
+    let full_id = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .and_then(|payload| payload.get("object"))
+        .and_then(Value::as_object)
+        .and_then(|payload_object| payload_object.get("initial_resolution"))
+        .and_then(Value::as_object)
+        .and_then(|resolution| resolution.get("full_id"))
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_wire::DidFullId::new(value.to_owned()).ok())
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "principal-control genesis must carry a valid initial_resolution.full_id",
+            )
+        })?;
+    if !arkret_wire::project_full_id_to_core_id(&full_id)
+        .is_ok_and(|core_id| core_id == *actor_core_id)
+    {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "invalid_proof",
+            "principal-control genesis initial_resolution.full_id must project to actor_id",
+        ));
+    }
+    Ok(full_id)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -422,5 +426,35 @@ mod tests {
             out,
             vec!["ak:event:e1".to_owned(), "ak:event:e2".to_owned()]
         );
+    }
+
+    #[test]
+    fn principal_control_genesis_resolves_full_id_from_initial_resolution() {
+        let full_id =
+            arkret_wire::DidFullId::new("did:webvh:zQ3shExampleScid:alice.example:webvh:user")
+                .expect("full id");
+        let actor_id = arkret_wire::project_full_id_to_core_id(&full_id).expect("core id");
+        let event = json!({
+            "payload": {
+                "object": {
+                    "initial_resolution": {
+                        "full_id": full_id,
+                        "method_history_head": "sha256:fixture",
+                        "version_id": "version-1"
+                    }
+                }
+            },
+            "proofs": [{
+                "verification_method": "did:key:z6MkruntimeExample#z6MkruntimeExample"
+            }]
+        })
+        .as_object()
+        .expect("event object")
+        .clone();
+
+        let resolved = principal_control_genesis_resolution_full_id(&event, &actor_id)
+            .expect("resolution full id");
+
+        assert_eq!(resolved.as_str(), full_id.as_str());
     }
 }

@@ -894,7 +894,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "root_anchored",
+            "authorization_binding_kind": "registration_anchor",
             "device_signature": "c2ln"
         }),
     );
@@ -961,7 +961,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "root_anchored",
+            "authorization_binding_kind": "registration_anchor",
             "device_signature": "c2ln"
         }),
     );
@@ -1010,7 +1010,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
-            "authorization_binding_kind": "root_anchored",
+            "authorization_binding_kind": "registration_anchor",
             "device_signature": "c2ln"
         }),
     );
