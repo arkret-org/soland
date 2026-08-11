@@ -92,14 +92,14 @@ pub(in crate::routing) async fn verify_inbound_peer_http_signature(
     // Bucket-normalize the failure timing without blocking a tokio worker:
     // run the synchronous verify body, then async-pad on the error path.
     let started_at = Instant::now();
-    let outcome = verify_inbound_peer_http_signature_inner(state, req, body_bytes.as_deref());
+    let outcome = verify_inbound_peer_http_signature_inner(state, req, body_bytes.as_deref()).await;
     if outcome.is_err() {
         apply_federation_auth_failure_delay(started_at).await;
     }
     outcome
 }
 
-fn verify_inbound_peer_http_signature_inner(
+async fn verify_inbound_peer_http_signature_inner(
     state: &AppState,
     req: &Request,
     body_bytes: Option<&[u8]>,
@@ -140,7 +140,7 @@ fn verify_inbound_peer_http_signature_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let source_verifying_key =
-        verifying_key_for_service_id(state, &source_service_id, &signature_input.key_id)?;
+        verifying_key_for_service_id(state, &source_service_id, &signature_input.key_id).await?;
     let mut required_components = vec![
         Component::Method,
         Component::TargetUri,
@@ -312,7 +312,7 @@ fn federation_verification_error(error: HttpMessageVerificationError, label: &st
     }
 }
 
-fn verifying_key_for_service_id(
+async fn verifying_key_for_service_id(
     state: &AppState,
     service_id: &str,
     verification_method: &str,
@@ -334,7 +334,9 @@ fn verifying_key_for_service_id(
     // service to publish a controller-owned method such as `#service-key`
     // while preventing a service-level cache entry from silently accepting a
     // different or rotated-away method.
-    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method) {
+    if let Ok(key) =
+        crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method).await
+    {
         return Ok(key);
     }
     let development_method =
@@ -356,12 +358,12 @@ fn development_service_signing_key(service_id: &str) -> SigningKey {
 }
 
 pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) -> String {
-    let scheme = req
-        .uri()
-        .scheme_str()
-        .map(ToOwned::to_owned)
-        .or_else(|| public_base_url_scheme(state))
-        .unwrap_or_else(|| "http".to_owned());
+    // The signed target is the destination service's registered public
+    // endpoint, not the reverse proxy's internal upstream URI. Salvo can
+    // expose the Caddy -> Soland hop as `http://...` even when the client used
+    // the advertised `https://...` endpoint, so the configured public origin
+    // must win whenever it is available.
+    let scheme = signature_target_scheme(&state.config().public_base_url, req.uri().scheme_str());
     let authority = signature_authority(req, state);
     let path_and_query = req
         .uri()
@@ -405,10 +407,12 @@ fn forwarded_host_authority(req: &Request) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn public_base_url_scheme(state: &AppState) -> Option<String> {
-    reqwest::Url::parse(&state.config().public_base_url)
+fn signature_target_scheme(public_base_url: &str, request_scheme: Option<&str>) -> String {
+    reqwest::Url::parse(public_base_url)
         .ok()
         .map(|url| url.scheme().to_owned())
+        .or_else(|| request_scheme.map(ToOwned::to_owned))
+        .unwrap_or_else(|| "http".to_owned())
 }
 
 fn public_base_url_authority(state: &AppState) -> Option<String> {
@@ -428,6 +432,24 @@ fn signature_error(message: impl Into<String>) -> AppError {
         "federation request authentication failed"
     );
     AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
+}
+
+#[cfg(test)]
+mod signature_target_tests {
+    use super::signature_target_scheme;
+
+    #[test]
+    fn public_endpoint_scheme_wins_over_reverse_proxy_upstream_scheme() {
+        assert_eq!(
+            signature_target_scheme("https://local.host/", Some("http")),
+            "https"
+        );
+    }
+
+    #[test]
+    fn request_scheme_is_used_when_public_endpoint_is_invalid() {
+        assert_eq!(signature_target_scheme("not a URL", Some("https")), "https");
+    }
 }
 
 fn cross_domain_replay_error(message: impl Into<String>) -> AppError {
