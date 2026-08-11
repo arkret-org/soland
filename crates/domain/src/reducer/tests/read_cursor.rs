@@ -1,7 +1,7 @@
 use super::*;
 
 const REALM_ID: &str = "ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6";
-const ACTOR_ID: &str = "did:webvh:z6mkalice:alice.example";
+const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
 
 fn fixture_event_id(suffix: u32) -> String {
     let mut digest = [0u8; 32];

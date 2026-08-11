@@ -23,7 +23,7 @@ fn message_create_and_query() {
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-            "sender": "did:web:alice",
+            "sender": "ak:did_core:web:alice",
             "thread_id": "ak:strand:1",
             "content": {"kind": "ak.content.text", "body": "hello"}
         }),
@@ -50,7 +50,7 @@ fn redaction_hides_message() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
@@ -63,7 +63,7 @@ fn redaction_hides_message() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),
@@ -93,7 +93,7 @@ fn redaction_hides_message() {
         .cloned()
         .unwrap()
         .unwrap();
-    assert_eq!(cell.by, "did:web:alice");
+    assert_eq!(cell.by, "ak:did_core:web:alice");
     assert_eq!(cell.reason.as_deref(), Some("wrong room"));
 }
 
@@ -106,7 +106,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": event_id,
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
@@ -127,7 +127,7 @@ fn mal14_tombstone_visible_to_author() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
                 "reason": "policy:auto",
                 "human_reason": "rethink",
             }),
@@ -139,7 +139,7 @@ fn mal14_tombstone_visible_to_author() {
     assert!(view.content.is_some(), "author should see original content");
     // Tombstone metadata is also present.
     let r = view.redaction.unwrap();
-    assert_eq!(r.by, "did:web:alice");
+    assert_eq!(r.by, "ak:did_core:web:alice");
     assert_eq!(r.reason.as_deref(), Some("rethink"));
 }
 
@@ -155,7 +155,7 @@ fn mal14_tombstone_hidden_from_members() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
             }),
         ),
         &hlc,
@@ -178,7 +178,7 @@ fn mal14_unredaction_clears_cell_and_index() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
             }),
         ),
         &hlc,
@@ -226,7 +226,7 @@ fn mal14_late_arriving_redaction_still_takes_effect() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_event_id": event_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
                 "reason": "late",
             }),
         ),
@@ -257,7 +257,7 @@ fn reaction_or_set_convergence() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_ref": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "key": "👍"
             }),
         ),
@@ -276,7 +276,7 @@ fn reaction_or_set_convergence() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "target_ref": "ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "key": "👍"
             }),
         ),
@@ -307,7 +307,7 @@ fn membership_join_leave() {
     // suite).
     let join_payload = serde_json::json!({
         "realm_id": realm_id,
-        "actor_id": "did:web:bob",
+        "actor_id": "ak:did_core:web:bob",
         "membership": "join",
         "delivery_status": "unroutable"
     });
@@ -322,7 +322,7 @@ fn membership_join_leave() {
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
     let leave_payload = serde_json::json!({
-        "actor_id": "did:web:bob",
+        "actor_id": "ak:did_core:web:bob",
         "membership": "leave"
     });
     let (_, leave_writes) = projected_cell_writes(
@@ -350,7 +350,7 @@ fn message_revise_creates_chain() {
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
             serde_json::json!({
                 "event_id": "ak:event:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R",
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
@@ -396,7 +396,7 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
@@ -445,7 +445,7 @@ fn redaction_accepts_schema_message_id_target() {
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
@@ -459,7 +459,7 @@ fn redaction_accepts_schema_message_id_target() {
             serde_json::json!({
                 "event_id": redaction_event_id,
                 "message_id": message_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),
@@ -496,7 +496,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             serde_json::json!({
                 "event_id": event_id,
                 "message_id": message_id,
-                "sender": "did:web:alice",
+                "sender": "ak:did_core:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
             }),
@@ -522,7 +522,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             serde_json::json!({
                 "event_id": "ak:event:AaviAQUPcXQA_m9RNFUvox0-znrutEvE8BkTgEoWNTJx",
                 "message_id": message_id,
-                "by": "did:web:alice",
+                "by": "ak:did_core:web:alice",
                 "reason": "wrong room"
             }),
         ),

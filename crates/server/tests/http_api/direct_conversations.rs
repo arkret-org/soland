@@ -119,28 +119,44 @@ async fn project_authorized_device(
     signing_key: &ed25519_dalek::SigningKey,
 ) -> String {
     let control_realm = soland_test_support::fixture_principal_control_realm(actor);
-    let authorize = arkret_event_draft::test_support::raw_projected_operation(
-        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
-            "ak:operation:",
-        ))
-        .unwrap(),
-        arkret_identifiers::RealmId::new(control_realm).unwrap(),
+    let actor_full = arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap();
+    let actor_core = arkret_wire::project_full_id_to_core_id(&actor_full).unwrap();
+    let realm_id = arkret_identifiers::RealmId::new(control_realm).unwrap();
+    let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_core.clone(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({
-            "sender": actor,
-            "principal_id": actor,
+            "principal_id": actor_core,
             "device_id": device_id,
             "device_public_key": test_ed25519_multibase_public(signing_key),
             "hpke_key": "z6LSDirectConversationFixtureHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": actor,
+            "authorized_by": actor_core,
             "not_before": "2026-05-25T00:00:00.000Z",
             "authorization_binding_kind": "root_anchored",
             "device_signature": "c2ln"
         }),
-    );
+        Utc::now(),
+    )
+    .unwrap();
+    let authorize = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:operation:",
+        ))
+        .unwrap(),
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .unwrap();
     let authorize_event_id = authorize.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(state, actor, &[authorize]).await;
+    soland_test_support::project_accepted_operations(state, actor_core.as_str(), &[authorize])
+        .await;
     authorize_event_id
 }
 
@@ -154,9 +170,13 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     // Canonical SDK KeyPackage capability set (ARKRET_MLS_KEY_PACKAGE_CAPABILITIES);
     // the direct-conversation claim requires `ak.content.v1` from this set.
     let capabilities = serde_json::json!(["mimi.content.v1", "ak.content.v1"]);
+    let bob_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_wire::DidFullId::new(BOB_DID.to_owned()).unwrap(),
+    )
+    .unwrap();
     let unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(serde_json::json!({
-            "principal_id": BOB_DID,
+            "principal_id": bob_core,
             "device_id": BOB_DEVICE,
             "key_packages": [{
                 "keypackage_id": keypackage_id,

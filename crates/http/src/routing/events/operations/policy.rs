@@ -295,7 +295,7 @@ mod tests {
         }));
         assert_eq!(
             policy_operation_sender(&op),
-            Some("did:web:fixture.example")
+            Some("ak:did_core:web:fixture.example")
         );
     }
 

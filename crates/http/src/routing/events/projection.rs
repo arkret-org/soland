@@ -260,7 +260,7 @@ mod tests {
         let operation = op(
             arkret_wire::EventKind::InviteAccept,
             json!({
-                "sender": "did:web:bob.example",
+                "sender": "ak:did_core:web:bob.example",
                 "invite_id": invite_id,
                 "delivery_status": "routable",
             }),

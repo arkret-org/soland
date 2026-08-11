@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use super::*;
 
 const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
-const ACTOR: &str = "did:web:alice.example";
+const ACTOR: &str = "ak:did_core:web:alice.example";
 const ACTIVE_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000000";
 const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-000000000001";
 

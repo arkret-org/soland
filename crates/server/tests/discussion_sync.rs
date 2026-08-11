@@ -67,9 +67,13 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 }
 
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": format!("ak:device:01904100-0000-7000-8000-{device_suffix}"),
             "display_name": actor,
         }))
@@ -604,9 +608,12 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         payload,
     } = input;
+    let actor_full = DidFullId::new(actor_id.to_owned()).expect("fixture actor full DID");
+    let actor = arkret_wire::project_full_id_to_core_id(&actor_full)
+        .expect("fixture actor full DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
+            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -621,9 +628,6 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     let actor_seq = frontier.next_actor_seq;
     let prev_refs = frontier.frontier_event_ids;
     let now = chrono::Utc::now();
-    let actor_full = DidFullId::new(actor_id.to_owned()).expect("fixture actor full DID");
-    let actor = arkret_wire::project_full_id_to_core_id(&actor_full)
-        .expect("fixture actor full DID projects to a core id");
     let verification_method =
         arkret_wire::DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
             || format!("{actor_id}#{device_id}"),

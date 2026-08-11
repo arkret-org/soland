@@ -677,12 +677,12 @@ mod tests {
         state.realm_directory().upsert(entry);
     }
 
-    async fn put_agent(state: &AppState, agent: &str, controller: &str) {
+    async fn put_agent(state: &AppState, agent: &str, controller: &str, verification_method: &str) {
         let mut record = soland_services::identity::AgentPairingState::new(
             agent.to_owned(),
             controller.to_owned(),
             "ak:realm:ATWQEEyC8UZTZ3u0Vp5MrgAI7TdaZ7A8gEomiO5_Q9Vy".to_owned(),
-            arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
+            arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
             arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
             chrono::Utc::now(),
         );
@@ -856,7 +856,7 @@ mod tests {
                 fields: Default::default(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
                 history_basis_seals: Vec::new(),
                 updated_by: None,
@@ -880,7 +880,7 @@ mod tests {
                 fields: Default::default(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
                 history_basis_seals: Vec::new(),
                 updated_by: None,
@@ -1051,9 +1051,9 @@ mod tests {
     async fn plain_message_does_not_notify_unmentioned_members_by_default() {
         let state = test_state();
         let realm_id = "ak:realm:AauAoPMR2z4BNQITCfoc7MFdCoZUkuRA2F1Ar8_Y5wGi";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
-        let carol = "did:web:carol.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        let carol = "ak:did_core:web:carol.example";
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
 
         let delivered = plain_message(realm_id, "000000009971", alice);
@@ -1070,9 +1070,9 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh";
         let strand_id = "ak:strand:AYzqeQ1hbLexQxBuFmhDzV2R1jsnUEvB0ELJR10hOgtK";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
-        let carol = "did:web:carol.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        let carol = "ak:did_core:web:carol.example";
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
         seed_strand(&state, realm_id, strand_id);
         seed_strand_watch(&state, strand_id, bob, "all");
@@ -1104,9 +1104,9 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:Adyav4arFL7WanivBY0R2rPKamnwP3Ufm3id4lK6RvLC";
         let strand_id = "ak:strand:ATzedkQcDEQSoizsKm0tLBqVS7MdSmwECSr83UPmfDCv";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
-        let mallory = "did:web:mallory.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        let mallory = "ak:did_core:web:mallory.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
         seed_strand_watch(&state, strand_id, bob, "all");
         seed_strand_watch(&state, strand_id, mallory, "all");
@@ -1122,8 +1122,8 @@ mod tests {
     async fn member_mention_is_single_mention_notification() {
         let state = test_state();
         let realm_id = "ak:realm:AQXbZyLQDsJ3HgYeoGi2pg7v2-EAb87QmzHIKinXcPx7";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
 
         let delivered = mention_message(realm_id, "000000009973", alice, bob);
@@ -1144,8 +1144,8 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:AfiUdT1FiCuG9vrwdBoVapciBl_9lj1WXVvcQiqjwjL1";
         let strand_id = "ak:strand:ATOuTJ1jIr62GMxyz9DvXbMreJu0R34jc4VIYM4ArDuj";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
         seed_strand(&state, realm_id, strand_id);
 
@@ -1172,9 +1172,9 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:Ae_gn71jX8JjmWkvGzHGOxtSJGQ6O5zlLx95wejUyP2q";
         let strand_id = "ak:strand:AYXsQsNFlX2cPilpTg9wFxq8ZR7FMXe2x3oUUPW1lKze";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
-        let carol = "did:web:carol.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        let carol = "ak:did_core:web:carol.example";
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
@@ -1206,8 +1206,8 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:ARj7PZkho4xcjXfMvde5k0hNB7YBVc6TGbS_IQvAuKxh";
         let strand_id = "ak:strand:AVYkqAhEtUpBukcTx8idL_KiAIF0h1LWipAY-VigqJZZ";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009932", alice, strand_id, bob);
@@ -1249,8 +1249,8 @@ mod tests {
         let state = test_state();
         let realm_id = "ak:realm:AaQmWDnuj2L95eyMHnDSAuVVh6dlrGqPknIPvBibhOmJ";
         let strand_id = "ak:strand:AWpZLCspUVLBed5WbRkPgTNizbqjIiZrgmHKrcZ1dLGp";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
         seed_strand(&state, realm_id, strand_id);
         let operation = rsvp_update(realm_id, "000000009948", alice, strand_id);
@@ -1264,9 +1264,9 @@ mod tests {
     async fn unregistered_mention_sidecar_is_never_compared_to_member_ids() {
         let state = test_state();
         let realm_id = "ak:realm:AZfY2N95Y0T6RkbZInh0TK2U52OiArWMoi24g5SjFjSe";
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
-        let carol = "did:web:carol.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        let carol = "ak:did_core:web:carol.example";
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
 
         let delivered = encrypted_unregistered_sidecar_message(realm_id, "000000009975", alice);
@@ -1281,10 +1281,16 @@ mod tests {
     async fn agent_third_party_mention_gate_is_non_retroactive() {
         let state = test_state();
         let realm_id = "ak:realm:Ae34nQKc2ovP6XDJ1VP9lVATdzZ-6obodata7oQp4ucY";
-        let controller = "did:web:alice.example";
-        let third_party = "did:web:bob.example";
-        let agent = "did:web:agents.example:alice-summary";
-        put_agent(&state, agent, controller).await;
+        let controller = "ak:did_core:web:alice.example";
+        let third_party = "ak:did_core:web:bob.example";
+        let agent = "ak:did_core:web:agents.example:alice-summary";
+        put_agent(
+            &state,
+            agent,
+            controller,
+            "did:web:agents.example:alice-summary#managed-controller",
+        )
+        .await;
         set_realm_selection(&state, realm_id, agent, false, 0).await;
 
         let suppressed_event_id = fixture_event_id("000000009982").to_string();
@@ -1333,10 +1339,16 @@ mod tests {
         let realm_id = "ak:realm:AakPvoRAhodng9IHc5ZdoFQD-VzTa8ev2gXDgp_ivtfK";
         let circle_id = "ak:circle:Aecu1rM_o2niy2h_rtK9KBChw8L-QoAsngbVoP1bpNrl";
         let strand_id = "ak:strand:AWfDaIWeo-OwLmokFm6boWYM7iYeSPeyw_TUiOku1wdZ";
-        let controller = "did:web:alice.example";
-        let third_party = "did:web:bob.example";
-        let agent = "did:web:agents.example:alice-summary";
-        put_agent(&state, agent, controller).await;
+        let controller = "ak:did_core:web:alice.example";
+        let third_party = "ak:did_core:web:bob.example";
+        let agent = "ak:did_core:web:agents.example:alice-summary";
+        put_agent(
+            &state,
+            agent,
+            controller,
+            "did:web:agents.example:alice-summary#managed-controller",
+        )
+        .await;
         seed_strand_scope(&state, realm_id, strand_id, circle_id);
         set_realm_selection(&state, realm_id, agent, false, 0).await;
         set_circle_selection(&state, realm_id, circle_id, agent, true).await;

@@ -380,12 +380,13 @@ pub(super) async fn provision_agent(
             })?;
             let controller_authorization_ref =
                 crate::routing::identity::managed_agent_pcr::controller_authorization_ref(
-                    agent_id.as_str(),
+                    &agent_full_id,
                 )?;
             let allocation_handle =
                 issue_allocation_handle(state, &controller_id, &operation_id, &idempotency_key)?;
             let outcome = AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id,
+                full_id: agent_full_id,
                 controller_realm_id: RealmId::new(controller_realm).map_err(|error| {
                     AppError::internal(format!("controller PCR id invalid: {error}"))
                 })?,
@@ -445,6 +446,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             agent_id,
+            full_id,
             principal_control_realm_id,
             allocation_handle,
             slug,
@@ -467,6 +469,7 @@ pub(super) async fn provision_agent(
                 })?;
             let AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id: allocated_agent_id,
+                full_id: allocated_full_id,
                 controller_realm_id,
                 allocation_handle: allocated_handle,
                 controller_authorization_ref,
@@ -486,6 +489,7 @@ pub(super) async fn provision_agent(
                     pairing_ttl_ms,
                 })?
                 || allocated_agent_id != agent_id
+                || allocated_full_id != full_id
                 || allocated_handle != allocation_handle
                 || prepared.slug != slug
                 || prepared.requested_scope != requested_scope
@@ -642,26 +646,28 @@ pub(super) async fn provision_agent(
                 principal
             };
 
-            if !crate::routing::identity::managed_agent_pcr::managed_agent_pcr_genesis_accepted(
-                state,
-                agent_id.as_str(),
-                principal_control_realm_id.as_str(),
-            )
-            .await?
-            {
+            let Some(pcr_genesis_accepted_at) =
+                crate::routing::identity::managed_agent_pcr::managed_agent_pcr_genesis_accepted_at(
+                    state,
+                    agent_id.as_str(),
+                    principal_control_realm_id.as_str(),
+                )
+                .await?
+            else {
                 return json_ok(AgentProvisionOutcome::AwaitingPcrGenesis {
                     agent_id,
+                    full_id,
                     principal_control_realm_id,
                     allocation_handle,
                     controller_authorization_ref,
                     requested_scope_digest,
                 });
-            }
+            };
 
             crate::routing::identity::managed_agent_pcr::persist_managed_agent_did_identity_anchor(
                 state,
-                agent_id.as_str(),
-                allocation.created_at,
+                &full_id,
+                pcr_genesis_accepted_at,
             )
             .await?;
             let controller_account = state
@@ -709,6 +715,7 @@ pub(super) async fn provision_agent(
             let outcome = AgentProvisionOutcome::Complete {
                 outcome: arkret_models_collaboration::agent_operations::AgentProvisionComplete {
                     agent_id: agent_id.clone(),
+                    full_id: full_id.clone(),
                     principal_control_realm_id: principal_control_realm_id.clone(),
                     controller_authorization_ref: controller_authorization_ref.clone(),
                     requested_scope_digest: requested_scope_digest.clone(),
@@ -1690,13 +1697,7 @@ pub(super) async fn attach_agent_grant(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
-    let record = require_agent_controller(state, &session, &agent_id).await?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
-        state,
-        &record,
-        chrono::Utc::now(),
-    )
-    .await?;
+    require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
@@ -1752,6 +1753,7 @@ pub(super) async fn detach_agent_grant(
     aa: AuthArgs,
     agent_id: PathParam<String>,
     grant_id: PathParam<String>,
+    body: JsonBody<AgentGrantDetachRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentGrantDetachOutcome> {
@@ -1759,14 +1761,30 @@ pub(super) async fn detach_agent_grant(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let grant_id = grant_id.into_inner();
-    require_agent_controller(state, &session, &agent_id).await?;
+    let record = require_agent_controller(state, &session, &agent_id).await?;
+    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
     let typed_grant_id = GrantId::new(grant_id.clone())
         .map_err(|error| AppError::invalid_param(format!("grant_id is invalid: {error}")))?;
-    if !state.config().development_mode {
-        return Err(AppError::unsupported_feature(
-            "production Agent grant detachment requires protocol-valid Event authoring",
-        )
-        .with_wire_code("agent_grant_fanout_unavailable"));
+    let body = body.into_inner();
+    body.validate()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    let payload = body
+        .payload()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    if payload.grant_id != typed_grant_id
+        || payload
+            .grant_ref
+            .as_ref()
+            .is_some_and(|grant_ref| grant_ref != &typed_grant_id)
+    {
+        return Err(AppError::invalid_param(
+            "revoke_event payload grant_id/grant_ref must equal the path grant_id",
+        ));
     }
     let locations = {
         let projection = state.projections().snapshot();
@@ -1779,8 +1797,17 @@ pub(super) async fn detach_agent_grant(
     let [(matched_grant_id, realm_id)] = locations.as_slice() else {
         return Err(AppError::not_found("Agent capability grant not found"));
     };
-    revoke_capability_grant(state, &session, realm_id, matched_grant_id).await?;
-    let revoked_at = now();
+    let event = &body.revoke_event.event;
+    if event.actor_id.as_str() != session.actor
+        || event.realm_id.as_str() != realm_id
+        || matched_grant_id != typed_grant_id.as_str()
+    {
+        return Err(AppError::capability_denied(
+            "revoke_event does not match the authenticated controller or target grant",
+        ));
+    }
+    let revoked_at = event.created_at;
+    submit_signed_agent_event(state, &session, body.revoke_event).await?;
     append_audit_log(
         state,
         Some(&session.actor),

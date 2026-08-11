@@ -1135,17 +1135,16 @@ mod tests {
 
     fn cancel_operation(invitee: Option<&str>) -> Operation {
         let event = cancel_event(invitee);
-        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000000523",
             )
             .unwrap(),
-            RealmId::new(CANCEL_REALM).unwrap(),
-            arkret_wire::EventKind::InviteCancel.as_str(),
-            serde_json::to_value(event.payload).unwrap(),
-        );
-        operation.created_at = event.created_at;
-        operation
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+        )
+        .unwrap()
     }
 
     async fn seed_cancel_invite(state: &AppState, third_party: bool) {
@@ -1377,27 +1376,36 @@ mod tests {
                 .invite_member_is_invited(realm_id.as_str(), invitee)
         );
 
-        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-000000000503",
-            )
-            .unwrap(),
-            realm_id.clone(),
+        let mut event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::InviteCreate.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            crate::test_actor_id_str(inviter),
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             json!({
                 "invitee": invitee,
                 "invite_delivery_target": delivery_target,
                 "introduction_evidence_digest": evidence_digest,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
-        );
-        let event_id =
+            created_at,
+        )
+        .unwrap();
+        event.event_id =
             arkret_identifiers::EventId::new(invite_id.replacen("ak:invite:", "ak:event:", 1))
                 .unwrap();
-        operation.context.event_id = event_id.clone();
-        operation.context.accepted_event_id = event_id;
-        operation.context.sender = crate::test_actor_id_str(&inviter);
-        operation.created_at = created_at;
+        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000503",
+            )
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+        )
+        .unwrap();
 
         project_invite_create_operation(&state, inviter, &operation).await;
 

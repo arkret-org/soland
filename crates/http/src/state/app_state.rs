@@ -1063,6 +1063,27 @@ impl AppState {
             .ok_or("service route resolver is not installed")
     }
 
+    /// Replace the production route fetcher at test composition time while
+    /// retaining the same durable floor, cache, and quarantine store.
+    ///
+    /// This hook exists only for integration fixtures that model an
+    /// independently verified route source. It must be called before the
+    /// state performs any route resolution; production callers cannot enable
+    /// it and sending code still resolves exclusively through the shared
+    /// [`ServiceRouteResolver`].
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_install_service_route_fetcher(
+        &self,
+        fetcher: Arc<dyn soland_services::service_route::ServiceRouteFetcher>,
+    ) {
+        let resolver = Arc::new(ServiceRouteResolver::new(
+            Arc::new(self.persistence.clone()),
+            fetcher,
+        ));
+        *self.service_route_resolver.lock() = Some(resolver);
+    }
+
     /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
     pub fn did_bindings(&self) -> &dyn arkret_identity::VerifiedDidBindingStore {
         self.did_bindings.as_ref()

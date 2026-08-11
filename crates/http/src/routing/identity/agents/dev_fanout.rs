@@ -8,7 +8,7 @@
 use arkret_wire::Event;
 #[cfg(test)]
 use chrono::Utc;
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::SessionRecord;
@@ -16,23 +16,6 @@ use crate::routing::events::event_log::{
     submit_initial_event_submission, submit_one_error_to_app_error,
 };
 use crate::state::AppState;
-
-/// Build a server-authored envelope for `session.actor` and submit it via the
-/// shared internal event API. `actor_seq` is taken as
-/// `max_actor_seq(actor) + 1` so concurrent fan-out events stay strictly
-/// increasing.
-pub(super) async fn submit_agent_fanout_event(
-    state: &AppState,
-    session: &SessionRecord,
-    _realm_id: &str,
-    _kind: &str,
-    _payload: Value,
-) -> Result<String, AppError> {
-    Err(
-        AppError::unsupported_feature("operation requires a controller-signed SDK Event")
-            .with_wire_code("controller_signed_event_required"),
-    )
-}
 
 fn agent_fanout_submit_error(
     kind: &str,
@@ -182,26 +165,6 @@ pub(super) async fn submit_provision_event(
                 error.message,
             )
         })?;
-    Ok(event_id)
-}
-
-/// Revoke an ordinary capability grant during Agent lifecycle teardown.
-/// Revoke an ordinary capability grant during Agent lifecycle teardown.
-/// `ak.capability.revoke` is idempotent when the grant was never accepted.
-pub(super) async fn revoke_capability_grant(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    grant_id: &str,
-) -> Result<String, AppError> {
-    let payload = json!({ "grant_id": grant_id });
-    let event_id =
-        submit_agent_fanout_event(state, session, realm_id, "ak.capability.revoke", payload)
-            .await?;
-    // The durable reducer event is the source of truth; this mirrors the
-    // same revoke into the in-memory authz read index before the HTTP command
-    // returns so subsequent resource checks fail closed immediately.
-    state.authorization().mark_projected_grant_revoked(grant_id);
     Ok(event_id)
 }
 

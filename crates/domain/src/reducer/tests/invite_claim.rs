@@ -4,10 +4,10 @@ use super::*;
 
 const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
 const INVITE: &str = "ak:invite:AUftf_3k2fRKMG0NFlHe5iEMBOUpxMwYMRu-yhMJl-yz";
-const INVITER: &str = "did:web:alice.example";
-const SUBJECT: &str = "did:web:bob.example";
+const INVITER: &str = "ak:did_core:web:alice.example";
+const SUBJECT: &str = "ak:did_core:web:bob.example";
 const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";
-const SERVICE: &str = "did:web:verify.example";
+const SERVICE: &str = "ak:did_core:web:verify.example";
 const VERIFICATION_METHOD: &str = "did:web:verify.example#invite-key";
 const TOKEN_COMMITMENT: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -222,7 +222,7 @@ fn invite_claim_rechecks_verification_service_authorization() {
             claim_payload(
                 "nonce-service-0001",
                 TOKEN_COMMITMENT,
-                "did:web:other.example",
+                "ak:did_core:web:other.example",
             ),
         ),
         &hlc,
@@ -262,7 +262,7 @@ fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-policy-rotated");
     seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
-    seed_realm_policy_allowlist(&mut state, &hlc, vec!["did:web:other.example"]);
+    seed_realm_policy_allowlist(&mut state, &hlc, vec!["ak:did_core:web:other.example"]);
 
     let rejected = state.apply(
         &make_operation(

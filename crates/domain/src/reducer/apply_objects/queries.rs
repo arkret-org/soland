@@ -633,16 +633,6 @@ impl ProjectionState {
         )
     }
 
-    /// Read the `policy_frontier` declared on the most recent
-    /// `ak.realm.delivery_binding_policy` event for this realm. Wire
-    /// this up to a structured cache so the
-    /// reducer can emit `delivery_binding_stale` rejections.
-    pub fn realm_delivery_binding_policy_frontier(&self, realm_id: &str) -> Option<&str> {
-        self.realm_delivery_binding_policy_cell_value(realm_id)?
-            .get("policy_frontier")
-            .and_then(Value::as_str)
-    }
-
     /// R3.1 — query realm links by direction and optional link_kind
     /// allow-list. Returns a Vec sorted by `(target_realm_id, link_kind)`
     /// so the response is stable across calls.

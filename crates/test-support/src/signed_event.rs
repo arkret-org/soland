@@ -12,7 +12,7 @@
 //! fixtures and the standalone integration binaries stop each carrying a partial
 //! copy of it.
 
-use arkret_identifiers::{DidFullId, Hlc, RealmId, SealId};
+use arkret_identifiers::{Hlc, RealmId, SealId};
 use arkret_wire::{DidUrl, Event, EventId, EventInitialSubmission, Precondition, ScopeRef};
 use serde_json::Value;
 
@@ -66,6 +66,7 @@ pub fn complete_realm_bootstrap_unit(
     profile_title: &str,
 ) -> Vec<Event> {
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
+    let actor_core_id = genesis.actor_id.to_string();
     let followups = [
         (
             arkret_wire::EventKind::RealmProfile,
@@ -95,7 +96,7 @@ pub fn complete_realm_bootstrap_unit(
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,
-                "actor_id": actor_id,
+                "actor_id": actor_core_id,
                 "membership": "join",
                 "delivery_status": "unroutable"
             }),

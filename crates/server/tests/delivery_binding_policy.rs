@@ -43,19 +43,53 @@ fn join_op(member: &str, binding: Value) -> Operation {
     join_op_for_realm(REALM_A, member, binding)
 }
 
+fn complete_binding(mut binding: Value) -> Value {
+    if binding.get("recipient_service_kind").is_none() {
+        binding["recipient_service_kind"] = json!("principal_server");
+    }
+    if binding.get("binding_scope").is_none() {
+        binding["binding_scope"] = json!("realm");
+    }
+    if binding.get("delivery_modes").is_none() {
+        binding["delivery_modes"] = json!(["events"]);
+    }
+    if binding.get("service_resolution").is_none()
+        && let Some(recipient_service_id) =
+            binding.get("recipient_service_id").and_then(Value::as_str)
+    {
+        let service_id = arkret_identifiers::DidCoreId::new(recipient_service_id).unwrap();
+        binding["service_resolution"] = json!({
+            "current_record_url": format!(
+                "https://fixture.example{}",
+                arkret_models_identity::identity_resolution::canonical_service_current_record_path(
+                    &service_id,
+                )
+            )
+        });
+    }
+    if binding.get("resolved_at").is_none() {
+        binding["resolved_at"] = json!("2026-05-19T00:00:00.000Z");
+    }
+    binding
+}
+
 fn join_op_for_realm(realm_id: &str, member: &str, binding: Value) -> Operation {
-    op(
+    let binding = complete_binding(binding);
+    let operation = op(
         arkret_wire::EventKind::MemberState,
         realm_id,
         json!({
+            "realm_id": realm_id,
             "actor_id": member,
-            "sender": "did:web:admin.example",
             "membership": "join",
-            "role": "member",
             "delivery_status": "routable",
             "delivery_binding": binding,
         }),
-    )
+    );
+    operation
+        .typed_payload::<arkret_wire::event_spec::MemberState>()
+        .expect("delivery-policy fixture membership payload");
+    operation
 }
 
 fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> String {
@@ -89,13 +123,14 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
-    let create = arkret_event_draft::test_support::raw_projected_operation(
+    let create = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
-        realm_id.clone(),
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        payload,
-    );
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .unwrap();
     let effect = state.apply_projected(&create, &writes, hlc);
     assert!(matches!(
         effect,
@@ -125,7 +160,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "allowed_binding_sources": ["explicit", "invite"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": ["did:web:principal.acme.example"],
+            "allowed_recipient_services": ["ak:did_core:web:principal.acme.example"],
             "required_endorsers": [],
             "unroutable_membership_allowed": false,
             "rebind_authorization": "member_and_admin"
@@ -141,10 +176,10 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
 
     // Recipient is NOT in the allow-list → reject.
     let bad = join_op(
-        "did:web:bob",
+        "ak:did_core:web:bob",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:rogue.example",
+            "recipient_service_id": "ak:did_core:web:rogue.example",
             "service_acceptance_ref": "ak:event:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
@@ -156,14 +191,14 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         other => panic!("expected Rejected(recipient_service_not_allowed), got {other:?}"),
     }
     // Membership cache NOT populated on rejection.
-    assert!(state.member(REALM_A, "did:web:bob").is_none());
+    assert!(state.member(REALM_A, "ak:did_core:web:bob").is_none());
 
     // Recipient IN the allow-list → accept.
     let good = join_op(
-        "did:web:alice",
+        "ak:did_core:web:alice",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
+            "recipient_service_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
@@ -197,10 +232,10 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
     );
 
     let bad = join_op(
-        "did:web:ida",
+        "ak:did_core:web:ida",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
+            "recipient_service_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AQlHdUE3urVdfxTt7ycDMQRrgYPGEa5lOPTTdGDDO7w_",
         }),
     );
@@ -229,10 +264,10 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
     );
 
     let bad = join_op(
-        "did:web:jane",
+        "ak:did_core:web:jane",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
+            "recipient_service_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AdaVg413OwhSu62wpakXmVkeXGpGgVIRhwmIKtrcSFcT",
         }),
     );
@@ -261,10 +296,10 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
     );
 
     let good = join_op(
-        "did:web:kim",
+        "ak:did_core:web:kim",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.anywhere.example",
+            "recipient_service_id": "ak:did_core:web:principal.anywhere.example",
             "service_acceptance_ref": "ak:event:AWFZIiVRYv3UXtLsxC0FrmfecM_JlRJAoKP0NXeMrpiQ",
         }),
     );
@@ -293,10 +328,10 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
     );
 
     let bad = join_op(
-        "did:web:carol",
+        "ak:did_core:web:carol",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
+            "recipient_service_id": "ak:did_core:web:principal.acme.example",
             "service_acceptance_ref": "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
         }),
     );
@@ -323,15 +358,15 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
             // Sentinel ["*"] lifts only the recipient allow-list dimension so
             // this test exercises the service_acceptance_ref check.
             "allowed_recipient_services": ["*"],
-            "required_endorsers": ["did:web:acme.example"],
+            "required_endorsers": ["ak:did_core:web:acme.example"],
         }),
     );
 
     let bad = join_op(
-        "did:web:dave",
+        "ak:did_core:web:dave",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
+            "recipient_service_id": "ak:did_core:web:principal.acme.example",
             // service_acceptance_ref omitted
         }),
     );
@@ -363,11 +398,11 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
     // Reasonable-looking binding (would pass a permissive policy) MUST
     // still be rejected because policy is unset.
     let bad = join_op(
-        "did:web:eve",
+        "ak:did_core:web:eve",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_id": "did:web:principal.example",
-            "did_document_digest": "sha256:deadbeef",
+            "recipient_service_id": "ak:did_core:web:principal.example",
+            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
@@ -377,7 +412,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         }
         other => panic!("expected Rejected(delivery_binding_policy_unset), got {other:?}"),
     }
-    assert!(state.member(REALM_A, "did:web:eve").is_none());
+    assert!(state.member(REALM_A, "ak:did_core:web:eve").is_none());
 }
 
 #[test]
@@ -386,22 +421,23 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     let hlc = ServerHlc::new("test");
     let realm_id = create_direct_conversation(&mut state, &hlc);
 
+    let founding_binding = complete_binding(json!({
+        "binding_source": "explicit",
+        "recipient_service_id": "ak:did_core:web:soland-beta.example",
+        "service_acceptance_ref": "ak:event:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
+        "resolved_at": "2026-07-25T00:00:00.000Z"
+    }));
     let founding_peer = op(
         arkret_wire::EventKind::MemberState,
         &realm_id,
         json!({
-            "actor_id": "did:web:bob.example",
-            "sender": "did:web:alice.example",
+            "realm_id": realm_id,
+            "actor_id": "ak:did_core:web:bob.example",
+            "sender": "ak:did_core:web:alice.example",
             "membership": "join",
-            "role": "member",
             "reason": "direct_conversation_bootstrap",
             "delivery_status": "routable",
-            "delivery_binding": {
-                "binding_source": "explicit",
-                "recipient_service_id": "did:web:soland-beta.example",
-                "service_acceptance_ref": "ak:event:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu",
-                "resolved_at": "2026-07-25T00:00:00.000Z"
-            }
+            "delivery_binding": founding_binding
         }),
     );
     let effect = state.apply(&founding_peer, &hlc);
@@ -410,22 +446,23 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
         "expected Direct Conversation founding peer join to pass, got {effect:?}"
     );
 
+    let third_member_binding = complete_binding(json!({
+        "binding_source": "explicit",
+        "recipient_service_id": "ak:did_core:web:soland-gamma.example",
+        "service_acceptance_ref": "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
+        "resolved_at": "2026-07-25T00:00:00.000Z"
+    }));
     let third_member = op(
         arkret_wire::EventKind::MemberState,
         &realm_id,
         json!({
-            "actor_id": "did:web:carol.example",
-            "sender": "did:web:alice.example",
+            "realm_id": realm_id,
+            "actor_id": "ak:did_core:web:carol.example",
+            "sender": "ak:did_core:web:alice.example",
             "membership": "join",
-            "role": "member",
             "reason": "direct_conversation_bootstrap",
             "delivery_status": "routable",
-            "delivery_binding": {
-                "binding_source": "explicit",
-                "recipient_service_id": "did:web:soland-gamma.example",
-                "service_acceptance_ref": "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
-                "resolved_at": "2026-07-25T00:00:00.000Z"
-            }
+            "delivery_binding": third_member_binding
         }),
     );
     assert!(matches!(
@@ -442,10 +479,10 @@ fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
 
     let ordinary_join = join_op_for_realm(
         &realm_id,
-        "did:web:bob.example",
+        "ak:did_core:web:bob.example",
         json!({
             "binding_source": "explicit",
-            "recipient_service_id": "did:web:soland-beta.example",
+            "recipient_service_id": "ak:did_core:web:soland-beta.example",
             "service_acceptance_ref": "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
             "resolved_at": "2026-07-25T00:00:00.000Z"
         }),
@@ -479,11 +516,11 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
     );
 
     let bad = join_op(
-        "did:web:fred",
+        "ak:did_core:web:fred",
         json!({
             "binding_source": "did_document_default",
-            "recipient_service_id": "did:web:principal.example",
-            "did_document_digest": "sha256:deadbeef",
+            "recipient_service_id": "ak:did_core:web:principal.example",
+            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -494,103 +531,7 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
     }
 }
 
-// ── 3. delivery_binding_handover_stale_test ─────────────────────────────
-//
-// When the policy carries a `policy_frontier` newer than the sender's
-// carried `delivery_binding_frontier`, the join MUST be rejected with
-// `delivery_binding_stale` so the sender re-resolves the new target
-// rather than falling back to DID Document.
-
-#[test]
-fn delivery_binding_handover_stale_when_frontier_behind_policy() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-
-    apply_policy(
-        &mut state,
-        &hlc,
-        json!({
-            "allowed_binding_sources": ["explicit"],
-            "did_document_default_allowed": false,
-            "allowed_recipient_services": ["did:web:principal.acme.example"],
-            "required_endorsers": [],
-            // Lexicographic comparison is fine here — frontier strings
-            // are spec'd as monotonic per-Realm identifiers.
-            "policy_frontier": "ak:frontier:02000000",
-        }),
-    );
-
-    // Carried frontier strictly older than policy_frontier → stale.
-    let stale = join_op(
-        "did:web:greta",
-        json!({
-            "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:ARle858WIq1Q6tyqPUeacCaK06rWbVcvzG37T12U0-yi",
-            "delivery_binding_frontier": "ak:frontier:01000000",
-        }),
-    );
-    match state.apply(&stale, &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "delivery_binding_stale");
-        }
-        other => panic!("expected Rejected(delivery_binding_stale), got {other:?}"),
-    }
-
-    // Frontier caught up → accept.
-    let fresh = join_op(
-        "did:web:greta",
-        json!({
-            "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd",
-            "delivery_binding_frontier": "ak:frontier:02000000",
-        }),
-    );
-    let effect = state.apply(&fresh, &hlc);
-    assert!(
-        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
-        "expected MembershipChanged on caught-up frontier, got {effect:?}"
-    );
-}
-
-// Missing `delivery_binding_frontier` while the policy declares one is
-// also stale — sender MUST be told to refresh, never fall back to DID
-// Document.
-#[test]
-fn delivery_binding_handover_stale_when_frontier_absent() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-
-    apply_policy(
-        &mut state,
-        &hlc,
-        json!({
-            "allowed_binding_sources": ["explicit"],
-            "did_document_default_allowed": false,
-            "allowed_recipient_services": ["did:web:principal.acme.example"],
-            "required_endorsers": [],
-            "policy_frontier": "ak:frontier:02000000",
-        }),
-    );
-
-    let no_frontier = join_op(
-        "did:web:henry",
-        json!({
-            "binding_source": "explicit",
-            "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:AQZU3LOaSy4GhEHnYFmJaYYvDYn2WVDsPLSUYwGHDZ7Q",
-        }),
-    );
-    match state.apply(&no_frontier, &hlc) {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "delivery_binding_stale");
-        }
-        other => panic!("expected Rejected(delivery_binding_stale), got {other:?}"),
-    }
-}
-
-// ── 4. Cell projection round-trip ───────────────────────────────────────
+// ── 3. Cell projection round-trip ───────────────────────────────────────
 //
 // The policy event MUST land in the canonical cells map so other
 // consumers (admin / sync / future sender redirect logic) can read it
@@ -607,11 +548,10 @@ fn delivery_binding_policy_event_projects_cell_value() {
         json!({
             "allowed_binding_sources": ["explicit", "invite"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": ["did:web:principal.acme.example"],
-            "required_endorsers": ["did:web:acme.example"],
+            "allowed_recipient_services": ["ak:did_core:web:principal.acme.example"],
+            "required_endorsers": ["ak:did_core:web:acme.example"],
             "unroutable_membership_allowed": false,
-            "rebind_authorization": "member_and_admin",
-            "policy_frontier": "ak:frontier:02000000"
+            "rebind_authorization": "member_and_admin"
         }),
     );
 
@@ -624,10 +564,6 @@ fn delivery_binding_policy_event_projects_cell_value() {
         .expect("allowed_recipient_services must be an array");
     assert_eq!(
         allowed.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
-        vec!["did:web:principal.acme.example"]
-    );
-    assert_eq!(
-        state.realm_delivery_binding_policy_frontier(REALM_A),
-        Some("ak:frontier:02000000")
+        vec!["ak:did_core:web:principal.acme.example"]
     );
 }

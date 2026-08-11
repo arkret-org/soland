@@ -1,3 +1,4 @@
+use arkret_identifiers::DidFullId;
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
@@ -18,6 +19,9 @@ fn test_config() -> AppConfig {
 }
 
 async fn ensure_account(app: &salvo::Service, actor: &str) {
+    let full_id = DidFullId::new(actor.to_owned()).expect("fixture account full DID");
+    let principal_id =
+        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture account core id");
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
         .add_header(
             "authorization",
@@ -25,7 +29,8 @@ async fn ensure_account(app: &salvo::Service, actor: &str) {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": actor,
+            "principal_id": principal_id,
+            "full_id": full_id,
             "display_name": actor,
         }))
         .send(app)
@@ -40,9 +45,13 @@ async fn ensure_account(app: &salvo::Service, actor: &str) {
 
 async fn dev_token(app: &salvo::Service, actor: &str) -> String {
     ensure_account(app, actor).await;
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": ids::generate("device"),
             "display_name": actor,
         }))
@@ -58,16 +67,18 @@ async fn dev_token(app: &salvo::Service, actor: &str) -> String {
 async fn opaque_consent_request_does_not_create_a_pending_cell() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state);
-    let alice = "did:web:opaque-consent-request-alice.example";
-    let bob = "did:web:opaque-consent-request-bob.example";
-    let alice_token = dev_token(&app, alice).await;
-    let bob_token = dev_token(&app, bob).await;
+    let alice_full = "did:web:opaque-consent-request-alice.example";
+    let bob_full = "did:web:opaque-consent-request-bob.example";
+    let alice = "ak:did_core:web:opaque-consent-request-alice.example";
+    let bob = "ak:did_core:web:opaque-consent-request-bob.example";
+    let alice_token = dev_token(&app, alice_full).await;
+    let bob_token = dev_token(&app, bob_full).await;
 
     let mut requested = TestClient::post("http://server/_arkret/self/consent/request")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .json(&serde_json::json!({
-            "holder_did": bob,
-            "peer_did": alice,
+            "holder_principal_id": bob,
+            "peer_principal_id": alice,
             "consent_scope": "direct_message",
         }))
         .send(&app)
@@ -94,9 +105,10 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
 async fn invite_receive_policy_get_set_round_trips() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state);
-    let alice = "did:web:irp-alice.example";
-    let mallory = "did:web:irp-mallory.example";
-    let alice_token = dev_token(&app, alice).await;
+    let alice_full = "did:web:irp-alice.example";
+    let alice = "ak:did_core:web:irp-alice.example";
+    let mallory = "ak:did_core:web:irp-mallory.example";
+    let alice_token = dev_token(&app, alice_full).await;
 
     let default_policy: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)

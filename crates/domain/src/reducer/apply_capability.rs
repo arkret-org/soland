@@ -324,7 +324,7 @@ mod cba_capability_cell_tests {
                 "grant": {
                     "id": grant_id,
                     "realm_id": realm_id,
-                    "issuer": "did:web:owner.example",
+                    "issuer": "ak:did_core:web:owner.example",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": realm_id,
@@ -332,7 +332,7 @@ mod cba_capability_cell_tests {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": "did:web:owner.example",
+                    "subject": "ak:did_core:web:owner.example",
                     "actions": ["ak.realm.admin"],
                     "capability_action_registry_digest": registry_digest,
                     "resources": [{
@@ -349,7 +349,7 @@ mod cba_capability_cell_tests {
             .expect("the CBA registry wrapper must resolve to an effective grant");
         assert_eq!(grant.grant_id, grant_id);
         assert_eq!(grant.realm_id, realm_id);
-        assert_eq!(grant.subject, "did:web:owner.example");
+        assert_eq!(grant.subject, "ak:did_core:web:owner.example");
         assert!(
             grant
                 .actions
@@ -2041,13 +2041,13 @@ mod agent_key_tests {
 
     use crate::reducer::{ProjectionState, SolandRealmState};
 
-    const AGENT: &str = "did:web:agent.example";
+    const AGENT: &str = "ak:did_core:web:agent.example";
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
     const GRANT: &str = "ak:grant:AYOGN6zLytw3AP-JRSpnGwuq8CjgA5Tq_YDSH1IzUT77";
     const GRANT_2: &str = "ak:grant:AWj0q-Z4gw_sS6wsl8gtEwhi3abA99IaQU-csCcBHFVz";
     const GRANT_3: &str = "ak:grant:Af-etF0vTHwlpJOwEu53s_Pq08WOwxuO7UxIWltAiAmk";
     const OWNER_GRANT: &str = "ak:grant:Aam5L1XcrHrrRfNk_9wOcpOu9263GPwRPTjzYXdIgYb0";
-    const REALM_OWNER: &str = "did:web:alice.example";
+    const REALM_OWNER: &str = "ak:did_core:web:alice.example";
 
     #[test]
     fn agent_and_service_high_risk_grants_require_finite_expiry() {
@@ -2136,7 +2136,7 @@ mod agent_key_tests {
             REALM.to_owned(),
             SolandRealmState {
                 realm_id: REALM.to_owned(),
-                owner: Some("did:web:alice.example".to_owned()),
+                owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
                 archived: false,
@@ -2326,7 +2326,7 @@ mod agent_key_tests {
                 EventKind::CapabilityGrant,
                 grant_payload(
                     GRANT_2,
-                    "did:web:bob.example",
+                    "ak:did_core:web:bob.example",
                     AGENT,
                     json!(["ak.message.create"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
@@ -2350,8 +2350,8 @@ mod agent_key_tests {
                 EventKind::CapabilityGrant,
                 grant_payload(
                     GRANT,
-                    "did:web:alice.example",
-                    "did:web:bob.example",
+                    "ak:did_core:web:alice.example",
+                    "ak:did_core:web:bob.example",
                     json!(["ak.message.create"]),
                     json!([{ "kind": "realm", "realm_id": REALM }]),
                 ),
@@ -2366,7 +2366,7 @@ mod agent_key_tests {
             EventKind::CapabilityGrant,
             grant_payload(
                 GRANT_2,
-                "did:web:bob.example",
+                "ak:did_core:web:bob.example",
                 AGENT,
                 json!(["ak.message.create"]),
                 json!([{ "kind": "realm", "realm_id": REALM }]),
@@ -2383,7 +2383,7 @@ mod agent_key_tests {
             EventKind::CapabilityGrant,
             grant_payload(
                 GRANT_3,
-                "did:web:bob.example",
+                "ak:did_core:web:bob.example",
                 AGENT,
                 json!(["ak.reaction.add"]),
                 json!([{ "kind": "realm", "realm_id": REALM }]),
@@ -2405,7 +2405,7 @@ mod agent_key_tests {
                 EventKind::AppletRegistration,
                 json!({
                     "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
-                    "service_id": "did:web:bridge.example",
+                    "service_id": "ak:did_core:web:bridge.example",
                     "namespace": "bridge",
                     "claimed_profiles": [
                         "ak.profile.applet_service.v1",
@@ -2427,8 +2427,8 @@ mod agent_key_tests {
     fn bridge_grant_payload() -> serde_json::Value {
         let mut payload = grant_payload(
             GRANT_2,
-            "did:web:alice.example",
-            "did:web:bridge.example",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:bridge.example",
             json!(["ak.applet.ghost.provision"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
@@ -2437,7 +2437,7 @@ mod agent_key_tests {
             "constraint_kind": "authority_control",
             "constraint_subkind": "applet_authority",
             "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
-            "executed_by": "did:web:bridge.example",
+            "executed_by": "ak:did_core:web:bridge.example",
             "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }]);
         payload
@@ -2466,7 +2466,7 @@ mod agent_key_tests {
             REALM.to_owned(),
             SolandRealmState {
                 realm_id: REALM.to_owned(),
-                owner: Some("did:web:alice.example".to_owned()),
+                owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
                 archived: false,
@@ -2500,7 +2500,7 @@ mod agent_key_tests {
         let mut mutations = Vec::new();
 
         let mut wrong_subject = base.clone();
-        wrong_subject["grant"]["subject"] = json!("did:web:other.example");
+        wrong_subject["grant"]["subject"] = json!("ak:did_core:web:other.example");
         mutations.push(wrong_subject);
         let mut wrong_epoch = base.clone();
         wrong_epoch["grant"]["constraints"][0]["registration_epoch"] =
@@ -2534,8 +2534,8 @@ mod agent_key_tests {
         let child_expiry = parent_expiry + chrono::Duration::hours(1);
         let mut parent = grant_payload(
             GRANT,
-            "did:web:alice.example",
-            "did:web:bob.example",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:bob.example",
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
@@ -2550,7 +2550,7 @@ mod agent_key_tests {
 
         let mut child = grant_payload(
             GRANT_2,
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             AGENT,
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
@@ -2573,8 +2573,8 @@ mod agent_key_tests {
         seed_realm_authority(&mut state);
         let parent = grant_payload(
             GRANT,
-            "did:web:alice.example",
-            "did:web:bob.example",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:bob.example",
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
@@ -2595,7 +2595,7 @@ mod agent_key_tests {
 
         let mut child = grant_payload(
             GRANT_2,
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             AGENT,
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
@@ -2621,7 +2621,7 @@ mod agent_key_tests {
         let parent = grant_payload(
             GRANT,
             REALM_OWNER,
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
@@ -2631,13 +2631,13 @@ mod agent_key_tests {
         ));
         let mut child = grant_payload(
             GRANT_2,
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             AGENT,
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
-        child["sender"] = json!("did:web:bob.example");
+        child["sender"] = json!("ak:did_core:web:bob.example");
         assert!(matches!(
             state.apply_capability_grant(&op(EventKind::CapabilityGrant, child), now),
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2687,10 +2687,8 @@ mod agent_key_tests {
         ));
 
         let mut root = state.realm_authority_root(REALM).unwrap();
-        root.controller_id = arkret_wire::project_full_id_to_core_id(
-            &arkret_identifiers::DidFullId::new("did:web:bob.example").unwrap(),
-        )
-        .unwrap();
+        root.controller_id =
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example").unwrap();
         root.controller_epoch += 1;
         state.realm_null_subject_cells.insert(
             (
@@ -2754,7 +2752,7 @@ mod agent_key_tests {
         let rejected = state.apply_capability_relinquish(
             &op(
                 arkret_wire::EventKind::CapabilityRelinquish,
-                json!({ "grant_id": GRANT, "sender": "did:web:mallory.example" }),
+                json!({ "grant_id": GRANT, "sender": "ak:did_core:web:mallory.example" }),
             ),
             now,
         );
@@ -2817,7 +2815,7 @@ mod authority_cycle_tests {
                 .expect("fixture grant is Event-derived")
                 .to_string(),
                 "grant": {
-                    "issuer": "did:web:alice.example",
+                    "issuer": "ak:did_core:web:alice.example",
                     "issuer_authority_refs": [
                         { "kind": "grant", "grant_id": authority_grant_id }
                     ],
@@ -2873,12 +2871,16 @@ mod authority_cycle_tests {
 
     fn seed_realm_owner(state: &mut ProjectionState) {
         let now = chrono::Utc::now();
-        crate::reducer::tests::install_realm_authority_root(state, REALM, "did:web:alice.example");
+        crate::reducer::tests::install_realm_authority_root(
+            state,
+            REALM,
+            "ak:did_core:web:alice.example",
+        );
         state.realm_states.insert(
             REALM.to_owned(),
             SolandRealmState {
                 realm_id: REALM.to_owned(),
-                owner: Some("did:web:alice.example".to_owned()),
+                owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: None,
                 deleted: false,
                 archived: false,
@@ -2900,7 +2902,11 @@ mod authority_cycle_tests {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         proj.apply_capability_grant(
-            &root_grant_op(G_A, "did:web:alice.example", "did:web:alice.example"),
+            &root_grant_op(
+                G_A,
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:alice.example",
+            ),
             chrono::Utc::now(),
         );
         proj.apply_capability_grant(&regrant_op(G_B, G_A), chrono::Utc::now());
@@ -2940,8 +2946,8 @@ mod authority_cycle_tests {
         proj.apply_capability_grant(
             &root_grant_op_with_constraints(
                 G_A,
-                "did:web:alice.example",
-                "did:web:alice.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:alice.example",
                 json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
             ),
             chrono::Utc::now(),
@@ -2975,8 +2981,8 @@ mod authority_cycle_tests {
             proj.apply_capability_grant(
                 &root_grant_op_with_constraints(
                     G_A,
-                    "did:web:alice.example",
-                    "did:web:alice.example",
+                    "ak:did_core:web:alice.example",
+                    "ak:did_core:web:alice.example",
                     json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
                 ),
                 chrono::Utc::now(),
@@ -3029,8 +3035,8 @@ mod authority_cycle_tests {
         proj.apply_capability_grant(
             &root_grant_op_with_constraints(
                 G_A,
-                "did:web:alice.example",
-                "did:web:alice.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:alice.example",
                 json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
             ),
             chrono::Utc::now(),
@@ -3061,8 +3067,8 @@ mod federation_revoke_fanout_tests {
 
     const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
     const OTHER_REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
-    const OWNER: &str = "did:web:alice.example";
-    const PEER_SERVICE_ID: &str = "did:web:beta.example";
+    const OWNER: &str = "ak:did_core:web:alice.example";
+    const PEER_SERVICE_ID: &str = "ak:did_core:web:beta.example";
     const GRANT: &str = "ak:grant:AZqtjPe_dBMbCiO1AaO3pl249mYTX42jAeK7WbxsUOP_";
     const OWNER_GRANT: &str = "ak:grant:AftcsV-S3Qgkuf_flS2xTzy_TzSq42hZip4BUCG8D6qv";
 
@@ -3240,9 +3246,9 @@ mod realm_owner_authority_tests {
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
 
     const REALM: &str = "ak:realm:ATKefSdBA52dfl_b0kwuiBO-JG0nPTlnS_bXWGh3Z57K";
-    const OWNER: &str = "did:web:owner.example";
-    const CO_OWNER: &str = "did:web:co-owner.example";
-    const STRANGER: &str = "did:web:stranger.example";
+    const OWNER: &str = "ak:did_core:web:owner.example";
+    const CO_OWNER: &str = "ak:did_core:web:co-owner.example";
+    const STRANGER: &str = "ak:did_core:web:stranger.example";
 
     fn grant_op(
         operation_slot: &str,

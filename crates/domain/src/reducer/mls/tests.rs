@@ -87,7 +87,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
         "group_id": "ak:mls_group:abc",
         "epoch": 1,
         "commit_ref": "ak:event:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
-        "recipient_actor_id": "did:web:bob.example",
+        "recipient_actor_id": "ak:did_core:web:bob.example",
         "recipient_device_id": "ak:device:bob-phone",
         "welcome_bytes_b64": b64(b"opaque-welcome-bytes"),
         "key_package_id": keypackage_ref,
@@ -106,7 +106,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "keypackage_digest": keypackage_digest,
             "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
             "claim_id": "claim-01",
-            "requester_actor_id": "did:web:alice.example",
+            "requester_actor_id": "ak:did_core:web:alice.example",
             "requester_device_id": "ak:device:alice-desktop",
             "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
             "welcome_digest": arkret_canonical::sha256_digest(b"opaque-welcome-bytes"),
@@ -150,7 +150,7 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
         "mls_group_id": group_id,
         "effective_scope": effective_scope.clone(),
         "epoch": 0,
-        "creator_principal_id": "did:web:alice.example",
+        "creator_principal_id": "ak:did_core:web:alice.example",
         "creator_device_id": "ak:device:alice-desktop",
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -194,7 +194,7 @@ fn keypackage_publish_then_claim_succeeds() {
         "ak.mls.keypackage",
         publish_payload(
             "ak:mls_keypackage:01",
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
         ),
@@ -252,7 +252,7 @@ fn keypackage_claim_twice_second_fails() {
         "ak.mls.keypackage",
         publish_payload(
             "ak:mls_keypackage:02",
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
         ),
@@ -309,7 +309,7 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
         "ak.mls.keypackage",
         publish_payload(
             "ak:mls_keypackage:renew",
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
         ),
@@ -374,7 +374,7 @@ fn last_resort_keypackage_reuses_within_realm_only() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
         "ak:mls_keypackage:last-resort",
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
     );
@@ -435,7 +435,7 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(
         "ak:mls_keypackage:revoked-last-resort",
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
     );
@@ -475,7 +475,7 @@ fn keypackage_claim_rejects_mismatched_device_authorization() {
         "ak.mls.keypackage",
         publish_payload(
             "ak:mls_keypackage:03",
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "ak:device:alice-desktop",
             1_000_000,
         ),
@@ -517,7 +517,7 @@ fn welcome_enqueue_then_fetch_marks_delivered() {
         ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
     ));
 
-    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ak:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new("ak:did_core:web:bob.example", "ak:device:bob-phone");
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue.len(), 1);
     assert!(queue[0].delivered_at.is_none());
@@ -587,7 +587,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
         200,
         arkret_wire::EventKind::AgentKeyAuthorize,
         json!({
-            "agent_id": "did:web:bob.example",
+            "agent_id": "ak:did_core:web:bob.example",
             "key_id": "ak:agent_key:0196419b-0000-7000-8000-0000000000a2",
             "accepted_event_id": authorize_event_id,
             "verification_method": "did:web:bob.example#runtime-1"
@@ -691,7 +691,7 @@ fn welcome_enqueue_decodes_schema_ciphertext_base64_to_raw_welcome_bytes() {
         effect,
         ProjectionEffect::Mls(MlsEffect::WelcomeEnqueued { .. })
     ));
-    let key = MlsWelcomeQueueKey::new("did:web:bob.example", "ak:device:bob-phone");
+    let key = MlsWelcomeQueueKey::new("ak:did_core:web:bob.example", "ak:device:bob-phone");
     let queue = state.mls_welcomes.get(&key).unwrap();
     assert_eq!(queue[0].welcome_bytes, raw_welcome);
     assert_eq!(queue[0].key_package_id, "ak:mls_keypackage:01");
@@ -742,7 +742,7 @@ fn commit_epoch_in_order_succeeds() {
             "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 0,
             "next_epoch": 1,
-            "leader_actor_id": "did:web:alice.example",
+            "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-1"),
             "governance_binding": governance_binding(0),
         }),
@@ -768,7 +768,7 @@ fn commit_epoch_in_order_succeeds() {
             "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 1,
             "next_epoch": 2,
-            "leader_actor_id": "did:web:alice.example",
+            "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"opaque-commit-2"),
             "governance_binding": governance_binding(1),
         }),
@@ -787,7 +787,7 @@ fn commit_epoch_in_order_succeeds() {
             group_id: "ak:mls_group:abc".to_owned(),
             effective_scope: realm_scope(),
             epoch: 2,
-            leader_actor_id: "did:web:alice.example".to_owned(),
+            leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
             genesis_event_ref,
             committed_at: 501,
@@ -810,7 +810,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
         realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
         circle_id: None,
         mls_group_ref: Some("ak:mls_group:abc".to_owned()),
-        actor_id: "did:web:alice.example".to_owned(),
+        actor_id: "ak:did_core:web:alice.example".to_owned(),
         device_id: Some("ak:device:lost".to_owned()),
         membership_frontier: vec![revoke_event.to_owned()],
         trigger_membership: "device_revoke".to_owned(),
@@ -828,7 +828,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                     "base_epoch": 0,
                     "proposal_type": "remove",
                     "proposal_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                    "target_principal_id": "did:web:alice.example",
+                    "target_principal_id": "ak:did_core:web:alice.example",
                     "target_device_id": "ak:device:lost",
                 }),
             )
@@ -844,7 +844,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
+                "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "proposal_refs": [proposal_ref],
                 "governance_binding": governance_binding(0),
@@ -870,11 +870,11 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
     let frontier = "ak:event:Aenxxuj1jGJoLHv5bnuHV1awQ_gKwK2elnGlpIES2Nu4";
     let targets = [
         (
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             "ak:event:AQnbGFYH6ZHKM4sQnK_8kg0bmuqX4U5wGRs8Vbxp3u9h",
         ),
         (
-            "did:web:charlie.example",
+            "ak:did_core:web:charlie.example",
             "ak:event:ARbbiTuRZqECoqMK9qlbv1t2-8v9s_6fOm2bY2rAJt6n",
         ),
     ];
@@ -917,7 +917,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                 "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
+                "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
                 "governance_binding": governance_binding(0),
@@ -944,7 +944,7 @@ fn commit_epoch_requires_effective_genesis() {
                 "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 0,
                 "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
+                "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"opaque-commit-1"),
                 "governance_binding": governance_binding(0),
             }),
@@ -987,7 +987,7 @@ fn same_group_id_is_independent_across_effective_scopes() {
             "group_id": "ak:mls_group:abc",
             "expected_prev_epoch": 0,
             "next_epoch": 1,
-            "leader_actor_id": "did:web:alice.example",
+            "leader_actor_id": "ak:did_core:web:alice.example",
             "commit_bytes_b64": b64(b"realm-commit"),
             "governance_binding": governance_binding_for_scope(
                 0,
@@ -1034,7 +1034,7 @@ fn commit_future_epoch_rejected() {
                 "group_id": "ak:mls_group:abc",
                 "expected_prev_epoch": 5,
                 "next_epoch": 6,
-                "leader_actor_id": "did:web:alice.example",
+                "leader_actor_id": "ak:did_core:web:alice.example",
                 "commit_bytes_b64": b64(b"leap"),
                 "governance_binding": governance_binding(5),
             }),
@@ -1058,7 +1058,7 @@ fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
         "group_id": "ak:mls_group:abc",
         "expected_prev_epoch": 0,
         "next_epoch": 1,
-        "leader_actor_id": "did:web:alice.example",
+        "leader_actor_id": "ak:did_core:web:alice.example",
         "commit_bytes_b64": b64(label),
         "governance_binding": governance_binding(0),
     });

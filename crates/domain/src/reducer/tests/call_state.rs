@@ -91,7 +91,7 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:AU9VDQu1sjP8qOSxIJQFAs4NIBcuMF-hCYYGzgzCvD28";
     let participant = serde_json::json!({
-        "actor_id": "did:web:bob.example",
+        "actor_id": "ak:did_core:web:bob.example",
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000001"
     });
     let input = call_input(
@@ -185,9 +185,9 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
     let call_id = "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj";
     let removal = serde_json::json!({
-        "actor_id": "did:web:bob.example",
+        "actor_id": "ak:did_core:web:bob.example",
         "action": "ban",
-        "removed_by": "did:web:mod.example",
+        "removed_by": "ak:did_core:web:mod.example",
         "removed_at": "2026-07-26T00:00:00.000Z"
     });
     let add = call_input(
@@ -212,8 +212,8 @@ fn moderation_restore_only_removes_observed_matching_ban() {
             "moderation_delta": {
                 "op": "restore_participant",
                 "observed_dot": dot,
-                "actor_id": "did:web:bob.example",
-                "restored_by": "did:web:mod.example",
+                "actor_id": "ak:did_core:web:bob.example",
+                "restored_by": "ak:did_core:web:mod.example",
                 "restored_at": "2026-07-26T00:01:00.000Z"
             }
         }),
@@ -404,7 +404,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
     ));
 
     let participant = serde_json::json!({
-        "actor_id": "did:web:bob.example",
+        "actor_id": "ak:did_core:web:bob.example",
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000010"
     });
     let join = call_input(

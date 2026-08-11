@@ -78,13 +78,13 @@ fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) 
 #[test]
 fn moderation_decision_then_lift_converges_on_cell() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
     assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
     assert!(!state.moderation_decision_is_lifted(MOD_DECISION_ID));
     assert_eq!(
         state.moderation_decision_issuer(MOD_DECISION_ID).as_deref(),
-        Some("did:web:mod.example")
+        Some("ak:did_core:web:mod.example")
     );
     let items = match state.cells.get(&mod_decision_cell_ref()) {
         Some(CellState::Value(Value::Array(items))) => items,
@@ -117,7 +117,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
     assert!(!state.moderation_decision_is_live(MOD_DECISION_ID));
 
     // 2.6 terminal: a re-add stays lifted.
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
     assert!(state.moderation_decision_is_lifted(MOD_DECISION_ID));
     assert!(matches!(
         state.cells.get(&mod_decision_cell_ref()),
@@ -128,9 +128,9 @@ fn moderation_decision_then_lift_converges_on_cell() {
 #[test]
 fn moderation_appeal_fsm_submitted_under_review_decided() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
     assert_eq!(
         state.moderation_appeal_state(MOD_APPEAL_ID).as_deref(),
         Some("submitted")
@@ -142,7 +142,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
         }),
     );
     assert!(matches!(
@@ -160,7 +160,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
             "verdict": "uphold",
             "reason_text_ref": "appeal denied",
             "decided_at": "2026-06-20T00:00:00.000Z",
@@ -179,7 +179,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
 #[test]
 fn moderation_appeal_invalid_transition_rejected() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
     // review before submit => (none) -> under_review is illegal.
     let review = make_operation(
         arkret_wire::EventKind::ModerationAppealReview,
@@ -187,7 +187,7 @@ fn moderation_appeal_invalid_transition_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
         }),
     );
     assert!(matches!(
@@ -200,16 +200,16 @@ fn moderation_appeal_invalid_transition_rejected() {
 #[test]
 fn moderation_appeal_reviewer_close_before_decision_rejected() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
     let review = make_operation(
         arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
         }),
     );
     assert!(matches!(
@@ -223,7 +223,7 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "closer": "did:web:reviewer.example",
+            "closer": "ak:did_core:web:reviewer.example",
             "close_reason": "reviewer_closed",
         }),
     );
@@ -237,9 +237,9 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
 #[test]
 fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
 
     let close = make_operation(
         arkret_wire::EventKind::ModerationAppealClose,
@@ -247,7 +247,7 @@ fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "closer": "did:web:appellant.example",
+            "closer": "ak:did_core:web:appellant.example",
             "close_reason": "appellant_withdrawn",
         }),
     );
@@ -261,17 +261,17 @@ fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
 #[test]
 fn moderation_appeal_self_review_forbidden() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
     // Decision issuer == reviewer => separation-of-duties violation.
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
     let review = make_operation(
         arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:mod.example",
+            "reviewer": "ak:did_core:web:mod.example",
         }),
     );
     assert!(matches!(
@@ -284,16 +284,16 @@ fn moderation_appeal_self_review_forbidden() {
 #[test]
 fn moderation_appeal_overturn_missing_lift_rejected() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
     let review = make_operation(
         arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
         }),
     );
     assert!(matches!(
@@ -307,7 +307,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "did:web:reviewer.example",
+            "reviewer": "ak:did_core:web:reviewer.example",
             "verdict": "overturn",
             "reason_text_ref": "appeal upheld",
             "decided_at": "2026-06-20T00:00:00.000Z",
@@ -345,9 +345,9 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
 #[test]
 fn moderation_appeal_duplicate_active_rejected() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
-    seed_decision(&mut state, &hlc, "did:web:mod.example");
-    submit_appeal(&mut state, &hlc, "did:web:appellant.example");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
 
     let duplicate = make_operation(
         arkret_wire::EventKind::ModerationAppealSubmit,
@@ -357,7 +357,7 @@ fn moderation_appeal_duplicate_active_rejected() {
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
-            "appellant": "did:web:appellant.example",
+            "appellant": "ak:did_core:web:appellant.example",
             "reason_text_ref": "duplicate appeal text",
         }),
     );
@@ -372,7 +372,7 @@ fn moderation_appeal_duplicate_active_rejected() {
 #[test]
 fn moderation_appeal_submit_rejects_carried_appeal_id() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("did:web:test.soland");
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
     let legacy = make_operation(
         arkret_wire::EventKind::ModerationAppealSubmit,
         MOD_REALM,
@@ -382,7 +382,7 @@ fn moderation_appeal_submit_rejects_carried_appeal_id() {
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
-            "appellant": "did:web:appellant.example",
+            "appellant": "ak:did_core:web:appellant.example",
             "reason_text_ref": "legacy appeal text",
         }),
     );

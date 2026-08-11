@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{ConsentId, DidFullId};
+use arkret_identifiers::{ConsentId, DidCoreId};
 use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestOutcome,
     ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
@@ -36,10 +36,10 @@ use soland_services::identity::{
     SessionIdentityState as SessionRecord,
 };
 
-use super::{AuthArgs, append_audit_log, now, query_param, validate_did};
+use super::{AuthArgs, append_audit_log, now, query_param};
 use crate::routing::identity::device_messages::fanout_actor_private_update;
 use crate::state::AppState;
-use crate::{JsonResult, ids, json_ok};
+use crate::{JsonResult, json_ok};
 
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
@@ -168,13 +168,13 @@ async fn get_consent_cell(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_principal_id.into_inner();
-    if validate_did(&holder).is_err() {
-        return Err(AppError::invalid_param("invalid holder DID"));
+    if DidCoreId::new(holder.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid holder principal id"));
     }
     let peer =
         query_param(req, "peer").ok_or_else(|| AppError::missing_param("peer is required"))?;
-    if validate_did(&peer).is_err() {
-        return Err(AppError::invalid_param("invalid peer DID"));
+    if DidCoreId::new(peer.clone()).is_err() {
+        return Err(AppError::invalid_param("invalid peer principal id"));
     }
     authorize_reader(&session.actor, &holder, &peer)?;
     // Accept both `consent_scope` (canonical) and the shorter `scope` alias so
@@ -701,11 +701,11 @@ fn revoke_cell_with_dots(
 }
 
 fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {
-    if validate_did(holder).is_err() {
-        return Err(AppError::invalid_param("invalid holder DID"));
+    if DidCoreId::new(holder.to_owned()).is_err() {
+        return Err(AppError::invalid_param("invalid holder principal id"));
     }
-    if validate_did(peer).is_err() {
-        return Err(AppError::invalid_param("invalid peer DID"));
+    if DidCoreId::new(peer.to_owned()).is_err() {
+        return Err(AppError::invalid_param("invalid peer principal id"));
     }
     if session_actor != holder {
         return Err(AppError::capability_denied(

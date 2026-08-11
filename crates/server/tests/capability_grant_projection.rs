@@ -23,8 +23,8 @@ use soland_http::authz::SolandAuthzEngine;
 
 const REALM: &str = "ak:realm:Aemw9elq19fDvIg-i7BJI44N3RJHLqzlZ0EYQW_cgutY";
 const GRANT_ID: &str = "ak:grant:ARle858WIq1Q6tyqPUeacCaK06rWbVcvzG37T12U0-yi";
-const ISSUER: &str = "did:web:owner.example";
-const SUBJECT: &str = "did:web:bob.example";
+const ISSUER: &str = "ak:did_core:web:owner.example";
+const SUBJECT: &str = "ak:did_core:web:bob.example";
 const STRAND_ID: &str = "ak:strand:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
 const CIRCLE_A: &str = "ak:circle:AV0qavYDFj4YHrrFZnfkfneXMs0JkzjUEmCj7wbVmzN4";
 const CIRCLE_B: &str = "ak:circle:AbSfcRhN4egzL0N5Mj2zIGUOB-2ng3vazhVmP7lFmJXo";
@@ -117,10 +117,7 @@ fn seed_realm_owner(state: &mut ProjectionState) {
         arkret_state::lattice::CellState::Value(
             serde_json::to_value(
                 arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                    arkret_wire::project_full_id_to_core_id(
-                        &arkret_identifiers::DidFullId::new(ISSUER).unwrap(),
-                    )
-                    .unwrap(),
+                    arkret_identifiers::DidCoreId::new(ISSUER).unwrap(),
                     arkret_policy::current_capability_action_registry_digest().unwrap(),
                 ),
             )

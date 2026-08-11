@@ -96,13 +96,17 @@ fn signed_keypackage_claim_request(
         "self KeyPackage claim nonce must carry at least 128 bits"
     );
     let created_at = Utc::now();
-    let verification_method = format!("{requester}#{requester_device}");
+    let requester_full = arkret_identifiers::DidFullId::new(requester.to_owned()).unwrap();
+    let requester_id = arkret_wire::project_full_id_to_core_id(&requester_full).unwrap();
+    let target_full = arkret_identifiers::DidFullId::new(target_principal_id.to_owned()).unwrap();
+    let target_principal_id = arkret_wire::project_full_id_to_core_id(&target_full).unwrap();
+    let verification_method = format!("{}#{requester_device}", requester_full.as_str());
     let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
         serde_json::from_value(json!({
             "target_principal_id": target_principal_id,
             "target_device_ids": target_device_ids,
             "intended_realm_id": intended_realm_id,
-            "requester": requester,
+            "requester": requester_id,
             "required_capabilities": required_capabilities,
             "claim_nonce": b64(claim_nonce),
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
@@ -254,9 +258,13 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": device_id,
             "display_name": display,
         }))
@@ -276,11 +284,15 @@ async fn mls_lifecycle_end_to_end() {
     let alice_did = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_token = dev_token(state.clone(), alice_did, alice_device, "Alice").await;
+    let alice_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(alice_did).unwrap(),
+    )
+    .unwrap();
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     let mut alice_device_record = state
         .test_persistence()
         .devices()
-        .get(alice_did, alice_device)
+        .get(alice_core.as_str(), alice_device)
         .await
         .unwrap()
         .unwrap();
@@ -333,7 +345,7 @@ async fn mls_lifecycle_end_to_end() {
     let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
     let publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(json!({
-            "principal_id": alice_did,
+            "principal_id": alice_core,
             "device_id": alice_device,
             "key_packages": [
                 {
@@ -516,12 +528,16 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     let bob_did = "did:web:bob.example";
+    let bob_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(bob_did).unwrap(),
+    )
+    .unwrap();
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
     let mut bob_device_record = state
         .test_persistence()
         .devices()
-        .get(bob_did, bob_device)
+        .get(bob_core.as_str(), bob_device)
         .await
         .unwrap()
         .unwrap();
@@ -549,7 +565,7 @@ async fn mls_lifecycle_end_to_end() {
     let lifecycle_capabilities_digest = sha256_json(&lifecycle_capabilities);
     let lifecycle_publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(json!({
-            "principal_id": bob_did,
+            "principal_id": bob_core,
             "device_id": bob_device,
             "key_packages": [{
                 "keypackage_id": lifecycle_keypackage_id,
@@ -697,7 +713,7 @@ async fn mls_lifecycle_end_to_end() {
             "mls_group_id": group_id,
             "effective_scope": effective_scope.clone(),
             "epoch": 0,
-            "creator_principal_id": alice_did,
+            "creator_principal_id": alice_core,
             "creator_device_id": alice_device,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "group_info_ref": "ak:blob:sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -753,7 +769,7 @@ async fn mls_lifecycle_end_to_end() {
         "keypackage_digest": claimed_keypackage_digest,
         "intended_realm_id": realm_id,
         "claim_id": claim_id,
-        "requester_actor_id": alice_did,
+        "requester_actor_id": alice_core,
         "requester_device_id": alice_device,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
@@ -782,7 +798,7 @@ async fn mls_lifecycle_end_to_end() {
         json!({
             "mls_group_id": group_id,
             "epoch": 1,
-            "recipient_principal_id": bob_did,
+            "recipient_principal_id": bob_core,
             "recipient_device_id": bob_device,
             "keypackage_ref": keypackage_ref,
             "keypackage_digest": claimed_keypackage_digest,
@@ -904,7 +920,7 @@ async fn mls_lifecycle_end_to_end() {
     let device_message = &device_messages[0];
     assert_eq!(device_message["kind"], json!("ak.mls.welcome"));
     assert_eq!(device_message["sender_device_id"], json!(alice_device));
-    assert_eq!(device_message["recipient_principal_id"], json!(bob_did));
+    assert_eq!(device_message["recipient_principal_id"], json!(bob_core));
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));
     assert_eq!(
         device_message["expires_at"],
@@ -914,7 +930,7 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(device_message["content"]["epoch"], json!(1));
     assert_eq!(
         device_message["content"]["recipient_principal_id"],
-        json!(bob_did)
+        json!(bob_core)
     );
     assert_eq!(
         device_message["content"]["recipient_device_id"],

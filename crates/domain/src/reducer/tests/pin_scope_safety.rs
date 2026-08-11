@@ -13,7 +13,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
         REALM_ID.to_owned(),
         SolandRealmState {
             realm_id: REALM_ID.to_owned(),
-            owner: Some("did:web:alice.example".to_owned()),
+            owner: Some("ak:did_core:web:alice.example".to_owned()),
             title: Some("Product".to_owned()),
             deleted: false,
             archived: false,
@@ -29,9 +29,12 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
         },
     );
     state.members.insert(
-        (REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
+        (
+            REALM_ID.to_owned(),
+            "ak:did_core:web:alice.example".to_owned(),
+        ),
         SolandMembershipState {
-            member: "did:web:alice.example".to_owned(),
+            member: "ak:did_core:web:alice.example".to_owned(),
             realm_id: REALM_ID.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -55,7 +58,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "id": CIRCLE_ID,
                     "realm_id": REALM_ID,
                     "title": "Private",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
@@ -74,9 +77,9 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             REALM_ID,
             serde_json::json!({
                 "circle_id": CIRCLE_ID,
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "membership": "join",
-                "sender": "did:web:alice.example"
+                "sender": "ak:did_core:web:alice.example"
             }),
         ),
         hlc,
@@ -95,7 +98,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "realm_id": REALM_ID,
                     "scope_circle_id": CIRCLE_ID,
                     "metadata": {"title": "Private discussion"},
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -112,7 +115,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             serde_json::json!({
                 "event_id": MESSAGE_EVENT_ID,
                 "thread_id": STRAND_ID,
-                "sender": "did:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
                 "content": {"kind": "ak.content.text", "body": "private"}
             }),
         ),
@@ -132,7 +135,7 @@ fn pin_add(pin_scope: serde_json::Value) -> Operation {
             "pin_scope": pin_scope,
             "target_ref": MESSAGE_EVENT_ID,
             "rank": "a0",
-            "sender": "did:web:alice.example"
+            "sender": "ak:did_core:web:alice.example"
         }),
     )
 }
@@ -183,7 +186,7 @@ fn pin_rejects_redacted_message_target() {
             REALM_ID,
             serde_json::json!({
                 "target_event_id": MESSAGE_EVENT_ID,
-                "by": "did:web:alice.example"
+                "by": "ak:did_core:web:alice.example"
             }),
         ),
         &hlc,
@@ -228,22 +231,22 @@ fn pin_rejects_active_moderation_decision_head() {
         ))
         .unwrap(),
         CellState::Value(serde_json::json!([{
-            "tag": "hard_deny:did:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tag": "hard_deny:ak:did_core:web:mod.example:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "value": {
                 "decision_id": "ak:event:AaCSkmkJGCJsdlTB9SXNQ9Ohes5_op9NMMetO0Trkf0q",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "hard_deny",
-                "issuer": "did:web:mod.example",
+                "issuer": "ak:did_core:web:mod.example",
                 "request_canonical_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "realm_id": REALM_ID
             }
         }, {
-            "tag": "require_review:did:web:other.example:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "tag": "require_review:ak:did_core:web:other.example:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             "value": {
                 "decision_id": "ak:event:AcOfKRN6NaqA5lqbkGhhOD5HiIfpgFRFDsl7ay0xainV",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "require_review",
-                "issuer": "did:web:other.example",
+                "issuer": "ak:did_core:web:other.example",
                 "request_canonical_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "realm_id": REALM_ID
             }

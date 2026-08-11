@@ -487,8 +487,9 @@ pub struct SolandAccountRegisterOutcome {
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
 pub use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
+    AgentGrantDetachOutcome, AgentGrantDetachRequestBody, AgentKeyPairOutcome,
+    AgentKeyPairRequestBody, AgentList, AgentPauseRequestBody, AgentResumeRequestBody,
+    AgentSidecarList, AgentSidecarView, AgentView,
 };
 pub use arkret_models_collaboration::objects::media::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,

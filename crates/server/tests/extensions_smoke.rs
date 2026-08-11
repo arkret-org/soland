@@ -80,9 +80,12 @@ async fn dev_token(state: AppState) -> String {
 
 async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> String {
     state.hydrate().await.unwrap();
+    let actor_core =
+        arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap())
+            .unwrap();
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": format!("ak:device:01904100-0000-7000-8000-{device_suffix}"),
             "display_name": "Applet service"
         }))
@@ -95,6 +98,7 @@ async fn dev_login_token(state: AppState, actor: &str, device_suffix: &str) -> S
 }
 
 async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> String {
+    state.hydrate().await.unwrap();
     let typed_realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
     if state
         .test_persistence()
@@ -118,7 +122,6 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             .await
             .unwrap();
     }
-    state.hydrate().await.unwrap();
     let actor_did =
         arkret_wire::project_full_id_to_core_id(&DidFullId::new(actor.to_owned()).unwrap())
             .unwrap();
@@ -134,13 +137,13 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             seeded.realm_id = typed_realm_id.clone();
             seeded
         });
-        realm.members.insert(actor_did);
+        realm.members.insert(actor_did.clone());
         realms.upsert(realm);
     }
     state.test_projection().lock().members.insert(
-        (DEMO_REALM_ID.to_owned(), actor.to_owned()),
+        (DEMO_REALM_ID.to_owned(), actor_did.to_string()),
         soland_domain::reducer::SolandMembershipState {
-            member: actor.to_owned(),
+            member: actor_did.to_string(),
             realm_id: DEMO_REALM_ID.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),

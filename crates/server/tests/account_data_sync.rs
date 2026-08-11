@@ -33,9 +33,13 @@ fn app_from_state(state: AppState) -> salvo::Service {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: &str) -> String {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let mut response = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": device_id,
             "display_name": display_name,
         }))
@@ -120,9 +124,13 @@ async fn signed_account_data_submission(
     tombstone: bool,
 ) -> arkret_wire::EventInitialSubmission {
     let realm_id = soland_test_support::fixture_principal_control_realm(actor);
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor full DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
             .await
@@ -138,7 +146,7 @@ async fn signed_account_data_submission(
     let mut payload = json!({
         "key": account_data_key,
         "expected_revision": expected_revision,
-        "owner": actor,
+        "owner": actor_core,
         "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     });
     if let Some(content) = content {
@@ -320,9 +328,13 @@ async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor full DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -944,7 +956,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(rejected.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
 
     // `push-operations.schema.json#/$defs/push_notify_outcome` is a closed
     // response whose only members are `push_target_id` and a conserved

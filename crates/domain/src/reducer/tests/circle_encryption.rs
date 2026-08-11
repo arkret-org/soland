@@ -56,8 +56,8 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
             },
         );
     };
-    join_member(&mut state, "did:web:alice");
-    join_member(&mut state, "did:web:bob");
+    join_member(&mut state, "ak:did_core:web:alice");
+    join_member(&mut state, "ak:did_core:web:bob");
     // mallory is intentionally NOT a Realm member.
     state.circles.insert(
         circle.clone(),
@@ -77,7 +77,7 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: "did:web:alice".to_owned(),
+            created_by: "ak:did_core:web:alice".to_owned(),
             created_at: now,
             updated_by: None,
             updated_at: None,
@@ -98,9 +98,9 @@ fn circle_manage_pull_realm_member_succeeds() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "did:web:bob",
+            "actor_id": "ak:did_core:web:bob",
             "membership": "join",
-            "sender": "did:web:alice",
+            "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
         }),
     );
@@ -110,7 +110,9 @@ fn circle_manage_pull_realm_member_succeeds() {
         "manage-backed pull should be accepted, got {effect:?}"
     );
     assert!(
-        state.circles[&circle].members.contains("did:web:bob"),
+        state.circles[&circle]
+            .members
+            .contains("ak:did_core:web:bob"),
         "bob must be an active Circle member with no accept step"
     );
 }
@@ -125,9 +127,9 @@ fn circle_pull_without_manage_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "did:web:bob",
+            "actor_id": "ak:did_core:web:bob",
             "membership": "join",
-            "sender": "did:web:alice",
+            "sender": "ak:did_core:web:alice",
         }),
     );
     assert!(
@@ -138,7 +140,11 @@ fn circle_pull_without_manage_rejected() {
         ),
         "cross-actor add without manage capability must be rejected"
     );
-    assert!(!state.circles[&circle].members.contains("did:web:bob"));
+    assert!(
+        !state.circles[&circle]
+            .members
+            .contains("ak:did_core:web:bob")
+    );
 }
 
 #[test]
@@ -151,9 +157,9 @@ fn circle_pull_non_realm_member_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "did:web:mallory",
+            "actor_id": "ak:did_core:web:mallory",
             "membership": "join",
-            "sender": "did:web:alice",
+            "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
         }),
     );
@@ -178,8 +184,8 @@ fn circle_self_join_requires_open_rule() {
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "did:web:bob",
-            "membership": "join", "sender": "did:web:bob",
+            "circle_id": circle, "actor_id": "ak:did_core:web:bob",
+            "membership": "join", "sender": "ak:did_core:web:bob",
         }),
     );
     assert!(
@@ -193,8 +199,8 @@ fn circle_self_join_requires_open_rule() {
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "did:web:alice",
-            "membership": "join", "sender": "did:web:alice",
+            "circle_id": circle, "actor_id": "ak:did_core:web:alice",
+            "membership": "join", "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
         }),
     );
@@ -205,15 +211,19 @@ fn circle_self_join_requires_open_rule() {
         ),
         "self-join on a non-open Circle must be accepted with explicit manage"
     );
-    assert!(state.circles[&circle].members.contains("did:web:alice"));
+    assert!(
+        state.circles[&circle]
+            .members
+            .contains("ak:did_core:web:alice")
+    );
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "public".to_owned();
     let op_open = make_operation(
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "did:web:bob",
-            "membership": "join", "sender": "did:web:bob",
+            "circle_id": circle, "actor_id": "ak:did_core:web:bob",
+            "membership": "join", "sender": "ak:did_core:web:bob",
         }),
     );
     assert!(
@@ -223,7 +233,11 @@ fn circle_self_join_requires_open_rule() {
         ),
         "self-join on an open Circle must be accepted"
     );
-    assert!(state.circles[&circle].members.contains("did:web:bob"));
+    assert!(
+        state.circles[&circle]
+            .members
+            .contains("ak:did_core:web:bob")
+    );
 }
 
 // AKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
@@ -491,7 +505,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     let realm = "ak:realm:ARM_okyR4stVa2JmCJPyJcnwpoxsI3jimzSgJEra7UL0";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
-        "principal_id": "did:web:hr.example",
+        "principal_id": "ak:did_core:web:hr.example",
         "verification_method": "did:web:hr.example#rrk-1"
     });
     // No scheme committed yet (defaults to mls_rfc9420) → incompatible.
@@ -521,7 +535,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
     let realm = "ak:realm:AcfJePA6div26qnIQkrT20tbJtdJ79JSjQFTRuB8pA7T";
     let recipient = serde_json::json!({
         "recipient_id": "rrk-1",
-        "principal_id": "did:web:hr.example",
+        "principal_id": "ak:did_core:web:hr.example",
         "verification_method": "did:web:hr.example#rrk-1"
     });
     // Same-update set of scheme + durability policy is accepted.
@@ -583,8 +597,8 @@ fn durability_policy_threshold_validates_k_of_n() {
     let hlc = ServerHlc::new("durability-threshold");
     let realm = "ak:realm:AQxy0zXCpXmA_8kcoWOSePqrAA7vI9NsCp7RMO8ha6ak";
     let recipients = serde_json::json!([
-        {"recipient_id": "rrk-1", "principal_id": "did:web:a.example", "verification_method": "did:web:a.example#rrk"},
-        {"recipient_id": "rrk-2", "principal_id": "did:web:b.example", "verification_method": "did:web:b.example#rrk"}
+        {"recipient_id": "rrk-1", "principal_id": "ak:did_core:web:a.example", "verification_method": "did:web:a.example#rrk"},
+        {"recipient_id": "rrk-2", "principal_id": "ak:did_core:web:b.example", "verification_method": "did:web:b.example#rrk"}
     ]);
     // n=3 but only 2 recipients → invalid.
     let effect = apply_policy_bundle(

@@ -13,8 +13,8 @@ use soland_domain::reducer::{ProjectionEffect, ProjectionState};
 
 const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const REALM_PARENT: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
-const BOB: &str = "did:web:bob.example";
-const MALLORY: &str = "did:web:mallory.example";
+const BOB: &str = "ak:did_core:web:bob.example";
+const MALLORY: &str = "ak:did_core:web:mallory.example";
 
 fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
@@ -83,25 +83,29 @@ fn join_op(member: &str) -> Operation {
         arkret_wire::EventKind::MemberState,
         REALM_A,
         json!({
+            "realm_id": REALM_A,
             "actor_id": member,
             "membership": "join",
-            "role": "member",
             "delivery_status": "unroutable"
         }),
     )
 }
 
 fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation {
-    op(
+    let operation = op(
         arkret_wire::EventKind::MemberState,
         realm_id,
         json!({
+            "realm_id": realm_id,
             "actor_id": member,
             "membership": membership,
-            "role": "member",
             "delivery_status": "unroutable"
         }),
-    )
+    );
+    operation
+        .typed_payload::<arkret_wire::event_spec::MemberState>()
+        .expect("join-policy fixture membership payload");
+    operation
 }
 
 fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
@@ -109,7 +113,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
         "gate_id": gate_id,
         "challenge_proof": {
             "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
-            "issued_by": "did:web:captcha.example",
+            "issued_by": "ak:did_core:web:captcha.example",
             "challenge_kind": "captcha",
             "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
             "proof": "base64url:test-proof"
@@ -118,7 +122,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
 }
 
 #[test]
-fn principal_admission_allows_configured_did_method() {
+fn principal_admission_did_method_fails_closed_without_full_id_evidence() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     apply_join_rule(&mut state, "public");
@@ -142,23 +146,20 @@ fn principal_admission_allows_configured_did_method() {
         "policy_bundle cell must be projected"
     );
 
-    let accepted = join_op(
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:users.acme.example:bob",
-    );
-    let effect = state.apply(&accepted, &hlc);
-    assert!(
-        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
-        "expected webvh member to pass principal_admission, got {effect:?}"
-    );
+    let unresolved = join_op("ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x");
+    assert!(matches!(
+        state.apply(&unresolved, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "gate_check_failed"
+    ));
 
-    let rejected = join_op("did:web:users.acme.example:mallory");
+    let rejected = join_op("ak:did_core:web:users.acme.example:mallory");
     match state.apply(&rejected, &hlc) {
         ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
         other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
     }
     assert!(
         state
-            .member(REALM_A, "did:web:users.acme.example:mallory")
+            .member(REALM_A, "ak:did_core:web:users.acme.example:mallory")
             .is_none()
     );
 }
@@ -192,11 +193,9 @@ fn sealed_policy_payload_wrapper_preserves_join_policy() {
     );
 
     assert!(
-        matches!(
-            state.apply(&join_op(BOB), &hlc),
-            ProjectionEffect::MembershipChanged { .. }
-        ),
-        "Seal-reloaded generic state payload must retain the canonical join policy"
+        matches!(state.apply(&join_op(BOB), &hlc), ProjectionEffect::Rejected { reason }
+            if reason == "gate_check_failed"),
+        "Seal-reloaded policy must retain the full-DID evidence requirement"
     );
 }
 
@@ -204,7 +203,7 @@ fn sealed_policy_payload_wrapper_preserves_join_policy() {
 fn principal_admission_denylist_wins_over_allowlist() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let blocked = "did:web:blocked.example";
+    let blocked = "ak:did_core:web:blocked.example";
     apply_join_rule(&mut state, "public");
 
     apply_policy(
@@ -297,8 +296,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 fn any_combinator_accepts_parent_membership_gate_without_challenge() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let mut parent_join = member_state_op(REALM_PARENT, BOB, "join");
-    parent_join.payload["sender"] = json!("did:web:parent-admin.example");
+    let parent_join = member_state_op(REALM_PARENT, BOB, "join");
     assert!(matches!(
         state.apply(&parent_join, &hlc),
         ProjectionEffect::MembershipChanged { .. }
@@ -321,7 +319,7 @@ fn any_combinator_accepts_parent_membership_gate_without_challenge() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "did:web:captcha.example",
+                    "provider_did": "ak:did_core:web:captcha.example",
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }
@@ -344,8 +342,7 @@ fn any_combinator_accepts_parent_membership_gate_without_challenge() {
 fn all_combinator_requires_parent_membership_and_challenge_proof() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let mut parent_join = member_state_op(REALM_PARENT, BOB, "join");
-    parent_join.payload["sender"] = json!("did:web:parent-admin.example");
+    let parent_join = member_state_op(REALM_PARENT, BOB, "join");
     assert!(matches!(
         state.apply(&parent_join, &hlc),
         ProjectionEffect::MembershipChanged { .. }
@@ -368,7 +365,7 @@ fn all_combinator_requires_parent_membership_and_challenge_proof() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "did:web:captcha.example",
+                    "provider_did": "ak:did_core:web:captcha.example",
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }
@@ -427,7 +424,7 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
                     "gate_id": "g-captcha",
                     "kind": "challenge_response",
                     "auto_resolve": true,
-                    "provider_did": "did:web:captcha.example",
+                    "provider_did": "ak:did_core:web:captcha.example",
                     "challenge_kinds": ["captcha"],
                     "max_proof_age": "PT5M"
                 }

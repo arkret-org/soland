@@ -4,8 +4,8 @@ use super::*;
 
 const REALM: &str = "ak:realm:ASk_eoIHpJ8N_FKjxDcSCUURWkTNTCM3Ry9G5DEyb2gX";
 const CIRCLE: &str = "ak:circle:AUiSHUfqumU5_UtRrOIga2jjSmucw5MpSQdam3TtzPQu";
-const ALICE: &str = "did:web:alice";
-const BOB: &str = "did:web:bob";
+const ALICE: &str = "ak:did_core:web:alice";
+const BOB: &str = "ak:did_core:web:bob";
 
 fn seed_state(history_visibility: &str) -> (ProjectionState, ServerHlc, chrono::DateTime<Utc>) {
     let mut state = ProjectionState::new();

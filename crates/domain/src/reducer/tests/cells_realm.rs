@@ -123,7 +123,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // realm delivery-binding policy.
     let payload = serde_json::json!({
         "realm_id": realm_id,
-        "actor_id": "did:web:alice",
+        "actor_id": "ak:did_core:web:alice",
         "membership": "join",
         "delivery_status": "unroutable"
     });
@@ -139,14 +139,14 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     // Structured cache populated with state="join" and the default member
     // role; role assignment is not part of the closed membership payload.
     let m = state
-        .member(realm_id, "did:web:alice")
+        .member(realm_id, "ak:did_core:web:alice")
         .expect("member entry should exist after join");
     assert_eq!(m.state, "join");
     assert_eq!(m.role, "member");
 
     // FSM cell populated.
     assert_eq!(
-        state.member_fsm_state("did:web:alice").as_deref(),
+        state.member_fsm_state("ak:did_core:web:alice").as_deref(),
         Some("join")
     );
 
@@ -157,7 +157,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
 #[test]
 fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let actor = "did:web:reducer-test.example";
+    let actor = "ak:did_core:web:reducer-test.example";
     let payload = serde_json::json!({
         "realm_id": realm_id,
         "actor_id": actor,
@@ -167,10 +167,7 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(actor).unwrap(),
-    )
-    .unwrap();
+    operation.context.sender = arkret_identifiers::DidCoreId::new(actor).unwrap();
 
     let mut ordinary = ProjectionState::new();
     ordinary
@@ -213,7 +210,7 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
 #[test]
 fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path() {
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let peer = "did:web:peer.example";
+    let peer = "ak:did_core:web:peer.example";
     let payload = serde_json::json!({
         "actor_id": peer,
         "membership": "join",
@@ -271,7 +268,7 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
             arkret_wire::EventKind::MemberState,
             realm_id,
             serde_json::json!({
-                "actor_id": "did:web:bob",
+                "actor_id": "ak:did_core:web:bob",
                 "membership": "ban",
                 "role": "member"
             }),
@@ -284,7 +281,7 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
     assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
     assert_eq!(
-        state.member_fsm_state("did:web:bob").as_deref(),
+        state.member_fsm_state("ak:did_core:web:bob").as_deref(),
         Some("ban")
     );
 
@@ -294,7 +291,7 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
         &make_operation(
             arkret_wire::EventKind::MemberState,
             realm_id,
-            serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
+            serde_json::json!({"actor_id": "ak:did_core:web:bob", "membership": "invite"}),
         ),
         &hlc,
     );
@@ -304,7 +301,7 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
             if reason.starts_with("invalid_membership_transition")
     ));
     assert_eq!(
-        state.member_fsm_state("did:web:bob").as_deref(),
+        state.member_fsm_state("ak:did_core:web:bob").as_deref(),
         Some("ban")
     );
     assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
@@ -314,7 +311,7 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
 fn member_state_precondition_is_scoped_to_the_target_realm() {
     const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     const REALM_B: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
-    const ACTOR: &str = "did:web:bob.example";
+    const ACTOR: &str = "ak:did_core:web:bob.example";
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
@@ -329,10 +326,7 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
     });
     let (_, writes) = projected_cell_writes(arkret_wire::EventKind::MemberState, REALM_A, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, REALM_A, payload);
-    operation.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(ACTOR).unwrap(),
-    )
-    .unwrap();
+    operation.context.sender = arkret_identifiers::DidCoreId::new(ACTOR).unwrap();
     state.apply_projected(&operation, &writes, &hlc);
 
     let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
@@ -419,7 +413,10 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
         .realm_states
         .get(realm_id)
         .expect("realm_states entry should exist after create");
-    assert_eq!(realm.owner.as_deref(), Some("did:web:reducer-test.example"));
+    assert_eq!(
+        realm.owner.as_deref(),
+        Some("ak:did_core:web:reducer-test.example")
+    );
     assert_eq!(realm.title.as_deref(), Some("Test Realm"));
     assert!(!realm.deleted);
 
@@ -566,7 +563,7 @@ fn realm_destroy_writes_destroy_cell_and_marks_cache_deleted() {
         &make_operation(
             arkret_wire::EventKind::RealmCreate,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+            serde_json::json!({"action": "create", "owner": "ak:did_core:web:alice"}),
         ),
         &hlc,
     );
@@ -605,7 +602,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
         &make_operation(
             arkret_wire::EventKind::RealmCreate,
             realm_id,
-            serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+            serde_json::json!({"action": "create", "owner": "ak:did_core:web:alice"}),
         ),
         &hlc,
     );
@@ -646,7 +643,7 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
         &make_operation(
             arkret_wire::EventKind::RealmCreate,
             realm_id,
-            serde_json::json!({"action": "create", "owner": "did:web:alice"}),
+            serde_json::json!({"action": "create", "owner": "ak:did_core:web:alice"}),
         ),
         &hlc,
     );
@@ -701,7 +698,7 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
             serde_json::json!({
                 "receipt_id": "ak:receipt:01",
                 "schema": "ak.schema.erasure_receipt.v1",
-                "issuer": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                "issuer": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
                 "subject": {"kind": "realm", "subject_ref": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"},
                 "scope": {
                     "storage_boundary": "projection_store",
@@ -757,7 +754,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
     assert_eq!(log.len(), 1, "realm.create should write one genesis entry");
     assert!(
         state
-            .member(realm_id, "did:web:reducer-test.example")
+            .member(realm_id, "ak:did_core:web:reducer-test.example")
             .is_none(),
         "ordinary create must not synthesize membership; the final bootstrap slot owns it"
     );
@@ -826,7 +823,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     state.realm_create_cells.insert(
         realm_id.to_string(),
         arkret_state::lattice::CellState::Value(serde_json::json!([{
-            "issuer": "did:web:alice.example",
+            "issuer": "ak:did_core:web:alice.example",
             "issuer_seq": 1,
             "value": realm_id.as_str(),
         }])),
@@ -880,7 +877,7 @@ fn realm_genesis_and_profile_cells_return_none_for_uncreated_realm() {
 fn invite_entry_evaluates_principal_admission_hard_gate() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:AZpIovRd-lKGm0kpgKgqtWiGni5pA7imt7H99x3r-ot9";
-    let invitee = "did:web:denied.example";
+    let invitee = "ak:did_core:web:denied.example";
     state.realm_policy_bundle_cells.insert(
         realm_id.to_owned(),
         CellState::Value(serde_json::json!({
@@ -900,7 +897,7 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
         realm_id,
         serde_json::json!({
             "invitee": invitee,
-            "sender": "did:web:inviter.example"
+            "sender": "ak:did_core:web:inviter.example"
         }),
     );
     assert_eq!(
@@ -913,7 +910,7 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
 fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:Aep78TXQFoYm6MAUTeaLRRCcxM7GgYNbhMKM07j6OLsx";
-    let member = "did:web:alice.example";
+    let member = "ak:did_core:web:alice.example";
     state
         .realm_join_rules
         .insert(realm_id.to_owned(), "public".to_owned());
@@ -986,7 +983,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
 fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:AehJkZSB3P7C-ch-biRjD2flKZh73AhHpbhFnxWBhjo1";
-    let member = "did:web:alice.example";
+    let member = "ak:did_core:web:alice.example";
     state
         .realm_join_rules
         .insert(realm_id.to_owned(), "closed".to_owned());
@@ -1009,7 +1006,7 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
         realm_id,
         serde_json::json!({
             "actor_id": member,
-            "sender": "did:web:admin.example",
+            "sender": "ak:did_core:web:admin.example",
             "membership": "join",
             "delivery_status": "unroutable"
         }),
@@ -1045,7 +1042,7 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-transition");
     let realm_id = "ak:realm:AcPah3GE5X4KORy6n5BoQ_izb3czlMLYgWg6E1hVh883";
-    let member = "did:web:alice.example";
+    let member = "ak:did_core:web:alice.example";
     state.members.insert(
         (realm_id.to_owned(), member.to_owned()),
         SolandMembershipState {
@@ -1070,7 +1067,7 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
             realm_id,
             serde_json::json!({
                 "actor_id": member,
-                "sender": "did:web:admin.example",
+                "sender": "ak:did_core:web:admin.example",
                 "membership": "ban"
             }),
         ),
@@ -1090,7 +1087,7 @@ fn knock_state_visible_in_members_in_state_query() {
         &make_operation(
             arkret_wire::EventKind::MemberState,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({"actor_id": "did:web:carol", "membership": "knock"}),
+            serde_json::json!({"actor_id": "ak:did_core:web:carol", "membership": "knock"}),
         ),
         &hlc,
     );
@@ -1099,9 +1096,9 @@ fn knock_state_visible_in_members_in_state_query() {
         "knock",
     );
     assert_eq!(knockers.len(), 1);
-    assert_eq!(knockers[0].member, "did:web:carol");
+    assert_eq!(knockers[0].member, "ak:did_core:web:carol");
     assert_eq!(
-        state.member_fsm_state("did:web:carol").as_deref(),
+        state.member_fsm_state("ak:did_core:web:carol").as_deref(),
         Some("knock")
     );
 }
@@ -1155,15 +1152,15 @@ fn realm_cell_value_keeps_null_subject_singletons_realm_scoped() {
     .unwrap();
     state.realm_null_subject_cells.insert(
         ("ak:realm:first".to_owned(), cell_id.as_str().to_owned()),
-        CellState::Value(serde_json::json!({"service_id": "did:web:first.example"})),
+        CellState::Value(serde_json::json!({"service_id": "ak:did_core:web:first.example"})),
     );
     state.realm_null_subject_cells.insert(
         ("ak:realm:second".to_owned(), cell_id.as_str().to_owned()),
-        CellState::Value(serde_json::json!({"service_id": "did:web:second.example"})),
+        CellState::Value(serde_json::json!({"service_id": "ak:did_core:web:second.example"})),
     );
     state.cells.insert(
         cell_id.clone(),
-        CellState::Value(serde_json::json!({"service_id": "did:web:legacy.example"})),
+        CellState::Value(serde_json::json!({"service_id": "ak:did_core:web:legacy.example"})),
     );
 
     assert_eq!(
@@ -1171,14 +1168,14 @@ fn realm_cell_value_keeps_null_subject_singletons_realm_scoped() {
             .realm_cell_value("ak:realm:first", &cell_id)
             .and_then(|value| value.get("service_id"))
             .and_then(Value::as_str),
-        Some("did:web:first.example")
+        Some("ak:did_core:web:first.example")
     );
     assert_eq!(
         state
             .realm_cell_value("ak:realm:second", &cell_id)
             .and_then(|value| value.get("service_id"))
             .and_then(Value::as_str),
-        Some("did:web:second.example")
+        Some("ak:did_core:web:second.example")
     );
     assert!(
         state
@@ -1230,7 +1227,7 @@ fn realm_cell_exposes_policy_bundle_without_cross_realm_leakage() {
 fn base_search_policy() -> Value {
     serde_json::json!({
         "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],
-        "allowed_service_ids": ["did:web:search.example"],
+        "allowed_service_ids": ["ak:did_core:web:search.example"],
         "data_classes": ["blind_tokens"],
         "revocation_behavior": "fail_closed",
         "leakage_class": "deterministic_token",
@@ -1366,8 +1363,8 @@ fn apply_projected_create(
 #[test]
 fn managed_agent_genesis_activates_agent_status_cell_once() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
-    let agent_id =
-        arkret_identifiers::DidCoreId::new("ak:did_core:web:reducer-test.example").unwrap();
+    let agent_id = arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkreducertest").unwrap();
+    let agent_full_id = "did:webvh:z6mkreducertest:reducer-test.example";
     let genesis =
         arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
@@ -1386,13 +1383,24 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
-    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
-        .to_value()
-        .unwrap();
+    let mut payload =
+        arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+            .to_value()
+            .unwrap();
+    payload["object"]["initial_resolution"] = serde_json::json!({
+        "full_id": agent_full_id,
+        "method_history_head": "fixture-managed-agent-head",
+        "version_id": "1"
+    });
     let mut state = ProjectionState::new();
 
-    let (_, writes) =
-        projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
+    let (_, writes) = projected_cell_writes_for_actor(
+        arkret_wire::EventKind::RealmCreate,
+        realm_id,
+        0,
+        &payload,
+        agent_id.clone(),
+    );
     let mut operation = make_operation(
         arkret_wire::EventKind::RealmCreate,
         realm_id,
@@ -1418,8 +1426,13 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         state.cells.get(&cell),
         Some(&CellState::Value(serde_json::json!("active")))
     );
-    let (_, replay_writes) =
-        projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
+    let (_, replay_writes) = projected_cell_writes_for_actor(
+        arkret_wire::EventKind::RealmCreate,
+        realm_id,
+        0,
+        &payload,
+        agent_id.clone(),
+    );
     let mut replay = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
     replay.context.sender = agent_id;
     assert!(matches!(
@@ -1432,6 +1445,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
 #[test]
 fn managed_agent_genesis_requires_the_registered_status_projection() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
+    let agent_id = arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkreducertest").unwrap();
     let genesis =
         arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
@@ -1446,16 +1460,21 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(
-                arkret_identifiers::DidCoreId::new("ak:did_core:web:reducer-test.example").unwrap(),
-            ),
+            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
-    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
-        .to_value()
-        .unwrap();
-    let operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
+    let mut payload =
+        arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+            .to_value()
+            .unwrap();
+    payload["object"]["initial_resolution"] = serde_json::json!({
+        "full_id": "did:webvh:z6mkreducertest:reducer-test.example",
+        "method_history_head": "fixture-managed-agent-head",
+        "version_id": "1"
+    });
+    let mut operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
+    operation.context.sender = agent_id;
     let mut state = ProjectionState::new();
 
     assert!(matches!(
@@ -1623,7 +1642,7 @@ fn the_bundle_projects_every_registered_component() {
             "applies_to": ["seal_include"]
         },
         "audit_policy": {
-            "range_completeness_witnesses": ["did:web:witness.example"],
+            "range_completeness_witnesses": ["ak:did_core:web:witness.example"],
             "witnessed_min_attestations": 1,
             "witness_independence": "distinct_did"
         },

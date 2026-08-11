@@ -512,9 +512,10 @@ fn test_state() -> AppState {
 }
 
 const ROSTER_REALM: &str = "ak:realm:AQKdkfI-I4MXIS2hxLXbb_FK57j-jE497FF66I5NPGPE";
-const ROSTER_ACTOR: &str = "did:web:alice.example";
-const ROSTER_SUBJECT: &str = "did:web:alice-principal.example";
-const ROSTER_CALLER: &str = "did:web:bob.example";
+const ROSTER_ACTOR_FULL: &str = "did:web:alice.example";
+const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
+const ROSTER_SUBJECT: &str = "ak:did_core:web:alice-principal.example";
+const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
 
 fn roster_body(audience: &str) -> SyncRequestBody {
     let mut extra = BTreeMap::new();
@@ -555,9 +556,14 @@ fn roster_session(state: &AppState, actor: &str) -> SessionRecord {
 fn sync_test_operation_at(
     operation_id: &str,
     kind: impl AsRef<str>,
-    payload: Value,
+    mut payload: Value,
     created_at: DateTime<Utc>,
 ) -> arkret_event_draft::ProjectedEventOperation {
+    payload
+        .as_object_mut()
+        .expect("sync fixture payload object")
+        .entry("sender")
+        .or_insert_with(|| Value::String(ROSTER_ACTOR.to_owned()));
     let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
         RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
@@ -566,6 +572,41 @@ fn sync_test_operation_at(
     );
     operation.created_at = created_at;
     operation
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture preserves the accepted Event envelope coordinates"
+)]
+fn accepted_sync_test_operation_at(
+    operation_id: &str,
+    event_id: &str,
+    actor: &str,
+    actor_seq: u64,
+    kind: impl AsRef<str>,
+    payload: Value,
+    created_at: DateTime<Utc>,
+) -> arkret_event_draft::ProjectedEventOperation {
+    let mut event = arkret_wire::test_support::raw_event_at(
+        kind.as_ref(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
+        },
+        crate::test_actor_id_str(actor),
+        actor_seq,
+        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000002")).unwrap(),
+        payload,
+        created_at,
+    )
+    .expect("accepted sync fixture Event");
+    event.event_id = arkret_identifiers::EventId::new(event_id.to_owned()).unwrap();
+    arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .expect("accepted sync fixture operation")
 }
 
 fn roster_realm(public: bool, include_caller: bool) -> RealmDirectoryEntry {
@@ -795,7 +836,7 @@ fn canonical_event_record_received_at(
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
         },
-        crate::test_actor_id_str(actor_id),
+        arkret_identifiers::DidCoreId::new(actor_id.to_owned()).unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000001")).unwrap(),
         payload,
@@ -1074,14 +1115,12 @@ fn canonical_value_digest(value: &Value) -> String {
 // spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
 #[test]
 fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
-    use arkret_event_draft::ProjectedEventOperation as Operation;
-    use arkret_identifiers::OperationId;
-
     use crate::routing::events::projection::project_member_identity_update;
 
     let state = test_state();
     let realm = ROSTER_REALM;
     let actor = ROSTER_ACTOR;
+    let created_at = now();
     let first_event_id = "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc";
     let second_event_id = "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD";
 
@@ -1097,17 +1136,19 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
 
     // First update. The canonical `ak:event:` id is envelope metadata in the
     // typed projection context and never part of the signed payload.
-    let first_op = arkret_event_draft::test_support::raw_projected_operation(
-        OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned()).unwrap(),
-        RealmId::new(realm.to_owned()).unwrap(),
-        arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
+    let first_op = accepted_sync_test_operation_at(
+        "ak:operation:01904100-0000-7000-8000-0000000000e1",
+        first_event_id,
+        ROSTER_ACTOR_FULL,
+        1,
+        arkret_wire::EventKind::MemberIdentityUpdate,
         json!({
-            "event_id": first_event_id,
             "realm_id": realm,
             "actor_id": actor,
             "segment": "member_identity",
             "identity_payload": first_identity,
         }),
+        created_at,
     );
     project_member_identity_update(&state, &first_op);
 
@@ -1124,18 +1165,20 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
             "display_profile": { "display_name": "Alice 2" }
         }
     });
-    let second_op = arkret_event_draft::test_support::raw_projected_operation(
-        OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000e2".to_owned()).unwrap(),
-        RealmId::new(realm.to_owned()).unwrap(),
-        arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
+    let second_op = accepted_sync_test_operation_at(
+        "ak:operation:01904100-0000-7000-8000-0000000000e2",
+        second_event_id,
+        ROSTER_ACTOR_FULL,
+        2,
+        arkret_wire::EventKind::MemberIdentityUpdate,
         json!({
-            "event_id": second_event_id,
             "realm_id": realm,
             "actor_id": actor,
             "segment": "member_identity",
             "identity_payload": second_identity,
             "replaces": [ { "event_id": first_event_id, "payload_digest": first_digest } ],
         }),
+        created_at + ChronoDuration::milliseconds(1),
     );
     project_member_identity_update(&state, &second_op);
 

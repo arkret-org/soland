@@ -525,10 +525,14 @@ pub(crate) async fn dev_token(state: AppState) -> String {
 }
 
 async fn authorize_test_event_device(state: &AppState, actor: &str, device_id: &str) {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let persistence = state.test_persistence();
     let devices = persistence.devices();
     let mut record = devices
-        .get(actor, device_id)
+        .get(actor_core.as_str(), device_id)
         .await
         .unwrap()
         .expect("dev-login persists its device inventory record");
@@ -546,9 +550,13 @@ pub(crate) async fn dev_token_for_device(
     device_id: &str,
     display_name: &str,
 ) -> String {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": device_id,
             "display_name": display_name
         }))
@@ -1378,9 +1386,13 @@ pub(crate) async fn register_account(
     handle: &str,
     device_id: &str,
 ) -> String {
+    let full_id = DidFullId::new(did.to_owned()).expect("fixture account full DID");
+    let principal_id =
+        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture account core id");
     let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
-            "principal_id": did,
+            "principal_id": principal_id,
+            "full_id": full_id,
             "display_name": handle.trim_start_matches('@'),
             "device_id": device_id
         }))
@@ -1395,13 +1407,14 @@ pub(crate) async fn register_account(
         .await
         .unwrap();
     assert_eq!(
-        registered["principal_id"], did,
+        registered["principal_id"],
+        principal_id.as_str(),
         "register response: {registered}"
     );
 
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": did,
+            "actor": principal_id,
             "device_id": device_id,
             "display_name": handle.trim_start_matches('@')
         }))
@@ -1587,7 +1600,17 @@ pub(crate) const HTTP_API_FIXTURE_BASIS: soland_test_support::cba_basis::Fixture
     );
 
 fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
-    soland_test_support::cba_basis::realm_basis(realm_id, subject, notary, HTTP_API_FIXTURE_BASIS)
+    let subject_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(subject.to_owned())
+            .expect("fixture basis subject full DID"),
+    )
+    .expect("fixture basis subject projection");
+    soland_test_support::cba_basis::realm_basis(
+        realm_id,
+        &subject_core,
+        notary,
+        HTTP_API_FIXTURE_BASIS,
+    )
 }
 
 /// The service DID every fixture Realm designates as its notary.

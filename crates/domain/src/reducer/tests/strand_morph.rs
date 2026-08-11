@@ -21,7 +21,7 @@ fn strand_lifecycle_round_trip() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Payment refactor",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -40,7 +40,7 @@ fn strand_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::StrandArchive,
             realm_id,
-            serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "target_ref": strand_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -60,7 +60,7 @@ fn strand_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::StrandRestore,
             realm_id,
-            serde_json::json!({ "target_ref": strand_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "target_ref": strand_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -93,7 +93,7 @@ fn strand_lifecycle_preflight_rejects_illegal_transitions() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Refactor",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -178,7 +178,7 @@ fn morph_lifecycle_round_trip() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -231,7 +231,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -318,7 +318,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Launch",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -342,7 +342,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
                 "board_space_id": board_space_id,
                 "target_space_id": "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
                 "rank": "a1",
-                "sender": "did:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
             }),
         ),
         &hlc,
@@ -361,7 +361,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     );
     assert_eq!(
         state.strands[strand_id].updated_by.as_deref(),
-        Some("did:web:alice.example")
+        Some("ak:did_core:web:alice.example")
     );
 
     // ak.strand.reorder — same family, same effect.
@@ -374,7 +374,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
                 "board_space_id": board_space_id,
                 "space_id": "ak:space:AcYTKs4ZiqRv25YJCWQZHLEXQk6KYMtujf2hpo1tUy99",
                 "rank": "a2",
-                "sender": "did:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
             }),
         ),
         &hlc,
@@ -422,7 +422,7 @@ fn strand_position_events_queue_unknown_strand() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": { "title": "Backfill target" },
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -453,7 +453,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Sensitive strand",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -468,7 +468,7 @@ fn redaction_with_strand_object_ref_flips_to_redacted() {
             serde_json::json!({
                 "target_event_id": "ak:event:AZpcyCdqige1P-5w7zjYU5ugeAn8qSwSCpFRU9CRz2SA",
                 "object_ref": strand_id,
-                "by": "did:web:alice.example",
+                "by": "ak:did_core:web:alice.example",
                 "reason": "policy violation",
             }),
         ),
@@ -506,7 +506,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Sensitive task" },
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -519,7 +519,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
             serde_json::json!({
                 "target_event_id": "ak:event:AUYmiWygi5zNhCFs6fat_lSDpnktIttb8rT9AIwOHC5i",
                 "object_ref": morph_id,
-                "sender": "did:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
             }),
         ),
         &hlc,
@@ -554,7 +554,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Strand",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -601,7 +601,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
                     "realm_id": realm_id,
                     "morph_kind": "task",
                     "metadata": { "title": "Task" },
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -654,7 +654,7 @@ fn strand_tracks_update_touches_active_strand_only() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Launch",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -670,7 +670,7 @@ fn strand_tracks_update_touches_active_strand_only() {
                 "patch": {
                     "tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}
                 },
-                "sender": "did:web:alice.example",
+                "sender": "ak:did_core:web:alice.example",
             }),
         ),
         &hlc,
@@ -701,7 +701,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
                 "object": {
                     "id": strand_id,
                     "realm_id": realm_id,
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "tracks": {
                         "discussion": {
                             "is_primary": true,
@@ -728,7 +728,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
                 "tracks.synthesis.enabled": {"$op": "set", "value": true},
                 "tracks.synthesis.is_primary": {"$op": "set", "value": true}
             },
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
         }),
     );
     assert_eq!(state.check_strand_tracks_transition(&tracks_op), Ok(()));
@@ -769,7 +769,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "title": "Refactor",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),

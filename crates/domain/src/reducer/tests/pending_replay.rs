@@ -16,7 +16,7 @@ fn space_create() -> Operation {
                 "realm_id": REALM,
                 "kind": "list",
                 "title": "Inbox",
-                "created_by": "did:web:alice.example"
+                "created_by": "ak:did_core:web:alice.example"
             }
         }),
     )
@@ -31,7 +31,7 @@ fn strand_create() -> Operation {
                 "id": STRAND,
                 "realm_id": REALM,
                 "metadata": { "title": "Original" },
-                "created_by": "did:web:alice.example"
+                "created_by": "ak:did_core:web:alice.example"
             }
         }),
     )
@@ -98,7 +98,7 @@ fn relation_create_waits_for_unknown_endpoint() {
             "relation_id": RELATION,
             "relation_kind": "references",
             "from_ref": STRAND,
-            "to_ref": "did:web:bob.example"
+            "to_ref": "ak:did_core:web:bob.example"
         }),
     );
 
@@ -138,8 +138,8 @@ fn relation_update_pending_replays_after_create() {
         serde_json::json!({
             "relation_id": RELATION,
             "relation_kind": "assigned_to",
-            "from_ref": "did:web:alice.example",
-            "to_ref": "did:web:bob.example"
+            "from_ref": "ak:did_core:web:alice.example",
+            "to_ref": "ak:did_core:web:bob.example"
         }),
     );
     state.apply(&create, &hlc);
@@ -172,7 +172,7 @@ fn message_revision_pending_replays_after_original_event() {
         REALM,
         serde_json::json!({
             "event_id": EVENT,
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "thread_id": STRAND,
             "content": { "kind": "ak.content.text", "body": "original" }
         }),
@@ -197,7 +197,7 @@ fn object_redaction_pending_replays_after_object_create() {
         serde_json::json!({
             "target_event_id": EVENT,
             "object_ref": STRAND,
-            "by": "did:web:alice.example"
+            "by": "ak:did_core:web:alice.example"
         }),
     );
 

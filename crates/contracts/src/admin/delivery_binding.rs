@@ -17,8 +17,6 @@ pub struct RealmDeliveryBindingPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binding_source_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_frontier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 

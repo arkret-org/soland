@@ -149,7 +149,7 @@ fn space_container_lifecycle_round_trip() {
                     "realm_id": realm_id,
                     "kind": "board",
                     "title": "Roadmap",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -172,7 +172,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -193,7 +193,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceRestore,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -214,7 +214,7 @@ fn space_container_lifecycle_round_trip() {
         &make_operation(
             arkret_wire::EventKind::SpaceTombstone,
             realm_id,
-            serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": container_space_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -252,7 +252,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Todo",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                 }
             }),
         ),
@@ -368,7 +368,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Original",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -404,7 +404,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Parent",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -545,7 +545,7 @@ fn space_container_child_order_tracks_rank_updates() {
                     "realm_id": realm_id,
                     "kind": "board",
                     "title": "Sprint",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -568,7 +568,7 @@ fn space_container_child_order_tracks_rank_updates() {
                         "title": title,
                         "parent_space_id": board_id,
                         "rank": rank,
-                        "created_by": "did:web:alice.example"
+                        "created_by": "ak:did_core:web:alice.example"
                     }
                 }),
             ),
@@ -621,7 +621,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
                     "realm_id": realm_id,
                     "kind": "board",
                     "title": "Sprint",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -639,7 +639,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
                     "title": "Todo",
                     "parent_space_id": board_id,
                     "rank": "r001",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -661,7 +661,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
                             "rank": "r007"
                         }
                     },
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -671,7 +671,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": list_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -700,7 +700,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
         &make_operation(
             arkret_wire::EventKind::SpaceRestore,
             realm_id,
-            serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": list_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -736,7 +736,7 @@ fn board_archive_cascades_child_lists_and_cards() {
                     "realm_id": realm_id,
                     "kind": "board",
                     "title": "Sprint",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -754,7 +754,7 @@ fn board_archive_cascades_child_lists_and_cards() {
                     "title": "Todo",
                     "parent_space_id": board_id,
                     "rank": "r001",
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -776,7 +776,7 @@ fn board_archive_cascades_child_lists_and_cards() {
                             "rank": "r007"
                         }
                     },
-                    "created_by": "did:web:alice.example"
+                    "created_by": "ak:did_core:web:alice.example"
                 }
             }),
         ),
@@ -787,7 +787,7 @@ fn board_archive_cascades_child_lists_and_cards() {
         &make_operation(
             arkret_wire::EventKind::SpaceArchive,
             realm_id,
-            serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": board_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -808,7 +808,7 @@ fn board_archive_cascades_child_lists_and_cards() {
         &make_operation(
             arkret_wire::EventKind::SpaceRestore,
             realm_id,
-            serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
+            serde_json::json!({ "space_id": board_id, "sender": "ak:did_core:web:alice.example" }),
         ),
         &hlc,
     );
@@ -838,7 +838,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     let public_strand_id = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
     let scoped_strand_id = "ak:strand:ATz4yMg8D3eSMJ7kiPNr0BF70hg3o_DBZklFZd5GZSuJ";
 
-    seed_realm_member(&mut state, realm_id, "did:web:alice.example");
+    seed_realm_member(&mut state, realm_id, "ak:did_core:web:alice.example");
     state.apply(
         &make_operation(
             arkret_wire::EventKind::CircleCreate,
@@ -848,7 +848,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "id": circle_id,
                     "realm_id": realm_id,
                     "title": "Private",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
@@ -863,9 +863,9 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "membership": "join",
-                "sender": "did:web:alice.example"
+                "sender": "ak:did_core:web:alice.example"
             }),
         ),
         &hlc,
@@ -880,7 +880,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Private list",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "child_scope_policy": {
                         "kind": "require_scope_circle_id",
                         "scope_circle_id": circle_id
@@ -914,7 +914,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "profile": "discussion"
                     }
                 },
-                "created_by": "did:web:alice.example",
+                "created_by": "ak:did_core:web:alice.example",
                 "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
@@ -958,7 +958,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "profile": "discussion"
                     }
                 },
-                "created_by": "did:web:alice.example",
+                "created_by": "ak:did_core:web:alice.example",
                 "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
@@ -983,7 +983,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     let child_id = "ak:space:AUZVSPb9v-NuEN6dQgTA44vXJnQ1d-pxAvvfplV4zgOc";
     let scoped_child_id = "ak:space:Ab-u0alSwVcrUhqmeFQmMzuYs83_IrjXlRSBnpm-B-JL";
 
-    seed_realm_member(&mut state, realm_id, "did:web:alice.example");
+    seed_realm_member(&mut state, realm_id, "ak:did_core:web:alice.example");
     state.apply(
         &make_operation(
             arkret_wire::EventKind::CircleCreate,
@@ -993,7 +993,7 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "id": circle_id,
                     "realm_id": realm_id,
                     "title": "Private",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
@@ -1008,9 +1008,9 @@ fn child_scope_policy_gates_space_parent_edges() {
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "membership": "join",
-                "sender": "did:web:alice.example"
+                "sender": "ak:did_core:web:alice.example"
             }),
         ),
         &hlc,
@@ -1025,7 +1025,7 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "realm_id": realm_id,
                     "kind": "folder",
                     "title": "Private parent",
-                    "created_by": "did:web:alice.example",
+                    "created_by": "ak:did_core:web:alice.example",
                     "child_scope_policy": {
                         "kind": "require_same_scope"
                     },
@@ -1044,7 +1044,7 @@ fn child_scope_policy_gates_space_parent_edges() {
             "realm_id": realm_id,
             "kind": "folder",
             "title": title,
-            "created_by": "did:web:alice.example"
+            "created_by": "ak:did_core:web:alice.example"
         });
         if let Some(scope) = scope {
             object["scope_circle_id"] = serde_json::json!(scope);

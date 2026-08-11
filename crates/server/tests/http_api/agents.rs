@@ -496,6 +496,7 @@ async fn provision_agent_sdk_commit_attempt(
     .unwrap();
     let arkret_models_collaboration::agent_operations::AgentProvisionOutcome::AwaitingControllerEvent {
         agent_id,
+        full_id,
         controller_realm_id,
         allocation_handle,
         controller_authorization_ref,
@@ -503,6 +504,10 @@ async fn provision_agent_sdk_commit_attempt(
     } = preparation else {
         panic!("prepare must await the controller-authored provision Event");
     };
+    assert_eq!(
+        arkret_wire::project_full_id_to_core_id(&full_id).unwrap(),
+        agent_id
+    );
     let expected_scope_digest =
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
@@ -627,6 +632,7 @@ async fn provision_agent_sdk_commit_attempt(
             operation_id,
             idempotency_key,
             agent_id,
+            full_id,
             principal_control_realm_id,
             allocation_handle,
             slug: slug.to_owned(),
@@ -844,6 +850,15 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         assert_eq!(replayed.take_json::<Value>().await.unwrap(), recovered_body);
 
         let agent_id = commit_body["agent_id"].as_str().unwrap();
+        let agent_full_id = commit_body["full_id"].as_str().unwrap();
+        assert_eq!(
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_identifiers::DidFullId::new(agent_full_id.to_owned()).unwrap()
+            )
+            .unwrap()
+            .as_str(),
+            agent_id
+        );
         let event_ids = [commit_body["provision_event"]["event"]["event_id"]
             .as_str()
             .unwrap()];
@@ -858,7 +873,11 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
                 "fault plan {plan:?} duplicated provision event {event_id}"
             );
         }
-        let did_history = persistence.webvh().list_log_events(agent_id).await.unwrap();
+        let did_history = persistence
+            .webvh()
+            .list_log_events(agent_full_id)
+            .await
+            .unwrap();
         assert_eq!(
             did_history.len(),
             1,
@@ -866,10 +885,12 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         );
         let did_document = persistence
             .webvh()
-            .get_document(agent_id)
+            .get_document(agent_full_id)
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(did_document.did, agent_full_id);
+        assert_eq!(did_document.did_document["id"], agent_full_id);
         assert_eq!(
             did_document.key_log_head.as_deref(),
             Some(did_history[0].event_digest.as_str())
@@ -941,6 +962,8 @@ async fn agent_provision_commit_requires_its_server_allocation() {
                 "ak:did_core:web:unallocated-agent.example",
             )
             .unwrap(),
+            full_id: arkret_identifiers::DidFullId::new("did:web:unallocated-agent.example")
+                .unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             )

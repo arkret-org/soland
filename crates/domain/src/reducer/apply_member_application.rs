@@ -546,7 +546,7 @@ mod tests {
             (REALM.to_owned(), APPLICATION.to_owned()),
             MemberApplicationState {
                 realm_id: REALM.to_owned(),
-                applicant: "did:web:applicant.example".to_owned(),
+                applicant: "ak:did_core:web:applicant.example".to_owned(),
                 receipt_digest: APPLICATION.to_owned(),
                 knock_ref: "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-".to_owned(),
                 policy_version_digest:
@@ -557,7 +557,7 @@ mod tests {
                         .to_owned(),
                 private_body: json!({"mode": "server_protected", "answers": []}),
                 status: "accepted".to_owned(),
-                accepted_by: Some("did:web:reviewer.example".to_owned()),
+                accepted_by: Some("ak:did_core:web:reviewer.example".to_owned()),
                 accepted_grant_id: Some(
                     "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo".to_owned(),
                 ),

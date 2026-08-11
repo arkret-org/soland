@@ -1099,6 +1099,34 @@ mod tests {
     use super::*;
     use crate::routing::identity::device_messages::device_message_envelopes_after;
 
+    fn accepted_test_operation(
+        operation_id: arkret_identifiers::OperationId,
+        realm_id: arkret_identifiers::RealmId,
+        actor: &str,
+        actor_seq: u64,
+        kind: arkret_wire::EventKind,
+        payload: serde_json::Value,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> arkret_event_draft::ProjectedEventOperation {
+        let event = arkret_wire::test_support::raw_event_at(
+            kind.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id },
+            arkret_identifiers::DidCoreId::new(actor.to_owned()).unwrap(),
+            actor_seq,
+            arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000003")).unwrap(),
+            payload,
+            created_at,
+        )
+        .unwrap();
+        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            operation_id,
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn canonical_no_hlc_projection_does_not_restate_or_append_synthetic_timeline() {
         let state = AppState::new(
@@ -1106,6 +1134,7 @@ mod tests {
             soland_storage_postgres::Db { pool: None },
         );
         let actor = arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
+        let actor_core = arkret_wire::project_full_id_to_core_id(&actor).unwrap();
         let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x32; 32],
@@ -1118,11 +1147,11 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id(&actor),
+            actor_core.clone(),
             8,
             arkret_identifiers::Hlc::new("019041000000-0000-a13f9c2e").unwrap(),
             json!({
-                "peer": {"kind": "human", "principal_id": "did:web:bob.example"},
+                "peer": {"kind": "human", "principal_id": "ak:did_core:web:bob.example"},
                 "granted_to_peer_scopes": [],
                 "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64))
             }),
@@ -1151,7 +1180,7 @@ mod tests {
 
         project_accepted_canonical_event_from_device(
             &state,
-            actor.as_str(),
+            actor_core.as_str(),
             "ak:device:019a0000-0000-7000-8000-000000000008",
             &operation,
             &cell_writes,
@@ -1185,9 +1214,9 @@ mod tests {
             "ak:operation:0196419b-1000-7000-8000-000000000102",
         )
         .unwrap();
-        let sender = "did:web:alice.example";
+        let sender = "ak:did_core:web:alice.example";
         let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000101";
-        let recipient = "did:web:bob.example";
+        let recipient = "ak:did_core:web:bob.example";
         let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000101";
         let payload = json!({
             "share_kind": "member_device",
@@ -1209,11 +1238,14 @@ mod tests {
             "ciphertext": "sealed",
             "created_at": "2026-07-05T00:00:00.000Z"
         });
-        let operation = arkret_event_draft::test_support::raw_projected_operation(
+        let operation = accepted_test_operation(
             operation_id.clone(),
-            realm_id,
+            realm_id.clone(),
+            sender,
+            1,
             arkret_wire::EventKind::RealmKeyShare,
             payload,
+            chrono::Utc::now(),
         );
 
         project_accepted_operations_from_device(
@@ -1244,9 +1276,9 @@ mod tests {
     fn realm_key_share_device_projection_preserves_payload_in_envelope_content() {
         let realm_id = "ak:realm:ARZTx1K62JEESOCDcEVZTToJPN3vCoG0zRRnpm3t3OeX";
         let operation_id = "ak:operation:0196419b-1000-7000-8000-000000000002";
-        let sender = "did:web:alice.example";
+        let sender = "ak:did_core:web:alice.example";
         let sender_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-        let recipient = "did:web:bob.example";
+        let recipient = "ak:did_core:web:bob.example";
         let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
         let payload = json!({
             "share_kind": "member_device",
@@ -1307,7 +1339,7 @@ mod tests {
 
     #[test]
     fn accepted_circle_member_context_only_adds_verified_capability() {
-        let operation = arkret_event_draft::test_support::raw_projected_operation(
+        let operation = accepted_test_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000202".to_owned(),
             )
@@ -1316,12 +1348,15 @@ mod tests {
                 "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p".to_owned(),
             )
             .unwrap(),
-            arkret_wire::EventKind::CircleMemberState.as_str(),
+            "ak:did_core:web:admin.example",
+            2,
+            arkret_wire::EventKind::CircleMemberState,
             json!({
                 "circle_id": "ak:circle:Acz03N1u4b-3h3OIv0LXsw-CHe-rsMKeWw7ZvA-ohkgx",
-                "actor_id": "did:web:agent.example",
+                "actor_id": "ak:did_core:web:agent.example",
                 "membership": "join"
             }),
+            chrono::Utc::now(),
         );
 
         let contextual = accepted_circle_member_reducer_operation(&operation);
@@ -1339,7 +1374,7 @@ mod tests {
 
     #[test]
     fn accepted_member_state_context_preserves_received_at_outside_typed_payload() {
-        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+        let mut operation = accepted_test_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:0196419b-1000-7000-8000-000000000203".to_owned(),
             )
@@ -1348,15 +1383,18 @@ mod tests {
                 "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p".to_owned(),
             )
             .unwrap(),
-            arkret_wire::EventKind::MemberState.as_str(),
+            "ak:did_core:web:member.example",
+            3,
+            arkret_wire::EventKind::MemberState,
             json!({
                 "realm_id": "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p",
-                "actor_id": "did:web:member.example",
+                "actor_id": "ak:did_core:web:member.example",
                 "membership": "join",
-                "delivery_status": "unroutable",
-                "event_received_at": "2026-07-07T05:20:58.398Z"
+                "delivery_status": "unroutable"
             }),
+            chrono::Utc::now(),
         );
+        operation.payload["event_received_at"] = json!("2026-07-07T05:20:58.398Z");
         let authored_at = operation.created_at;
 
         let contextual = accepted_member_state_reducer_operation(&operation);

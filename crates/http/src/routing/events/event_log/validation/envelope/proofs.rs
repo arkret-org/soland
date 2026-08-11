@@ -192,7 +192,13 @@ pub(crate) async fn validate_event_proofs(
             }
             method_root.to_owned()
         } else {
-            if method_root != ordinary_proof_root {
+            let method_root = arkret_wire::DidFullId::new(method_root.to_owned())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id));
+            let ordinary_proof_root_id = arkret_wire::DidCoreId::new(ordinary_proof_root.clone());
+            if method_root.as_ref().ok() != ordinary_proof_root_id.as_ref().ok()
+                || method_root.is_err()
+                || ordinary_proof_root_id.is_err()
+            {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",

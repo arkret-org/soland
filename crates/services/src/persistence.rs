@@ -394,7 +394,7 @@ impl PersistenceHandle {
         let now = chrono::Utc::now();
         let account = soland_storage::AccountRecord {
             id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
-            did: "did:web:alice.example".to_owned(),
+            did: "ak:did_core:web:alice.example".to_owned(),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,
@@ -409,7 +409,7 @@ impl PersistenceHandle {
         self.persistence
             .realm_meta()
             .put(
-                "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
+                "ak:realm:AehgGDMLc7-ZyfS74e4jHU84lk8I1GrpNU5GJWkxMGV4",
                 &soland_storage::RealmMetaRecord {
                     owner: account.did,
                     deleted: false,

@@ -33,15 +33,15 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairActivationState, AgentKeyPairOutcome,
-    AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
-    AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody, AgentPauseRequestBody,
-    AgentPresence, AgentPresenceState, AgentProjection, AgentProvisionOutcome,
-    AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker,
-    AgentReadinessState, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
-    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
-    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
-    AgentView, KeyState,
+    AgentGrantDetachOutcome, AgentGrantDetachRequestBody, AgentKeyPairActivationState,
+    AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState,
+    AgentList, AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody,
+    AgentPauseRequestBody, AgentPresence, AgentPresenceState, AgentProjection,
+    AgentProvisionOutcome, AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentReadiness,
+    AgentReadinessBlocker, AgentReadinessState, AgentRenewPairingOutcome,
+    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
+    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
+    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
 };
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
@@ -72,9 +72,8 @@ use crate::state::AppState;
 
 mod dev_fanout;
 use dev_fanout::{
-    require_controller_principal_control_realm, revoke_capability_grant,
-    submit_durable_agent_lifecycle, submit_provision_event, submit_signed_agent_event,
-    validate_durable_agent_lifecycle,
+    require_controller_principal_control_realm, submit_durable_agent_lifecycle,
+    submit_provision_event, submit_signed_agent_event, validate_durable_agent_lifecycle,
 };
 
 mod common;

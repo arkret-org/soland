@@ -61,7 +61,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
         REALM_ID.to_owned(),
         SolandRealmState {
             realm_id: REALM_ID.to_owned(),
-            owner: Some("did:web:alice.example".to_owned()),
+            owner: Some("ak:did_core:web:alice.example".to_owned()),
             title: Some("Product".to_owned()),
             deleted: false,
             archived: false,
@@ -107,7 +107,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
                         }
                     }
                 },
-                "created_by": "did:web:alice.example"
+                "created_by": "ak:did_core:web:alice.example"
             }
         }),
     );
@@ -129,7 +129,7 @@ fn pin_payload(note: Value) -> Value {
         "pin_scope": {"kind": "realm", "id": REALM_ID},
         "target_ref": STRAND_ID,
         "rank": "a0",
-        "sender": "did:web:alice.example",
+        "sender": "ak:did_core:web:alice.example",
         "note": note
     })
 }
@@ -146,7 +146,7 @@ fn rsvp_payload_for(status: &str, occurrence: Value, _unused: Value) -> Value {
     serde_json::json!({
         "event_ref": STRAND_ID,
         "occurrence": occurrence,
-        "sender": "did:web:alice.example",
+        "sender": "ak:did_core:web:alice.example",
         "entry": {
             "schedule_basis_refs": [BASIS_A],
             "response": {"status": status}
@@ -485,7 +485,7 @@ fn schedule_revision_frontier_tracks_only_calendar_changes() {
         REALM_ID,
         serde_json::json!({
             "target_ref": STRAND_ID,
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "patch": {"metadata.title": {"$op": "set", "value": "Renamed"}}
         }),
     );
@@ -508,7 +508,7 @@ fn schedule_revision_frontier_tracks_only_calendar_changes() {
         REALM_ID,
         serde_json::json!({
             "target_ref": STRAND_ID,
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "patch": {
                 "metadata.fields.calendar": {
                     "$op": "set",
@@ -549,7 +549,7 @@ fn concurrent_schedule_updates_retain_both_frontier_heads() {
     let schedule_patch = |start: &str, end: &str| {
         serde_json::json!({
             "target_ref": STRAND_ID,
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "patch": {
                 "metadata.fields.calendar": {
                     "$op": "set",

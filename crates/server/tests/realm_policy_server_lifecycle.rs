@@ -48,7 +48,7 @@ fn test_config() -> AppConfig {
         development_mode: true,
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
-        trust_domain: TRUST_DOMAIN.to_owned(),
+        trust_domain: arkret_identifiers::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
         ..soland_test_support::app_config()
     }
 }
@@ -65,9 +65,13 @@ fn ed25519_public_multibase(signing: &SigningKey) -> String {
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core id");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": actor,
+            "actor": actor_core,
             "device_id": device_id,
             "display_name": display,
         }))
@@ -81,11 +85,13 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
 
 async fn prepare_alice(state: &AppState) -> String {
     let token = dev_token(state.clone(), ALICE, ALICE_DEVICE, "Alice").await;
+    let alice_core =
+        arkret_wire::project_full_id_to_core_id(&DidFullId::new(ALICE).unwrap()).unwrap();
     let signing = SigningKey::from_bytes(&EVENT_SIGNING_SEED);
     let mut device = state
         .test_persistence()
         .devices()
-        .get(ALICE, ALICE_DEVICE)
+        .get(alice_core.as_str(), ALICE_DEVICE)
         .await
         .unwrap()
         .unwrap();

@@ -9,6 +9,38 @@ use arkret_models_integration::models_push::{
 use super::helpers::*;
 use crate::common::*;
 
+fn core_principal(full_id: &str) -> arkret_identifiers::DidCoreId {
+    arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(full_id.to_owned()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn accepted_device_authorize_operation(
+    operation_id: OperationId,
+    realm_id: RealmId,
+    actor: arkret_identifiers::DidCoreId,
+    payload: Value,
+) -> arkret_event_draft::ProjectedEventOperation {
+    let event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm { realm_id },
+        actor,
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
+        payload,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        operation_id,
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn auth_keys_device_messages_and_blobs_work() {
     let state = soland_test_support::app_state(test_config());
@@ -836,6 +868,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
+    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
     let device_key = SigningKey::from_bytes(&[202u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
@@ -843,10 +876,10 @@ async fn device_authorize_projects_public_key_into_devices_table() {
     // Exercise accepted device authorization projection directly.
     let control_realm = soland_test_support::fixture_principal_control_realm(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
-    let operation = arkret_event_draft::test_support::raw_projected_operation(
+    let operation = accepted_device_authorize_operation(
         OperationId::new(operation_id.clone()).unwrap(),
         RealmId::new(control_realm).unwrap(),
-        "ak.device.authorize",
+        alice_core.clone(),
         serde_json::json!({
             // device-lifecycle.md §5.2: an accepted ak.device.authorize MUST
             // carry hpke_key + canonical algorithms (they enter the device
@@ -854,24 +887,25 @@ async fn device_authorize_projects_public_key_into_devices_table() {
             // §5.2 possession-proof input). project_device_authorize parses the
             // typed DeviceAuthorizePayload, so the fixture must be a
             // spec-complete device.authorize, not a three-field stub.
-            "principal_id": alice,
+            "principal_id": alice_core,
             "device_id": alice_device,
             "device_public_key": multibase,
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice,
+            "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
             "authorization_binding_kind": "root_anchored",
             "device_signature": "c2ln"
         }),
     );
     let expected_authorize_event_id = operation.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
+        .await;
 
     let device = state
         .test_persistence()
         .devices()
-        .get(alice, alice_device)
+        .get(alice_core.as_str(), alice_device)
         .await
         .unwrap()
         .expect("device.authorize projection persisted the device");
@@ -891,6 +925,7 @@ async fn device_authorize_projects_public_key_into_devices_table() {
 async fn device_authorize_projection_preserves_atomic_generation_binding() {
     let state = soland_test_support::app_state(test_config());
     let alice = "did:web:managed-alice.example";
+    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000003";
     let generation_ref = "1-QmBootstrapGeneration";
     let now = chrono::Utc::now();
@@ -898,7 +933,7 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: alice.to_owned(),
+            actor: alice_core.to_string(),
             device_id: alice_device.to_owned(),
             display_name: None,
             verification_state: "verified".to_owned(),
@@ -914,29 +949,30 @@ async fn device_authorize_projection_preserves_atomic_generation_binding() {
         .unwrap();
 
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
-    let operation = arkret_event_draft::test_support::raw_projected_operation(
+    let operation = accepted_device_authorize_operation(
         OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
         RealmId::new(soland_test_support::fixture_principal_control_realm(alice)).unwrap(),
-        "ak.device.authorize",
+        alice_core.clone(),
         serde_json::json!({
-            "principal_id": alice,
+            "principal_id": alice_core,
             "device_id": alice_device,
             "device_public_key": test_ed25519_multibase_public(&device_key),
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice,
+            "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
             "authorization_binding_kind": "root_anchored",
             "device_signature": "c2ln"
         }),
     );
 
-    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
+        .await;
 
     let projected = state
         .test_persistence()
         .devices()
-        .get(alice, alice_device)
+        .get(alice_core.as_str(), alice_device)
         .await
         .unwrap()
         .expect("device remains projected");
@@ -951,34 +987,36 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:managed-alice.example";
+    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000004";
     let device_key = SigningKey::from_bytes(&[203u8; 32]);
     let multibase = test_ed25519_multibase_public(&device_key);
     let control_realm = soland_test_support::fixture_principal_control_realm(alice);
     let operation_id = new_prefixed_uuid7("ak:operation:");
-    let operation = arkret_event_draft::test_support::raw_projected_operation(
+    let operation = accepted_device_authorize_operation(
         OperationId::new(operation_id).unwrap(),
         RealmId::new(control_realm).unwrap(),
-        "ak.device.authorize",
+        alice_core.clone(),
         serde_json::json!({
             // An accepted ak.device.authorize carries device_public_key,
             // hpke_key, and canonical algorithms
             // (receiver rejects missing hpke_key/algorithms), plus the §5.2
             // authorized_by + not_before payload fields required by the typed
             // DeviceAuthorizePayload the projection parses.
-            "principal_id": alice,
+            "principal_id": alice_core,
             "device_id": alice_device,
             "device_public_key": multibase,
             "hpke_key": "z6LSTestServiceAttestedHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": alice,
+            "authorized_by": alice_core,
             "not_before": "2026-05-08T10:00:00.000Z",
             "authorization_binding_kind": "root_anchored",
             "device_signature": "c2ln"
         }),
     );
     let expected_authorize_event_id = operation.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(&state, alice, &[operation]).await;
+    soland_test_support::project_accepted_operations(&state, alice_core.as_str(), &[operation])
+        .await;
 
     let token = dev_token_for_device(
         state.clone(),
@@ -997,7 +1035,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][alice][alice_device];
+    let entry = &query["device_keys"][alice_core.as_str()][alice_device];
     assert_eq!(entry["device_status"], "active", "entry: {query}");
     assert_eq!(entry["device_signing_key"], format!("did:key:{multibase}"));
     assert_eq!(

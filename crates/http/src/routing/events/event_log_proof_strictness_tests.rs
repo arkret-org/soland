@@ -426,9 +426,9 @@ async fn circle_scoped_write_requires_circle_membership() {
     let state = make_state(true);
     let realm_id = "ak:realm:AU3fkxq_f4TuVlpZppN3pSPHhVOTTikXW_-Hw0vr9XCp";
     let circle_id = "ak:circle:AZT0NDzMS5h5Oz8ih_r5JqLxOrZZy4HxcAEY5s1MbM9K";
-    let member = "did:web:alice.example";
+    let member = "ak:did_core:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
-    let non_member = "did:web:slack-bridge.example:bot";
+    let non_member = "ak:did_core:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
 
     // Seed an active Circle whose only member is `member`.
@@ -515,8 +515,8 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     let circle_id = "ak:circle:AS5EmLqkRoAqtHJcDm0xGwZ8A-MgC4120y4IpSAbqFCJ";
     let strand_id = "ak:strand:AekvaCkXy9kgtwfnxzaKIOIIHF_-HZpSbCakATPdwWMH";
     let event_id = "ak:event:ATISmX7h_m-9AlDVmW5cqCG9eM06QsDQFjEjG675Jf3A";
-    let member = "did:web:alice.example";
-    let non_member = "did:web:slack-bridge.example:bot";
+    let member = "ak:did_core:web:alice.example";
+    let non_member = "ak:did_core:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
 
     {
@@ -625,8 +625,8 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     let circle_id = "ak:circle:AQIjwhwC5jFHrCd985kMq2m5ahV3nG7qBK-aMMYLbgAt";
     let scoped_morph_id = "ak:morph:AXlXsex0Kgdp6mgmqub7aKP53d1_Zp7PifQwrYfC-8HO";
     let realm_morph_id = "ak:morph:AXg0u_PNFrZzEeHPh_4tFOFF7XNlDbiHiSewgv_unmDK";
-    let member = "did:web:alice.example";
-    let non_member = "did:web:slack-bridge.example:bot";
+    let member = "ak:did_core:web:alice.example";
+    let non_member = "ak:did_core:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
 
     {
@@ -733,8 +733,8 @@ async fn applet_registration_requires_realm_admin() {
     // capability; an active `ak.realm.admin` grant is required.
     let state = make_state(true);
     let realm_id = "ak:realm:Aaleb4QrS8SxR5KXmKfDQZMNxW8WlSaUaySdeWV2-hVl";
-    let owner = "did:web:alice.example";
-    let outsider = "did:web:mallory.example";
+    let owner = "ak:did_core:web:alice.example";
+    let outsider = "ak:did_core:web:mallory.example";
     let now = chrono::Utc::now();
     state
         .realms()

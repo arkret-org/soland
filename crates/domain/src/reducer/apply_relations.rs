@@ -1115,7 +1115,7 @@ mod cross_realm_relation_tests {
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: "did:web:alice.example".to_owned(),
+            created_by: "ak:did_core:web:alice.example".to_owned(),
             created_at: chrono::Utc::now(),
             updated_by: None,
             updated_at: None,
@@ -1259,7 +1259,7 @@ mod cross_realm_relation_tests {
         let mut proj = proj();
         let now = chrono::Utc::now();
         assert!(matches!(
-            proj.apply_relation_create(&relation_op("watches", "did:web:alice.example", STRAND_A), now),
+            proj.apply_relation_create(&relation_op("watches", "ak:did_core:web:alice.example", STRAND_A), now),
             ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED
         ));
 
@@ -1271,7 +1271,7 @@ mod cross_realm_relation_tests {
                 realm_id: REALM_A.to_owned(),
                 relation_kind: "watches".to_owned(),
                 scope_circle_id: None,
-                from_ref: Some("did:web:alice.example".to_owned()),
+                from_ref: Some("ak:did_core:web:alice.example".to_owned()),
                 to_ref: Some(STRAND_A.to_owned()),
                 fields: Default::default(),
                 state: "active".to_owned(),
@@ -1353,7 +1353,7 @@ mod cross_realm_relation_tests {
             "ak:relation:Ae5nQV8vc0vdLoM4E0eWMAvKPBzLpSToH_xqOfADuOnG",
             "assigned_to",
             STRAND_A,
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         );
         let bob = relation_op_with_id_digest(
@@ -1361,7 +1361,7 @@ mod cross_realm_relation_tests {
             "ak:relation:AbgYe9iozlpYfT_UYRVvVPZMNqDryanxxBDlEdIY7ANC",
             "assigned_to",
             STRAND_A,
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         );
         let alice_new = relation_op_with_id_digest(
@@ -1369,7 +1369,7 @@ mod cross_realm_relation_tests {
             "ak:relation:Adb3UVZv-3xCDNGPJdzLl3MFKNLpKv5XtLbCpPalk8uj",
             "assigned_to",
             STRAND_A,
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         );
 

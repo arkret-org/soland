@@ -380,7 +380,7 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
 /// {
 ///   "welcome_id":             "ak:mls_welcome:<uuid>",
 ///   "group_id":               "ak:mls_group:<uuid>",
-///   "recipient_actor_id":     "did:web:bob.example",
+///   "recipient_actor_id":     "ak:did_core:web:bob.example",
 ///   "recipient_device_id":    "ak:device:<uuid>",
 ///   "ciphertext":             "<base64url(opaque MLS Welcome)>",
 ///   "key_package_id":         "ak:mls_keypackage:<uuid>"
@@ -646,7 +646,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 /// {
 ///   "group_id":            "ak:mls_group:<uuid>",
 ///   "expected_prev_epoch": <u64>,
-///   "leader_actor_id":     "did:web:alice.example",
+///   "leader_actor_id":     "ak:did_core:web:alice.example",
 ///   "commit_bytes_b64":    "<base64url(opaque MLS Commit)>"
 /// }
 /// ```

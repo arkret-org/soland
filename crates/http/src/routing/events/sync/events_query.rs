@@ -1352,6 +1352,7 @@ mod tests {
 
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
+    const TEST_ACTOR_CORE: &str = "ak:did_core:web:alice.example";
 
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
@@ -1608,7 +1609,7 @@ mod tests {
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",
-            "sender": TEST_ACTOR,
+            "sender": TEST_ACTOR_CORE,
             "content": {"kind": "ak.content.text", "body": "secret that must not leak"}
         });
         let revised_payload = json!({
@@ -1617,7 +1618,7 @@ mod tests {
             "realm_id": TEST_REALM,
             "strand_id": strand_id,
             "track_name": "discussion",
-            "sender": TEST_ACTOR,
+            "sender": TEST_ACTOR_CORE,
             "content": {"kind": "ak.content.text", "body": "revised secret that must not leak"}
         });
         let message = operation_at(
@@ -1639,7 +1640,7 @@ mod tests {
                 "event_id": redaction_event_id,
                 "message_id": message_id,
                 "reason": "test redaction",
-                "sender": TEST_ACTOR
+                "sender": TEST_ACTOR_CORE
             }),
             redacted_at,
         );

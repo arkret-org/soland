@@ -31,7 +31,7 @@ impl ProjectionState {
         };
         let realm_id = operation.realm_id.to_string();
         let inviter = operation.context.sender.to_string();
-        if arkret_identifiers::DidFullId::new(inviter.clone()).is_err() {
+        if arkret_identifiers::DidCoreId::new(inviter.clone()).is_err() {
             return rejected("inviter_invalid");
         }
         let Some(third_party_id) = payload.get("third_party_id") else {

@@ -743,8 +743,13 @@ pub(crate) async fn post_recovery_policy(
         fixture_basis,
     )
     .await;
+    let principal_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(principal_id.to_owned())
+            .expect("fixture recovery principal full DID"),
+    )
+    .expect("fixture recovery principal projection");
     let basis =
-        soland_test_support::cba_basis::realm_basis_seal(&realm_id, principal_id, fixture_basis);
+        soland_test_support::cba_basis::realm_basis_seal(&realm_id, &principal_core, fixture_basis);
     seed_local_notary_authority(&state, &realm, &basis);
     let prior = state
         .test_persistence()

@@ -1,6 +1,6 @@
 use super::*;
 const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-const AGENT: &str = "did:web:agent.example";
+const AGENT: &str = "ak:did_core:web:agent.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
 fn action_request(request_id: &str) -> Operation {
@@ -22,7 +22,7 @@ fn action_approve(request_id: &str) -> Operation {
             "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
             "request_id": request_id,
             "agent_id": AGENT,
-            "controller_id": "did:web:controller.example",
+            "controller_id": "ak:did_core:web:controller.example",
             "proposed_action": "ak.message.create",
             "target": { "kind": "realm", "realm_id": REALM },
             "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

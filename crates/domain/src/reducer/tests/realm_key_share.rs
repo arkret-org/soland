@@ -4,7 +4,7 @@ use super::*;
 
 const REALM: &str = "ak:realm:ARZTx1K62JEESOCDcEVZTToJPN3vCoG0zRRnpm3t3OeX";
 const OTHER_REALM: &str = "ak:realm:AVZ7nXDwlbG9ELz_LKV1N5EbIB4dgRviGHwq8qLD6yf_";
-const RECIPIENT: &str = "did:web:bob.example";
+const RECIPIENT: &str = "ak:did_core:web:bob.example";
 const RECIPIENT_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000b1";
 const SENDER_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000a1";
 
@@ -73,7 +73,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     let hlc = ServerHlc::new("realm-key-share-projected-context");
     let mut payload = realm_key_share_payload(realm_scope(REALM));
     payload["event_id"] = json!("ak:event:AecY6VFbHDy31xmAkuKo8He_U4xrDRuRu7A84_akXHBF");
-    payload["sender"] = json!("did:web:alice.example");
+    payload["sender"] = json!("ak:did_core:web:alice.example");
     let effect = state.apply(
         &make_operation(arkret_wire::EventKind::RealmKeyShare, REALM, payload),
         &hlc,

@@ -42,7 +42,6 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
             realm_id: realm_id.to_owned(),
             allowed_recipient_services: Vec::new(),
             binding_source_policy: None,
-            policy_frontier: None,
             updated_at: None,
         };
     };
@@ -60,10 +59,6 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
         .get("binding_source_policy")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let policy_frontier = value
-        .get("policy_frontier")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
     let updated_at = value
         .get("updated_at")
         .and_then(Value::as_str)
@@ -72,7 +67,6 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
         realm_id: realm_id.to_owned(),
         allowed_recipient_services,
         binding_source_policy,
-        policy_frontier,
         updated_at,
     }
 }
@@ -197,16 +191,16 @@ pub(super) async fn admin_list_member_routability(
         (allowed, routes_by_actor)
     };
 
+    let unrestricted = allowed.len() == 1 && allowed[0] == "*";
     let mut data: Vec<MemberRoutabilityRowOutcome> = members
         .into_iter()
         .map(|actor_id| {
             let route = routes_by_actor.get(&actor_id);
             let recipient_service_id = route.map(|(did, _)| did.clone());
-            // Empty allow-list means unrestricted (matches the reducer's
-            // delivery-binding gate semantics), so every known recipient
-            // is in-list when the allow-list is empty.
+            // The explicit ["*"] sentinel is unrestricted. Missing or empty
+            // allow-lists remain fail-closed, matching the reducer and schema.
             let in_allowed_list = match &recipient_service_id {
-                Some(did) => allowed.is_empty() || allowed.contains(did),
+                Some(did) => unrestricted || allowed.contains(did),
                 None => false,
             };
             let delivery_status = match route {

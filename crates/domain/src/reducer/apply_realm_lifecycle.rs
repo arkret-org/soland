@@ -712,14 +712,7 @@ impl ProjectionState {
             };
         let delivery_binding_frontier =
             if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                payload
-                    .get("delivery_binding")
-                    .and_then(Value::as_object)
-                    .and_then(|binding| binding.get("delivery_binding_frontier"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToOwned::to_owned)
-                    .or_else(|| event_ref.clone())
+                event_ref.clone()
             } else {
                 None
             };

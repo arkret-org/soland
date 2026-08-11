@@ -1,8 +1,8 @@
 use super::*;
 
 const REALM: &str = "ak:realm:AW2XhEBfjbMHqDBzRGwBXCaBZtSGUQTBe5CkC4pjU8O2";
-const OWNER: &str = "did:web:owner.example";
-const SUCCESSOR: &str = "did:web:successor.example";
+const OWNER: &str = "ak:did_core:web:owner.example";
+const SUCCESSOR: &str = "ak:did_core:web:successor.example";
 
 fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
@@ -85,7 +85,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": expected,
                 "patch": {
-                    "controller_id": "did:web:outsider.example",
+                    "controller_id": "ak:did_core:web:outsider.example",
                     "controller_epoch": 1
                 },
                 "successor_acceptance": "accepted",

@@ -16,24 +16,229 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use arkret_models_identity::{
+    ResolutionCommitment, ServiceResolutionRecord, ServiceResolutionRecordCore,
+};
+use arkret_wire::{
+    Base64UrlString, DidCoreId, DidFullId, DidUrl, Hash, ProtocolSignature, ServiceKind,
+    TypedTrustDomainId,
+};
+use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use soland_http::config::{AppConfig, ObjectStorageConfig};
 use soland_http::routing::federation::outbox::{FederationDispatcher, enqueue_outbound};
 use soland_http::routing::federation::outbox_operator;
 use soland_http::state::AppState;
+use soland_services::ServiceResult;
+use soland_services::service_route::{
+    RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
+};
 use soland_storage::FederationOutboxState;
 use soland_test_support::AppStateTestExt as _;
 
-const PEER_DID: &str = "did:web:peer.example";
+const PEER_FULL_DID: &str = "did:web:peer.example";
+const PEER_DID: &str = "ak:did_core:web:peer.example";
+const DENIED_PEER_FULL_DID: &str = "did:web:denied-peer.example";
+const DENIED_PEER_DID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"resource":"sha256:01"}"#;
+
+#[derive(Clone)]
+struct VerifiedPeerRoute {
+    service_id: DidCoreId,
+    candidate: VerifiedRouteCandidate,
+}
+
+struct FixtureVerifiedRouteFetcher {
+    routes: BTreeMap<(String, String), VerifiedRouteCandidate>,
+}
+
+impl FixtureVerifiedRouteFetcher {
+    /// Model the output of independent record, DID-method, proof, and Describe
+    /// verification without turning the delivery peer into a second mock
+    /// discovery server. The production resolver still validates every stable
+    /// binding and monotonic floor before exposing the route to the dispatcher.
+    fn new(routes: &[VerifiedPeerRoute]) -> Self {
+        Self {
+            routes: routes
+                .iter()
+                .map(|route| {
+                    (
+                        (
+                            route.service_id.to_string(),
+                            ServiceKind::PrincipalServer.as_str().to_owned(),
+                        ),
+                        route.candidate.clone(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn route(&self, service_id: &DidCoreId, service_kind: &str) -> Option<VerifiedRouteCandidate> {
+        self.routes
+            .get(&(service_id.to_string(), service_kind.to_owned()))
+            .cloned()
+    }
+}
+
+#[async_trait]
+impl ServiceRouteFetcher for FixtureVerifiedRouteFetcher {
+    async fn fetch_current(
+        &self,
+        service_id: &DidCoreId,
+        service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(self.route(service_id, service_kind))
+    }
+
+    async fn fetch_notice_candidate(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_realm_peer_mirror(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+
+    async fn fetch_configured_mirror(
+        &self,
+        _service_id: &DidCoreId,
+        _service_kind: &str,
+    ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        Ok(None)
+    }
+}
+
+#[derive(Serialize)]
+struct RouteBindingProjection<'a> {
+    service_id: &'a DidCoreId,
+    service_kind: ServiceKind,
+    service_resolution: &'a ResolutionCommitment,
+    http_json_base_url: &'a str,
+}
+
+fn verified_peer_route(
+    full_id: &str,
+    expected_core_id: &str,
+    base_url: &str,
+    trust_domain: &str,
+) -> VerifiedPeerRoute {
+    let full_id = DidFullId::new(full_id.to_owned()).expect("fixture peer full DID");
+    let service_id = DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture peer core projection"),
+    );
+    assert_eq!(service_id.as_str(), expected_core_id);
+    let base_url = format!("{}/", base_url.trim_end_matches('/'));
+    let method_history_head = format!("sha256:{}", "1".repeat(64));
+    let version_id = "fixture-route-v1".to_owned();
+    let commitment = ResolutionCommitment {
+        full_id: full_id.clone(),
+        method_history_head: method_history_head.clone(),
+        version_id: version_id.clone(),
+    };
+    let describe_digest = Hash::new(
+        arkret_canonical::canonical_sha256(&RouteBindingProjection {
+            service_id: &service_id,
+            service_kind: ServiceKind::PrincipalServer,
+            service_resolution: &commitment,
+            http_json_base_url: &base_url,
+        })
+        .expect("fixture route-binding digest"),
+    )
+    .expect("fixture route-binding hash");
+    let issued_at = chrono::Utc::now();
+    let current_record_url = format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        arkret_models_identity::canonical_service_current_record_path(&service_id)
+    );
+    let record = ServiceResolutionRecord {
+        record: ServiceResolutionRecordCore {
+            service_id: service_id.clone(),
+            service_kind: ServiceKind::PrincipalServer.as_str().to_owned(),
+            full_id: full_id.clone(),
+            method_history_head: method_history_head.clone(),
+            version_id: version_id.clone(),
+            resolution_event_ref: "fixture-verified-route".to_owned(),
+            record_sequence: 0,
+            previous_record_digest: None,
+            current_record_url,
+            base_url: base_url.clone(),
+            describe_digest: describe_digest.clone(),
+            issued_at,
+            refresh_after: issued_at + chrono::Duration::hours(1),
+            expires_at: issued_at + chrono::Duration::hours(2),
+        },
+        proof: ProtocolSignature {
+            verification_method: DidUrl::new(format!("{full_id}#assertion-1"))
+                .expect("fixture verification method"),
+            created_at: issued_at,
+            jws: Base64UrlString::new("AA").expect("fixture proof bytes"),
+        },
+    };
+    VerifiedPeerRoute {
+        service_id: service_id.clone(),
+        candidate: VerifiedRouteCandidate {
+            source: RouteSource::CurrentRecord,
+            record,
+            description: VerifiedServiceDescribeMetadata {
+                service_id,
+                service_kind: ServiceKind::PrincipalServer.as_str().to_owned(),
+                service_resolution: commitment,
+                http_json_base_url: base_url,
+                route_binding_digest: describe_digest,
+                trust_domain: TypedTrustDomainId::new(trust_domain)
+                    .expect("fixture peer trust domain"),
+                protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+            },
+        },
+    }
+}
+
+fn standard_peer_route(base_url: &str) -> VerifiedPeerRoute {
+    verified_peer_route(
+        PEER_FULL_DID,
+        PEER_DID,
+        base_url,
+        "ak:trust_domain:peer.example",
+    )
+}
+
+fn denied_peer_route() -> VerifiedPeerRoute {
+    verified_peer_route(
+        DENIED_PEER_FULL_DID,
+        DENIED_PEER_DID,
+        "http://169.254.169.254",
+        "ak:trust_domain:denied-peer.example",
+    )
+}
+
+fn unique_peer_route(prefix: &str, base_url: &str) -> VerifiedPeerRoute {
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let full_id = format!("did:web:{prefix}-{suffix}.example");
+    let core_id = format!("ak:did_core:web:{prefix}-{suffix}.example");
+    verified_peer_route(&full_id, &core_id, base_url, "ak:trust_domain:peer.example")
+}
+
+fn install_verified_routes(state: &AppState, routes: &[VerifiedPeerRoute]) {
+    state.test_install_service_route_fetcher(Arc::new(FixtureVerifiedRouteFetcher::new(routes)));
+}
 
 struct CapturedSignedRequestBody {
     captured: String,
@@ -162,7 +367,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("destination-service-id: did:web:peer.example"),
+        lower.contains("destination-service-id: ak:did_core:web:peer.example"),
         "captured request missing Destination-Service-ID binding; got: {}",
         captured.captured
     );
@@ -265,6 +470,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     let row = enqueue_outbound(
         &state,
         &peer_url,
@@ -340,6 +546,7 @@ async fn retryable_5xx_keeps_the_same_transport_identity_and_backs_off() {
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("503 Service Unavailable", br#"{"error":"unavailable"}"#);
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     let row = enqueue_outbound(
         &state,
         &peer_url,
@@ -392,6 +599,7 @@ async fn peer_retry_after_is_a_floor_the_dispatcher_never_undercuts() {
         br#"{"error":{"code":"rate_limited"}}"#,
     )]);
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     let row = enqueue_outbound(
         &state,
         &peer_url,
@@ -429,6 +637,7 @@ async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
         br#"{"ok":false,"error":{"code":"dependency_missing"}}"#,
     );
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     let row = enqueue_outbound(
         &state,
         &peer_url,
@@ -490,12 +699,13 @@ async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
 #[tokio::test]
 async fn egress_policy_denial_is_policy_suppressed_rather_than_delivered() {
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[denied_peer_route()]);
     // The cloud metadata endpoint is hard-blocked regardless of posture, so
     // this exercises a denial without depending on env-var configuration.
     let row = enqueue_outbound(
         &state,
         "http://169.254.169.254",
-        PEER_DID,
+        DENIED_PEER_DID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -545,6 +755,37 @@ async fn egress_policy_denial_is_policy_suppressed_rather_than_delivered() {
     assert_eq!(
         outbox_row(&state, &row.id).await.state,
         FederationOutboxState::PolicySuppressed
+    );
+}
+
+#[tokio::test]
+async fn persisted_peer_url_is_not_service_resolution_evidence() {
+    let state = soland_test_support::app_state(outbox_test_config());
+    let row = enqueue_outbound(
+        &state,
+        "http://127.0.0.1:9",
+        PEER_DID,
+        FEDERATION_ENDPOINT,
+        IDEMPOTENCY_KEY,
+        PAYLOAD_JSON,
+    )
+    .await
+    .expect("enqueue");
+
+    FederationDispatcher::new(state.clone())
+        .run_one_pass()
+        .await
+        .expect("dispatch pass");
+
+    let updated = outbox_row(&state, &row.id).await;
+    assert_eq!(updated.state, FederationOutboxState::Pending);
+    assert_eq!(updated.attempts, 1);
+    assert!(
+        updated
+            .last_response_excerpt
+            .as_deref()
+            .is_some_and(|excerpt| excerpt.contains("service_route_unavailable")),
+        "the diagnostic peer_url must not become a raw delivery fallback: {updated:?}"
     );
 }
 
@@ -634,6 +875,7 @@ async fn operator_requeue_mints_a_new_intent_and_records_the_audit() {
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     // The private operations rail carries its own envelope, so requeue
     // revalidation only requires the stored body to still be parseable JSON.
     // The peer-Event rail additionally re-runs `validate_federation_transport`,
@@ -749,7 +991,7 @@ async fn outbox_row(state: &AppState, id: &str) -> soland_storage::FederationOut
 static PG_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A fresh `AppState` over the same PostgreSQL pool — the test's "restart".
-async fn pg_restart() -> Option<AppState> {
+async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
     std::env::var("DATABASE_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())?;
@@ -790,6 +1032,9 @@ async fn pg_restart() -> Option<AppState> {
     )
     .expect("postgres AppState");
     soland_test_support::register_persistence(&state, persistence_store);
+    if !routes.is_empty() {
+        install_verified_routes(&state, routes);
+    }
     Some(state)
 }
 
@@ -802,15 +1047,16 @@ fn unique_key(prefix: &str) -> String {
 #[tokio::test]
 async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
     let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart().await else {
+    let Some(state) = pg_restart(&[]).await else {
         return;
     };
     let (peer_url, request_rx) = spawn_mock_peer();
+    let route = unique_peer_route("restart-pending", &peer_url);
     let key = unique_key("restart-pending");
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
         PAYLOAD_JSON,
@@ -820,7 +1066,9 @@ async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
     // Drop every in-process object and rebuild from the database alone.
     drop(state);
 
-    let restarted = pg_restart().await.expect("restart");
+    let restarted = pg_restart(std::slice::from_ref(&route))
+        .await
+        .expect("restart");
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -835,16 +1083,18 @@ async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
 #[tokio::test]
 async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
     let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart().await else {
+    let Some(state) = pg_restart(&[]).await else {
         return;
     };
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("503 Service Unavailable", br#"{"error":"unavailable"}"#);
+    let route = unique_peer_route("restart-backoff", &peer_url);
+    install_verified_routes(&state, std::slice::from_ref(&route));
     let key = unique_key("restart-backoff");
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
         PAYLOAD_JSON,
@@ -865,7 +1115,9 @@ async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
 
     // The mock peer has no second response queued: if the restarted dispatcher
     // sent early, the delivery would fail and `attempts` would advance.
-    let restarted = pg_restart().await.expect("restart");
+    let restarted = pg_restart(std::slice::from_ref(&route))
+        .await
+        .expect("restart");
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -882,7 +1134,7 @@ async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
 #[tokio::test]
 async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart().await else {
+    let Some(state) = pg_restart(&[]).await else {
         return;
     };
     // Two identical 2xx replies: the peer accepts the first, the local process
@@ -892,11 +1144,12 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
         MockResponse::new("200 OK", br#"{"status":"accepted"}"#),
         MockResponse::new("200 OK", br#"{"status":"duplicate"}"#),
     ]);
+    let route = unique_peer_route("restart-inflight", &peer_url);
     let key = unique_key("restart-inflight");
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
         PAYLOAD_JSON,
@@ -921,7 +1174,9 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     assert!(claimed.iter().any(|claimed| claimed.id == row.id));
     drop(state);
 
-    let restarted = pg_restart().await.expect("restart");
+    let restarted = pg_restart(std::slice::from_ref(&route))
+        .await
+        .expect("restart");
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -944,16 +1199,19 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
 #[tokio::test]
 async fn postgres_terminal_rows_are_not_resent_after_restart() {
     let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart().await else {
+    let Some(state) = pg_restart(&[]).await else {
         return;
     };
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
+    let peer_route = unique_peer_route("restart-dead", &peer_url);
+    let denied_route = unique_peer_route("restart-denied", "http://169.254.169.254");
+    install_verified_routes(&state, &[peer_route.clone(), denied_route.clone()]);
     let dead_key = unique_key("restart-dead");
     let dead = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        peer_route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &dead_key,
         PAYLOAD_JSON,
@@ -965,7 +1223,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
     let suppressed = enqueue_outbound(
         &state,
         "http://169.254.169.254",
-        PEER_DID,
+        denied_route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &suppressed_key,
         PAYLOAD_JSON,
@@ -987,7 +1245,9 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
     );
     drop(state);
 
-    let restarted = pg_restart().await.expect("restart");
+    let restarted = pg_restart(&[peer_route, denied_route])
+        .await
+        .expect("restart");
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -1098,6 +1358,7 @@ async fn outbound_signature_fails_after_service_key_rotation() {
 async fn capture_signed_request() -> CapturedSignedRequestBody {
     let (peer_url, request_rx) = spawn_mock_peer();
     let state = soland_test_support::app_state(outbox_test_config());
+    install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
 
     // Enqueue one outbound row through the standard peer-event delivery path.
     // funnels through after computing the deterministic idempotency

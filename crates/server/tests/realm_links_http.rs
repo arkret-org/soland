@@ -67,9 +67,13 @@ fn ed25519_public_multibase(signing: &SigningKey) -> String {
 /// directory has to authorize the key the envelope names; without this the
 /// Events fail the device proof rather than anything the test is about.
 async fn prepare_alice(state: &AppState) -> String {
+    let alice_core = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(ALICE).unwrap(),
+    )
+    .unwrap();
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
-            "actor": ALICE,
+            "actor": alice_core,
             "device_id": ALICE_DEVICE,
             "display_name": "Alice Desktop"
         }))
@@ -83,7 +87,7 @@ async fn prepare_alice(state: &AppState) -> String {
     let mut device = state
         .test_persistence()
         .devices()
-        .get(ALICE, ALICE_DEVICE)
+        .get(alice_core.as_str(), ALICE_DEVICE)
         .await
         .unwrap()
         .unwrap();

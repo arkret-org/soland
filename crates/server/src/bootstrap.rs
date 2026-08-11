@@ -1449,10 +1449,7 @@ mod tests {
         assert_eq!(restarted_seed, first_seed);
         assert_eq!(
             restarted_identity.active_signing_key_ref.as_str(),
-            format!(
-                "arkret:signer:soland-notary:{}",
-                restarted_identity.service_id
-            )
+            format!("arkret:signer:soland-notary:{}", restarted_identity.full_id)
         );
     }
 

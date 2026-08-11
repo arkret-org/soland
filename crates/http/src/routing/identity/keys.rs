@@ -405,6 +405,9 @@ pub(crate) fn device_signature_kid_points_to_device_key(
             .strip_prefix(&expected_principal_id_key)
             .is_some_and(|rest| rest.starts_with('#') || rest.starts_with('?'))
         || verification_method_controller(kid) == actor
+        || arkret_wire::DidFullId::new(verification_method_controller(kid).to_owned())
+            .and_then(|controller| arkret_wire::project_full_id_to_core_id(&controller))
+            .is_ok_and(|controller| controller.as_str() == actor)
 }
 
 fn verify_keys_upload_device_signature(
@@ -619,4 +622,23 @@ async fn device_signing_keys_query(
         principal_id,
         devices,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::device_signature_kid_points_to_device_key;
+
+    #[test]
+    fn device_signature_kid_projects_full_controller_to_core_actor() {
+        assert!(device_signature_kid_points_to_device_key(
+            "did:web:alice.example#ak:device:primary",
+            "ak:did_core:web:alice.example",
+            "z6MkAuthorizedDeviceKey",
+        ));
+        assert!(!device_signature_kid_points_to_device_key(
+            "did:web:mallory.example#ak:device:primary",
+            "ak:did_core:web:alice.example",
+            "z6MkAuthorizedDeviceKey",
+        ));
+    }
 }

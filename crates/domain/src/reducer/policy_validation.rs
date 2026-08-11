@@ -110,19 +110,6 @@ pub(crate) fn enforce_delivery_binding_policy(
         return Err("service_acceptance_missing");
     }
 
-    // Frontier check: if the policy declares `policy_frontier`, the
-    // binding's carried `delivery_binding_frontier` MUST match or
-    // exceed it lexicographically. Missing carried frontier = stale.
-    if let Some(policy_frontier) = policy.get("policy_frontier").and_then(Value::as_str) {
-        let carried = binding
-            .get("delivery_binding_frontier")
-            .and_then(Value::as_str);
-        match carried {
-            None => return Err("delivery_binding_stale"),
-            Some(c) if c < policy_frontier => return Err("delivery_binding_stale"),
-            _ => {}
-        }
-    }
     Ok(())
 }
 

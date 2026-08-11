@@ -18,7 +18,7 @@
 //!    the row.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DidFullId, OperationId, RealmId};
+use arkret_identifiers::{OperationId, RealmId};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
@@ -31,9 +31,9 @@ const CIRCLE_A: &str = "ak:circle:AcReudaBA9DxPpluEp4JJtMF_LufdP6FdBs1JuhsHdjL";
 const CIRCLE_B: &str = "ak:circle:AXW19C_FsRE9VsaX3ZNkkfJaib48WHTD0dFvBtfORoTU";
 const STRAND_X: &str = "ak:strand:AcIdv36sZgAnUyLmf0eWHBnC6uHK4tYeTONYoJdRr_qa";
 const MORPH_X: &str = "ak:morph:AWJKopXwYqsRtNrpAHu0GlZy-NcK04NxZCmgmva_qUNA";
-const ALICE: &str = "did:web:alice.example";
-const BOB: &str = "did:web:bob.example";
-const MALLORY: &str = "did:web:mallory.example";
+const ALICE: &str = "ak:did_core:web:alice.example";
+const BOB: &str = "ak:did_core:web:bob.example";
+const MALLORY: &str = "ak:did_core:web:mallory.example";
 
 fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let object = payload.get_mut("object").and_then(Value::as_object_mut);
@@ -807,5 +807,4 @@ fn circle_tombstone_hides_from_read_helper() {
         live.iter().all(|c| c.circle_id != CIRCLE_A),
         "tombstoned Circle MUST not appear in circles_for_realm"
     );
-    let _ = DidFullId::new(ALICE.to_owned()).expect("did parses"); // silence unused import
 }

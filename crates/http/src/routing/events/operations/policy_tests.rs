@@ -209,7 +209,7 @@ fn canonical_event_storage_identity(
 fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::Value {
     json!({
         "schema": "ak.schema.accountability_grant.v1",
-        "sender": "did:web:alice.example",
+        "sender": "ak:did_core:web:alice.example",
         "issuer": "did:web:alice.example",
         "subject": "did:web:agent.example",
         "accountability_scope": "agent_operator",
@@ -701,7 +701,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
         "000000009954",
         arkret_wire::EventKind::StrandCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "object": {
                 "id": strand_id,
                 "realm_id": "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh",
@@ -1084,7 +1084,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
         "0000000007d1",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "actor_id": "did:web:agent.example",
             "membership": "join",
             "reason": "controller_add_agent",
@@ -1112,7 +1112,7 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
         "0000000007d2",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "actor_id": "did:web:agent.example",
             "membership": "join",
             "reason": "controller_add_agent",
@@ -1137,7 +1137,7 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
         "0000000007d3",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "actor_id": "did:web:agent.example",
             "membership": "join",
             "reason": "controller_add_agent",
@@ -1170,7 +1170,7 @@ fn reply_message(
         seed,
         arkret_wire::EventKind::MessageCreate,
         json!({
-            "sender": agent_id,
+            "sender": crate::test_actor_id_str(agent_id),
             "content": [{"type": "text", "text": "agent reply"}],
             "agent_context": agent_context(agent_id, authorization_ref),
         }),
@@ -1185,7 +1185,7 @@ fn act_on_behalf_message(
     approval: Option<(&str, &str)>,
 ) -> Operation {
     let mut payload = json!({
-        "sender": "did:web:alice.example",
+        "sender": "ak:did_core:web:alice.example",
         "executed_by": agent_id,
         "content": [{"type": "text", "text": "approved"}],
     });
@@ -1293,7 +1293,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "invite",
-            "sender": "did:web:alice.example"
+            "sender": "ak:did_core:web:alice.example"
         }),
     );
     assert_eq!(
@@ -1340,7 +1340,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         json!({
             "actor_id": "did:web:charlie.example",
             "membership": "join",
-            "sender": "did:web:alice.example"
+            "sender": "ak:did_core:web:alice.example"
         }),
     );
     assert_eq!(
@@ -1365,7 +1365,7 @@ async fn direct_conversation_realm_refuses_tombstone_and_destroy() {
             realm_id.clone(),
             seed,
             kind.clone(),
-            json!({ "sender": "did:web:alice.example" }),
+            json!({ "sender": "ak:did_core:web:alice.example" }),
         );
         assert_eq!(
             validate_operation_policy(&state, &[terminal])
@@ -1381,7 +1381,7 @@ async fn direct_conversation_realm_refuses_tombstone_and_destroy() {
         realm_id,
         "000000000608",
         arkret_wire::EventKind::RealmArchive,
-        json!({ "sender": "did:web:alice.example" }),
+        json!({ "sender": "ak:did_core:web:alice.example" }),
     );
     assert!(
         !matches!(
@@ -1568,7 +1568,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
         "0000000007a2",
         arkret_wire::EventKind::StrandCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "executed_by": agent,
             "object": {
                 "id": "ak:strand:AVdfqhxRnk4959EgJEklIslgnTpVrvncd17v-s916y6P",
@@ -1608,7 +1608,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
         "0000000007c1",
         arkret_wire::EventKind::StrandCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "executed_by": agent,
             "authorization_ref": grant.grant_id,
             "object": {
@@ -1640,7 +1640,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
         "0000000007b1",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "actor_id": agent,
             "membership": "join",
             "realm_id": "ak:realm:AeMbHcOGMt3VgaQzdMnK0nUaMYOGvt35z9V139HW8NEU",
@@ -1685,7 +1685,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "0000000007c2",
         arkret_wire::EventKind::RelationCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "executed_by": agent,
             "authorization_ref": envelope_grant.grant_id,
             "agent_context": agent_context(agent, context_grant.grant_id.as_str()),
@@ -1716,7 +1716,7 @@ async fn provenance_actor_kind_agent_unknown_action_fails_closed_before_context(
         "0000000007c3",
         arkret_wire::EventKind::RelationCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "provenance": {
                 "actor_kind": "agent"
             },
@@ -1759,7 +1759,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
         "0000000007c4",
         arkret_wire::EventKind::ViewCreate,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "executed_by": agent,
             "authorization_ref": grant_id.as_str(),
             "agent_context": agent_context(agent, grant_id.as_str()),
@@ -1799,7 +1799,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
         "0000000007c5",
         "ak.agent.unknown.write",
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "executed_by": agent,
             "authorization_ref": grant_id.as_str(),
             "agent_context": agent_context(agent, grant_id.as_str()),
@@ -1838,7 +1838,7 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
         "0000000007c6",
         "ak.agent.unknown.reply",
         json!({
-            "sender": agent,
+            "sender": crate::test_actor_id_str(agent),
             "agent_context": agent_context(agent, grant_id.as_str()),
         }),
     );
@@ -1961,7 +1961,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "0000000007a4",
         "ak.profile.create",
         json!({
-            "sender": "did:web:agent.example",
+            "sender": "ak:did_core:web:agent.example",
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
             "accountable_principal_ids": ["did:web:alice.example"]
@@ -1972,7 +1972,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "0000000007a5",
         "ak.identity.accountability_grant",
         json!({
-            "sender": "did:web:mallory.example",
+            "sender": "ak:did_core:web:mallory.example",
             "issuer": "did:web:alice.example",
             "subject": "did:web:agent.example",
             "grant_status": "active",
@@ -2007,7 +2007,7 @@ async fn profile_accountable_principal_accepts_active_atomic_grant() {
         "0000000007a9",
         "ak.profile.create",
         json!({
-            "sender": "did:web:agent.example",
+            "sender": "ak:did_core:web:agent.example",
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
             "accountable_principal_ids": ["did:web:alice.example"]
@@ -2043,7 +2043,7 @@ async fn profile_accountable_principal_atomic_revoke_wins() {
         "0000000007ac",
         "ak.profile.update",
         json!({
-            "sender": "did:web:agent.example",
+            "sender": "ak:did_core:web:agent.example",
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
             "accountable_principal_ids": ["did:web:alice.example"]
@@ -2076,7 +2076,7 @@ async fn profile_accountability_uses_signed_frozen_time() {
         "0000000007ae",
         "ak.profile.update",
         json!({
-            "sender": "did:web:agent.example",
+            "sender": "ak:did_core:web:agent.example",
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
             "accountable_principal_ids": ["did:web:alice.example"]
@@ -2133,7 +2133,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         "0000000007a7",
         "ak.profile.create",
         json!({
-            "sender": "did:web:agent.example",
+            "sender": "ak:did_core:web:agent.example",
             "principal_id": "did:web:agent.example",
             "display_name": "Agent",
             "accountable_principal_ids": ["did:web:alice.example"]
@@ -2160,7 +2160,7 @@ async fn circle_member_manage_rejects_forged_verdict_without_grant() {
         "000000000881",
         arkret_wire::EventKind::CircleMemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
             "actor_id": "did:web:bob.example",
             "membership": "join",
@@ -2201,7 +2201,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         "000000000882",
         arkret_wire::EventKind::CircleMemberState,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "circle_id": circle_id,
             "actor_id": "did:web:bob.example",
             "membership": "join",
@@ -2232,7 +2232,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         "000000000883",
         arkret_wire::EventKind::CircleTombstone,
         json!({
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "circle_id": circle_id
         }),
     );
@@ -2430,7 +2430,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         arkret_wire::EventKind::RelationUpdate,
         json!({
             "relation_id": relation_id,
-            "sender": "did:web:bob.example",
+            "sender": "ak:did_core:web:bob.example",
             "fields": {"label": "nope"}
         }),
     );
@@ -2447,7 +2447,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         arkret_wire::EventKind::RelationUpdate,
         json!({
             "relation_id": relation_id,
-            "sender": "did:web:alice.example",
+            "sender": "ak:did_core:web:alice.example",
             "fields": {"label": "ok"}
         }),
     );
@@ -2461,7 +2461,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         arkret_wire::EventKind::RelationTombstone,
         json!({
             "relation_id": relation_id,
-            "sender": "did:web:bob.example"
+            "sender": "ak:did_core:web:bob.example"
         }),
     );
     assert_eq!(
@@ -2485,7 +2485,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         "000000000901",
         arkret_wire::EventKind::ModerationDecision,
         json!({
-            "sender": "did:web:moderator.example",
+            "sender": "ak:did_core:web:moderator.example",
             "issuer": "did:web:impostor.example",
             "target_ref": "ak:message:AXvyk2cSPhfYUHVSaDoVqdjSO3t5IXRAqpG-6hQjjUAx",
             "decision": "quarantine",
@@ -2514,7 +2514,7 @@ async fn moderation_decision_allows_authorized_issuer() {
         "000000000902",
         arkret_wire::EventKind::ModerationDecision,
         json!({
-            "sender": "did:web:moderator.example",
+            "sender": "ak:did_core:web:moderator.example",
             "issuer": "did:web:moderator.example",
             "target_ref": "ak:message:AR9_0Dn3PqKpHpxvh0C4oIGwx_MZWw6y7PjVc300c93v",
             "decision": "quarantine",
@@ -2540,7 +2540,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
         "000000000903",
         arkret_wire::EventKind::ModerationDecision,
         json!({
-            "sender": "did:web:moderator.example",
+            "sender": "ak:did_core:web:moderator.example",
             "target_ref": "ak:message:AW8-c0F9KfRq5YWdUYT1ilfjIDzjU3jCt-GT8KmVIeCA",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
@@ -2573,7 +2573,7 @@ async fn call_recording_start_defaults_to_record_capability() {
         "000000000904",
         arkret_wire::EventKind::CallRecordingStart,
         json!({
-            "sender": "did:web:recorder.example",
+            "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
             "recording_id": "recording-904",
             "recording_agent": "did:web:recorder.example",
@@ -2609,7 +2609,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         "000000000905",
         arkret_wire::EventKind::CallRecordingStart,
         json!({
-            "sender": "did:web:recorder.example",
+            "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
             "recording_id": "transcript-905",
             "recording_agent": "did:web:recorder.example",
@@ -2655,7 +2655,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         "000000000906",
         arkret_wire::EventKind::CallRecordingStart,
         json!({
-            "sender": "did:web:recorder.example",
+            "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
             "recording_id": "transcript-906",
             "recording_agent": "did:web:recorder.example",
@@ -2687,7 +2687,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let payload = json!({
-        "sender": "did:web:recorder.example",
+        "sender": "ak:did_core:web:recorder.example",
         "call_id": "ak:call:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",
         "recording_id": "recording-907",
         "recording_agent": "did:web:recorder.example",
@@ -3112,7 +3112,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             "ciphertext": "sealed-history-secret",
             "created_at": "2026-07-05T00:00:00.000Z",
             "event_id": "ak:event:AbmoMmPKDs6imtvD716Jo6SMuqoQBREkaSd3-lTFdVED",
-            "sender": "did:web:alice.example"
+            "sender": "ak:did_core:web:alice.example"
         }),
     );
 

@@ -343,8 +343,10 @@ mod tests {
 
     const REALM: &str = "ak:realm:AaucqKYsYtNwus16IgXDBl88-LWNZZVtRpZ-CqgnPQoi";
     const REALM_OTHER: &str = "ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS";
-    const ORG: &str = "did:webvh:example.test:orgs:01J0000000000000000000000A";
-    const ORG2: &str = "did:webvh:example.test:orgs:01J0000000000000000000000B";
+    const ORG: &str = "ak:did_core:webvh:z6mkorgfixturea";
+    const ORG2: &str = "ak:did_core:webvh:z6mkorgfixtureb";
+    const ORG_FULL: &str = "did:webvh:z6mkorgfixturea:example.test:orgs:a";
+    const ORG2_FULL: &str = "did:webvh:z6mkorgfixtureb:example.test:orgs:b";
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339("2026-06-25T12:00:00.000Z")
@@ -363,6 +365,7 @@ mod tests {
 
     /// Active `organization_principal_id` statement (no delegation_ref required).
     fn active_payload(realm_id: &str, org: &str, relationship: &str, scopes: &[&str]) -> Value {
+        let full_id = if org == ORG { ORG_FULL } else { ORG2_FULL };
         json!({
             "statement_id": format!("org-stmt-{relationship}"),
             "realm_id": realm_id,
@@ -374,7 +377,7 @@ mod tests {
             "authorization": {
                 "issuer": org,
                 "issuer_role": "organization_principal_id",
-                "verification_method": format!("{org}#k1"),
+                "verification_method": format!("{full_id}#k1"),
                 "signed_at": "2026-06-25T00:00:00.000Z",
                 "proof": "c2ln"
             }
@@ -589,7 +592,7 @@ mod tests {
         let mut state = ProjectionState::new();
         let effect = apply(
             &mut state,
-            json!({ "organization_ref": "did:web:org.example" }),
+            json!({ "organization_ref": "ak:did_core:web:org.example" }),
         );
         assert!(matches!(
             effect,

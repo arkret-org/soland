@@ -223,7 +223,7 @@ mod tests {
             serde_json::json!({
                 "encryption_profile": "mls_rfc9420",
                 "event_id": format!("ak:event:{event_suffix}"),
-                "sender": "did:web:example.com:users:alice"
+                "sender": "ak:did_core:web:example.com:users:alice"
             }),
         )
     }

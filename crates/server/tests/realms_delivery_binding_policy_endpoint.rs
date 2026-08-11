@@ -38,7 +38,7 @@ fn app() -> salvo::Service {
 async fn dev_token(svc: &salvo::Service) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": "did:web:alice.example",
+            "actor": "ak:did_core:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "display_name": "Alice Desktop"
         }))
@@ -77,12 +77,6 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
     assert_eq!(
         body["realm_id"], realm_id,
         "endpoint must echo the realm_id back in the typed envelope: {body}"
-    );
-    // policy_frontier MUST be absent / null on an unset policy — that's
-    // the signal sodmin uses to render the "no policy set yet" state.
-    assert!(
-        body.get("policy_frontier").is_none() || body["policy_frontier"].is_null(),
-        "policy_frontier must be unset on a fresh realm: {body}"
     );
 }
 
