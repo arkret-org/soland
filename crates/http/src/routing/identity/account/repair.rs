@@ -407,7 +407,7 @@ async fn relay_to_destination(
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
-        &state.config().trust_domain,
+        state.config().trust_domain.as_str(),
     );
     crate::routing::federation::outbox::insert_header_if_valid(
         &mut headers,

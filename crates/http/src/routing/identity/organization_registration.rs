@@ -87,7 +87,7 @@ pub(crate) async fn prepare(
         .prepare(
             body,
             &origin,
-            &state.config().trust_domain,
+            state.config().trust_domain.as_str(),
             &issuer,
             chrono::Utc::now(),
         )

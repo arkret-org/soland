@@ -329,7 +329,7 @@ pub(super) async fn recovery_policy_put(
         principal_id: validated.principal_id,
         version: validated.version,
         acceptance_basis,
-        trust_domain: validated.trust_domain,
+        trust_domain: validated.trust_domain.into_string(),
         allowed_proof_kinds: validated.allowed_proof_kinds,
         supersedes: validated.supersedes,
         expires_at: validated.expires_at,

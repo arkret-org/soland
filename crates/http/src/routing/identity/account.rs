@@ -1638,11 +1638,7 @@ async fn direct_conversation_resolve(
     )
     .await?;
     if let Some(founder_id) = founder.as_deref() {
-        let trust_domain =
-            arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-                .map_err(|error| {
-                    AppError::internal(format!("configured trust_domain invalid: {error}"))
-                })?;
+        let trust_domain = state.config().trust_domain.clone();
         if let Some(slot) = state
             .event_queries()
             .direct_conversation_founding_slot(founder_id, trust_domain.as_str(), &pair_key)

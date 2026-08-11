@@ -17,9 +17,7 @@ use std::collections::BTreeMap;
 
 use arkret_canonical as canonical;
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{
-    DidCoreId, DidFullId, EventId, Hash, Hlc, OperationId, RealmId, TypedTrustDomainId,
-};
+use arkret_identifiers::{DidCoreId, DidFullId, EventId, Hash, Hlc, OperationId, RealmId};
 use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingAcceptanceReceipt,
     DirectConversationFoundingAcceptanceStatus, DirectConversationFoundingAuthorizationCore,

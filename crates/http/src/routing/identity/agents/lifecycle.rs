@@ -939,7 +939,7 @@ pub(super) async fn issue_provisioning_abandonment_challenge(
         dpop_jkt: abandonment_dpop_jkt(&session)?,
         audience: service_id,
         origin,
-        trust_domain: state.config().trust_domain.clone(),
+        trust_domain: state.config().trust_domain.to_string(),
         issued_at,
         expires_at: issued_at
             + chrono::Duration::seconds(AGENT_PROVISIONING_ABANDONMENT_TTL_SECONDS),

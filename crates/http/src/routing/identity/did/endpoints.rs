@@ -136,7 +136,7 @@ pub(crate) async fn identity_describe(
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         service_kind: "identity_registry".to_owned(),
         service_id,
-        trust_domain: state.config().trust_domain.clone(),
+        trust_domain: state.config().trust_domain.to_string(),
         registry_mode: "development_local".to_owned(),
         supported_receipts: vec!["local".to_owned()],
         profiles: profiles.clone(),

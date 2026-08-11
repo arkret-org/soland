@@ -1155,7 +1155,7 @@ mod consent_proof_tests {
                 verification_method: arkret_wire::DidUrl::new(verification_method.clone()).unwrap(),
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
                 created_at: now(),
-                domain: Some(state.config().trust_domain.clone()),
+                domain: Some(state.config().trust_domain.to_string()),
                 audience: Some(Audience::Single(state.service_id().to_owned())),
                 proof_purpose: None,
                 jws: "pending".to_owned(),

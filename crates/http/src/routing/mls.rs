@@ -908,9 +908,7 @@ fn peer_claim_transport_binding(
         peer_required_header(req, "destination-trust-domain")?,
     )
     .map_err(|_| peer_claim_schema_violation("destination-trust-domain is invalid"))?;
-    let local_trust_domain =
-        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-            .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
+    let local_trust_domain = state.config().trust_domain.clone();
     if destination_service_id.as_str() != state.service_id()
         || source_service_id == destination_service_id
         || source_trust_domain != local_trust_domain
@@ -1160,9 +1158,7 @@ async fn peer_claim_policy_authorized(
             {
                 return Ok(false);
             }
-            let trust_domain =
-                arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-                    .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
+            let trust_domain = state.config().trust_domain.clone();
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(

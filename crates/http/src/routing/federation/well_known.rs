@@ -52,7 +52,7 @@ async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownArkretOutco
     json_ok(WellKnownArkretOutcome {
         schema: "ak.schema.server_description.v1".to_owned(),
         service_id: state.service_id().clone(),
-        trust_domain: state.config().trust_domain.clone(),
+        trust_domain: state.config().trust_domain.to_string(),
         public_base_url: state.config().public_base_url.clone(),
         fanout_topology: fanout_topology.to_owned(),
         endpoints: WellKnownArkretEndpoints {

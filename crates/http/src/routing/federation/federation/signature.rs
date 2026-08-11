@@ -105,7 +105,7 @@ fn verify_inbound_peer_http_signature_inner(
     body_bytes: Option<&[u8]>,
 ) -> Result<(), AppError> {
     if body_bytes.is_some() {
-        validate_federation_request_binding(&state.config().trust_domain, req)?;
+        validate_federation_request_binding(state.config().trust_domain.as_str(), req)?;
     }
 
     let source_service_id = required_header(req, "source-service-id")?;
@@ -118,7 +118,7 @@ fn verify_inbound_peer_http_signature_inner(
             "Destination-Service-ID does not match this service",
         ));
     }
-    if destination_trust_domain != state.config().trust_domain {
+    if destination_trust_domain != state.config().trust_domain.as_str() {
         return Err(signature_error(
             "Destination-Trust-Domain does not match this service",
         ));

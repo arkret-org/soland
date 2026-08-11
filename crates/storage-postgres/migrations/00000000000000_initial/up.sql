@@ -1811,7 +1811,8 @@ CREATE TABLE public.recovery_policies (
     verification_method text NOT NULL,
     raw_payload jsonb NOT NULL,
     accepted_at timestamp with time zone NOT NULL,
-    CONSTRAINT recovery_policies_version_check CHECK ((version >= 1))
+    CONSTRAINT recovery_policies_version_check CHECK ((version >= 1)),
+    CONSTRAINT recovery_policies_trust_domain_check CHECK ((trust_domain ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$'))
 );
 
 ALTER TABLE ONLY public.recovery_policies
@@ -1848,6 +1849,7 @@ CREATE TABLE public.recovery_sessions (
     CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'root_anchored'::text)),
     CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
+    CONSTRAINT recovery_sessions_trust_domain_check CHECK ((trust_domain ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
     CONSTRAINT recovery_sessions_transaction_id_key UNIQUE (transaction_id)
 );
 
@@ -2244,6 +2246,7 @@ CREATE TABLE public.direct_conversation_founding_slots (
     idempotency_key text NOT NULL,
     receipt_bytes bytea NOT NULL,
     accepted_at timestamptz NOT NULL,
+    CONSTRAINT direct_conversation_founding_slots_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
     PRIMARY KEY (founder_id, trust_domain_id, pair_key),
     UNIQUE (founder_id, idempotency_key)
 );
@@ -2256,5 +2259,6 @@ CREATE TABLE public.direct_conversation_founding_equivocations (
     committed_unit_digest text NOT NULL,
     conflicting_unit_digest text NOT NULL,
     idempotency_key text NOT NULL,
-    observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+    observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT direct_conversation_founding_equivocations_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$'))
 );

@@ -1144,8 +1144,7 @@ impl AppState {
     pub fn did_binding_trust_domain(
         &self,
     ) -> Result<arkret_identifiers::TypedTrustDomainId, String> {
-        arkret_identifiers::TypedTrustDomainId::new(self.config().trust_domain.clone())
-            .map_err(|error| format!("configured trust_domain is invalid: {error}"))
+        Ok(self.config().trust_domain.clone())
     }
 
     pub(crate) fn organization_registrations(&self) -> &OrganizationRegistrationService {

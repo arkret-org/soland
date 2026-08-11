@@ -146,7 +146,7 @@ pub(crate) async fn federation_verify_actor(
 ) -> JsonResult<arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    validate_federation_request_binding(&state.config().trust_domain, req)?;
+    validate_federation_request_binding(state.config().trust_domain.as_str(), req)?;
 
     if state.config().development_mode {
         return json_ok(

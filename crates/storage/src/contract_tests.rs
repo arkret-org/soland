@@ -691,7 +691,8 @@ fn registration_challenge(
         nonce: challenge_hash[..32].to_owned(),
         audience: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
         origin: "https://service.example/".to_owned(),
-        trust_domain: "service.example".to_owned(),
+        trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:service.example")
+            .expect("valid service trust domain"),
         local_admin_subject: local_admin_subject.clone(),
         requested_scopes: scopes.to_vec(),
         expires_at: created_at + Duration::seconds(300),

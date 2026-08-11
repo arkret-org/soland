@@ -43,8 +43,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         arkret_wire::EventKind::RealmCreate,
         serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-            arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-                .unwrap(),
+            state.config().trust_domain.clone(),
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(alice.clone()),
             arkret_policy::current_capability_action_registry_digest().unwrap(),

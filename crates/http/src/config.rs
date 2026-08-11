@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arkret_identifiers::TrustDomainId;
 use zeroize::{Zeroize, Zeroizing};
 
 /// v1 interoperability bound for HTTP message content of a non-streaming JSON operation, from
@@ -432,7 +433,7 @@ pub struct AppConfig {
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
     /// This is explicit deployment identity configuration: a stable service
     /// core id cannot be reversed into a host or trust domain.
-    pub trust_domain: String,
+    pub trust_domain: TrustDomainId,
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
@@ -768,7 +769,8 @@ impl AppConfig {
             compaction_prune_walk_interval_seconds: 0,
             compaction_prune_walk_per_realm_limit: 50,
             seed_demo_data: false,
-            trust_domain: "ak:trust_domain:soland.local".to_owned(),
+            trust_domain: TrustDomainId::new("ak:trust_domain:soland.local")
+                .expect("static trust domain"),
             receive_policy_constraints: None,
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
@@ -991,7 +993,7 @@ impl AppConfig {
                 "SOLAND_TRUST_DOMAIN is required; it cannot be derived from the service core id"
             )
         })?;
-        arkret_identifiers::TypedTrustDomainId::new(trust_domain.clone()).map_err(|error| {
+        let trust_domain = TrustDomainId::new(trust_domain).map_err(|error| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
         })?;
         let receive_policy_constraints = load_receive_policy_constraints()?;

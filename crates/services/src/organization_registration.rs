@@ -10,7 +10,9 @@ use arkret_models_identity::{
     OrganizationRegistrationStatus, next_organization_registration_generation,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_wire::{DidCoreId, DidFullId, DidUrl, Hash, PayloadProof, ProofContextId};
+use arkret_wire::{
+    DidCoreId, DidFullId, DidUrl, Hash, PayloadProof, ProofContextId, TrustDomainId,
+};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use soland_storage::{
@@ -150,6 +152,8 @@ impl OrganizationRegistrationService {
         request
             .validate()
             .map_err(|error| schema(error.to_string()))?;
+        let trust_domain = TrustDomainId::new(trust_domain)
+            .map_err(|error| schema(format!("invalid trust_domain: {error}")))?;
         let pinned = self
             .resolver
             .resolve_current_webvh_state(&request.full_id)
@@ -186,7 +190,7 @@ impl OrganizationRegistrationService {
             nonce,
             audience: issuer_service_id.clone(),
             origin: origin.to_owned(),
-            trust_domain: trust_domain.to_owned(),
+            trust_domain,
             local_admin_subject: request.local_admin_subject,
             requested_scopes: request.requested_scopes,
             expires_at: created_at + CHALLENGE_LIFETIME,

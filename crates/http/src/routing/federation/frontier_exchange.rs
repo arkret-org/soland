@@ -226,7 +226,7 @@ fn signed_query_headers(
     super::outbox::insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
-        &state.config().trust_domain,
+        state.config().trust_domain.as_str(),
     );
     super::outbox::rfc9421_sign(state, headers, "QUERY", target_url)
 }

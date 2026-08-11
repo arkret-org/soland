@@ -4,7 +4,7 @@ pub(super) struct ValidatedRecoveryPolicy {
     pub policy_id: String,
     pub principal_id: String,
     pub version: u32,
-    pub trust_domain: String,
+    pub trust_domain: TrustDomainId,
     pub allowed_proof_kinds: Vec<String>,
     pub supersedes: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -31,12 +31,7 @@ pub(super) fn validate_recovery_policy(
     require_policy_id_pattern(&policy_id)?;
     let principal_id = require_did(payload, "principal_id")?;
     let version = require_u32_min(payload, "version", 1)?;
-    let trust_domain = require_string(payload, "trust_domain")?;
-    if !trust_domain.starts_with("ak:trust_domain:") {
-        return Err(AppError::invalid_param(format!(
-            "trust_domain `{trust_domain}` must start with ak:trust_domain:",
-        )));
-    }
+    let trust_domain = typed.trust_domain.clone();
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
     for kind in &allowed_proof_kinds {
         if !ALLOWED_PROOF_KINDS.contains(&kind.as_str()) {

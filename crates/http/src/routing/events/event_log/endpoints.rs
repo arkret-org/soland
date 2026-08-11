@@ -204,7 +204,7 @@ async fn events_describe(
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
         state.config().oidc_client_id.as_deref(),
-        &state.config().trust_domain,
+        state.config().trust_domain.as_str(),
         state.config().resumable_upload_incomplete_ttl_seconds,
         state.config().to_device_queue_capacity,
     );

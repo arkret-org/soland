@@ -169,10 +169,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
             AppError::internal(format!("service resolution projection failed: {error}"))
         })?,
     );
-    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
-        state.config().trust_domain.clone(),
-    )
-    .map_err(|error| AppError::internal(format!("invalid configured trust_domain: {error}")))?;
+    let trust_domain = state.config().trust_domain.clone();
     let supported_profiles: Vec<String> = DIRECTORY_DISCOVERY_PROFILES
         .iter()
         .map(|profile| (*profile).to_owned())

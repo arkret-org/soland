@@ -907,14 +907,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             error.to_string(),
         )
     })?;
-    let trust_domain_id =
-        TypedTrustDomainId::new(state.config().trust_domain.clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("configured trust domain is invalid: {error}"),
-            )
-        })?;
+    let trust_domain_id = state.config().trust_domain.clone();
     let (pair_key, founder_id, authorization_core) = match &submission.founder_basis_evidence {
         evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human { .. } => {
             evidence
@@ -2351,19 +2344,7 @@ pub(crate) async fn submit_federation_events(
                 return;
             }
         };
-    let expected_destination = match TypedTrustDomainId::new(state.config().trust_domain.clone()) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(%error, "configured trust_domain failed typed validation");
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "service trust_domain is invalid",
-            );
-            return;
-        }
-    };
+    let expected_destination = state.config().trust_domain.clone();
     if trust_headers
         .verify_destination(&expected_destination)
         .is_err()

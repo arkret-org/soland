@@ -197,7 +197,7 @@ async fn get_server_info(
         server_name: Some(state.service_id().clone()),
         uptime: None,
         service_id: state.service_id().clone(),
-        trust_domain: state.config().trust_domain.clone(),
+        trust_domain: state.config().trust_domain.to_string(),
         development_mode: state.config().development_mode,
         allow_public_registration: state.account_registration_policy().enabled,
     })

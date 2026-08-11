@@ -42,7 +42,10 @@ fn test_config() -> AppConfig {
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
         jws_replay_window_per_family: BTreeMap::new(),
-        trust_domain: "ak:trust_domain:soland-mls-test.local".to_owned(),
+        trust_domain: arkret_identifiers::TrustDomainId::new(
+            "ak:trust_domain:soland-mls-test.local",
+        )
+        .unwrap(),
         ..soland_test_support::app_config()
     }
 }

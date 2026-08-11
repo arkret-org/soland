@@ -251,7 +251,7 @@ pub(crate) async fn relay_signal_once(
     insert_header_if_valid(
         &mut headers,
         "source-trust-domain",
-        &state.config().trust_domain,
+        state.config().trust_domain.as_str(),
     );
     insert_header_if_valid(
         &mut headers,
@@ -916,7 +916,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "source-trust-domain",
-            &self.state.config().trust_domain,
+            self.state.config().trust_domain.as_str(),
         );
         insert_header_if_valid(
             &mut headers,

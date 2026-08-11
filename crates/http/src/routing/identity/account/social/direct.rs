@@ -7,10 +7,7 @@ pub(crate) fn direct_pair_key(
     left: &str,
     right: &str,
 ) -> Result<String, AppError> {
-    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
-        state.config().trust_domain.clone(),
-    )
-    .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
+    let trust_domain = state.config().trust_domain.clone();
     let left = direct_pair_key_participant(left, "actor")?;
     let right = direct_pair_key_participant(right, "peer")?;
     arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
@@ -151,17 +148,7 @@ pub(crate) async fn validate_direct_binding_operation(
         );
         return Err("direct_conversation_binding_invalid");
     }
-    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
-        state.config().trust_domain.clone(),
-    )
-    .map_err(|_| {
-        tracing::warn!(
-            target: "soland_http::error",
-            stage = "trust_domain",
-            "direct conversation binding validation failed"
-        );
-        "direct_conversation_binding_invalid"
-    })?;
+    let trust_domain = state.config().trust_domain.clone();
     payload.validate_pair_key(trust_domain).map_err(|_| {
         tracing::warn!(
             target: "soland_http::error",

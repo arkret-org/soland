@@ -1677,9 +1677,7 @@ pub(in crate::routing) async fn validate_peer_request(
     req: &mut Request,
     has_body: bool,
 ) -> Result<(), AppError> {
-    let expected_destination =
-        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-            .map_err(|_| AppError::internal("service trust_domain is invalid"))?;
+    let expected_destination = state.config().trust_domain.clone();
     if has_body {
         let trust_headers =
             crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
