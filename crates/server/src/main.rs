@@ -146,7 +146,7 @@ async fn run() -> anyhow::Result<()> {
     if let Some(url) = config.external_webvh_provider_url.clone() {
         let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
             .ok()
-            .unwrap_or_else(|| config.trust_domain.clone());
+            .unwrap_or_else(|| config.trust_domain.to_string());
         match soland_http::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,
             std::time::Duration::from_secs(3),
