@@ -79,8 +79,8 @@ pub fn valid_new_service_registration_records(
     document: &WebvhDocumentRecord,
     event: &WebvhLogRecord,
 ) -> bool {
-    document.did == outcome.service_id.as_str()
-        && event.did == outcome.service_id.as_str()
+    document.did == outcome.full_id.as_str()
+        && event.did == outcome.full_id.as_str()
         && document.seq == 1
         && event.seq == 1
         && document.key_log_head.as_deref() == Some(event.event_digest.as_str())

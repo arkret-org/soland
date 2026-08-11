@@ -1337,6 +1337,11 @@ mod tests {
             .expect("identity lookup")
             .expect("stored identity");
         assert_eq!(stored.identity.full_id.method(), "webvh");
+        assert_ne!(
+            stored.identity.full_id.as_str(),
+            stored.identity.service_id.as_str(),
+            "the WebVH store key is the complete DID, not its stable core projection"
+        );
         assert_eq!(
             stored.identity.registration_key,
             registration_key(&config).unwrap()
