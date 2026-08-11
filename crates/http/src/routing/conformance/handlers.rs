@@ -358,6 +358,8 @@ pub async fn realm_basis(
         .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
     let subject = arkret_identifiers::DidFullId::new(body.subject.clone())
         .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
+    let subject_actor_id = arkret_wire::project_full_id_to_core_id(&subject)
+        .map_err(|_| AppError::invalid_param("subject DID must project to a canonical core id"))?;
     if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
         return Err(AppError::invalid_param(
             "data_plane_actions must contain between 1 and 32 actions",
@@ -409,7 +411,7 @@ pub async fn realm_basis(
         .is_empty();
     let basis = soland_services::conformance_basis::build_conformance_realm_basis(
         &body.realm_id,
-        &body.subject,
+        subject_actor_id.as_str(),
         (!has_existing_notary).then_some(requested_notary_authority),
         &body.data_plane_actions,
     )

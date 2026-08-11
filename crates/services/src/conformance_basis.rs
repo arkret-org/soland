@@ -243,7 +243,7 @@ pub fn build_realm_basis(
     ));
     if let Some(notary_authority) = notary_authority {
         let notary_authority =
-            DidFullId::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
+            DidCoreId::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
         ops.push((
             CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
                 .map_err(|error| error.to_string())?,
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn shared_builder_honors_fixture_identity_inputs_and_fails_closed() {
         let realm_id = "ak:realm:AZvHex1PY66SV1ktwvanY5DTtObiifOGrVl1LHL80p-_";
-        let subject = "did:web:fixture.example";
+        let subject = "ak:did_core:web:fixture.example";
         let actions = vec!["ak.strand.create".to_owned()];
         let build = |domain: &str, notary: Option<&str>| {
             build_realm_basis(
@@ -494,10 +494,13 @@ mod tests {
             )
         };
 
-        let first =
-            build("soland:test:first:", Some("did:web:notary.example")).expect("shared basis");
-        let second = build("soland:test:second:", Some("did:web:notary.example"))
-            .expect("shared basis with distinct identity inputs");
+        let first = build("soland:test:first:", Some("ak:did_core:web:notary.example"))
+            .expect("shared basis");
+        let second = build(
+            "soland:test:second:",
+            Some("ak:did_core:web:notary.example"),
+        )
+        .expect("shared basis with distinct identity inputs");
 
         assert_ne!(first.seal.id, second.seal.id);
         assert_eq!(first.grants.len(), 2);

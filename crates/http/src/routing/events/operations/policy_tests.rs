@@ -46,7 +46,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
             arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
                 .unwrap(),
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(alice_full),
+            arkret_wire::notary::NotaryValue::single_did(alice.clone()),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
         ).unwrap())

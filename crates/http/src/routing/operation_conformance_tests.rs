@@ -219,7 +219,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "digest_algorithm": "sha256",
                 "notary": {
                     "kind": "single_did",
-                    "did": "did:web:alice.example"
+                    "actor_id": "ak:did_core:web:alice.example"
                 }
             }}),
             valid: true,

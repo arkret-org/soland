@@ -722,8 +722,8 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .ok()
             .flatten()
             .map(|(profile, _)| match profile {
-                arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                    normalize_join_candidate_service_id(did.as_str())
+                arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
+                    normalize_join_candidate_service_id(actor_id.as_str())
                         .into_iter()
                         .map(|service_id| service_id.to_string())
                         .collect()
@@ -735,10 +735,10 @@ pub(super) async fn join_candidates_for_resolved_realm(
                     .map(|service_id| service_id.to_string())
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
-                    did,
+                    actor_id,
                     recovery_members,
                 } => {
-                    normalize_join_candidate_service_id(did.as_str())
+                    normalize_join_candidate_service_id(actor_id.as_str())
                         .into_iter()
                         .chain(recovery_members.into_iter().filter_map(|member| {
                             normalize_join_candidate_service_id(member.as_str())

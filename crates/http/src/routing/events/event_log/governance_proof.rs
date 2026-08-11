@@ -207,15 +207,17 @@ fn authoritative_notary_dids(
             proof_state_error(format!("invalid materialized Realm notary: {error}"))
         })?;
     let authority_dids = match notary {
-        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => vec![did.to_string()],
+        arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
+            vec![actor_id.to_string()]
+        }
         arkret_wire::notary::NotaryValue::Threshold { members, .. }
         | arkret_wire::notary::NotaryValue::OpenSet { members } => {
             members.into_iter().map(|did| did.to_string()).collect()
         }
         arkret_wire::notary::NotaryValue::Mixed {
-            did,
+            actor_id,
             recovery_members,
-        } => std::iter::once(did.to_string())
+        } => std::iter::once(actor_id.to_string())
             .chain(
                 recovery_members
                     .into_iter()
@@ -1600,13 +1602,13 @@ mod tests {
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
         let realm_id =
             RealmId::new("ak:realm:AVxoxV_VZOMmjtC2-4yBLVKc5PxZEVmIkN3giIkafwx2").unwrap();
-        let notary = "did:web:notary.example";
+        let notary = "ak:did_core:web:notary.example";
         let mut joined = BTreeMap::new();
         joined.insert(
             CellRef::new("ak:cell:ak.component.notary.v1:null".to_owned()).unwrap(),
             CellState::Value(serde_json::json!({
                 "kind": "single_did",
-                "did": notary,
+                "actor_id": notary,
             })),
         );
 
@@ -1692,6 +1694,7 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
         let actor_id = arkret_identifiers::DidFullId::new("did:web:agent.example").unwrap();
+        let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
         arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
@@ -1707,7 +1710,7 @@ mod tests {
                     "capability_action_registry_digest":
                         arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "fields": {"purpose": "principal_control"},
-                    "notary": {"kind": "single_did", "did": actor_id},
+                    "notary": {"kind": "single_did", "actor_id": actor_core_id},
                     "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 }
             }),

@@ -246,7 +246,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 tag: None,
                 value: Some(json!({
                     "kind": "single_did",
-                    "did": state.service_id(),
+                    "actor_id": state.service_id(),
                 })),
                 from: None,
                 to: None,

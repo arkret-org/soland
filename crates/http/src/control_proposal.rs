@@ -264,10 +264,6 @@ mod control_proposal_ack_quorum_tests {
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
     }
 
-    fn full_did(name: &str) -> arkret_wire::DidFullId {
-        arkret_wire::DidFullId::new(format!("did:web:{name}.example")).unwrap()
-    }
-
     fn signers(values: &[&str]) -> BTreeSet<arkret_wire::DidCoreId> {
         values.iter().map(|value| did(value)).collect()
     }
@@ -297,7 +293,7 @@ mod control_proposal_ack_quorum_tests {
     #[test]
     fn mixed_accepts_primary_or_complete_recovery_set_only() {
         let profile = NotaryValue::Mixed {
-            did: full_did("primary"),
+            actor_id: did("primary"),
             recovery_members: vec![did("recovery-a"), did("recovery-b")],
         };
         assert!(profile.proposal_quorum_met(&signers(&["primary"])));

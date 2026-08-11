@@ -44,8 +44,8 @@ pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
 /// The recovery notary a fixture Realm names, and the organization controlling
 /// it. The organization is deliberately not the Realm creator's: `single_did`
 /// recovery diversity is only satisfied when they differ.
-const FIXTURE_NOTARY_RECOVERY_MEMBER: &str = "did:web:recovery.notary.example";
-const FIXTURE_NOTARY_RECOVERY_ORGANIZATION: &str = "did:web:recovery.organization.example";
+const FIXTURE_NOTARY_RECOVERY_MEMBER: &str = "ak:did_core:web:recovery.notary.example";
+const FIXTURE_NOTARY_RECOVERY_ORGANIZATION: &str = "ak:did_core:web:recovery.organization.example";
 
 /// One fixture Realm's accepted authorization basis for one subject.
 pub type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
@@ -344,6 +344,10 @@ pub fn realm_genesis_payload(
     trust_domain: &str,
     _created_at: chrono::DateTime<chrono::Utc>,
 ) -> serde_json::Value {
+    let controller_organization = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(subject.to_owned()).expect("fixture controller DID"),
+    )
+    .expect("fixture controller core id");
     serde_json::json!({
         "object": {
             "schema": "ak.schema.realm_genesis.v1",
@@ -361,9 +365,9 @@ pub fn realm_genesis_payload(
                     .expect("fixture capability action registry digest"),
             "notary": {
                 "kind": "single_did",
-                "did": notary_did,
+                "actor_id": notary_did,
                 "recovery_members": [FIXTURE_NOTARY_RECOVERY_MEMBER],
-                "controller_organization": subject,
+                "controller_organization": controller_organization,
                 "recovery_controller_organizations": [FIXTURE_NOTARY_RECOVERY_ORGANIZATION]
             }
         }

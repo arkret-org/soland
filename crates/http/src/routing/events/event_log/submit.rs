@@ -3473,6 +3473,7 @@ mod managed_agent_pcr_batch_tests {
                 .unwrap();
         let agent_id =
             arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
+        let agent_actor_id = arkret_wire::project_full_id_to_core_id(&agent_id).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
                 arkret_wire::GenesisSalt::new(
@@ -3489,7 +3490,7 @@ mod managed_agent_pcr_batch_tests {
                 arkret_wire::SecurityClass::HighAssurance,
                 arkret_wire::EncryptionProfile::MlsRfc9420,
                 arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-                arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
+                arkret_wire::notary::NotaryValue::single_did(agent_actor_id.clone()),
                 arkret_policy::current_capability_action_registry_digest().unwrap(),
             )
             .unwrap();
@@ -3500,7 +3501,7 @@ mod managed_agent_pcr_batch_tests {
         let mut event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
-            crate::test_actor_id(&agent_id),
+            agent_actor_id,
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             payload,

@@ -1309,8 +1309,14 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         )
     })?;
     let signatures = match (&notary, &seal.notary_signature) {
-        (arkret_wire::notary::NotaryValue::SingleDid { did, .. }, NotarySig::Single(signature))
-        | (arkret_wire::notary::NotaryValue::Mixed { did, .. }, NotarySig::Single(signature)) => {
+        (
+            arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. },
+            NotarySig::Single(signature),
+        )
+        | (
+            arkret_wire::notary::NotaryValue::Mixed { actor_id, .. },
+            NotarySig::Single(signature),
+        ) => {
             let signer = arkret_identity::verification_method_did(&signature.verification_method)
                 .map_err(|error| {
                 AppError::new(
@@ -1318,7 +1324,10 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                     format!("Seal signer DID is invalid: {error}"),
                 )
             })?;
-            if signer != *did {
+            let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
+                .map(arkret_wire::DidCoreId::from)
+                .map_err(|error| AppError::new(ErrorCode::SignatureInvalid, error.to_string()))?;
+            if signer_core != *actor_id {
                 return Err(AppError::new(
                     ErrorCode::SignatureInvalid,
                     "Seal signer is not the current primary notary".to_owned(),

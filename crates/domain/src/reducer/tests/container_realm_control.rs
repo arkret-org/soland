@@ -168,7 +168,10 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
-                "notary": {"kind": "single_did", "did": "did:web:new-notary.example"}
+                "notary": {
+                    "kind": "single_did",
+                    "actor_id": "ak:did_core:web:new-notary.example"
+                }
             }),
         ),
         &hlc,
@@ -185,9 +188,9 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
                 CellState::Value(value) => Some(value),
                 CellState::Bottom(_) => None,
             })
-            .and_then(|value| value.get("did"))
+            .and_then(|value| value.get("actor_id"))
             .and_then(Value::as_str),
-        Some("did:web:new-notary.example")
+        Some("ak:did_core:web:new-notary.example")
     );
 
     let transition_payload = serde_json::json!({

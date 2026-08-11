@@ -174,8 +174,8 @@ impl NotaryWorker {
             return Ok(None);
         };
         match profile {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. }
-                if did.as_str() == self.service_id =>
+            arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. }
+                if actor_id.as_str() == self.service_id =>
             {
                 Ok(Some("single_chain".to_owned()))
             }
@@ -186,8 +186,8 @@ impl NotaryWorker {
             {
                 Ok(Some(self.service_id.clone()))
             }
-            arkret_wire::notary::NotaryValue::Mixed { did, .. }
-                if did.as_str() == self.service_id =>
+            arkret_wire::notary::NotaryValue::Mixed { actor_id, .. }
+                if actor_id.as_str() == self.service_id =>
             {
                 Ok(Some("single_chain".to_owned()))
             }
@@ -222,13 +222,15 @@ impl NotaryWorker {
             return Ok(None);
         };
         let locally_signable = match &profile {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                did.as_str() == self.service_id
+            arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
+                actor_id.as_str() == self.service_id
             }
             arkret_wire::notary::NotaryValue::OpenSet { members } => members
                 .iter()
                 .any(|member| member.as_str() == self.service_id),
-            arkret_wire::notary::NotaryValue::Mixed { did, .. } => did.as_str() == self.service_id,
+            arkret_wire::notary::NotaryValue::Mixed { actor_id, .. } => {
+                actor_id.as_str() == self.service_id
+            }
             arkret_wire::notary::NotaryValue::Threshold { .. } => false,
         };
         Ok(locally_signable.then_some(digest))
@@ -897,15 +899,15 @@ impl NotaryWorker {
             return Ok(false);
         };
         match notary_value {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                Ok(did.as_str() == self.service_id)
+            arkret_wire::notary::NotaryValue::SingleDid { actor_id, .. } => {
+                Ok(actor_id.as_str() == self.service_id)
             }
             arkret_wire::notary::NotaryValue::Threshold { .. } => Ok(false),
             arkret_wire::notary::NotaryValue::OpenSet { members } => Ok(members
                 .iter()
                 .any(|member| member.as_str() == self.service_id)),
-            arkret_wire::notary::NotaryValue::Mixed { did, .. } => {
-                Ok(did.as_str() == self.service_id)
+            arkret_wire::notary::NotaryValue::Mixed { actor_id, .. } => {
+                Ok(actor_id.as_str() == self.service_id)
             }
         }
     }
@@ -1581,7 +1583,11 @@ mod tests {
         let v = json!({
             "kind": "threshold",
             "threshold": 2,
-            "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
+            "members": [
+                "ak:did_core:web:a.example",
+                "ak:did_core:web:b.example",
+                "ak:did_core:web:c.example"
+            ],
             "forensic_attribution": "quorum_intersection",
             "revocation_freshness_window_ms": 60000,
             "paused": false,
@@ -1610,7 +1616,7 @@ mod tests {
         let notary_cell = notary_cell_ref(&realm_id).unwrap();
         let move_id = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let local_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-            state.service_resolution_commitment().full_id.clone(),
+            arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
         ))
         .unwrap();
         let event_ops = vec![(
@@ -1639,7 +1645,8 @@ mod tests {
         );
 
         let remote_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-            arkret_identifiers::DidFullId::new("did:web:notary.example".to_owned()).unwrap(),
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:notary.example".to_owned())
+                .unwrap(),
         ))
         .unwrap();
         let remote_event_ops = vec![(
@@ -1670,6 +1677,16 @@ mod tests {
     fn recovery_first_seal_requirement(
         predecessor_refs: Vec<SealId>,
     ) -> FirstGenerationEventSealRequirement {
+        let principal_id =
+            arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkfixture:alice.example")
+                .unwrap();
+        let authority_instance = arkret_wire::PrincipalAuthorityInstance::new(
+            principal_id.clone(),
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+            RealmId::new("ak:realm:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j").unwrap(),
+            Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+        )
+        .unwrap();
         let replacement = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         let reanchor = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
         let pre_fence_basis = (!predecessor_refs.is_empty()).then(|| {
@@ -1680,10 +1697,14 @@ mod tests {
             })
         });
         let payload = serde_json::from_value(json!({
-            "principal_id": "did:webvh:z6mkfixture:alice.example",
-            "did_version_id": "2-QmCurrent",
-            "previous_device_generation": "1-QmPrevious",
-            "new_device_generation": "2-QmCurrent",
+            "principal_id": principal_id,
+            "authority_instance": authority_instance,
+            "recovery_authority_kind": "pcr_policy",
+            "recovery_policy_id": "ak:policy:01904100-0000-7000-8000-000000000001",
+            "recovery_policy_version": 1,
+            "recovery_session_id": "ak:recovery_session:01904100-0000-7000-8000-000000000002",
+            "previous_device_generation": 1,
+            "new_device_generation": 2,
             "pre_fence_basis": pre_fence_basis,
             "replacement_authorize_payload_digest": format!("sha256:{}", "9".repeat(64))
         }))
@@ -1698,7 +1719,7 @@ mod tests {
                 Hash::new(reanchor.as_str().to_owned()).unwrap(),
                 Hash::new(replacement.as_str().to_owned()).unwrap(),
             ],
-            principal_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
+            principal_id: principal_id.to_string(),
             replacement_device_id: "ak:device:recovery".to_owned(),
             replacement_device_public_key: "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG"
                 .to_owned(),

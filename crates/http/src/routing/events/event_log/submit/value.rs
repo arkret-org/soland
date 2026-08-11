@@ -768,9 +768,8 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     };
     if !matches!(
         notary,
-        arkret_wire::notary::NotaryValue::SingleDid { ref did, .. }
-            if arkret_wire::project_full_id_to_core_id(did)
-                .is_ok_and(|core| arkret_wire::DidCoreId::from(core) == event.actor_id)
+        arkret_wire::notary::NotaryValue::SingleDid { ref actor_id, .. }
+            if actor_id == &event.actor_id
     ) {
         return Ok(Some("current notary is not single_did == principal"));
     }

@@ -393,7 +393,10 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
                 "security_class": "standard",
                 "encryption_profile": "mls_rfc9420",
                 "notary_profile": "single_did",
-                "notary": {"kind": "single_did", "did": "did:web:alice"},
+                "notary": {
+                    "kind": "single_did",
+                    "actor_id": "ak:did_core:web:alice"
+                },
                 "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             }
         }),
@@ -739,7 +742,10 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
             "security_class": "standard",
             "encryption_profile": "none",
             "notary_profile": "single_did",
-            "notary": {"kind": "single_did", "did": "did:web:notary.example"}
+            "notary": {
+                "kind": "single_did",
+                "actor_id": "ak:did_core:web:notary.example"
+            }
         }
     });
     let first = apply_projected_create(&mut state, realm_id, payload.clone(), &hlc);
@@ -765,7 +771,7 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
         }),
         Some(&serde_json::json!({
             "kind": "single_did",
-            "did": "did:web:notary.example"
+            "actor_id": "ak:did_core:web:notary.example"
         }))
     );
 
@@ -785,11 +791,12 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
         arkret_identifiers::RealmId::new("ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW")
             .unwrap();
     let creator = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
+    let creator_actor_id = arkret_wire::project_full_id_to_core_id(&creator).unwrap();
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(creator),
+        arkret_wire::notary::NotaryValue::single_did(creator_actor_id),
         arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     )
@@ -846,7 +853,10 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
             "security_class": "standard",
             "encryption_profile": "mls_rfc9420",
             "notary_profile": "single_did",
-            "notary": {"kind": "single_did", "did": "did:web:alice.example"},
+            "notary": {
+                "kind": "single_did",
+                "actor_id": "ak:did_core:web:alice.example"
+            },
             "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap()
         })),
     );
@@ -1356,7 +1366,8 @@ fn apply_projected_create(
 #[test]
 fn managed_agent_genesis_activates_agent_status_cell_once() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
-    let agent_id = "did:web:reducer-test.example";
+    let agent_id =
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:reducer-test.example").unwrap();
     let genesis =
         arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
@@ -1371,9 +1382,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_wire::SecurityClass::HighAssurance,
             arkret_wire::EncryptionProfile::MlsRfc9420,
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-            arkret_wire::notary::NotaryValue::single_did(
-                arkret_identifiers::DidFullId::new(agent_id).unwrap(),
-            ),
+            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
@@ -1389,22 +1398,20 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         realm_id,
         payload.clone(),
     );
-    operation.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(agent_id).unwrap(),
-    )
-    .unwrap();
+    operation.context.sender = agent_id.clone();
     let effect = state.apply_projected(&operation, &writes, &ServerHlc::new("test"));
     assert!(
         !matches!(effect, ProjectionEffect::Rejected { .. }),
         "managed-Agent genesis unexpectedly rejected: {effect:?}; writes={writes:?}"
     );
     assert_eq!(
-        state.agent_lifecycles.get(agent_id),
+        state.agent_lifecycles.get(agent_id.as_str()),
         Some(&arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
     );
     let cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:{}:{agent_id}",
-        arkret_wire::CellFamilyId::AGENT_STATUS_V1
+        "ak:cell:{}:{}",
+        arkret_wire::CellFamilyId::AGENT_STATUS_V1,
+        agent_id.as_str(),
     ))
     .unwrap();
     assert_eq!(
@@ -1414,10 +1421,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
     let (_, replay_writes) =
         projected_cell_writes(arkret_wire::EventKind::RealmCreate, realm_id, &payload);
     let mut replay = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-    replay.context.sender = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(agent_id).unwrap(),
-    )
-    .unwrap();
+    replay.context.sender = agent_id;
     assert!(matches!(
         state.apply_projected(&replay, &replay_writes, &ServerHlc::new("test")),
         ProjectionEffect::Rejected { reason }
@@ -1443,7 +1447,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_wire::EncryptionProfile::MlsRfc9420,
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(
-                arkret_identifiers::DidFullId::new("did:web:reducer-test.example").unwrap(),
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:reducer-test.example").unwrap(),
             ),
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )

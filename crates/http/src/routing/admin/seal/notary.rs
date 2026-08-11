@@ -1,6 +1,6 @@
 //! Read-only Notary cell admin endpoint.
 
-use arkret_identifiers::DidFullId;
+use arkret_identifiers::DidCoreId;
 use arkret_wire::NotaryValue as SdkNotaryValue;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
@@ -15,7 +15,7 @@ use crate::{JsonResult, app_error, json_ok};
 /// Project a JSON cell value into the admin DTO [`AdminNotaryValue`].
 pub(super) fn notary_value_from_cell(
     value: Option<&Value>,
-    service_id: &arkret_identifiers::DidFullId,
+    service_id: &DidCoreId,
 ) -> Result<AdminNotaryValue, AppError> {
     let Some(value) = value else {
         return Ok(admin_notary_value_from_sdk(
@@ -51,9 +51,9 @@ fn admin_notary_value_from_sdk(
         .and_then(|value| value.get("paused").and_then(Value::as_bool))
         .unwrap_or(false);
     match value {
-        SdkNotaryValue::SingleDid { did, .. } => AdminNotaryValue {
+        SdkNotaryValue::SingleDid { actor_id, .. } => AdminNotaryValue {
             kind_raw: "single_did".to_owned(),
-            single_did: Some(did.as_str().to_owned()),
+            single_did: Some(actor_id.as_str().to_owned()),
             revocation_freshness_window_ms,
             paused,
             ..Default::default()
@@ -83,7 +83,7 @@ fn admin_notary_value_from_sdk(
             ..Default::default()
         },
         SdkNotaryValue::Mixed {
-            did: primary,
+            actor_id: primary,
             recovery_members,
         } => AdminNotaryValue {
             kind_raw: "mixed".to_owned(),
@@ -119,8 +119,11 @@ pub(crate) async fn admin_get_notary(
         let projection = state.projections().snapshot();
         projection.cell_value(&cell).cloned()
     };
-    json_ok(notary_value_from_cell(
-        value.as_ref(),
-        &state.service_resolution_commitment().full_id,
-    )?)
+    let service_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        app_error!(
+            InternalError,
+            "configured service id is not a canonical core id: {error}"
+        )
+    })?;
+    json_ok(notary_value_from_cell(value.as_ref(), &service_id)?)
 }

@@ -715,13 +715,14 @@ fn lease_internal_error(error: impl std::fmt::Display) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{DidFullId, Event, EventKind, Hlc, RealmId, ScopeRef};
+    use arkret_wire::{Event, EventKind, Hlc, RealmId, ScopeRef};
     use serde_json::json;
 
     use super::*;
 
     const REALM: &str = "ak:realm:AdLYeSYbF1FJx56D-sYzJ--z1eUpXoCui7ZQTBhWJbKp";
     const ACTOR: &str = "did:web:alice.local.host";
+    const ACTOR_CORE: &str = "ak:did_core:web:alice.local.host";
     const REGISTRY_DIGEST: &str =
         "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
 
@@ -756,7 +757,7 @@ mod tests {
                 "security_class": "standard",
                 "encryption_profile": "none",
                 "notary_profile": "single_did",
-                "notary": {"kind": "single_did", "did": ACTOR},
+                "notary": {"kind": "single_did", "actor_id": ACTOR_CORE},
                 "capability_action_registry_digest": REGISTRY_DIGEST
             }}),
         );

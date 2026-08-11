@@ -301,7 +301,7 @@ fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {
 fn issuer_role_str(payload: &RealmOrganizationPayload) -> &'static str {
     use arkret_models_collaboration::RealmOrganizationIssuerRole as Role;
     match payload.authorization.issuer_role {
-        Role::OrganizationDid => "organization_principal_id",
+        Role::OrganizationPrincipalId => "organization_principal_id",
         Role::GovernanceService => "governance_service",
         Role::AccountAuthority => "account_authority",
         Role::ThresholdQuorum => "threshold_quorum",

@@ -55,7 +55,7 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
                 tag: None,
                 value: Some(serde_json::json!({
                     "kind": "single_did",
-                    "did": state.service_id(),
+                    "actor_id": state.service_id(),
                 })),
                 from: None,
                 to: None,
