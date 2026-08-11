@@ -1,8 +1,7 @@
 //! Moderation user-facing endpoints.
 //!
-//! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report`) — file a report.
-//!   Persists both the report record and a derived queue item (`ModerationQueueItem`) per the
-//!   spec's triage architecture.
+//! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report`) — submit the
+//!   caller-authored signed report DataEvent through ordinary Event admission.
 //! - moderation appeals are durable `ak.moderation.appeal.*` events submitted through `POST
 //!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
@@ -21,8 +20,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 
-use super::{append_audit_log, now, realm_has_member, sha256_hex, validate_did};
-use crate::ids;
+use super::{now, realm_has_member, sha256_hex, validate_did};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
@@ -31,7 +29,7 @@ pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
 }
 
-pub(crate) async fn persist_canonical_moderation_report_event(
+pub(crate) async fn persist_mimi_facade_moderation_report_event(
     state: &AppState,
     realm_id: &str,
     reporter: &str,
@@ -84,16 +82,31 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         serde_json::from_value(payload).map_err(|error| {
             AppError::internal(format!("moderation Event payload invalid: {error}"))
         })?;
-    let mut event =
-        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
-            arkret_wire::ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            },
-            service_actor_id,
-            typed_payload,
+    typed_payload
+        .validate_provenance(&service_actor_id)
+        .map_err(AppError::invalid_param)?;
+    if typed_payload.provenance
+        != Some(
+            arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
         )
-        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
-        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
+        || typed_payload.source_provider.is_none()
+    {
+        return Err(AppError::invalid_param(
+            "service-authored moderation report requires MIMI facade provenance",
+        ));
+    }
+    let event_scope =
+        typed_payload
+            .effective_scope
+            .clone()
+            .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            });
+    let mut event = arkret_event_draft::TypedEventDraft::<
+        arkret_wire::event_spec::SelfModerationReport,
+    >::new(event_scope, service_actor_id, typed_payload)
+    .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+    .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
     if let Some(max_actor_seq) = max_actor_seq {
         event.prev_refs = records
             .iter()
@@ -165,7 +178,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
     let envelope = serde_json::to_value(event).map_err(|error| {
         AppError::internal(format!("moderation Event serialize failed: {error}"))
     })?;
-    crate::routing::events::event_log::submit_moderation_report_event_value(
+    crate::routing::events::event_log::submit_mimi_moderation_report_event_value(
         state,
         &session,
         envelope,
@@ -239,6 +252,51 @@ pub(super) async fn validate_moderation_report_safety(
         )));
     }
 
+    validate_moderation_report_content_safety(
+        state,
+        realm_id,
+        reporter,
+        target_ref,
+        effective_scope,
+        evidence_package,
+        franking_proof,
+        true,
+    )
+    .await
+}
+
+async fn validate_signed_moderation_report_safety(
+    state: &AppState,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+    effective_scope: Option<&ScopeRef>,
+    evidence_package: &Value,
+    franking_proof: &Value,
+) -> Result<ModerationReportSafety, AppError> {
+    validate_moderation_report_content_safety(
+        state,
+        realm_id,
+        reporter,
+        target_ref,
+        effective_scope,
+        evidence_package,
+        franking_proof,
+        false,
+    )
+    .await
+}
+
+async fn validate_moderation_report_content_safety(
+    state: &AppState,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+    effective_scope: Option<&ScopeRef>,
+    evidence_package: &Value,
+    franking_proof: &Value,
+    consume_franking_nonce: bool,
+) -> Result<ModerationReportSafety, AppError> {
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
     let target_scope =
         moderation_target_effective_scope_value(state, realm_id, reporter, target_ref)?;
@@ -248,7 +306,8 @@ pub(super) async fn validate_moderation_report_safety(
     let evidence_package =
         validate_moderation_evidence_package(evidence_package, &effective_scope)?;
     let franking_proof =
-        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
+        validate_moderation_franking_proof(state, realm_id, franking_proof, consume_franking_nonce)
+            .await?;
     Ok(ModerationReportSafety {
         effective_scope,
         evidence_package,
@@ -480,6 +539,7 @@ async fn validate_moderation_franking_proof(
     state: &AppState,
     realm_id: &str,
     franking_proof: &Value,
+    consume_nonce: bool,
 ) -> Result<Option<Value>, AppError> {
     if franking_proof.is_null() {
         return Ok(None);
@@ -553,7 +613,9 @@ async fn validate_moderation_franking_proof(
             franking_proof_invalid(format!("franking_proof typed validation failed: {error}"))
         })?;
     validate_franking_event_time_anchor(state, realm_id, &typed_proof).await?;
-    if !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce) {
+    if consume_nonce
+        && !state.remember_moderation_franking_nonce(realm_id, received_by, replay_nonce)
+    {
         return Err(AppError::new(
             ErrorCode::DuplicateConflict,
             "franking_proof replay_nonce was already used",
@@ -744,163 +806,91 @@ async fn moderation_report(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.reporter.as_str() != session.actor {
-        return Err(AppError::capability_denied(
-            "reporter must match authenticated actor",
-        ));
-    }
-    if !realm_has_member(state, body.realm_id.as_str(), &session.actor).await {
-        return Err(AppError::capability_denied(
-            "reporter cannot see the target realm",
-        ));
-    }
-    let realm_id = body.realm_id.as_str().to_owned();
-    let target_ref = body.target_ref.clone();
-    let report_reason_code = body.report_reason_code.clone();
-    let reporter = body.reporter.as_str().to_owned();
-    let source_service = moderation_request_source_service(req);
-    let source_ip_hash = moderation_request_source_ip_hash(req);
-    let evidence_package = body
-        .evidence_package
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| AppError::internal(format!("evidence package encode failed: {error}")))?
-        .unwrap_or(Value::Null);
-    let franking_proof = body
-        .franking_proof
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| AppError::internal(format!("franking proof encode failed: {error}")))?
-        .unwrap_or(Value::Null);
-    let safety = validate_moderation_report_safety(
-        state,
-        &realm_id,
-        &reporter,
-        &target_ref,
-        body.effective_scope.as_ref(),
-        &evidence_package,
-        &franking_proof,
-        source_service.as_deref(),
-        &source_ip_hash,
-    )
-    .await?;
-    // Internal assignment keeps the `<did>#moderation` role form; the wire
-    // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
-    let moderation_role = format!("{}#moderation", state.service_id());
-    let mut report_fields = serde_json::Map::new();
-    report_fields.insert("realm_id".to_owned(), json!(realm_id));
-    report_fields.insert("effective_scope".to_owned(), safety.effective_scope);
-    report_fields.insert("target_ref".to_owned(), json!(target_ref));
-    report_fields.insert("report_reason_code".to_owned(), json!(report_reason_code));
-    if let Some(description) = body.description {
-        report_fields.insert("description".to_owned(), json!(description));
-    }
-    report_fields.insert("reporter".to_owned(), json!(reporter));
-    if !body.evidence_refs.is_empty() {
-        report_fields.insert("evidence_refs".to_owned(), json!(body.evidence_refs));
-    }
-    if let Some(evidence_package) = safety.evidence_package {
-        report_fields.insert("evidence_package".to_owned(), evidence_package);
-    }
-    if let Some(franking_proof) = safety.franking_proof {
-        report_fields.insert("franking_proof".to_owned(), franking_proof);
-    }
-    let report_event_id = persist_canonical_moderation_report_event(
-        state,
-        &realm_id,
-        &reporter,
-        &target_ref,
-        Value::Object(report_fields.clone()),
-    )
-    .await?;
-    // `report` and `moderation_queue_item` are both Event-derived kinds, and the
-    // registry names the same `ak.self.moderation.report` Event as the genesis
-    // of each: they are two distinct typed outputs of one accepted Event, not
-    // ids anyone may mint. Neither can be known before the Event is accepted,
-    // and neither enters its payload — the Event digest would then depend on a
-    // value derived from itself.
-    let report_event = arkret_identifiers::EventId::new(report_event_id.clone())
-        .map_err(|error| AppError::internal(format!("moderation Event id invalid: {error}")))?;
-    let report_id = arkret_identifiers::ReportId::from_event_id(&report_event).to_string();
-    let queue_item_ref =
-        arkret_identifiers::ModerationQueueItemId::from_event_id(&report_event).to_string();
-    report_fields.insert("report_id".to_owned(), json!(report_id));
-    report_fields.insert("event_id".to_owned(), json!(report_event_id));
-    report_fields.insert("created_at".to_owned(), json!(now()));
-    let report_payload = Value::Object(report_fields);
-    if let Err(error) = state
-        .governance()
-        .append_moderation_report(report_payload.clone())
+    body.validate()
+        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+    let event = &body.report_event.event;
+    let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
+        serde_json::from_value(Value::Object(event.payload.clone().into_iter().collect()))
+            .map_err(|error| AppError::invalid_param(format!("report_event payload: {error}")))?;
+    let principal_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+        AppError::internal(format!(
+            "authenticated session principal id is invalid: {error}"
+        ))
+    })?;
+    let event_value = serde_json::to_value(event)
+        .map_err(|error| AppError::invalid_param(format!("report_event encode: {error}")))?;
+    let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&event_value)
+        .map_err(|error| {
+            AppError::invalid_param(format!("report_event canonical form: {}", error.message))
+        })?;
+    let exact_replay = state
+        .event_queries()
+        .canonical_event(event.event_id.as_str())
         .await
-    {
-        tracing::error!(%error, "failed to append moderation report");
-    }
-    if let Err(error) = state
-        .governance()
-        .append_moderation_action(json!({
-            "action_id": ids::generate("moderation_action"),
-            "report_id": report_id,
-            "realm_id": realm_id,
-            "target_ref": target_ref,
-            "status": "open",
-            "assigned_to": moderation_role.clone(),
-            "created_at": now(),
-        }))
-        .await
-    {
-        tracing::error!(%error, "failed to append moderation action");
-    }
-    // Spec triage: each accepted report is wrapped in a
-    // `ModerationQueueItem` cell so admins can prioritise / route /
-    // assign reviewers. We default to `status=submitted`,
-    // `visibility=metadata_only`, `priority=normal` — sodmin can update
-    // via `POST /_soland/admin/moderation/queue/{id}/{assign,prioritise}`.
-    let queue_item = json!({
-        "id": queue_item_ref,
-        "report": report_payload,
-        "status": "submitted",
-        "priority": "normal",
-        "visibility": "metadata_only",
-        "assigned_to": [moderation_role],
-        "audit_refs": [],
-        "created_at": now(),
-    });
-    if let Err(error) = state
-        .governance()
-        .upsert_moderation_queue_item(queue_item)
-        .await
-    {
-        tracing::warn!(%error, "queue item upsert failed (likely Pg backend stub)");
-    }
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "moderation.report",
-        json!({
-            "report_id": report_id.clone(),
-            "event_id": report_event_id,
-            "id": queue_item_ref
-        }),
-        "submitted",
-    )
-    .await;
-    let mut routed_to = Vec::new();
-    if moderation_routing_visible_to_actor(state, &realm_id, &session.actor).await {
-        match arkret_wire::DidCoreId::new(state.service_id().clone()) {
-            Ok(did) => routed_to.push(did),
-            Err(_) => tracing::warn!(
-                service_id = %state.service_id(),
-                "service_id is not a valid DID core id; omitted from routed_to"
-            ),
+        .map_err(|error| AppError::internal(format!("moderation replay lookup failed: {error}")))?
+        .is_some_and(|record| record.canonical_bytes == canonical_bytes);
+    if !exact_replay {
+        if !realm_has_member(state, event.realm_id.as_str(), &session.actor).await {
+            return Err(AppError::capability_denied(
+                "reporter cannot see the target realm",
+            ));
         }
+        let evidence_package = payload
+            .evidence_package
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("evidence package encode failed: {error}"))
+            })?
+            .unwrap_or(Value::Null);
+        let franking_proof = payload
+            .franking_proof
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| AppError::internal(format!("franking proof encode failed: {error}")))?
+            .unwrap_or(Value::Null);
+        validate_signed_moderation_report_safety(
+            state,
+            event.realm_id.as_str(),
+            payload.reporter.as_str(),
+            payload.target_ref.as_str(),
+            payload.effective_scope.as_ref(),
+            &evidence_package,
+            &franking_proof,
+        )
+        .await?;
     }
+    let accepted_target =
+        arkret_models_collaboration::governance::moderation::ModerationReportAcceptedTargetBasis {
+            target_ref: payload.target_ref.to_string(),
+            effective_scope: event.scope_ref.clone(),
+        };
+    body.validate_authoring_context(&principal_id, &accepted_target)
+        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+    let report_id = body
+        .report_id()
+        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+    crate::routing::events::event_log::submit_initial_event_submission(
+        state,
+        &session,
+        body.report_event,
+    )
+    .await
+    .map_err(|error| {
+        crate::routing::events::event_log::submit_one_error_to_app_error(
+            "moderation report Event submit failed",
+            error.status,
+            error.code,
+            &error.message,
+        )
+    })?;
     json_ok(ModerationReportOutcome {
         report_id,
         status:
             arkret_models_collaboration::governance::moderation::ModerationReportStatus::Submitted,
-        routed_to,
+        routed_to: Vec::new(),
     })
 }
 
@@ -1191,11 +1181,11 @@ mod report_safety_tests {
         seed_franking_event_anchor(&state, FRANKING_RECEIVED_AT).await;
         let proof = valid_franking();
         assert!(
-            validate_moderation_franking_proof(&state, REALM, &proof)
+            validate_moderation_franking_proof(&state, REALM, &proof, true)
                 .await
                 .is_ok()
         );
-        let replay = validate_moderation_franking_proof(&state, REALM, &proof)
+        let replay = validate_moderation_franking_proof(&state, REALM, &proof, true)
             .await
             .unwrap_err();
         assert_eq!(replay.code, ErrorCode::DuplicateConflict);
@@ -1205,7 +1195,7 @@ mod report_safety_tests {
     async fn franking_without_event_time_anchor_is_rejected() {
         let state = test_state();
         let proof = valid_franking();
-        let error = validate_moderation_franking_proof(&state, REALM, &proof)
+        let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
             .await
             .unwrap_err();
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
@@ -1216,7 +1206,7 @@ mod report_safety_tests {
         let state = test_state();
         seed_franking_event_anchor(&state, "2026-04-30T00:10:01.000Z").await;
         let proof = valid_franking();
-        let error = validate_moderation_franking_proof(&state, REALM, &proof)
+        let error = validate_moderation_franking_proof(&state, REALM, &proof, true)
             .await
             .unwrap_err();
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);

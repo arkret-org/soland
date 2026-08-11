@@ -51,7 +51,7 @@ use soland_services::identity::MimiConsentCorrelation;
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
-    persist_canonical_moderation_report_event, validate_moderation_report_safety,
+    persist_mimi_facade_moderation_report_event, validate_moderation_report_safety,
 };
 use super::{append_audit_log, now};
 use crate::ids;

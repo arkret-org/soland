@@ -902,7 +902,7 @@ pub(super) async fn mimi_report_abuse(
     if let Some(franking_proof) = safety.franking_proof {
         event_fields.insert("franking_proof".to_owned(), franking_proof);
     }
-    let report_event_id = persist_canonical_moderation_report_event(
+    let report_event_id = persist_mimi_facade_moderation_report_event(
         state,
         &realm_id,
         reporter,
@@ -918,27 +918,6 @@ pub(super) async fn mimi_report_abuse(
         &arkret_identifiers::EventId::new(report_event_id.clone())
             .map_err(|error| AppError::internal(format!("MIMI report Event id: {error}")))?,
     );
-    let mut report_fields = event_fields;
-    report_fields.insert("report_id".to_owned(), json!(report_id.as_str()));
-    report_fields.insert("event_id".to_owned(), json!(report_event_id));
-    report_fields.insert("kind".to_owned(), json!("mimi_abuse_report"));
-    report_fields.insert(
-        "mimi_room_uri".to_owned(),
-        body.get("mimi_room_uri").cloned().unwrap_or(Value::Null),
-    );
-    report_fields.insert(
-        "provider_id".to_owned(),
-        body.get("provider_id").cloned().unwrap_or(Value::Null),
-    );
-    report_fields.insert("created_at".to_owned(), json!(now()));
-    if let Err(error) = state
-        .governance()
-        .append_moderation_report(Value::Object(report_fields))
-        .await
-    {
-        tracing::error!(%error, "failed to persist mimi abuse report");
-    }
-
     let routed_to = vec![
         arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?,

@@ -2503,19 +2503,21 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
 
 #[tokio::test]
 async fn moderation_decision_allows_authorized_issuer() {
+    const MODERATOR: &str = "ak:did_core:web:moderator.example";
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AUYLjBoI0xYRjG5SKmFPOh3Agj-mEAcV6cmiVPn4KB64".to_owned(),
     )
     .unwrap();
-    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    grant_moderation_decision(&state, &realm_id, MODERATOR);
     let decision = op(
         realm_id,
         "000000000902",
         arkret_wire::EventKind::ModerationDecision,
         json!({
-            "sender": "ak:did_core:web:moderator.example",
-            "issuer": "did:web:moderator.example",
+            "actor_id": MODERATOR,
+            "sender": MODERATOR,
+            "issuer": MODERATOR,
             "target_ref": "ak:message:AR9_0Dn3PqKpHpxvh0C4oIGwx_MZWw6y7PjVc300c93v",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"

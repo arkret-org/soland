@@ -486,6 +486,9 @@ async fn project_accepted_operations_inner(
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::AccountDataSet {
             project_account_data_set(state, origin, source_device_id, operation).await;
         }
+        if kinds::canonical_kind(operation) == arkret_wire::EventKind::SelfModerationReport {
+            materialize_moderation_report(state, operation).await;
+        }
         crate::routing::identity::consent::project_consent_operation(state, operation).await;
         // Device-identity Phase 1 — persist an accepted `ak.device.authorize`'s
         // `payload.device_public_key` into the devices table so the
@@ -629,6 +632,62 @@ async fn project_accepted_operations_inner(
                 "failed to persist accepted operation projection"
             );
         }
+    }
+}
+
+async fn materialize_moderation_report(state: &AppState, operation: &Operation) {
+    let event_id = &operation.context.event_id;
+    let report_id = arkret_identifiers::ReportId::from_event_id(event_id);
+    let queue_item_id = arkret_identifiers::ModerationQueueItemId::from_event_id(event_id);
+    let Some(mut report) = operation.payload.as_object().cloned() else {
+        tracing::error!(event_id = %event_id, "accepted moderation report payload is not an object");
+        return;
+    };
+    report.insert("report_id".to_owned(), serde_json::json!(report_id));
+    report.insert("event_id".to_owned(), serde_json::json!(event_id));
+    report.insert(
+        "effective_scope".to_owned(),
+        serde_json::json!(operation.context.accepted_scope_ref),
+    );
+    if operation
+        .payload
+        .get("target_ref")
+        .and_then(Value::as_str)
+        .is_some_and(|target| target.starts_with("ak:event:"))
+    {
+        report.insert(
+            "target_event_id".to_owned(),
+            operation.payload["target_ref"].clone(),
+        );
+    }
+    report.insert(
+        "created_at".to_owned(),
+        serde_json::json!(operation.created_at),
+    );
+    let report = Value::Object(report);
+    if let Err(error) = state
+        .governance()
+        .append_moderation_report(report.clone())
+        .await
+    {
+        tracing::error!(%error, event_id = %event_id, "accepted moderation report projection failed");
+    }
+    let queue_item = serde_json::json!({
+        "id": queue_item_id,
+        "report": report,
+        "status": "submitted",
+        "priority": "normal",
+        "visibility": "metadata_only",
+        "assigned_to": [format!("{}#moderation", state.service_id())],
+        "audit_refs": [],
+        "created_at": operation.created_at,
+    });
+    if let Err(error) = state
+        .governance()
+        .upsert_moderation_queue_item(queue_item)
+        .await
+    {
+        tracing::error!(%error, event_id = %event_id, "accepted moderation queue projection failed");
     }
 }
 

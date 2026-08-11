@@ -349,7 +349,7 @@ enum InternalEventBinding {
         owner: String,
         key: String,
     },
-    ModerationReport {
+    MimiModerationReport {
         reporter: String,
         target_ref: String,
     },
@@ -406,7 +406,7 @@ impl InternalEventAdmission {
         }
     }
 
-    pub(in crate::routing) fn moderation_report(
+    pub(in crate::routing) fn mimi_moderation_report(
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
         reporter: impl Into<String>,
@@ -421,7 +421,7 @@ impl InternalEventAdmission {
                 .as_str()
                 .to_owned(),
             device_id: "moderation-report-service".to_owned(),
-            binding: InternalEventBinding::ModerationReport {
+            binding: InternalEventBinding::MimiModerationReport {
                 reporter: reporter.into(),
                 target_ref: target_ref.into(),
             },
@@ -517,7 +517,7 @@ impl InternalEventAdmission {
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
-                InternalEventBinding::ModerationReport {
+                InternalEventBinding::MimiModerationReport {
                     reporter,
                     target_ref,
                 } => object.get("payload").is_some_and(|payload| {
@@ -3290,7 +3290,7 @@ pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_moderation_report_event_value,
+    submit_mimi_moderation_report_event_value,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

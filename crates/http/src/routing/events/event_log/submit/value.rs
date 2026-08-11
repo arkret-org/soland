@@ -484,7 +484,7 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     .await
 }
 
-pub(in crate::routing) async fn submit_moderation_report_event_value(
+pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
@@ -492,7 +492,7 @@ pub(in crate::routing) async fn submit_moderation_report_event_value(
     reporter: &str,
     target_ref: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let admission = InternalEventAdmission::moderation_report(
+    let admission = InternalEventAdmission::mimi_moderation_report(
         realm_id,
         state.service_id().as_str(),
         reporter,

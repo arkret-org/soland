@@ -783,6 +783,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    moderation_queue_items (pk) {
+        pk -> Int8,
+        id -> Bytea,
+        realm_id -> Nullable<Text>,
+        payload -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     multisig_pending (seal_id) {
         seal_id -> Text,
         realm_id -> Text,
@@ -1580,6 +1590,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     mls_key_packages,
     mls_welcomes,
     moderation_actions,
+    moderation_queue_items,
     moderation_reports,
     multisig_pending,
     notifications,

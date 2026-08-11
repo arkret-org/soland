@@ -1,6 +1,7 @@
 use super::{
-    Binary, JsonPayloadRow, Jsonb, ModerationStore, Nullable, PersistenceError, PersistenceResult,
-    PgPool, RunQueryDsl, SqlUuid, Text, Value, async_trait, ids, pg_conn, sql_query,
+    Binary, JsonPayloadRow, Jsonb, ModerationStore, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, RunQueryDsl, SqlUuid, Text, Value, async_trait, ids, pg_conn,
+    sql_query,
 };
 pub struct PgModerationStore {
     pub pool: PgPool,
@@ -38,7 +39,11 @@ impl ModerationStore for PgModerationStore {
             "INSERT INTO moderation_reports \
              (id, reporter_id, target_actor_id, target_event_id, realm_id, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
-             ON CONFLICT (id) DO NOTHING",
+             ON CONFLICT (id) DO UPDATE SET \
+             reporter_id = EXCLUDED.reporter_id, \
+             target_actor_id = EXCLUDED.target_actor_id, \
+             target_event_id = EXCLUDED.target_event_id, \
+             realm_id = EXCLUDED.realm_id, payload = EXCLUDED.payload",
         )
         .bind::<Binary, _>(report_id_token)
         .bind::<Nullable<Text>, _>(&reporter)
@@ -108,6 +113,60 @@ impl ModerationStore for PgModerationStore {
             .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+            .map_err(PersistenceError::database)
+    }
+
+    async fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
+        let id = item.get("id").and_then(Value::as_str).ok_or_else(|| {
+            PersistenceError::Internal("moderation queue item missing id".to_owned())
+        })?;
+        let realm_id = item
+            .pointer("/report/realm_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let id_token =
+            ids::event_token_part_or_schema_violation(id, "moderation_queue_item")?.to_vec();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
+        sql_query(
+            "INSERT INTO moderation_queue_items (id, realm_id, payload, created_at) \
+             VALUES ($1, $2, $3, NOW()) \
+             ON CONFLICT (id) DO UPDATE SET realm_id = EXCLUDED.realm_id, payload = EXCLUDED.payload",
+        )
+        .bind::<Binary, _>(id_token)
+        .bind::<Nullable<Text>, _>(realm_id.as_deref())
+        .bind::<Jsonb, _>(&item)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT payload FROM moderation_queue_items ORDER BY created_at ASC, pk ASC")
+            .load::<JsonPayloadRow>(&mut *conn)
+            .await
+            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
+            .map_err(PersistenceError::database)
+    }
+
+    async fn get_queue_item(&self, id: &str) -> PersistenceResult<Option<Value>> {
+        let id_token =
+            ids::event_token_part_or_schema_violation(id, "moderation_queue_item")?.to_vec();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query("SELECT payload FROM moderation_queue_items WHERE id = $1")
+            .bind::<Binary, _>(id_token)
+            .get_result::<JsonPayloadRow>(&mut *conn)
+            .await
+            .optional()
+            .map(|row| row.map(|row| row.payload))
             .map_err(PersistenceError::database)
     }
 }

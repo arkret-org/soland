@@ -1163,6 +1163,19 @@ CREATE INDEX moderation_reports_space_idx ON public.moderation_reports USING btr
 
 CREATE INDEX moderation_reports_target_idx ON public.moderation_reports USING btree (target_actor_id);
 
+-- Queue identity is derived from the same accepted report Event token. The
+-- payload is an idempotent read projection and may be rebuilt from Events.
+CREATE TABLE public.moderation_queue_items (
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id bytea NOT NULL CHECK (octet_length(id) = 33),
+    realm_id text,
+    payload jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT moderation_queue_items_id_key UNIQUE (id)
+);
+
+CREATE INDEX moderation_queue_items_realm_idx ON public.moderation_queue_items USING btree (realm_id);
+
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY,
     organization_principal_id text NOT NULL,

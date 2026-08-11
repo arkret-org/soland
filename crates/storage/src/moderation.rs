@@ -4,11 +4,6 @@ use super::{PersistenceError, PersistenceResult, Value, async_trait};
 /// Reports and actions are append-only. Appeals and queue items support the
 /// moderation workbench; canonical decisions remain durable Events projected
 /// by `soland_domain::reducer::apply_moderation`.
-///
-/// The Pg backend stubs appeals/queue items as
-/// `Err(PersistenceError::Internal("not yet wired"))` so production
-/// instances fail loudly until a migration ships; the in-memory backend
-/// implements them fully and is used by dev mode + tests.
 #[async_trait]
 pub trait ModerationStore: Send + Sync {
     async fn append_report(&self, report: Value) -> PersistenceResult<()>;

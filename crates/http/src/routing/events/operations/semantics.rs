@@ -38,6 +38,7 @@ pub fn validate_operation_semantics(
         // check so a removed `target_ref` payload is rejected with the
         // typed-shape reason rather than the generic SDK schema error.
         validate_typed_payload_shapes(&kind, operation)?;
+        validate_moderation_report_provenance(state, &kind, operation)?;
         validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(&kind, operation)?;
         validate_operation_payload_schema(&kind, operation)?;
@@ -137,6 +138,32 @@ pub(crate) fn validate_reaction_target_kind(
 /// For the space lifecycle events the SDK's typed payload requires
 /// `space_id`. The validator here HARD-REJECTS the
 /// wire-broken `target_ref` form; producers must emit canonical `space_id`.
+fn validate_moderation_report_provenance(
+    state: &AppState,
+    kind: &arkret_wire::EventKind,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kind != &arkret_wire::EventKind::SelfModerationReport {
+        return Ok(());
+    }
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::SelfModerationReport>()
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    if payload.realm_id != operation.realm_id {
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    }
+    payload.validate_provenance(&operation.context.sender)?;
+    if payload.provenance
+        == Some(
+            arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
+        )
+        && operation.context.sender.as_str() != state.service_id()
+    {
+        return Err("MIMI facade moderation report must be authored by the local service");
+    }
+    Ok(())
+}
+
 fn validate_typed_payload_shapes(
     kind: &arkret_wire::EventKind,
     operation: &Operation,

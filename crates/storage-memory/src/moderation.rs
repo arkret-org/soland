@@ -14,7 +14,22 @@ impl MemoryModerationStore {
 #[async_trait]
 impl ModerationStore for MemoryModerationStore {
     async fn append_report(&self, report: Value) -> PersistenceResult<()> {
-        self.reports.lock().push(report);
+        let report_id = report
+            .get("report_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Internal("moderation report missing report_id".to_owned())
+            })?
+            .to_owned();
+        let mut reports = self.reports.lock();
+        if let Some(existing) = reports
+            .iter_mut()
+            .find(|item| item.get("report_id").and_then(Value::as_str) == Some(report_id.as_str()))
+        {
+            *existing = report;
+        } else {
+            reports.push(report);
+        }
         Ok(())
     }
 
