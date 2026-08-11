@@ -1165,7 +1165,7 @@ CREATE INDEX moderation_reports_target_idx ON public.moderation_reports USING bt
 
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY,
-    organization_did text NOT NULL,
+    organization_principal_id text NOT NULL,
     handle text,
     display_name text NOT NULL,
     source_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -1180,7 +1180,7 @@ CREATE TABLE public.organizations (
 
 CREATE INDEX organizations_handle_idx ON public.organizations USING btree (handle) WHERE (handle IS NOT NULL);
 
-CREATE INDEX organizations_did_idx ON public.organizations USING btree (organization_did);
+CREATE INDEX organizations_principal_id_idx ON public.organizations USING btree (organization_principal_id);
 
 CREATE TABLE public.organization_registration_challenges (
     challenge_id text PRIMARY KEY,
