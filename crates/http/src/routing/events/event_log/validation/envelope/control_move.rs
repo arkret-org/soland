@@ -106,11 +106,16 @@ pub(super) async fn reject_revoked_actor_device_signature(
         candidate_devices.insert(device_id);
     }
 
+    let directory_actor_id = arkret_wire::DidFullId::new(session.actor.clone())
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+        .is_ok_and(|session_actor_id| session_actor_id.as_str() == actor_id)
+        .then_some(session.actor.as_str())
+        .unwrap_or(actor_id);
     for device_id in candidate_devices {
         let revoked = state
             .identities()
             .find_device(soland_services::identity::FindDeviceQuery {
-                actor_id: actor_id.to_owned(),
+                actor_id: directory_actor_id.to_owned(),
                 device_id: device_id.clone(),
             })
             .await
@@ -137,9 +142,11 @@ pub(super) fn actor_device_id_from_verification_method(
     verification_method: &str,
     actor_id: &str,
 ) -> Option<String> {
-    verification_method
-        .strip_prefix(actor_id)
-        .and_then(|suffix| suffix.strip_prefix('#'))
+    let (method_controller, fragment) = verification_method.rsplit_once('#')?;
+    let method_controller = arkret_wire::DidFullId::new(method_controller.to_owned()).ok()?;
+    let method_actor_id = arkret_wire::project_full_id_to_core_id(&method_controller).ok()?;
+    (method_actor_id.as_str() == actor_id)
+        .then_some(fragment)
         .map(str::trim)
         .filter(|fragment| !fragment.is_empty())
         .map(|fragment| {

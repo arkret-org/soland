@@ -1435,7 +1435,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let token = "managed-agent-governance-session";
     super::agents::seed_controller_session(&state, token, controller_id).await;
     super::agents::seed_agent_provision_prerequisites(&state, controller_id).await;
-    super::agents::seed_active_controller_device_generation(&state, controller_id).await;
+    let controller_authority_instance =
+        super::agents::seed_active_controller_device_generation(&state, controller_id).await;
 
     // Agent provisioning is the spec-defined prepare/commit transcript. Reuse
     // the SDK-backed fixture instead of maintaining an obsolete one-shot body
@@ -1444,6 +1445,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &state,
         token,
         controller_id,
+        &controller_authority_instance,
         "governance-recovery",
         serde_json::json!({
             "actions": [
@@ -1496,6 +1498,10 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
+            initial_resolution: serde_json::from_value(
+                agent_record.provision_event_refs.as_ref().unwrap()["initial_resolution"].clone(),
+            )
+            .unwrap(),
             controller_id: arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

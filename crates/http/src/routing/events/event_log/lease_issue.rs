@@ -691,7 +691,9 @@ fn sign_lease_fields(
         payload_digest: digest,
         created_at: issued_at,
         domain: None,
-        audience: Some(Audience::Single(state.service_id().clone())),
+        audience: Some(Audience::Single(
+            state.service_resolution_commitment().full_id.to_string(),
+        )),
         proof_purpose: None,
         jws: String::new(),
     };

@@ -10,7 +10,7 @@ use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
     RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
 };
-use arkret_wire::{DidUrl, Seal};
+use arkret_wire::{DidCoreId, DidUrl, Seal};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -19,10 +19,20 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::events::ActiveAgentAccountabilityQuery;
 use soland_services::identity::{
-    AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogCommitResult, DidLogEvent,
+    AgentPairingState as AgentPrincipalRecord, PinnedDidVersionStatus,
 };
 
 use crate::state::AppState;
+
+fn managed_controller_core_id(controller_id: &str) -> Result<DidCoreId, AppError> {
+    DidCoreId::new(controller_id.to_owned())
+        .or_else(|_| {
+            DidFullId::new(controller_id.to_owned())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                .map(DidCoreId::from)
+        })
+        .map_err(|error| schema_error(format!("managed Agent controller DID is invalid: {error}")))
+}
 
 const CONTROLLER_DELEGATION_FRAGMENT: &str = "managed-controller";
 
@@ -38,59 +48,175 @@ pub(crate) fn controller_authorization_ref(agent_full_id: &DidFullId) -> Result<
     })
 }
 
-pub(crate) async fn persist_managed_agent_did_identity_anchor(
+pub(crate) async fn accepted_managed_agent_initial_resolution(
     state: &AppState,
     agent_full_id: &DidFullId,
-    provisioned_at: DateTime<Utc>,
-) -> Result<(), AppError> {
-    let document = json!({"id": agent_full_id});
-    validate_agent_did_identity_anchor(&document, agent_full_id)?;
-    let operation = json!({
-        "versionId": "1",
-        "versionTime": arkret_canonical::format_timestamp_canonical(provisioned_at),
-        "state": document,
-    });
-    let digest = arkret_canonical::canonical_sha256(&operation).map_err(|error| {
-        AppError::internal(format!(
-            "managed Agent DID inception digest failed: {error}"
-        ))
-    })?;
-    let commit = state
+    controller_id: &arkret_identifiers::DidCoreId,
+) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {
+    let pinned = state
         .dids()
-        .commit_log_operation(
-            None,
-            DidDocumentState {
-                did: agent_full_id.to_string(),
-                did_document: document,
-                key_log_head: Some(digest.clone()),
-                seq: 1,
-                method_evidence: json!({
-                    "mode": "managed_agent_identity_anchor",
-                }),
-                fetched_at: provisioned_at,
-                expires_at: provisioned_at,
-                updated_at: provisioned_at,
-            },
-            DidLogEvent {
-                event_digest: digest,
-                did: agent_full_id.to_string(),
-                seq: 1,
-                operation,
-                created_at: provisioned_at,
-            },
+        .resolve_current_webvh_state(agent_full_id)
+        .await
+        .map_err(|error| {
+            failed_precondition(
+                format!("managed Agent accepted inception is unavailable: {error}"),
+                "managed_agent_inception_unavailable",
+            )
+        })?;
+    if pinned.status != PinnedDidVersionStatus::Current || !pinned.version_id.starts_with("1-") {
+        return Err(failed_precondition(
+            "managed Agent prepare requires an unrotated accepted inception",
+            "managed_agent_inception_not_current",
+        ));
+    }
+    validate_managed_agent_inception_document(
+        &pinned.document,
+        agent_full_id,
+        controller_id.as_str(),
+        false,
+    )?;
+    Ok(arkret_models_identity::ResolutionCommitment {
+        full_id: agent_full_id.clone(),
+        method_history_head: pinned.log_head_digest.to_string(),
+        version_id: pinned.version_id,
+    })
+}
+
+fn validate_managed_agent_inception_document(
+    document: &Value,
+    agent_full_id: &DidFullId,
+    controller_id: &str,
+    allow_pcr_binding: bool,
+) -> Result<(), AppError> {
+    arkret_signatures::webvh::validate_managed_agent_did_document_profile(
+        agent_full_id.as_str(),
+        document,
+        &[],
+    )
+    .map_err(|error| schema_error(format!("managed Agent DID profile is invalid: {error}")))?;
+    let services = document
+        .get("service")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema_error("managed Agent inception service set is missing"))?;
+    let expected_service_count = if allow_pcr_binding { 3 } else { 2 };
+    if services.len() != expected_service_count {
+        return Err(schema_error(
+            "managed Agent DID service set does not match its lifecycle phase",
+        ));
+    }
+    let expected_id = format!(
+        "{}#{CONTROLLER_DELEGATION_FRAGMENT}",
+        agent_full_id.as_str()
+    );
+    let controller = &services[1];
+    if controller.get("id").and_then(Value::as_str) != Some(expected_id.as_str())
+        || controller
+            .pointer("/serviceEndpoint/controller_did")
+            .and_then(Value::as_str)
+            != Some(controller_id)
+    {
+        return Err(schema_error(
+            "managed Agent inception must contain one matching controller delegation",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn managed_agent_binding_is_accepted(
+    state: &AppState,
+    initial_resolution: &arkret_models_identity::ResolutionCommitment,
+    controller_id: &str,
+    principal_control_realm_id: &RealmId,
+    authorization_ref: &DidUrl,
+    requested_scope_digest: &Hash,
+) -> Result<bool, AppError> {
+    let controller_core_id = managed_controller_core_id(controller_id)?;
+    let initial_head = arkret_identifiers::Hash::new(
+        initial_resolution.method_history_head.clone(),
+    )
+    .map_err(|error| schema_error(format!("managed Agent inception head is invalid: {error}")))?;
+    state
+        .dids()
+        .resolve_pinned_webvh_state(
+            &initial_resolution.full_id,
+            &initial_resolution.version_id,
+            &initial_head,
         )
         .await
         .map_err(|error| {
-            AppError::internal(format!(
-                "managed Agent DID inception commit failed: {error}"
-            ))
+            failed_precondition(
+                format!("managed Agent committed inception is unavailable: {error}"),
+                "managed_agent_inception_unavailable",
+            )
         })?;
-    match commit {
-        DidLogCommitResult::Accepted | DidLogCommitResult::Duplicate => Ok(()),
-        DidLogCommitResult::Conflict => Err(AppError::conflict(
-            "managed Agent DID inception conflicts with existing accepted history",
-        )),
+    let current = state
+        .dids()
+        .resolve_current_webvh_state(&initial_resolution.full_id)
+        .await
+        .map_err(|error| {
+            failed_precondition(
+                format!("managed Agent current DID history is unavailable: {error}"),
+                "managed_agent_did_binding_unavailable",
+            )
+        })?;
+    if current.version_id == initial_resolution.version_id {
+        return Ok(false);
     }
+    if !current.version_id.starts_with("2-") {
+        return Err(failed_precondition(
+            "managed Agent PCR binding must be the first continuous update after inception",
+            "managed_agent_did_binding_not_entry_one",
+        ));
+    }
+    validate_managed_agent_inception_document(
+        &current.document,
+        &initial_resolution.full_id,
+        controller_core_id.as_str(),
+        true,
+    )?;
+    let services = current
+        .document
+        .get("service")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema_error("managed Agent DID service set is missing"))?;
+    let expected_id = format!(
+        "{}#arkret-principal-control-realm",
+        initial_resolution.full_id.as_str()
+    );
+    let mut bindings = services.iter().filter(|service| {
+        service.get("type").and_then(Value::as_str) == Some("ArkretPrincipalControlRealm")
+    });
+    let Some(binding) = bindings.next() else {
+        return Ok(false);
+    };
+    if bindings.next().is_some()
+        || binding.get("id").and_then(Value::as_str) != Some(expected_id.as_str())
+        || binding
+            .pointer("/serviceEndpoint/realm_id")
+            .and_then(Value::as_str)
+            != Some(principal_control_realm_id.as_str())
+        || binding
+            .pointer("/serviceEndpoint/controller_did")
+            .and_then(Value::as_str)
+            != Some(controller_core_id.as_str())
+        || binding
+            .pointer("/serviceEndpoint/authorization_ref")
+            .and_then(Value::as_str)
+            != Some(authorization_ref.as_str())
+        || binding
+            .pointer("/serviceEndpoint/requested_scope_digest")
+            .and_then(Value::as_str)
+            != Some(requested_scope_digest.as_str())
+        || binding
+            .pointer("/serviceEndpoint/requested_scope")
+            .is_some()
+    {
+        return Err(schema_error(
+            "managed Agent DID PCR service binding does not match the accepted create-locked tuple",
+        ));
+    }
+    Ok(true)
 }
 
 pub(crate) async fn validate_managed_agent_key_backup(
@@ -692,6 +818,27 @@ pub(crate) async fn validate_agent_controller_binding(
     validate_active_agent_accountability(state, agent_record, accepted_at).await
 }
 
+pub(crate) fn managed_agent_initial_resolution_for_record(
+    agent_record: &AgentPrincipalRecord,
+) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {
+    let value = agent_record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("initial_resolution"))
+        .cloned()
+        .ok_or_else(|| {
+            failed_precondition(
+                "managed Agent provisioning initial resolution is missing",
+                "managed_agent_initial_resolution_missing",
+            )
+        })?;
+    serde_json::from_value(value).map_err(|error| {
+        AppError::internal(format!(
+            "stored managed Agent initial resolution is invalid: {error}"
+        ))
+    })
+}
+
 async fn validate_active_agent_accountability(
     state: &AppState,
     agent_record: &AgentPrincipalRecord,
@@ -710,7 +857,7 @@ async fn validate_active_agent_accountability(
         })?;
     let query = ActiveAgentAccountabilityQuery {
         accountability_event_id: accountability_event_id.to_owned(),
-        controller_id: agent_record.controller_id.clone(),
+        controller_id: managed_controller_core_id(&agent_record.controller_id)?.to_string(),
         agent_id: agent_record.id.clone(),
         accepted_at,
     };
@@ -747,12 +894,13 @@ pub(crate) async fn validate_delegated_agent_envelope(
         .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
     let agent_id = event.actor_id.as_str();
     let record = managed_agent_record(state, agent_id).await?;
-    if record.controller_id != controller_id
+    let controller_core_id = managed_controller_core_id(controller_id)?;
+    if managed_controller_core_id(&record.controller_id)? != controller_core_id
         || event
             .executed_by
             .as_ref()
             .map(arkret_wire::DidCoreId::as_str)
-            != Some(controller_id)
+            != Some(controller_core_id.as_str())
         || event.realm_id.as_str() != record.principal_control_realm_id
         || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
     {
@@ -792,6 +940,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             controller_id,
             record.principal_control_realm_id.as_str(),
             state.config().trust_domain.as_str(),
+            &managed_agent_initial_resolution_for_record(&record)?,
         )?;
         let realm_id =
             RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
@@ -880,6 +1029,7 @@ pub(crate) fn validate_agent_pcr_genesis_object(
     controller_id: &str,
     expected_realm_id: &str,
     trust_domain: &str,
+    expected_initial_resolution: &arkret_models_identity::ResolutionCommitment,
 ) -> Result<(), AppError> {
     RealmId::new(expected_realm_id.to_owned())
         .map_err(|error| schema_error(format!("managed Agent PCR Realm id is invalid: {error}")))?;
@@ -887,14 +1037,32 @@ pub(crate) fn validate_agent_pcr_genesis_object(
         .get("genesis_salt")
         .and_then(Value::as_str)
         .ok_or_else(|| schema_error("managed Agent PCR genesis_salt is missing"))?;
+    let initial_resolution = serde_json::from_value::<
+        arkret_models_identity::identity_resolution::ResolutionCommitment,
+    >(
+        object
+            .get("initial_resolution")
+            .cloned()
+            .ok_or_else(|| schema_error("managed Agent PCR initial_resolution is missing"))?,
+    )
+    .map_err(|error| {
+        schema_error(format!(
+            "managed Agent PCR initial_resolution is invalid: {error}"
+        ))
+    })?;
+    if &initial_resolution != expected_initial_resolution {
+        return Err(failed_precondition(
+            "managed Agent PCR initial_resolution differs from the accepted inception locked by provisioning",
+            "managed_agent_initial_resolution_mismatch",
+        ));
+    }
     let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
         .map_err(|error| schema_error(format!("managed Agent core id is invalid: {error}")))?;
     let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id,
-            controller_id: arkret_identifiers::DidCoreId::new(controller_id.to_owned()).map_err(
-                |error| schema_error(format!("managed Agent controller DID is invalid: {error}")),
-            )?,
+            initial_resolution: expected_initial_resolution.clone(),
+            controller_id: managed_controller_core_id(controller_id)?,
             genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
                 |error| {
                     schema_error(format!(
@@ -1072,19 +1240,16 @@ fn validate_agent_did_identity_anchor(
     document: &Value,
     agent_full_id: &DidFullId,
 ) -> Result<(), AppError> {
-    if document.get("id").and_then(Value::as_str) != Some(agent_full_id.as_str()) {
-        return Err(schema_error("managed Agent DID document id mismatch"));
-    }
-    let exact_keys = document
-        .as_object()
-        .map(|object| object.keys().map(String::as_str).collect::<BTreeSet<_>>())
-        .ok_or_else(|| schema_error("managed Agent DID document must be an object"))?;
-    if exact_keys != BTreeSet::from(["id"]) {
-        return Err(schema_error(
-            "managed Agent DID document may carry identity-anchor fields only",
-        ));
-    }
-    Ok(())
+    arkret_signatures::webvh::validate_managed_agent_did_document_profile(
+        agent_full_id.as_str(),
+        document,
+        &[],
+    )
+    .map_err(|error| {
+        schema_error(format!(
+            "managed Agent DID identity profile is invalid: {error}"
+        ))
+    })
 }
 
 fn validate_agent_runtime_authority(record: &AgentPrincipalRecord) -> Result<(), AppError> {
@@ -1108,10 +1273,7 @@ pub(crate) fn requested_scope_digest_for_record(
     .map_err(|error| schema_error(format!("managed Agent requested_scope is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(record.id.clone())
         .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
-    let controller_id =
-        arkret_identifiers::DidCoreId::new(record.controller_id.clone()).map_err(|error| {
-            schema_error(format!("managed Agent controller DID is invalid: {error}"))
-        })?;
+    let controller_id = managed_controller_core_id(&record.controller_id)?;
     agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
         .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))
 }
@@ -1216,8 +1378,8 @@ fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
 mod tests {
     use super::*;
 
-    const AGENT: &str = "ak:did_core:web:agent.example";
-    const AGENT_FULL: &str = "did:web:agent.example";
+    const AGENT: &str = "ak:did_core:webvh:z6mkfixtureagent";
+    const AGENT_FULL: &str = "did:webvh:z6mkfixtureagent:agent.example";
     const CONTROLLER: &str = "ak:did_core:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
     const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
@@ -1240,6 +1402,11 @@ mod tests {
         let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
             arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
+                initial_resolution: arkret_models_identity::ResolutionCommitment {
+                    full_id: arkret_identifiers::DidFullId::new(AGENT_FULL).unwrap(),
+                    method_history_head: format!("sha256:{}", "8".repeat(64)),
+                    version_id: "1-Qmfixture".to_owned(),
+                },
                 controller_id: arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -1253,6 +1420,10 @@ mod tests {
         )
         .unwrap();
         serde_json::to_value(payload.object).unwrap()
+    }
+
+    fn pcr_initial_resolution() -> arkret_models_identity::ResolutionCommitment {
+        serde_json::from_value(pcr_genesis()["initial_resolution"].clone()).unwrap()
     }
 
     #[test]
@@ -1279,8 +1450,15 @@ mod tests {
 
     #[test]
     fn agent_pcr_genesis_requires_restricted_mls_e2ee_profile() {
-        validate_agent_pcr_genesis_object(&pcr_genesis(), AGENT, CONTROLLER, PCR, TRUST_DOMAIN)
-            .expect("strict Agent PCR genesis must pass");
+        validate_agent_pcr_genesis_object(
+            &pcr_genesis(),
+            AGENT,
+            CONTROLLER,
+            PCR,
+            TRUST_DOMAIN,
+            &pcr_initial_resolution(),
+        )
+        .expect("strict Agent PCR genesis must pass");
 
         let mut ordinary_realm = pcr_genesis();
         ordinary_realm["history_visibility"] = json!("shared");
@@ -1292,6 +1470,24 @@ mod tests {
                 CONTROLLER,
                 PCR,
                 TRUST_DOMAIN,
+                &pcr_initial_resolution(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn agent_pcr_genesis_rejects_resolution_not_locked_by_provisioning() {
+        let mut different = pcr_initial_resolution();
+        different.method_history_head = format!("sha256:{}", "9".repeat(64));
+        assert!(
+            validate_agent_pcr_genesis_object(
+                &pcr_genesis(),
+                AGENT,
+                CONTROLLER,
+                PCR,
+                TRUST_DOMAIN,
+                &different,
             )
             .is_err()
         );

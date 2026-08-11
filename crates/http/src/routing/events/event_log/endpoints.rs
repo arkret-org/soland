@@ -124,10 +124,25 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
+    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
+        AppError::new(
+            ErrorCode::PolicyViolation,
+            format!("Seal submitter full DID is invalid: {error}"),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+    let session_core_id =
+        arkret_wire::project_full_id_to_core_id(&session_full_id).map_err(|error| {
+            AppError::new(
+                ErrorCode::PolicyViolation,
+                format!("Seal submitter full DID cannot be projected: {error}"),
+            )
+            .with_status(StatusCode::FORBIDDEN)
+        })?;
     let own_pcr = state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(seal.realm_id.as_str(), &session.actor);
+        .realm_is_principal_control_for_actor(seal.realm_id.as_str(), session_core_id.as_str());
     let managed_agent = if own_pcr {
         None
     } else {
@@ -794,6 +809,10 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierAccountClientState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let session_core_id = arkret_wire::project_full_id_to_core_id(&session_full_id)
+        .map_err(|error| AppError::internal(format!("session actor projection failed: {error}")))?;
     let query_body = if req.method().as_str() == "QUERY" {
         Some(
             req.parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
@@ -838,7 +857,7 @@ async fn events_frontier(
         let own_pcr = state
             .projections()
             .snapshot()
-            .realm_is_principal_control_for_actor(realm_value, &session.actor);
+            .realm_is_principal_control_for_actor(realm_value, session_core_id.as_str());
         let managed_agent_pcr =
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
@@ -976,7 +995,8 @@ async fn events_frontier(
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-        let own_actor_pcr = actor == session.actor
+        let is_session_actor = actor_id == session_core_id;
+        let own_actor_pcr = is_session_actor
             && state
                 .projections()
                 .snapshot()
@@ -991,7 +1011,7 @@ async fn events_frontier(
                     && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
             });
-        let invited_actor = actor == session.actor
+        let invited_actor = is_session_actor
             && crate::routing::spaces::space::realm_member_invited_or_joined_at(
                 state,
                 realm_id.as_str(),
@@ -1005,7 +1025,7 @@ async fn events_frontier(
         // is not yet rebuilt (notably immediately after an atomic bootstrap
         // commit). This does not synthesize an empty frontier: an unknown
         // Realm still has no canonical records and therefore remains 404.
-        let authored_realm_history = if actor == session.actor {
+        let authored_realm_history = if is_session_actor {
             !state
                 .event_queries()
                 .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())

@@ -747,12 +747,24 @@ fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
 }
 
+fn session_actor_core_id(session: &SessionRecord) -> Option<arkret_wire::DidCoreId> {
+    arkret_wire::DidCoreId::new(session.actor.clone())
+        .or_else(|_| {
+            arkret_wire::DidFullId::new(session.actor.clone())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                .map(arkret_wire::DidCoreId::from)
+        })
+        .ok()
+}
+
 pub(crate) async fn event_visible_to_session(
     state: &AppState,
     record: &CanonicalEventRecord,
     session: &SessionRecord,
 ) -> bool {
-    if record.actor_id == session.actor {
+    if session_actor_core_id(session)
+        .is_some_and(|session_actor| session_actor.as_str() == record.actor_id)
+    {
         return true;
     }
     match canonical_realm_id_for_record(record) {
@@ -781,13 +793,20 @@ fn circle_event_visible_to_session(
     else {
         return true;
     };
-    if record.actor_id == session.actor {
+    let Some(session_actor) = session_actor_core_id(session) else {
+        return false;
+    };
+    if record.actor_id == session_actor.as_str() {
         return true;
     }
     state
         .projections()
         .snapshot()
-        .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
+        .circle_scope_visible_to_actor_at(
+            &scope_circle_id,
+            session_actor.as_str(),
+            record.received_at,
+        )
 }
 
 /// Scan the projected cell or durable Event store for the most recent

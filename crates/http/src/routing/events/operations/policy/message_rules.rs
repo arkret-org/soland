@@ -333,12 +333,21 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
             .executed_by
             .as_ref()
             .ok_or("managed_agent_pcr_genesis_controller_missing")?;
+        let record = state
+            .agent_pairings()
+            .agent(&agent_id)
+            .await
+            .map_err(|_| "managed_agent_principal_binding_unavailable")?
+            .ok_or("managed_agent_principal_binding_unavailable")?;
+        let initial_resolution = crate::routing::identity::managed_agent_pcr::managed_agent_initial_resolution_for_record(&record)
+            .map_err(|_| "managed_agent_initial_resolution_unavailable")?;
         crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
             object,
             &agent_id,
             controller_id.as_str(),
             &expected,
             state.config().trust_domain.as_str(),
+            &initial_resolution,
         )
         .map_err(|_| "principal_control_realm_profile_mismatch")?;
     }

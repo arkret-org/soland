@@ -414,9 +414,16 @@ fn ordinary_event_device_id(
         .and_then(|proofs| proofs.first())
         .and_then(|proof| proof.get("verification_method"))
         .and_then(serde_json::Value::as_str)?;
-    verification_method
-        .strip_prefix(record.actor_id.as_str())
-        .and_then(|suffix| suffix.strip_prefix('#'))
+    let (controller, fragment) = verification_method.rsplit_once('#')?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
+    if arkret_wire::project_full_id_to_core_id(&controller)
+        .ok()?
+        .as_str()
+        != record.actor_id
+    {
+        return None;
+    }
+    Some(fragment)
         .map(str::trim)
         .filter(|fragment| !fragment.is_empty())
         .map(|fragment| {
@@ -639,9 +646,24 @@ async fn try_apply_device_generation_event_seal(
         false
     };
 
+    let NotarySig::Single(signature) = &seal.notary_signature else {
+        return Err(device_generation_fenced(
+            "B-model Event Seal requires one identifiable device signature",
+        ));
+    };
+    let directory_principal_id = signature
+        .verification_method
+        .rsplit_once('#')
+        .and_then(|(controller, _)| arkret_wire::DidFullId::new(controller.to_owned()).ok())
+        .filter(|controller| {
+            arkret_wire::project_full_id_to_core_id(controller)
+                .is_ok_and(|core_id| core_id.as_str() == context.principal_id)
+        })
+        .map(|controller| controller.to_string())
+        .unwrap_or_else(|| context.principal_id.clone());
     let devices = state
         .identities()
-        .devices_for_actor(&context.principal_id)
+        .devices_for_actor(&directory_principal_id)
         .await
         .map_err(|error| {
             AppError::new(
@@ -649,11 +671,6 @@ async fn try_apply_device_generation_event_seal(
                 format!("device inventory unavailable: {error}"),
             )
         })?;
-    let NotarySig::Single(signature) = &seal.notary_signature else {
-        return Err(device_generation_fenced(
-            "B-model Event Seal requires one identifiable device signature",
-        ));
-    };
     let signer = devices
         .iter()
         .find(|device| {
@@ -665,7 +682,7 @@ async fn try_apply_device_generation_event_seal(
                 return false;
             };
             device_verification_method_matches(
-                &context.principal_id,
+                &directory_principal_id,
                 &device.device_id,
                 public_key,
                 &signature.verification_method,
@@ -1058,13 +1075,30 @@ pub(crate) async fn apply_managed_agent_event_seal(
         state.projections().project_cell_writes(event)
     })
     .map_err(|error| {
+        let kinds = events
+            .iter()
+            .map(|event| event.kind.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         seal_admission_error(format!(
-            "managed Agent PCR control material is invalid: {error}"
+            "managed Agent PCR control material is invalid: {error}; loaded {} Realm Events ({kinds})",
+            events.len()
         ))
     })?;
+    let record_controller_id = arkret_wire::DidCoreId::new(agent_record.controller_id.clone())
+        .or_else(|_| {
+            arkret_wire::DidFullId::new(agent_record.controller_id.clone())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                .map(arkret_wire::DidCoreId::from)
+        })
+        .map_err(|error| {
+            device_generation_fenced(format!(
+                "accepted managed Agent controller identity is invalid: {error}"
+            ))
+        })?;
     if material.realm_id != seal.realm_id
         || material.agent_id.as_str() != agent_record.id
-        || material.controller_id.as_str() != agent_record.controller_id
+        || material.controller_id != record_controller_id
         || material.authorization_ref.as_str() != agent_record.controller_authorization_ref.as_str()
     {
         return Err(device_generation_fenced(

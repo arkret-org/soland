@@ -44,10 +44,9 @@ pub(super) fn delegated_agent_session(
 }
 
 pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
-    if validate_did(value).is_err() {
-        return Err(AppError::invalid_param("agent_id must be a DID scalar"));
-    }
-    Ok(())
+    arkret_wire::DidCoreId::new(value.to_owned())
+        .map(|_| ())
+        .map_err(|_| AppError::invalid_param("agent_id must be a Core DidCoreId"))
 }
 
 pub(super) fn ensure_agent_record_controller(
@@ -72,7 +71,7 @@ pub(super) fn ensure_agent_record_controller(
     }
     if !agent_record_is_materialized(record) {
         return Err(AppError::capability_denied(
-            "Agent provisioning has not accepted its PCR genesis",
+            "Agent provisioning has not completed its DID/PCR bootstrap binding",
         ));
     }
     Ok(())
@@ -82,9 +81,9 @@ pub(super) fn agent_record_is_materialized(record: &AgentPrincipalRecord) -> boo
     record
         .provision_event_refs
         .as_ref()
-        .and_then(|refs| refs.get("pcr_genesis_accepted"))
+        .and_then(|refs| refs.get("did_binding_accepted"))
         .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 pub(super) async fn require_agent_controller(
@@ -301,34 +300,6 @@ pub(super) fn verification_method_agent_endpoint(
     (controller == agent_id)
         .then(|| arkret_identifiers::DeviceId::new(fragment.to_owned()).ok())
         .flatten()
-}
-
-/// Mint a `did:webvh` principal DID for a server-provisioned agent.
-///
-/// did:webvh-only red line: agent principals MUST NOT use `did:web` (no
-/// key-log history). The DID host is the deployment's explicitly configured
-/// public endpoint, never reverse-derived from the stable service core id and never a
-/// `.agents.example` placeholder. The SCID is a self-certifying multihash derived from a
-/// per-agent genesis skeleton so the identifier is bound to its inception
-/// material rather than being an opaque random string.
-pub(super) fn generate_agent_principal_did(public_base_url: &str) -> Result<String, AppError> {
-    let host = reqwest::Url::parse(public_base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .ok_or_else(|| AppError::internal("configured public_base_url has no host"))?;
-    let agent_uuid = uuid::Uuid::now_v7();
-    // Genesis skeleton: the SCID is the multihash of this canonical structure
-    // with the SCID field left as the placeholder, matching the did:webvh SCID
-    // derivation used elsewhere in soland.
-    let skeleton = serde_json::json!({
-        "scid": "{SCID}",
-        "host": host,
-        "path": format!("webvh:agent:{agent_uuid}"),
-    });
-    let scid =
-        crate::routing::identity::webvh_validation::derive_webvh_scid_from_skeleton(&skeleton)
-            .unwrap_or_else(|_| agent_uuid.simple().to_string());
-    Ok(format!("did:webvh:{scid}:{host}:webvh:agent:{agent_uuid}"))
 }
 
 #[cfg(test)]

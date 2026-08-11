@@ -110,6 +110,22 @@ async fn validate_event_envelope_with_ingress(
             "Event Envelope must be a JSON object",
         )
     })?;
+    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
+        event_validation_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("session actor is invalid: {error}"),
+        )
+    })?;
+    let session_actor_id = arkret_wire::project_full_id_to_core_id(&session_full_id)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("session actor projection failed: {error}"),
+            )
+        })?
+        .to_string();
     validate_event_critical_features(state, object)?;
     // `effective_scope` is reducer output and is intentionally absent from
     // the closed SDK Event DTO. Reject it from the raw envelope before
@@ -211,7 +227,8 @@ async fn validate_event_envelope_with_ingress(
     // equality gate below, not after it.
     let is_authorized_internal_adapter =
         internal_admission.is_some_and(|admission| admission.matches(session, object));
-    let ephemeral_pairwise_author = if actor_id != session.actor && !is_authorized_internal_adapter
+    let ephemeral_pairwise_author = if actor_id != session_actor_id
+        && !is_authorized_internal_adapter
     {
         let context =
             super::minimal_metadata_author::minimal_metadata_author_context(object, state).await;
@@ -219,7 +236,7 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    let managed_agent_delegation = if actor_id != session.actor
+    let managed_agent_delegation = if actor_id != session_actor_id
         && !is_authorized_internal_adapter
         && !ephemeral_pairwise_author
     {
@@ -245,7 +262,7 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    if actor_id != session.actor
+    if actor_id != session_actor_id
         && !managed_agent_delegation
         && !is_authorized_internal_adapter
         && !ephemeral_pairwise_author
@@ -280,23 +297,25 @@ async fn validate_event_envelope_with_ingress(
     // the prefix match once the agent runtime authorization plumbing
     // lands.
     if let Some(executed_by) = event_string_field(object, &["executed_by"]) {
-        if validate_did(&executed_by).is_err() {
-            return Err(event_validation_error(
+        let executed_by = arkret_wire::DidCoreId::new(executed_by).map_err(|_| {
+            event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_param",
-                "executed_by must be a DID",
-            ));
-        }
+                "executed_by must be a Core DidCoreId",
+            )
+        })?;
         let proofs = object
             .get("proofs")
             .and_then(Value::as_array)
             .and_then(|arr| arr.first())
             .and_then(Value::as_object);
         let vm = proofs.and_then(|proof| event_string_field(proof, &["verification_method"]));
-        let vm_did = vm
+        let vm_actor = vm
             .as_deref()
-            .map(|raw| raw.split_once('#').map_or(raw, |(did, _)| did));
-        if vm_did != Some(executed_by.as_str()) {
+            .and_then(|raw| raw.rsplit_once('#').map(|(did, _)| did))
+            .and_then(|did| arkret_wire::DidFullId::new(did.to_owned()).ok())
+            .and_then(|did| arkret_wire::project_full_id_to_core_id(&did).ok());
+        if vm_actor.as_ref() != Some(&executed_by) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "executed_by_mismatch",
@@ -387,16 +406,16 @@ async fn validate_event_envelope_with_ingress(
     }
     let is_realm_create_bootstrap = kind == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_create_actor_is_creator(object, &actor_id)
-        && (actor_id == session.actor || managed_agent_delegation)
+        && (actor_id == session_actor_id || managed_agent_delegation)
         && (!realm_exists || historical_realm_create);
     let is_invite_acceptance_join =
-        member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
+        member_join_accepts_pending_invite(state, object, &session_actor_id, &realm_id).await;
     let is_invitee_invite_cancel =
-        invitee_cancels_pending_invite(state, object, &session.actor, &realm_id).await;
+        invitee_cancels_pending_invite(state, object, &session_actor_id, &realm_id).await;
     let is_third_party_invite_claim = invite_claim_actor_claims_pending_third_party_invite(
         state,
         object,
-        &session.actor,
+        &session_actor_id,
         &realm_id,
     )
     .await;
@@ -406,7 +425,7 @@ async fn validate_event_envelope_with_ingress(
     // the Event or advances a reducer/frontier on the recipient service.
     let is_private_invite_delivery = private_invite_delivery
         && kind == arkret_wire::EventKind::InviteCreate.as_str()
-        && invite_create_actor_is_inviter(object, &session.actor)
+        && invite_create_actor_is_inviter(object, &session_actor_id)
         && !realm_exists;
     let is_direct_conversation_founding = realm_bootstrap_contexts
         .iter()
@@ -440,13 +459,13 @@ async fn validate_event_envelope_with_ingress(
     // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at
     // the later `join` transition, not on the knock itself.
-    let is_member_self_knock = member_self_knock(object, &session.actor);
+    let is_member_self_knock = member_self_knock(object, &session_actor_id);
     let is_authorized_internal_adapter = internal_admission
         .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
     let membership_subject = if ephemeral_pairwise_author {
         actor_id.as_str()
     } else {
-        session.actor.as_str()
+        session_actor_id.as_str()
     };
     if !is_realm_create_bootstrap
         && !is_invite_acceptance_join
@@ -819,7 +838,10 @@ async fn enforce_device_generation_fence(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: actor_id.to_owned(),
+            actor_id: verification_method
+                .rsplit_once('#')
+                .map(|(controller, _)| controller.to_owned())
+                .unwrap_or_else(|| actor_id.to_owned()),
             device_id: device_id.clone(),
         })
         .await

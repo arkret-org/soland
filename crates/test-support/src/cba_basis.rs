@@ -242,7 +242,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
         DidFullId::new(principal_id.to_owned()).expect("fixture principal full DID");
     let principal = arkret_wire::project_full_id_to_core_id(&principal_full_id)
         .expect("fixture principal projection");
-    let mut event = arkret_bootstrap::build_self_principal_pcr_create(
+    arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
             principal_full_id: principal_full_id.clone(),
@@ -274,24 +274,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
         },
         &fixture_registered_projection,
     )
-    .expect("fixture closed PCR genesis Event");
-    event
-        .payload
-        .get_mut("object")
-        .and_then(serde_json::Value::as_object_mut)
-        .expect("fixture PCR genesis object")
-        .insert(
-            "initial_resolution".to_owned(),
-            serde_json::json!({
-                "full_id": principal_full_id,
-                "method_history_head": format!("sha256:{}", "1".repeat(64)),
-                "version_id": "1"
-            }),
-        );
-    event
-        .refresh_content_bound_identity()
-        .expect("fixture PCR genesis identity refresh");
-    event
+    .expect("fixture closed PCR genesis Event")
 }
 
 /// Put the genesis unit of `realm_id` in place for `subject`.
@@ -419,6 +402,12 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
     {
         let event: arkret_wire::Event = serde_json::from_value(existing.envelope.clone())
             .expect("stored fixture genesis envelope");
+        let existing_is_principal_control_realm = event
+            .payload
+            .get("object")
+            .and_then(|object| object.get("purpose"))
+            .and_then(serde_json::Value::as_str)
+            == Some("principal_control");
         let has_complete_ordinary_bootstrap = [
             arkret_wire::EventKind::RealmProfile,
             arkret_wire::EventKind::RealmPolicyBundle,
@@ -434,7 +423,10 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
                 .iter()
                 .any(|record| record.kind == kind.as_str())
         });
-        if is_principal_control_realm || has_complete_ordinary_bootstrap {
+        if is_principal_control_realm
+            || existing_is_principal_control_realm
+            || has_complete_ordinary_bootstrap
+        {
             project_fixture_genesis_event(state, &realm, event).await;
             return;
         }

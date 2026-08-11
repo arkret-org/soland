@@ -187,11 +187,12 @@ pub(crate) async fn verify_control_proposal_ack(
             .strip_prefix(&format!("{signer_full_id}#"))
             .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
         if device_method {
-            crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            crate::jws_verify::verify_principal_authorized_control_ack_jws_async(
                 &bytes,
                 &member.signature.jws,
                 &member.signature.verification_method,
-                signer.as_str(),
+                &signer,
+                event,
                 state,
             )
             .await
@@ -225,19 +226,7 @@ pub(crate) async fn verify_control_proposal_ack(
             )
             .await
             .is_ok()
-                && profile.proposal_quorum_met(
-                    &event
-                        .proofs
-                        .iter()
-                        .filter_map(|proof| {
-                            let (controller, _) = proof.verification_method.rsplit_once('#')?;
-                            let full_id =
-                                arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
-                            let core_id = arkret_wire::project_full_id_to_core_id(&full_id).ok()?;
-                            (core_id == event.actor_id).then_some(core_id)
-                        })
-                        .collect(),
-                )
+                && profile.proposal_quorum_met(&BTreeSet::from([event.actor_id.clone()]))
         } else {
             false
         };

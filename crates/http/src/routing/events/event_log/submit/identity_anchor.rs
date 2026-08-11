@@ -2060,6 +2060,11 @@ mod tests {
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
                 principal_full_id: principal_full_id.clone(),
+                initial_resolution: arkret_models_identity::ResolutionCommitment {
+                    full_id: principal_full_id.clone(),
+                    method_history_head: format!("sha256:{}", "8".repeat(64)),
+                    version_id: "1-Qmfixture".to_owned(),
+                },
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )

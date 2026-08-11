@@ -747,7 +747,7 @@ async fn events_query_impl(
     }
     let realms = normalize_scope_selectors(parts.realms.clone())?;
     for actor in &parts.actors {
-        if validate_did(actor).is_err() {
+        if arkret_wire::DidCoreId::new(actor.clone()).is_err() {
             return Err(soland_http::error::AppError::invalid_param(format!(
                 "invalid actor: {actor}"
             )));

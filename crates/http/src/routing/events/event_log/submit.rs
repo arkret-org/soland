@@ -3363,8 +3363,10 @@ mod managed_agent_pcr_batch_tests {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
                 .unwrap();
-        let agent_id =
-            arkret_identifiers::DidFullId::new("did:web:agent.example".to_owned()).unwrap();
+        let agent_id = arkret_identifiers::DidFullId::new(
+            "did:webvh:z6mkfixtureagent:agent.example".to_owned(),
+        )
+        .unwrap();
         let agent_actor_id = arkret_wire::project_full_id_to_core_id(&agent_id).unwrap();
         let genesis =
             arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
@@ -3372,6 +3374,11 @@ mod managed_agent_pcr_batch_tests {
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
                 )
                 .unwrap(),
+                arkret_models_identity::ResolutionCommitment {
+                    full_id: agent_id.clone(),
+                    method_history_head: format!("sha256:{}", "8".repeat(64)),
+                    version_id: "1-Qmfixture".to_owned(),
+                },
                 arkret_identifiers::TypedTrustDomainId::new(
                     "ak:trust_domain:managed-agent-pcr".to_owned(),
                 )

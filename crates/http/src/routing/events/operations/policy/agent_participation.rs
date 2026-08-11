@@ -494,7 +494,13 @@ async fn operation_agent_write_context(
             .await
             .map_err(|_| "agent_principal_lookup_unavailable")?
             .is_some_and(|record| {
-                record.controller_id == executed_by
+                arkret_wire::DidCoreId::new(record.controller_id.clone())
+                    .or_else(|_| {
+                        arkret_wire::DidFullId::new(record.controller_id.clone())
+                            .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                            .map(arkret_wire::DidCoreId::from)
+                    })
+                    .is_ok_and(|controller_id| controller_id.as_str() == executed_by)
                     && record.principal_control_realm_id == operation.realm_id.as_str()
                     && record.controller_authorization_ref.as_str() == authorization_ref
             });

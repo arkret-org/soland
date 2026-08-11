@@ -449,6 +449,214 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     ))
 }
 
+/// Verify a principal-device compact JWS when the signed Control Proposal Ack
+/// supplies the exact PCR context that the generic principal verifier lacks.
+pub async fn verify_principal_authorized_control_ack_jws_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    principal_id: &arkret_wire::DidCoreId,
+    event: &arkret_wire::Event,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
+    let (method_full_id, device_id) = verification_method.rsplit_once('#').ok_or_else(|| {
+        fail("principal Control Proposal Ack method has no device fragment".to_owned())
+    })?;
+    let method_full_id =
+        arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
+            fail(format!(
+                "principal Control Proposal Ack method DID is invalid: {error}"
+            ))
+        })?;
+    let method_principal_id = arkret_wire::DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+            fail(format!(
+                "principal Control Proposal Ack method DID cannot be projected: {error}"
+            ))
+        })?,
+    );
+    if &method_principal_id != principal_id {
+        return Err(fail(
+            "principal Control Proposal Ack method does not belong to its signer".to_owned(),
+        ));
+    }
+    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned()).map_err(|error| {
+        fail(format!(
+            "principal Control Proposal Ack device fragment is invalid: {error}"
+        ))
+    })?;
+
+    let authority_instance = if &event.actor_id == principal_id {
+        state
+            .persistence()
+            .principal_resolution_for_realm(&event.realm_id)
+            .await
+            .map_err(|error| fail(format!("principal Ack PCR lookup failed: {error}")))?
+            .ok_or_else(|| fail("principal Ack PCR authority is unavailable".to_owned()))?
+            .authority_instance
+    } else {
+        let agent = state
+            .agent_pairings()
+            .agent(event.actor_id.as_str())
+            .await
+            .map_err(|error| {
+                fail(format!(
+                    "managed Agent Ack authority lookup failed: {error}"
+                ))
+            })?
+            .ok_or_else(|| fail("Ack actor is not a local managed Agent".to_owned()))?;
+        if agent.controller_id != method_full_id.as_str()
+            || event.executed_by.as_ref() != Some(principal_id)
+            || event.authorization_ref.as_deref()
+                != Some(agent.controller_authorization_ref.as_str())
+        {
+            return Err(fail(
+                "managed Agent Ack does not bind its delegated controller".to_owned(),
+            ));
+        }
+        let refs = agent.provision_event_refs.as_ref().ok_or_else(|| {
+            fail("managed Agent provisioning authority evidence is unavailable".to_owned())
+        })?;
+        serde_json::from_value::<arkret_wire::PrincipalAuthorityInstance>(
+            refs.get("controller_authority_instance")
+                .cloned()
+                .ok_or_else(|| {
+                    fail("managed Agent controller authority instance is unavailable".to_owned())
+                })?,
+        )
+        .map_err(|error| {
+            fail(format!(
+                "managed Agent controller authority is invalid: {error}"
+            ))
+        })?
+    };
+    authority_instance.validate().map_err(|error| {
+        fail(format!(
+            "principal Ack authority instance is invalid: {error}"
+        ))
+    })?;
+    if authority_instance.principal_id != *principal_id
+        || authority_instance.principal_server_id.as_str() != state.service_id()
+    {
+        return Err(fail(
+            "principal Ack authority does not bind this signer and Principal Server".to_owned(),
+        ));
+    }
+    let durable = state
+        .persistence()
+        .principal_resolution_by_authority_instance(&authority_instance.authority_instance_digest)
+        .await
+        .map_err(|error| fail(format!("principal Ack authority lookup failed: {error}")))?
+        .ok_or_else(|| fail("principal Ack authority is not durably accepted".to_owned()))?;
+    if durable.authority_instance != authority_instance {
+        return Err(fail(
+            "principal Ack authority does not match the durable PCR record".to_owned(),
+        ));
+    }
+
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: method_full_id.to_string(),
+            device_id: device_id.to_string(),
+        })
+        .await
+        .map_err(|error| fail(format!("principal Ack device state unavailable: {error}")))?
+        .ok_or_else(|| fail("principal Ack signer device is unavailable".to_owned()))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(fail("principal Ack signer device is not active".to_owned()));
+    }
+    let payload = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| fail(format!("principal Ack device evidence is invalid: {error}")))?;
+    let signing_key = payload
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| fail("principal Ack signer key is unavailable".to_owned()))?;
+    crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
+        .map_err(|error| fail(format!("principal Ack signer key is invalid: {error}")))?;
+    let generation_ref = payload
+        .authorized_generation_ref
+        .ok_or_else(|| fail("principal Ack signer has no active device generation".to_owned()))?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        principal_id.as_str(),
+    )
+    .await
+    .map_err(|error| {
+        fail(format!(
+            "principal Ack device generation unavailable: {error}"
+        ))
+    })?
+    .ok_or_else(|| fail("principal Ack device generation is unavailable".to_owned()))?;
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || generation.current_ref != generation_ref.as_str()
+    {
+        return Err(fail(
+            "principal Ack signer is outside the active device generation".to_owned(),
+        ));
+    }
+    let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
+        fail("principal Ack signer has no accepted authorization Event".to_owned())
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal Ack authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal Ack authorization Event is unavailable".to_owned()))?;
+    if authorize_event.actor_id != principal_id.as_str()
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(authority_instance.pcr_realm_id.as_str())
+    {
+        return Err(fail(
+            "principal Ack device authorization is outside the selected PCR authority".to_owned(),
+        ));
+    }
+
+    let document = DidDocument {
+        id: method_full_id.clone(),
+        verification_methods: BTreeMap::from([(
+            verification_method.to_owned(),
+            signing_key
+                .strip_prefix("did:key:")
+                .unwrap_or(signing_key)
+                .to_owned(),
+        )]),
+        also_known_as: Vec::new(),
+        updated_at: None,
+        raw_properties: BTreeMap::new(),
+    };
+    let accepted =
+        principal_binding_acceptance(state, &method_full_id, verification_method, &document)
+            .ok_or_else(|| {
+                fail("principal Ack device key cannot form an accepted binding".to_owned())
+            })?;
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| fail(format!("principal Ack method is invalid: {error}")))?;
+    let outcome = arkret_identity::verify_jws_with_binding(
+        canonical_bytes,
+        jws,
+        &verification_method,
+        &accepted,
+    )
+    .map_err(|error| fail(error.to_string()));
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
+        outcome.is_ok(),
+    );
+    outcome
+}
+
 /// Generic compact Ed25519 principal authorization remains fail-closed without
 /// an exact authority instance and PCR-scoped device evidence.
 pub async fn verify_principal_authorized_ed25519_signature_async(
@@ -492,17 +700,255 @@ pub async fn verify_principal_authorized_ed25519_signature_async(
 /// record subject folded into the signed transcript — which for delegated
 /// execution differs from `principal_id`, the DID that owns the signing key.
 pub async fn verify_principal_authorized_event_proof_async(
-    _proof: &arkret_wire::Proof,
-    _envelope_bytes: &[u8],
-    _actor_id: &arkret_wire::DidCoreId,
-    _verification_method: &str,
-    _principal_id: &str,
-    _state: &AppState,
+    proof: &arkret_wire::Proof,
+    envelope_bytes: &[u8],
+    actor_id: &arkret_wire::DidCoreId,
+    verification_method: &str,
+    principal_id: &str,
+    state: &AppState,
 ) -> Result<(), PrincipalAuthorizedJwsError> {
-    Err(PrincipalAuthorizedJwsError::Verification(
-        "Event principal authorization requires an exact authority_instance and PCR-scoped device evidence"
-            .to_owned(),
-    ))
+    let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
+    let (method_full_id, device_id) = verification_method.rsplit_once('#').ok_or_else(|| {
+        fail("principal Event verification method has no device fragment".to_owned())
+    })?;
+    let method_full_id =
+        arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
+            fail(format!(
+                "principal Event verification method DID is invalid: {error}"
+            ))
+        })?;
+    let method_principal_id = arkret_wire::DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+            fail(format!(
+                "principal Event verification method DID cannot be projected: {error}"
+            ))
+        })?,
+    );
+    let expected_principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
+        .or_else(|_| {
+            arkret_wire::DidFullId::new(principal_id.to_owned())
+                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                .map(arkret_wire::DidCoreId::from)
+        })
+        .map_err(|error| {
+            fail(format!(
+                "principal Event signer identity is invalid: {error}"
+            ))
+        })?;
+    if method_principal_id != expected_principal_id {
+        return Err(fail(
+            "principal Event verification method does not belong to the proof signer".to_owned(),
+        ));
+    }
+    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned()).map_err(|error| {
+        fail(format!(
+            "principal Event device fragment is invalid: {error}"
+        ))
+    })?;
+    let envelope: Value = serde_json::from_slice(envelope_bytes)
+        .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
+
+    // Ordinary principal Events select their exact authority through the PCR
+    // realm carried by the signed envelope. A controller-authored managed-Agent
+    // Event belongs to the Agent PCR instead, so it selects the controller PCR
+    // through the immutable authority instance persisted with the provisioning
+    // allocation. The signed authorization_ref binds that record to this Event.
+    let authority_instance = if actor_id == &expected_principal_id {
+        let realm_id = envelope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                fail("principal Event does not select a PCR authority realm".to_owned())
+            })?;
+        let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
+            .map_err(|error| fail(format!("principal Event PCR realm is invalid: {error}")))?;
+        state
+            .persistence()
+            .principal_resolution_for_realm(&realm_id)
+            .await
+            .map_err(|error| fail(format!("principal Event PCR lookup failed: {error}")))?
+            .ok_or_else(|| fail("principal Event PCR authority is unavailable".to_owned()))?
+            .authority_instance
+    } else {
+        let agent = state
+            .agent_pairings()
+            .agent(actor_id.as_str())
+            .await
+            .map_err(|error| fail(format!("managed Agent authority lookup failed: {error}")))?
+            .ok_or_else(|| fail("delegated Event actor is not a local managed Agent".to_owned()))?;
+        let agent_controller_id = arkret_wire::DidCoreId::new(agent.controller_id.clone())
+            .or_else(|_| {
+                arkret_wire::DidFullId::new(agent.controller_id.clone())
+                    .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+                    .map(arkret_wire::DidCoreId::from)
+            })
+            .map_err(|error| fail(format!("managed Agent controller is invalid: {error}")))?;
+        if agent_controller_id != expected_principal_id {
+            return Err(fail(
+                "delegated Event signer is not the managed Agent controller".to_owned(),
+            ));
+        }
+        let authorization_ref = envelope
+            .get("authorization_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                fail("delegated Event has no controller authorization_ref".to_owned())
+            })?;
+        if authorization_ref != agent.controller_authorization_ref.as_str() {
+            return Err(fail(
+                "delegated Event does not use the managed Agent authorization_ref".to_owned(),
+            ));
+        }
+        let refs = agent.provision_event_refs.as_ref().ok_or_else(|| {
+            fail("managed Agent provisioning authority evidence is unavailable".to_owned())
+        })?;
+        serde_json::from_value::<arkret_wire::PrincipalAuthorityInstance>(
+            refs.get("controller_authority_instance")
+                .cloned()
+                .ok_or_else(|| {
+                    fail("managed Agent controller authority instance is unavailable".to_owned())
+                })?,
+        )
+        .map_err(|error| {
+            fail(format!(
+                "managed Agent controller authority is invalid: {error}"
+            ))
+        })?
+    };
+    authority_instance
+        .validate()
+        .map_err(|error| fail(format!("principal authority instance is invalid: {error}")))?;
+    if authority_instance.principal_id != expected_principal_id
+        || authority_instance.principal_server_id.as_str() != state.service_id()
+    {
+        return Err(fail(
+            "principal authority instance does not bind this signer and Principal Server"
+                .to_owned(),
+        ));
+    }
+    let durable = state
+        .persistence()
+        .principal_resolution_by_authority_instance(&authority_instance.authority_instance_digest)
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal authority instance lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal authority instance is not durably accepted".to_owned()))?;
+    if durable.authority_instance != authority_instance {
+        return Err(fail(
+            "principal authority instance does not match the durable PCR record".to_owned(),
+        ));
+    }
+
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            // The local account/device directory is keyed by the authenticated
+            // full DID. PCR Events and authority selectors use the projected
+            // core DID; the projection equality above binds the two forms.
+            actor_id: method_full_id.to_string(),
+            device_id: device_id.to_string(),
+        })
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal device signing state unavailable: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal Event signer device is unavailable".to_owned()))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(fail(
+            "principal Event signer device is not active".to_owned(),
+        ));
+    }
+    let device_payload = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| {
+        fail(format!(
+            "principal device signing evidence is invalid: {error}"
+        ))
+    })?;
+    let signing_key = device_payload
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| fail("principal Event signer key is unavailable".to_owned()))?;
+    crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
+        .map_err(|error| fail(format!("principal Event signer key is invalid: {error}")))?;
+    // DidDocument's verification-method convenience index stores the
+    // publicKeyMultibase value, not a did:key URL wrapper.
+    let signing_key = signing_key
+        .strip_prefix("did:key:")
+        .unwrap_or(signing_key)
+        .to_owned();
+    let generation_ref = device_payload
+        .authorized_generation_ref
+        .ok_or_else(|| fail("principal Event signer has no active device generation".to_owned()))?;
+    let generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        expected_principal_id.as_str(),
+    )
+    .await
+    .map_err(|error| fail(format!("principal device generation unavailable: {error}")))?
+    .ok_or_else(|| fail("principal device generation is unavailable".to_owned()))?;
+    if generation.status
+        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+        || generation.current_ref != generation_ref.as_str()
+    {
+        return Err(fail(
+            "principal Event signer is outside the active device generation".to_owned(),
+        ));
+    }
+    let authorize_event_id = device_payload.device_authorize_event_id.ok_or_else(|| {
+        fail("principal Event signer has no accepted authorization Event".to_owned())
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal device authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal device authorization Event is unavailable".to_owned()))?;
+    if authorize_event.actor_id != expected_principal_id.as_str()
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(authority_instance.pcr_realm_id.as_str())
+    {
+        return Err(fail(
+            "principal device authorization Event is outside the selected PCR authority".to_owned(),
+        ));
+    }
+
+    let document = DidDocument {
+        id: method_full_id.clone(),
+        verification_methods: BTreeMap::from([(verification_method.to_owned(), signing_key)]),
+        also_known_as: Vec::new(),
+        updated_at: None,
+        raw_properties: BTreeMap::new(),
+    };
+    let accepted =
+        principal_binding_acceptance(state, &method_full_id, verification_method, &document)
+            .ok_or_else(|| {
+                fail("principal device key cannot form an accepted binding".to_owned())
+            })?;
+    let outcome = arkret_identity::verify_event_proof_with_binding(
+        proof,
+        envelope_bytes,
+        actor_id,
+        &accepted,
+    )
+    .map_err(|error| fail(error.to_string()));
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
+        outcome.is_ok(),
+    );
+    outcome
 }
 
 pub async fn verify_registered_identity_resolution_event_proof_async(

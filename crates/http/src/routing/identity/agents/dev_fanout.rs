@@ -40,15 +40,52 @@ fn agent_fanout_submit_error(
 pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
+    authority_instance: &arkret_wire::PrincipalAuthorityInstance,
 ) -> Result<String, AppError> {
-    return Err(AppError::new(
-        ErrorCode::FailedPrecondition,
-        "Agent provisioning requires an exact controller authority_instance selector",
-    )
-    .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-    .with_reason_code("principal_authority_instance_required"));
-    #[allow(unreachable_code)]
-    let realm_id: String = unreachable!("authority-instance selector required");
+    authority_instance.validate().map_err(|error| {
+        AppError::invalid_param(format!("controller authority_instance is invalid: {error}"))
+            .with_reason_code("principal_authority_instance_mismatch")
+    })?;
+    let controller_full_id = arkret_wire::DidFullId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id)
+        .map_err(|error| AppError::internal(format!("session actor projection failed: {error}")))?;
+    if authority_instance.principal_id != controller_id
+        || authority_instance.principal_server_id.as_str() != state.service_id()
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "controller authority_instance does not bind this session and Principal Server",
+        )
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("principal_authority_instance_mismatch"));
+    }
+    let record = state
+        .persistence()
+        .principal_resolution_by_authority_instance(&authority_instance.authority_instance_digest)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "controller authority-instance lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "controller authority_instance is not accepted by this Principal Server",
+            )
+            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+            .with_reason_code("principal_authority_instance_mismatch")
+        })?;
+    if record.authority_instance != *authority_instance {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "controller authority_instance differs from the durable PCR record",
+        )
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("principal_authority_instance_mismatch"));
+    }
+    let realm_id = authority_instance.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -77,17 +114,24 @@ pub(super) async fn require_controller_principal_control_realm(
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
             .with_reason_code("self_realm_metadata_missing")
         })?;
-    reconcile_self_realm_owner_projection(state, &realm_id, &session.actor, &meta)?;
+    reconcile_self_realm_owner_projection(
+        state,
+        &realm_id,
+        &controller_full_id,
+        &controller_id,
+        &meta,
+    )?;
     Ok(realm_id)
 }
 
 fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
-    controller_id: &str,
+    controller_full_id: &arkret_wire::DidFullId,
+    controller_id: &arkret_wire::DidCoreId,
     meta: &soland_services::events::RealmMetadata,
 ) -> Result<(), AppError> {
-    if meta.owner != controller_id {
+    if meta.owner != controller_full_id.as_str() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "self Realm owner does not match the authenticated controller",
@@ -98,7 +142,7 @@ fn reconcile_self_realm_owner_projection(
 
     if !state.projections().reconcile_realm_owner(
         realm_id,
-        controller_id,
+        controller_id.as_str(),
         meta.deleted,
         meta.created_at,
         meta.updated_at,
@@ -141,10 +185,18 @@ pub(super) async fn submit_provision_event(
     let payload =
         arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload::try_from(event)
             .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    if event.actor_id.as_str() != session.actor
+    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
+        AppError::invalid_param(format!("session full DID is invalid: {error}"))
+    })?;
+    let session_core_id = arkret_wire::DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(&session_full_id).map_err(|error| {
+            AppError::invalid_param(format!("session full DID cannot be projected: {error}"))
+        })?,
+    );
+    if event.actor_id != session_core_id
         || event.realm_id.as_str() != controller_realm_id
         || payload.agent_id != *agent_id
-        || payload.controller_id.as_str() != session.actor
+        || payload.controller_id != session_core_id
         || payload.principal_control_realm_id != *principal_control_realm_id
         || payload.controller_authorization_ref != *controller_authorization_ref
         || payload.agent_slug != agent_slug
