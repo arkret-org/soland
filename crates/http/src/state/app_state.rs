@@ -900,11 +900,14 @@ impl AppState {
             upstream_available: true,
             ..Default::default()
         });
+        let service_route_store: Arc<dyn soland_storage::ServiceRouteStore> =
+            Arc::new(persistence.clone());
         let service_route_resolver = Arc::new(ServiceRouteResolver::new(
-            Arc::new(persistence.clone()),
+            service_route_store.clone(),
             Arc::new(VerifiedBindingRouteFetcher::new(
                 projections.clone(),
                 dids.clone(),
+                service_route_store,
                 config.development_mode,
             )),
         ));

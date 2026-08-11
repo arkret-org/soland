@@ -398,7 +398,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     if parsed_events.len() != envelopes.len() {
         return Err("peer Event batch fanout cardinality mismatch".to_owned());
     }
-    let mut peers = dynamic_peer_event_targets(state, first).await;
+    let mut peers = dynamic_peer_event_targets(state, first).await?;
     // The atomic genesis unit is routed after acceptance, but its canonical
     // destination is already explicit in a routable peer member join inside
     // the batch. Read that binding directly so bootstrap delivery never
@@ -675,7 +675,7 @@ pub(super) async fn peer_event_fanout_records(
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
-    let peers = dynamic_peer_event_targets(state, parsed).await;
+    let peers = dynamic_peer_event_targets(state, parsed).await?;
     if peers.is_empty() {
         return Ok(Vec::new());
     }
@@ -1108,7 +1108,7 @@ struct DynamicPeerEventTarget {
 async fn dynamic_peer_event_targets(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-) -> Vec<DynamicPeerEventTarget> {
+) -> Result<Vec<DynamicPeerEventTarget>, String> {
     let mut service_frontiers = {
         let projection = state.projections().snapshot();
         // sync/federation.md §4.4 — peers whose federation service delegation
@@ -1228,21 +1228,28 @@ async fn dynamic_peer_event_targets(
         let url = if let Some((typed_service_id, service_kind, carrier)) =
             sync_endpoint_routes.remove(&service_id)
         {
-            let resolver = state.service_route_resolver().ok();
-            if let Some(resolver) = resolver {
-                resolver
-                    .resolve_carrier_route(
-                        &carrier,
-                        &typed_service_id,
-                        &service_kind,
-                        chrono::Utc::now(),
+            let resolver = state.service_route_resolver().map_err(|error| {
+                format!(
+                    "dynamic peer Event fanout target {service_id} has no service route resolver: {error}"
+                )
+            })?;
+            resolver
+                .resolve_carrier_route(
+                    &carrier,
+                    &typed_service_id,
+                    &service_kind,
+                    chrono::Utc::now(),
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
                     )
-                    .await
-                    .ok()
-                    .map(|route| route.cache_entry.base_url.trim_end_matches('/').to_owned())
-            } else {
-                None
-            }
+                })?
+                .cache_entry
+                .base_url
+                .trim_end_matches('/')
+                .to_owned()
         } else {
             crate::routing::federation::federation::resolved_peer_base_url(
                 state,
@@ -1251,16 +1258,11 @@ async fn dynamic_peer_event_targets(
                 false,
             )
             .await
-            .ok()
-        };
-        let Some(url) = url else {
-            tracing::warn!(
-                event_id = %parsed.event_id,
-                realm_id = %parsed.realm_id,
-                destination_service_id = %service_id,
-                "dynamic peer event fanout target has no verified service route"
-            );
-            continue;
+            .map_err(|error| {
+                format!(
+                    "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
+                )
+            })?
         };
         let realm_sync_endpoint = realm_sync_endpoint_service_ids.contains(&service_id);
         targets.push(DynamicPeerEventTarget {
@@ -1271,7 +1273,7 @@ async fn dynamic_peer_event_targets(
             realm_sync_endpoint,
         });
     }
-    targets
+    Ok(targets)
 }
 
 fn service_binding_ref_for_target(

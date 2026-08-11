@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use arkret_models_identity::{
     AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
     ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
-    ResolutionMethodHistoryEvidence, ServiceResolutionCarrier,
+    ResolutionMethodHistoryEvidence, ServiceResolutionCarrier, ServiceRouteHandoverState,
 };
 use arkret_wire::{BindingKind, DidCoreId, DidFullId, Hash, ServiceKind};
 use async_trait::async_trait;
@@ -13,6 +15,7 @@ use soland_services::service_route::{
     RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
 };
 use soland_services::{ServiceError, ServiceResult};
+use soland_storage::ServiceRouteStore;
 
 /// Fetches only carriers retained by an effective business binding. It never
 /// derives a URL from a service core id and never treats a configured endpoint
@@ -20,6 +23,7 @@ use soland_services::{ServiceError, ServiceResult};
 pub(crate) struct VerifiedBindingRouteFetcher {
     projections: ProjectionService,
     dids: DidService,
+    route_store: Arc<dyn ServiceRouteStore>,
     transport: arkret_http_client::ServiceResolutionFetcher,
     development_mode: bool,
 }
@@ -28,6 +32,7 @@ impl VerifiedBindingRouteFetcher {
     pub(crate) fn new(
         projections: ProjectionService,
         dids: DidService,
+        route_store: Arc<dyn ServiceRouteStore>,
         development_mode: bool,
     ) -> Self {
         let egress = if development_mode {
@@ -38,6 +43,7 @@ impl VerifiedBindingRouteFetcher {
         Self {
             projections,
             dids,
+            route_store,
             transport: arkret_http_client::ServiceResolutionFetcher::with_egress_policy(egress),
             development_mode,
         }
@@ -506,9 +512,70 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
 
     async fn fetch_notice_candidate(
         &self,
-        _service_id: &DidCoreId,
-        _service_kind: &str,
+        service_id: &DidCoreId,
+        service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+        let Some(floor) = self
+            .route_store
+            .last_seen_floor(service_id, service_kind)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let states = self
+            .route_store
+            .notice_states(service_id, service_kind, 32)
+            .await?;
+        let entries = self
+            .route_store
+            .handover_mirror_entries(service_id, service_kind, 32)
+            .await?;
+        let now = Utc::now();
+
+        for state in states.into_iter().filter(|state| {
+            state.state == ServiceRouteHandoverState::Scheduled
+                && state.expires_at > now
+                && state.from_record_sequence == floor.record_sequence
+                && state.from_record_digest == floor.record_digest
+        }) {
+            let Some(notice) = entries.iter().find_map(|entry| {
+                let notice = entry.request.service_route_handover_notice.as_ref()?;
+                (entry.artifact_digest == state.notice_digest
+                    && notice.notice.handover_id == state.handover_id
+                    && notice.notice.notice_revision == state.notice_revision)
+                    .then_some(notice)
+            }) else {
+                continue;
+            };
+            if notice
+                .notice
+                .not_before
+                .is_none_or(|not_before| now < not_before)
+            {
+                continue;
+            }
+            let Some(current_record_url) = notice.notice.candidate_record_url.clone() else {
+                continue;
+            };
+            let carrier = ServiceResolutionCarrier::CurrentRecordUrl {
+                current_record_url,
+                pinned_record_digest: None,
+            };
+            let mut candidate = self
+                .verify_carrier(&carrier, service_id, service_kind)
+                .await?;
+            if candidate.record.record.record_sequence != floor.record_sequence + 1
+                || candidate.record.record.previous_record_digest.as_ref()
+                    != Some(&floor.record_digest)
+            {
+                return Err(ServiceError::SchemaViolation(
+                    "scheduled service route candidate is not the continuous formal successor"
+                        .to_owned(),
+                ));
+            }
+            candidate.source = RouteSource::ScheduledNotice;
+            return Ok(Some(candidate));
+        }
         Ok(None)
     }
 
