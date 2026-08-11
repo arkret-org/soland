@@ -298,7 +298,7 @@ async fn get_realm_effective_moderation_policy(
     organizations::refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(organizations::effective_policy_for_realm(state, &realm_id))
+    json_ok(organizations::effective_policy_for_realm(state, &realm_id).await?)
 }
 
 #[salvo::oapi::endpoint(
@@ -320,28 +320,91 @@ async fn upsert_realm_moderation_policy(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-    let record = state
-        .realms()
-        .realm_metadata(&realm_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("not found"))?;
-    if record.owner != session.actor {
-        return Err(AppError::capability_denied("missing_capability"));
-    }
-    let payload = serde_json::to_value(body.into_inner().policy).map_err(|error| {
-        AppError::internal(format!("realm moderation policy serialize: {error}"))
-    })?;
-    if organizations::realm_policy_override_requires_approval(state, &realm_id, &payload).await
-        && !organizations::realm_policy_override_has_approval(state, &realm_id, &payload).await
+    let submission = body.into_inner().moderation_policy_event;
+    let policy =
+        caller_signed_realm_moderation_policy(&session.actor, &realm_id, &submission.event)?;
+    if organizations::realm_policy_override_requires_approval(state, &realm_id, &policy).await
+        && !organizations::realm_policy_override_has_approval(state, &realm_id, &policy).await
     {
         return Err(organizations::requires_organization_approval_error());
     }
-    let policy =
-        organizations::persist_realm_moderation_policy(state, &realm_id, payload, &session.actor)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(organizations::realm_policy_record_outcome(&policy))
+    let updated_at = submission.event.created_at;
+    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
+        .await
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                "ak.realm.moderation_policy submit failed",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
+    json_ok(organizations::realm_policy_event_outcome(
+        &realm_id,
+        policy,
+        &session.actor,
+        updated_at,
+    ))
+}
+
+fn caller_signed_realm_moderation_policy(
+    actor: &str,
+    realm_id: &str,
+    event: &arkret_wire::Event,
+) -> Result<serde_json::Value, AppError> {
+    if event.kind != arkret_wire::EventKind::RealmModerationPolicy {
+        return Err(AppError::invalid_param(
+            "moderation_policy_event.event.kind must be ak.realm.moderation_policy",
+        ));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "moderation_policy_event.event.actor_id must be the authenticated caller",
+        ));
+    }
+    if event.realm_id.as_str() != realm_id {
+        return Err(AppError::invalid_param(
+            "moderation_policy_event.event.realm_id must equal the path realm_id",
+        ));
+    }
+    let payload =
+        serde_json::from_value::<arkret_models_collaboration::events_payloads::StatePayload>(
+            serde_json::Value::Object(event.payload.clone().into_iter().collect()),
+        )
+        .map_err(|error| {
+            AppError::invalid_param(format!("moderation_policy_event payload: {error}"))
+        })?;
+    if payload.state.is_some() || payload.reason.is_some() {
+        return Err(AppError::invalid_param(
+            "moderation_policy_event payload must carry only value",
+        ));
+    }
+    let Some(policy @ serde_json::Value::Object(_)) = payload.value else {
+        return Err(AppError::invalid_param(
+            "moderation_policy_event payload.value must be a policy object",
+        ));
+    };
+    let [precondition] = event.preconditions.as_slice() else {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "moderation_policy_event must carry exactly one signed head_eq precondition",
+        )
+        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("failed_precondition"));
+    };
+    if precondition.cell.as_str() != "ak:cell:ak.component.realm.moderation_policy.v1:null"
+        || precondition.predicate.op != arkret_wire::PredicateOp::HeadEq
+    {
+        return Err(
+            AppError::new(
+                soland_http::error::ErrorCode::FailedPrecondition,
+                "moderation_policy_event must guard the settled realm moderation policy cell with head_eq",
+            )
+            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+            .with_wire_code("failed_precondition"),
+        );
+    }
+    Ok(policy)
 }
 
 #[salvo::oapi::endpoint(operation_id = "org.arkret.soland.spaces.cells.get", tags("spaces"))]

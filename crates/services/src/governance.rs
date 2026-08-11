@@ -63,14 +63,6 @@ pub struct OrganizationPolicyRecord {
 }
 
 #[derive(Clone, Debug)]
-pub struct RealmModerationPolicyRecord {
-    pub realm_id: String,
-    pub payload: Value,
-    pub updated_by: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
 pub struct RetentionPolicyRecord {
     pub realm_id: String,
     pub ttl_seconds: i64,
@@ -144,11 +136,6 @@ pub trait GovernanceRecordsPort: Send + Sync {
         organization_id: &str,
     ) -> ServiceResult<()>;
     async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>>;
-    async fn store_realm_moderation_policy(
-        &self,
-        record: &RealmModerationPolicyRecord,
-    ) -> ServiceResult<()>;
-    async fn realm_moderation_policies(&self) -> ServiceResult<Vec<RealmModerationPolicyRecord>>;
     async fn policy_document(&self, policy_id: &str)
     -> ServiceResult<Option<PolicyDocumentRecord>>;
     async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ServiceResult<()>;
@@ -213,7 +200,6 @@ pub struct GovernanceService {
     organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
     realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
-    realm_moderation_policies: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
     retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
 }
@@ -224,14 +210,12 @@ impl GovernanceService {
         let organizations = self.records.organizations().await?;
         let organization_policies = self.records.organization_policies().await?;
         let realm_organizations = self.records.realm_organization_links().await?;
-        let realm_moderation_policies = self.records.realm_moderation_policies().await?;
 
         self.replace_retention_tombstones(retention_tombstones);
         self.replace_organization_projection(
             organizations,
             organization_policies,
             realm_organizations,
-            realm_moderation_policies,
         );
         Ok(())
     }
@@ -302,23 +286,6 @@ impl GovernanceService {
         self.records.realm_organization_links().await
     }
 
-    pub async fn store_realm_moderation_policy(
-        &self,
-        record: &RealmModerationPolicyRecord,
-    ) -> ServiceResult<()> {
-        self.records.store_realm_moderation_policy(record).await?;
-        self.realm_moderation_policies
-            .lock()
-            .insert(record.realm_id.clone(), record.clone());
-        Ok(())
-    }
-
-    pub async fn realm_moderation_policies(
-        &self,
-    ) -> ServiceResult<Vec<RealmModerationPolicyRecord>> {
-        self.records.realm_moderation_policies().await
-    }
-
     pub fn new(
         audit_log: Arc<dyn AuditLogPort>,
         moderation: Arc<dyn ModerationPort>,
@@ -333,7 +300,6 @@ impl GovernanceService {
             organization_policies: Arc::new(Mutex::new(BTreeMap::new())),
             realm_organizations: Arc::new(Mutex::new(BTreeMap::new())),
             organization_realms: Arc::new(Mutex::new(BTreeMap::new())),
-            realm_moderation_policies: Arc::new(Mutex::new(BTreeMap::new())),
             retention_tombstones: Arc::new(Mutex::new(BTreeMap::new())),
             runtime_settings,
         }
@@ -359,7 +325,6 @@ impl GovernanceService {
         organizations: impl IntoIterator<Item = OrganizationRecord>,
         policies: impl IntoIterator<Item = OrganizationPolicyRecord>,
         links: impl IntoIterator<Item = (String, BTreeSet<String>)>,
-        realm_policies: impl IntoIterator<Item = RealmModerationPolicyRecord>,
     ) {
         *self.organizations.lock() = organizations
             .into_iter()
@@ -381,10 +346,6 @@ impl GovernanceService {
         }
         *self.realm_organizations.lock() = realm_organizations;
         *self.organization_realms.lock() = organization_realms;
-        *self.realm_moderation_policies.lock() = realm_policies
-            .into_iter()
-            .map(|record| (record.realm_id.clone(), record))
-            .collect();
     }
 
     pub fn cached_organization(&self, organization_id: &str) -> Option<OrganizationRecord> {
@@ -430,13 +391,6 @@ impl GovernanceService {
             .get(realm_id)
             .map(|organizations| organizations.iter().cloned().collect())
             .unwrap_or_default()
-    }
-
-    pub fn cached_realm_moderation_policy(
-        &self,
-        realm_id: &str,
-    ) -> Option<RealmModerationPolicyRecord> {
-        self.realm_moderation_policies.lock().get(realm_id).cloned()
     }
 
     pub fn replace_retention_tombstones(
@@ -683,17 +637,6 @@ mod tests {
             Ok(())
         }
         async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
-            Ok(Vec::new())
-        }
-        async fn store_realm_moderation_policy(
-            &self,
-            _record: &RealmModerationPolicyRecord,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn realm_moderation_policies(
-            &self,
-        ) -> ServiceResult<Vec<RealmModerationPolicyRecord>> {
             Ok(Vec::new())
         }
         async fn policy_document(

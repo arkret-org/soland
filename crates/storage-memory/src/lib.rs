@@ -48,10 +48,9 @@ pub(crate) use soland_storage::{
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
     PublicationEvidenceRecord, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
     RealmEventStats, RealmInviteRecord, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
-    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
-    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
+    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
     ServiceRegistrationCommitOutcome, ServiceRouteStore, SessionRecord, SessionStore, SidecarStore,
@@ -141,8 +140,8 @@ pub(crate) use federation::{
 };
 pub(crate) use governance::{
     MemoryHandleReleaseStore, MemoryOrganizationPolicyStore, MemoryOrganizationStore,
-    MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore,
+    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
 };
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;

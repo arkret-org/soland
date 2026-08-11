@@ -165,7 +165,6 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn organization_policies(&self) -> &dyn OrganizationPolicyStore;
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore;
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
-    fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore;
     fn audit(&self) -> &dyn AuditStore;
     fn join_applications(&self) -> &dyn JoinApplicationStore;
 }

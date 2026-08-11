@@ -3,11 +3,10 @@ use diesel::sql_types::Binary;
 use super::{
     BTreeMap, BTreeSet, BigInt, Bool, HandleReleaseStore, Jsonb, Nullable, OptionalExtension,
     OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RealmModerationPolicyRecord,
-    RealmModerationPolicyStore, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord,
-    RetentionTombstoneStore, RunQueryDsl, Text, Timestamptz, Value, async_trait, ids,
-    json_string_array, pg_conn, sql_query,
+    PersistenceError, PersistenceResult, PgPool, QueryableByName, RealmOrganizationStatementRecord,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RetentionPolicyRecord,
+    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore, RunQueryDsl, Text,
+    Timestamptz, Value, async_trait, ids, json_string_array, pg_conn, sql_query,
 };
 pub struct PgHandleReleaseStore {
     pub pool: PgPool,
@@ -646,88 +645,6 @@ impl From<RealmOrganizationStatementRow> for RealmOrganizationStatementRecord {
             proof_digest: row.proof_digest,
             delegation_ref: row.delegation_ref,
             issuer_role: row.issuer_role,
-            updated_at: row.updated_at,
-        }
-    }
-}
-pub struct PgRealmModerationPolicyStore {
-    pub pool: PgPool,
-}
-#[async_trait]
-impl RealmModerationPolicyStore for PgRealmModerationPolicyStore {
-    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT realm_id, payload, updated_by, updated_at \
-             FROM realm_moderation_policies WHERE realm_id = $1",
-        )
-        .bind::<Text, _>(realm_id)
-        .get_result::<RealmModerationPolicyRow>(&mut *conn)
-        .await
-        .optional()
-        .map(|row| row.map(RealmModerationPolicyRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO realm_moderation_policies (realm_id, payload, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (realm_id) DO UPDATE SET \
-               payload = EXCLUDED.payload, \
-               updated_by = EXCLUDED.updated_by, \
-               updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<Text, _>(&record.realm_id)
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<Text, _>(&record.updated_by)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT realm_id, payload, updated_by, updated_at \
-             FROM realm_moderation_policies ORDER BY realm_id",
-        )
-        .load::<RealmModerationPolicyRow>(&mut *conn)
-        .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(RealmModerationPolicyRecord::from)
-                .collect()
-        })
-        .map_err(PersistenceError::database)
-    }
-}
-#[derive(QueryableByName)]
-struct RealmModerationPolicyRow {
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Jsonb)]
-    payload: Value,
-    #[diesel(sql_type = Text)]
-    updated_by: String,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-impl From<RealmModerationPolicyRow> for RealmModerationPolicyRecord {
-    fn from(row: RealmModerationPolicyRow) -> Self {
-        Self {
-            realm_id: row.realm_id,
-            payload: row.payload,
-            updated_by: row.updated_by,
             updated_at: row.updated_at,
         }
     }

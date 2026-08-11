@@ -24,19 +24,18 @@ use super::{
     MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
     MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore, MemoryProjectionEventStore,
     MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
-    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
-    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
-    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
+    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
+    MemoryServiceIdentityStore, MemoryServiceRouteStore, MemorySessionStore, MemorySidecarStore,
+    MemorySignalRelayStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
     MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
     MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
     MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
     MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
     PrincipalResolutionStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
-    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
     RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
     RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
     ServiceIdentityStore, ServiceRouteStore, SessionStore, SidecarStore, SignalRelayStore,
@@ -76,7 +75,6 @@ pub struct SolandMemoryPersistenceStore {
     organization_policies: MemoryOrganizationPolicyStore,
     realm_organizations: MemoryRealmOrganizationStore,
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
-    realm_moderation_policies: MemoryRealmModerationPolicyStore,
     join_applications: MemoryJoinApplicationStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
@@ -171,7 +169,6 @@ impl SolandMemoryPersistenceStore {
             organization_policies: MemoryOrganizationPolicyStore::new(),
             realm_organizations: MemoryRealmOrganizationStore::new(),
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
-            realm_moderation_policies: MemoryRealmModerationPolicyStore::new(),
             join_applications: MemoryJoinApplicationStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
@@ -431,10 +428,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
 
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore {
         &self.realm_organization_statements
-    }
-
-    fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore {
-        &self.realm_moderation_policies
     }
 
     fn audit(&self) -> &dyn AuditStore {

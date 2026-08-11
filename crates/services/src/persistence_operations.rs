@@ -529,28 +529,6 @@ fn persistence_organization_policy(
     }
 }
 
-fn application_realm_moderation_policy(
-    row: soland_storage::RealmModerationPolicyRecord,
-) -> crate::governance::RealmModerationPolicyRecord {
-    crate::governance::RealmModerationPolicyRecord {
-        realm_id: row.realm_id,
-        payload: row.payload,
-        updated_by: row.updated_by,
-        updated_at: row.updated_at,
-    }
-}
-
-fn persistence_realm_moderation_policy(
-    row: &crate::governance::RealmModerationPolicyRecord,
-) -> soland_storage::RealmModerationPolicyRecord {
-    soland_storage::RealmModerationPolicyRecord {
-        realm_id: row.realm_id.clone(),
-        payload: row.payload.clone(),
-        updated_by: row.updated_by.clone(),
-        updated_at: row.updated_at,
-    }
-}
-
 fn application_policy_document(
     row: soland_storage::PolicyDocumentRecord,
 ) -> crate::governance::PolicyDocumentRecord {
@@ -759,30 +737,6 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         &self,
     ) -> crate::ServiceResult<Vec<(String, std::collections::BTreeSet<String>)>> {
         Ok(self.0.realm_organizations().snapshot_all().await?)
-    }
-
-    async fn store_realm_moderation_policy(
-        &self,
-        record: &crate::governance::RealmModerationPolicyRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .realm_moderation_policies()
-            .put(&persistence_realm_moderation_policy(record))
-            .await?;
-        Ok(())
-    }
-
-    async fn realm_moderation_policies(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::governance::RealmModerationPolicyRecord>> {
-        Ok(self
-            .0
-            .realm_moderation_policies()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_realm_moderation_policy)
-            .collect())
     }
 
     async fn policy_document(

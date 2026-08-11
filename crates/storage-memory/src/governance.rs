@@ -1,9 +1,9 @@
 use super::{
     Arc, BTreeMap, BTreeSet, HandleReleaseStore, Mutex, OrganizationPolicyRecord,
     OrganizationPolicyStore, OrganizationRecord, OrganizationStore, PersistenceResult,
-    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore, async_trait,
+    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    async_trait,
 };
 pub(crate) struct MemoryHandleReleaseStore {
     data: Arc<Mutex<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
@@ -207,33 +207,6 @@ impl RealmOrganizationStatementStore for MemoryRealmOrganizationStatementStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>> {
-        Ok(self.data.lock().values().cloned().collect())
-    }
-}
-pub(crate) struct MemoryRealmModerationPolicyStore {
-    data: Arc<Mutex<BTreeMap<String, RealmModerationPolicyRecord>>>,
-}
-impl MemoryRealmModerationPolicyStore {
-    pub(crate) fn new() -> Self {
-        Self {
-            data: Arc::new(Mutex::new(BTreeMap::new())),
-        }
-    }
-}
-#[async_trait]
-impl RealmModerationPolicyStore for MemoryRealmModerationPolicyStore {
-    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>> {
-        Ok(self.data.lock().get(realm_id).cloned())
-    }
-
-    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(record.realm_id.clone(), record.clone());
-        Ok(())
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>> {
         Ok(self.data.lock().values().cloned().collect())
     }
 }

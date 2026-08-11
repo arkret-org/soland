@@ -1079,15 +1079,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    realm_moderation_policies (realm_id) {
-        realm_id -> Text,
-        payload -> Jsonb,
-        updated_by -> Text,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     realm_organizations (realm_id, organization_id, relationship) {
         realm_id -> Text,
         organization_id -> Text,
@@ -1609,7 +1600,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     push_bridge_cache,
     push_devices,
     realm_invites,
-    realm_moderation_policies,
     realm_organizations,
     realm_owning_organizations,
     recovery_policies,

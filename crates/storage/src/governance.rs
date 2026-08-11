@@ -1,7 +1,6 @@
 use super::{
     BTreeSet, OrganizationPolicyRecord, OrganizationRecord, PersistenceResult,
-    RealmModerationPolicyRecord, RealmOrganizationStatementRecord, RetentionPolicyRecord,
-    RetentionTombstoneRecord, async_trait,
+    RealmOrganizationStatementRecord, RetentionPolicyRecord, RetentionTombstoneRecord, async_trait,
 };
 #[async_trait]
 pub trait HandleReleaseStore: Send + Sync {
@@ -56,10 +55,4 @@ pub trait RealmOrganizationStore: Send + Sync {
 pub trait RealmOrganizationStatementStore: Send + Sync {
     async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>>;
-}
-#[async_trait]
-pub trait RealmModerationPolicyStore: Send + Sync {
-    async fn get(&self, realm_id: &str) -> PersistenceResult<Option<RealmModerationPolicyRecord>>;
-    async fn put(&self, record: &RealmModerationPolicyRecord) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmModerationPolicyRecord>>;
 }

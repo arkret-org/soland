@@ -11,6 +11,7 @@ use arkret_models_collaboration::governance::realm_governance::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
 };
+use arkret_state::lattice::CellState;
 use chrono::Utc;
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -20,13 +21,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::validate_did;
-use soland_services::governance::{
-    OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
-};
+use soland_services::governance::{OrganizationPolicyRecord, OrganizationRecord};
 
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
+
+const REALM_MODERATION_POLICY_CELL: &str = "ak:cell:ak.component.realm.moderation_policy.v1:null";
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct UpsertOrganizationRequestBody {
@@ -193,13 +194,9 @@ pub(crate) async fn refresh_organization_projection(
     let organizations = state.governance().organizations().await?;
     let policies = state.governance().organization_policies().await?;
     let links = state.governance().realm_organization_links().await?;
-    let realm_policies = state.governance().realm_moderation_policies().await?;
-    state.governance().replace_organization_projection(
-        organizations,
-        policies,
-        links,
-        realm_policies,
-    );
+    state
+        .governance()
+        .replace_organization_projection(organizations, policies, links);
 
     Ok(())
 }
@@ -544,10 +541,10 @@ pub(crate) fn verified_moderation_organization_ids(
     ids
 }
 
-pub(crate) fn effective_policy_for_realm(
+pub(crate) async fn effective_policy_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> RealmEffectiveModerationPolicyOutcome {
+) -> Result<RealmEffectiveModerationPolicyOutcome, AppError> {
     // SOL-ORG-05 — only organizations with a verified, active, in-window
     // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
@@ -567,13 +564,9 @@ pub(crate) fn effective_policy_for_realm(
         })
         .collect::<Vec<_>>();
 
-    let realm_policy = state
-        .governance()
-        .cached_realm_moderation_policy(realm_id)
-        .as_ref()
-        .map(realm_policy_record_outcome);
+    let realm_policy = current_realm_policy_outcome(state, realm_id).await?;
     let has_organization_inheritance = !org_ids.is_empty();
-    RealmEffectiveModerationPolicyOutcome {
+    Ok(RealmEffectiveModerationPolicyOutcome {
         realm_id: realm_id.to_owned(),
         inheritance_mode: if has_organization_inheritance {
             "organization".to_owned()
@@ -596,14 +589,15 @@ pub(crate) fn effective_policy_for_realm(
             source: REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY.to_owned(),
             rewrites_realm_policy: false,
         },
-    }
+    })
 }
 
-pub(crate) fn effective_policy_value_for_realm(
+pub(crate) async fn effective_policy_value_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<Value, serde_json::Error> {
-    serde_json::to_value(effective_policy_for_realm(state, realm_id))
+) -> Result<Value, AppError> {
+    serde_json::to_value(effective_policy_for_realm(state, realm_id).await?)
+        .map_err(|error| AppError::internal(format!("serialize effective policy: {error}")))
 }
 
 pub(crate) async fn organization_policy_blocks_join(
@@ -725,25 +719,6 @@ fn organizations_denying_override_targets(
         .collect()
 }
 
-pub(crate) async fn persist_realm_moderation_policy(
-    state: &AppState,
-    realm_id: &str,
-    payload: Value,
-    actor: &str,
-) -> soland_services::ServiceResult<RealmModerationPolicyRecord> {
-    let record = RealmModerationPolicyRecord {
-        realm_id: realm_id.to_owned(),
-        payload,
-        updated_by: actor.to_owned(),
-        updated_at: Utc::now(),
-    };
-    state
-        .governance()
-        .store_realm_moderation_policy(&record)
-        .await?;
-    Ok(record)
-}
-
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
     state
         .governance()
@@ -836,16 +811,92 @@ fn organization_policy_record_view(
     }
 }
 
-pub(crate) fn realm_policy_record_outcome(
-    record: &RealmModerationPolicyRecord,
+pub(crate) fn realm_policy_event_outcome(
+    realm_id: &str,
+    policy: Value,
+    updated_by: &str,
+    updated_at: chrono::DateTime<Utc>,
 ) -> RealmModerationPolicyOutcome {
     RealmModerationPolicyOutcome {
         kind: "ak.realm.moderation_policy".to_owned(),
-        realm_id: record.realm_id.clone(),
-        policy: record.payload.clone(),
-        updated_by: record.updated_by.clone(),
-        updated_at: arkret_canonical::format_timestamp_canonical(record.updated_at),
+        realm_id: realm_id.to_owned(),
+        policy,
+        updated_by: updated_by.to_owned(),
+        updated_at: arkret_canonical::format_timestamp_canonical(updated_at),
     }
+}
+
+async fn current_realm_policy_outcome(
+    state: &AppState,
+    realm_id: &str,
+) -> Result<Option<RealmModerationPolicyOutcome>, AppError> {
+    let Some(policy) = current_realm_policy_value(state, realm_id)? else {
+        return Ok(None);
+    };
+    let projected = state
+        .event_queries()
+        .projected_events_for_realm(realm_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let event = projected
+        .into_iter()
+        .filter(|event| {
+            event.event_kind == arkret_wire::EventKind::RealmModerationPolicy
+                && event.payload.get("value") == Some(&policy)
+        })
+        .max_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "settled realm moderation policy has no accepted Event projection",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_wire_code("failed_precondition")
+        })?;
+    let sender = event.sender.ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "settled realm moderation policy Event has no actor projection",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("failed_precondition")
+    })?;
+    Ok(Some(realm_policy_event_outcome(
+        realm_id,
+        policy,
+        &sender,
+        event.created_at,
+    )))
+}
+
+fn current_realm_policy_value(state: &AppState, realm_id: &str) -> Result<Option<Value>, AppError> {
+    let snapshot = state.projections().snapshot();
+    let key = (realm_id.to_owned(), REALM_MODERATION_POLICY_CELL.to_owned());
+    let payload = match snapshot.realm_null_subject_cells.get(&key) {
+        Some(CellState::Bottom(_)) => {
+            return Err(AppError::new(
+                ErrorCode::FailedPrecondition,
+                "realm moderation policy cell is in Bottom",
+            )
+            .with_status(StatusCode::CONFLICT)
+            .with_wire_code("failed_bottom"));
+        }
+        Some(CellState::Value(payload)) => payload,
+        None => return Ok(None),
+    };
+    let Some(policy) = payload.get("value").filter(|value| value.is_object()) else {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "settled realm moderation policy cell has an invalid value",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_wire_code("failed_precondition"));
+    };
+    Ok(Some(policy.clone()))
 }
 
 fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
@@ -858,9 +909,9 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
             rules.extend(policy_rules(&policy.payload));
         }
     }
-    if let Some(realm_policy) = state.governance().cached_realm_moderation_policy(realm_id) {
+    if let Some(realm_policy) = current_realm_policy_value(state, realm_id).ok().flatten() {
         rules.extend(
-            allow_join_override_targets(&realm_policy.payload)
+            allow_join_override_targets(&realm_policy)
                 .into_iter()
                 .map(|target| {
                     json!({
@@ -915,11 +966,10 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
 }
 
 fn accepted_realm_override_allows_join(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    state
-        .governance()
-        .cached_realm_moderation_policy(realm_id)
-        .as_ref()
-        .is_some_and(|record| allow_join_override_targets(&record.payload).contains(actor))
+    current_realm_policy_value(state, realm_id)
+        .ok()
+        .flatten()
+        .is_some_and(|policy| allow_join_override_targets(&policy).contains(actor))
 }
 
 fn allow_join_override_targets(payload: &Value) -> BTreeSet<String> {

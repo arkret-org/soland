@@ -807,18 +807,20 @@ pub(crate) async fn validate_realm_moderation_policy(
         return Ok(());
     }
     let realm_id = operation.realm_id.as_str();
+    let Some(policy) = operation
+        .payload
+        .get("value")
+        .filter(|value| value.is_object())
+    else {
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    };
     let requires_approval = crate::routing::organizations::realm_policy_override_requires_approval(
-        state,
-        realm_id,
-        &operation.payload,
+        state, realm_id, policy,
     )
     .await;
-    let has_approval = crate::routing::organizations::realm_policy_override_has_approval(
-        state,
-        realm_id,
-        &operation.payload,
-    )
-    .await;
+    let has_approval =
+        crate::routing::organizations::realm_policy_override_has_approval(state, realm_id, policy)
+            .await;
     if requires_approval && !has_approval {
         return Err(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL);
     }

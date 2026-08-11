@@ -401,8 +401,8 @@ async fn get_effective_policy(
     organizations::refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_policy = organizations::effective_policy_value_for_realm(state, &realm_id)
-        .map_err(|error| AppError::internal(format!("organization effective policy: {error}")))?;
+    let organization_policy =
+        organizations::effective_policy_value_for_realm(state, &realm_id).await?;
     let projection = state.projections().snapshot();
     let mut outcome = effective_policy_for_realm(&projection, &realm_id);
     merge_organization_effective_policy(&mut outcome.effective_policy, organization_policy);

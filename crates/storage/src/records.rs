@@ -843,14 +843,6 @@ pub struct OrganizationPolicyRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct RealmModerationPolicyRecord {
-    pub realm_id: String,
-    pub payload: Value,
-    pub updated_by: String,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// SOL-ORG-04 — durable row for one verified `ak.realm.organization`
 /// relationship statement. Primary key `(realm_id, organization_id,
 /// relationship)`. Field order mirrors the spec `realm_organization_payload`.
