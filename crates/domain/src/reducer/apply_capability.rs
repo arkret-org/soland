@@ -1090,7 +1090,7 @@ impl ProjectionState {
         self.realm_schema_refs(realm_id)
             .into_iter()
             .filter(|reference| {
-                arkret_schema::generated::profile_requirements::PROFILE_REQUIREMENTS
+                arkret_wire::generated::profile_requirements::PROFILE_REQUIREMENTS
                     .contains_key(reference.as_str())
             })
             .collect()
@@ -1129,7 +1129,7 @@ impl ProjectionState {
 
         registration.claimed_profiles.iter().any(|profile_id| {
             let Some(rule) =
-                arkret_schema::generated::profile_requirements::non_event_grant_authority_rule(
+                arkret_wire::generated::profile_requirements::non_event_grant_authority_rule(
                     profile_id, action,
                 )
             else {
