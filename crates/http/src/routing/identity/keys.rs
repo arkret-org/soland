@@ -481,12 +481,15 @@ async fn keys_claim(
     let body = body.into_inner();
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
+        let actor_core = arkret_wire::project_full_id_to_core_id(&actor).map_err(|error| {
+            AppError::invalid_param(format!("claim actor cannot project: {error}"))
+        })?;
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {
             let facet =
                 crate::routing::identity::device_signing::resolve_device_signing_directory_facet(
                     state,
-                    actor.as_str(),
+                    actor_core.as_str(),
                     device_id.as_str(),
                 )
                 .await;
@@ -495,7 +498,7 @@ async fn keys_claim(
             }
             if let Ok(Some(key)) = state
                 .key_material()
-                .claim_one_time_key(actor.as_str(), device_id.as_str())
+                .claim_one_time_key(actor_core.as_str(), device_id.as_str())
                 .await
             {
                 let key = serde_json::from_value(key).map_err(|error| {
