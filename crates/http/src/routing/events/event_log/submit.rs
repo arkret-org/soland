@@ -151,12 +151,6 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
         .is_ok()
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::routing) enum DataEventQueryGrade {
-    Observed,
-    Stale,
-}
-
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: String,

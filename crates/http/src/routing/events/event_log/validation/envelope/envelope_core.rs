@@ -571,9 +571,6 @@ async fn validate_event_envelope_with_ingress(
         realm_bootstrap_contexts,
     )?;
     let data_event_cells = derived_data_event_cells(envelope, object)?;
-    // The returned grade only distinguishes "accepted inside the revocation
-    // freshness window" from an ordinary accept; v1 registers no response field
-    // that could carry it, so admission consumes the error side only.
     validate_data_event_capability_refs(
         state,
         &actor_id,

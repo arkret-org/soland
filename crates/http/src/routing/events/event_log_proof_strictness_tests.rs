@@ -2,7 +2,6 @@ use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::{AppConfig, ObjectStorageConfig};
-use crate::routing::events::event_log::DataEventQueryGrade;
 
 pub(super) fn make_state(development_mode: bool) -> AppState {
     let config = AppConfig {
@@ -2271,26 +2270,43 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
 }
 
 #[test]
-fn data_event_revocation_successor_within_window_is_stale() {
+fn data_event_revocation_successor_within_window_is_accepted() {
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 1);
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
-    assert_eq!(
-        validate_data_event_capability_refs(
-            &state,
-            DATA_EVENT_ACTOR,
-            DATA_EVENT_REALM,
-            "ak.message.create",
-            &object,
-            &data_event_derived_cells(),
-            false,
-        )
-        .unwrap(),
-        DataEventQueryGrade::Stale
-    );
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+        false,
+    )
+    .expect("a linear revocation inside the freshness window must remain accepted");
+}
+
+#[test]
+fn data_event_revocation_successor_at_window_boundary_is_accepted() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:Adtfh7VczxqGjGKRiDCJlBwIw-G-GAX-uATlzwwXLQcQ";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    insert_data_event_revocation_successor(&state, grant_id, "ak.message.create", 24);
+    let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+        false,
+    )
+    .expect("a revocation exactly at the freshness-window boundary must remain accepted");
 }
 
 #[test]

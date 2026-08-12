@@ -1,5 +1,4 @@
 use super::*;
-use crate::routing::events::event_log::DataEventQueryGrade;
 
 /// Verify a DataEvent's authorization against the accepted governance basis at
 /// its `seal_ref`.
@@ -29,10 +28,10 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
     realm_authority_root_authorized: bool,
-) -> Result<DataEventQueryGrade, EventValidationError> {
+) -> Result<(), EventValidationError> {
     let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
     if !is_data_event {
-        return Ok(DataEventQueryGrade::Observed);
+        return Ok(());
     }
     if object.contains_key("seal_basis") {
         return Err(event_validation_error(
@@ -381,9 +380,9 @@ fn validate_data_event_revocation_freshness(
         arkret_state::lattice::CellState,
     >,
     used_grant_ids: &std::collections::BTreeSet<String>,
-) -> Result<DataEventQueryGrade, EventValidationError> {
+) -> Result<(), EventValidationError> {
     if used_grant_ids.is_empty() {
-        return Ok(DataEventQueryGrade::Observed);
+        return Ok(());
     }
     let base_seal = state
         .projections()
@@ -457,7 +456,7 @@ fn validate_data_event_revocation_freshness(
                 "authorization was revoked {distance_ms}ms after seal_ref (window {effective_window}ms)"
             )));
         }
-        return Ok(DataEventQueryGrade::Stale);
+        return Ok(());
     }
 
     // A revoked joined view without a descendant revocation means the revoke
@@ -483,7 +482,7 @@ fn validate_data_event_revocation_freshness(
             ));
         }
     }
-    Ok(DataEventQueryGrade::Observed)
+    Ok(())
 }
 
 fn grant_invalid_in_state(
