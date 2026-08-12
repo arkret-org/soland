@@ -115,11 +115,13 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         .to_owned();
     for proof in &event.proofs {
         // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
-        // under the signer, never the bare signer DID.
-        if !proof
-            .verification_method
-            .starts_with(&format!("{signer_root}#"))
-        {
+        // under the signer, never the bare signer DID. Event actor identities
+        // are stable CoreIds while verification methods are rooted in FullIds,
+        // so compare the canonical FullId projection instead of string prefixes.
+        if !control_move_verification_method_matches_signer(
+            &proof.verification_method,
+            &signer_root,
+        ) {
             return Err(format!(
                 "Control Move proof verification method {} is not rooted in the signer {signer_root}",
                 proof.verification_method
@@ -146,6 +148,20 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+fn control_move_verification_method_matches_signer(
+    verification_method: &arkret_wire::DidUrl,
+    signer_root: &str,
+) -> bool {
+    let Some((controller, _)) = verification_method.as_str().rsplit_once('#') else {
+        return false;
+    };
+    let Ok(controller) = arkret_wire::DidFullId::new(controller.to_owned()) else {
+        return false;
+    };
+    arkret_wire::project_full_id_to_core_id(&controller)
+        .is_ok_and(|controller_core| controller_core.as_str() == signer_root)
 }
 
 fn seal_admission_error(message: impl Into<String>) -> AppError {
@@ -357,8 +373,30 @@ fn device_verification_method_matches(
         return false;
     };
     let did_key = device_public_key;
-    verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("{did_key}#{fragment}")
+    if verification_method == format!("{did_key}#{fragment}") {
+        return true;
+    }
+    arkret_wire::DidUrl::new(verification_method.to_owned()).is_ok_and(|method| {
+        session_device_verification_method_matches(principal_id, device_id, &method)
+    })
+}
+
+pub(crate) fn session_device_verification_method_matches(
+    principal_id: &str,
+    device_id: &str,
+    verification_method: &arkret_wire::DidUrl,
+) -> bool {
+    let Some((_, fragment)) = verification_method.as_str().rsplit_once('#') else {
+        return false;
+    };
+    if fragment != device_id {
+        return false;
+    }
+    let Ok(full_id) = arkret_identity::verification_method_did(verification_method) else {
+        return false;
+    };
+    arkret_wire::project_full_id_to_core_id(&full_id)
+        .is_ok_and(|core_id| core_id.as_str() == principal_id)
 }
 
 fn first_seal_signer_matches(
@@ -651,19 +689,9 @@ async fn try_apply_device_generation_event_seal(
             "B-model Event Seal requires one identifiable device signature",
         ));
     };
-    let directory_principal_id = signature
-        .verification_method
-        .rsplit_once('#')
-        .and_then(|(controller, _)| arkret_wire::DidFullId::new(controller.to_owned()).ok())
-        .filter(|controller| {
-            arkret_wire::project_full_id_to_core_id(controller)
-                .is_ok_and(|core_id| core_id.as_str() == context.principal_id)
-        })
-        .map(|controller| controller.to_string())
-        .unwrap_or_else(|| context.principal_id.clone());
     let devices = state
         .identities()
-        .devices_for_actor(&directory_principal_id)
+        .devices_for_actor(&context.principal_id)
         .await
         .map_err(|error| {
             AppError::new(
@@ -682,7 +710,7 @@ async fn try_apply_device_generation_event_seal(
                 return false;
             };
             device_verification_method_matches(
-                &directory_principal_id,
+                &context.principal_id,
                 &device.device_id,
                 public_key,
                 &signature.verification_method,
@@ -1184,8 +1212,11 @@ pub(crate) async fn apply_managed_agent_event_seal(
             "managed Agent PCR Seal requires one controller-device signature",
         ));
     };
-    let expected_method = format!("{}#{session_device_id}", agent_record.controller_id);
-    if signature.verification_method != expected_method {
+    if !session_device_verification_method_matches(
+        &agent_record.controller_id,
+        session_device_id,
+        &signature.verification_method,
+    ) {
         return Err(device_generation_fenced(
             "managed Agent PCR Seal signer differs from the authenticated controller device",
         ));
@@ -1783,26 +1814,28 @@ mod seal_delta_tests {
 
     #[test]
     fn device_verification_method_is_bound_to_device_id_or_key() {
-        let principal = "did:webvh:z6mkfixture:alice.example";
+        let full_id =
+            arkret_wire::DidFullId::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap();
+        let principal = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
         let device = "ak:device:recovery";
         let key = "did:key:z6MkRecovery";
         assert!(device_verification_method_matches(
-            principal,
+            principal.as_str(),
             device,
             key,
-            &format!("{principal}#{device}"),
+            &format!("{full_id}#{device}"),
         ));
         assert!(device_verification_method_matches(
-            principal,
+            principal.as_str(),
             device,
             key,
             "did:key:z6MkRecovery#z6MkRecovery",
         ));
         assert!(!device_verification_method_matches(
-            principal,
+            principal.as_str(),
             device,
             key,
-            &format!("{principal}#ak:device:other"),
+            &format!("{full_id}#ak:device:other"),
         ));
     }
 
@@ -1811,15 +1844,65 @@ mod seal_delta_tests {
     // principal DID) names no concrete verification method.
     #[test]
     fn device_verification_method_rejects_bare_dids() {
-        let principal = "did:webvh:z6mkfixture:alice.example";
+        let full_id = "did:webvh:z6mkfixture:alice.example";
+        let principal = arkret_wire::project_full_id_to_core_id(
+            &arkret_wire::DidFullId::new(full_id.to_owned()).unwrap(),
+        )
+        .unwrap();
         let device = "ak:device:recovery";
         let key = "did:key:z6MkRecovery";
 
         assert!(!device_verification_method_matches(
-            principal, device, key, key,
+            principal.as_str(),
+            device,
+            key,
+            key,
         ));
         assert!(!device_verification_method_matches(
-            principal, device, key, principal
+            principal.as_str(),
+            device,
+            key,
+            full_id
+        ));
+    }
+
+    #[test]
+    fn session_device_method_projects_full_did_to_authenticated_core() {
+        let method = arkret_wire::DidUrl::new(
+            "did:webvh:z6Mkfull:alice.example#ak:device:0196419b-0000-7000-8000-000000000001"
+                .to_owned(),
+        )
+        .unwrap();
+        let core = arkret_wire::project_full_id_to_core_id(
+            &arkret_wire::DidFullId::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap(),
+        )
+        .unwrap();
+        assert!(session_device_verification_method_matches(
+            core.as_str(),
+            "ak:device:0196419b-0000-7000-8000-000000000001",
+            &method,
+        ));
+        assert!(!session_device_verification_method_matches(
+            core.as_str(),
+            "ak:device:0196419b-0000-7000-8000-000000000002",
+            &method,
+        ));
+    }
+
+    #[test]
+    fn control_move_method_projects_full_did_to_signer_core() {
+        let method = arkret_wire::DidUrl::new(
+            "did:webvh:z6Mkfull:alice.example#ak:device:0196419b-0000-7000-8000-000000000001"
+                .to_owned(),
+        )
+        .unwrap();
+        assert!(control_move_verification_method_matches_signer(
+            &method,
+            "ak:did_core:webvh:z6Mkfull",
+        ));
+        assert!(!control_move_verification_method_matches_signer(
+            &method,
+            "ak:did_core:webvh:z6Mkother",
         ));
     }
 

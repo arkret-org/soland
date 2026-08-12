@@ -158,8 +158,11 @@ pub(crate) async fn validate_federated_device_signing_key_evidence(
         return Err("device authorization accepted_at is in the future".to_owned());
     }
 
-    verify_federated_genesis_receipt(state, &evidence.principal_genesis_receipt).await?;
-    verify_federated_accepted_seal(evidence)?;
+    verify_federated_genesis_receipt(state, &evidence.principal_genesis_receipt)
+        .await
+        .map_err(|error| format!("PCR genesis receipt is invalid: {error}"))?;
+    verify_federated_accepted_seal(evidence)
+        .map_err(|error| format!("PCR accepted Seal is invalid: {error}"))?;
 
     let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
         .map_err(|error| format!("PCR device authorization replay failed: {error}"))?;
@@ -173,7 +176,8 @@ pub(crate) async fn validate_federated_device_signing_key_evidence(
             attestation,
             &evidence.principal_genesis_receipt.issuer,
         )
-        .await?;
+        .await
+        .map_err(|error| format!("PCR range attestation is invalid: {error}"))?;
     }
 
     Ok(replayed
@@ -425,7 +429,8 @@ async fn verify_federated_range_attestation(
             proof.verification_method.as_str(),
             expected_issuer.as_str(),
         )
-        .await?;
+        .await
+        .map_err(|error| format!("PCR range Event proof is invalid: {error}"))?;
         if proof.event_digest.as_str() != arkret_canonical::sha256_digest(&event_bytes) {
             return Err("PCR range Event proof digest is invalid".to_owned());
         }
@@ -468,7 +473,8 @@ async fn verify_federated_range_attestation(
             proof.verification_method.as_str(),
             expected_issuer.as_str(),
         )
-        .await?;
+        .await
+        .map_err(|error| format!("PCR range payload proof is invalid: {error}"))?;
     }
     Ok(())
 }
@@ -487,6 +493,21 @@ async fn verify_federated_service_jws(
     if controller_core.as_str() != issuer {
         return Err("verification method controller does not match issuer core-id".to_owned());
     }
+    if controller == state.service_full_id()
+        && state
+            .service_verification_method("notary-key")
+            .is_ok_and(|method| method.as_str() == verification_method)
+    {
+        return arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(
+                jws,
+                binding,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: state.notary_verifying_key().to_bytes().to_vec(),
+                },
+            )
+            .map_err(|error| format!("local service notary verification failed: {error}"));
+    }
     if let Some(key) = state
         .federation_peer_verification_method_key(verification_method)
         .or_else(|| state.federation_peer_verifying_key(issuer))
@@ -499,7 +520,7 @@ async fn verify_federated_service_jws(
                     bytes: key.to_bytes().to_vec(),
                 },
             )
-            .map_err(|error| error.to_string());
+            .map_err(|error| format!("federation peer verification failed: {error}"));
     }
     crate::jws_verify::verify_did_controlled_jws_async(
         binding,
@@ -509,6 +530,7 @@ async fn verify_federated_service_jws(
         state,
     )
     .await
+    .map_err(|error| format!("DID-controlled service verification failed: {error}"))
 }
 
 pub(super) async fn did_document_at(

@@ -1936,13 +1936,40 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt signing failed: {error}"),
         )
     })?;
-    unsigned_proof.finalize(jws).map_err(|error| {
+    let proof = unsigned_proof.finalize(jws).map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("Event Batch Receipt proof is invalid: {error}"),
         )
-    })
+    })?;
+    let mut completed_receipt = receipt.clone();
+    completed_receipt.proofs.push(proof.clone());
+    let completed_binding = completed_receipt
+        .proof_binding_bytes(&proof)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Event Batch Receipt completed proof binding failed: {error}"),
+            )
+        })?;
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &proof.jws,
+            &completed_binding,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: state.notary_verifying_key().to_bytes().to_vec(),
+            },
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Event Batch Receipt signature self-check failed: {error}"),
+            )
+        })?;
+    Ok(proof)
 }
 
 fn unit_error(message: impl Into<String>) -> SubmitOneError {

@@ -89,29 +89,37 @@ fn reject_carried_event_derived_object_id(
         .map(|id_kind| (format!("{id_kind}_id"), format!("ak:{id_kind}:")))
         .collect();
 
-    fn scan(value: &Value, forbidden: &[(String, String)]) -> Option<String> {
-        match value {
-            Value::Object(object) => {
-                for (key, nested) in object {
-                    if let Some(text) = nested.as_str()
-                        && forbidden.iter().any(|(field, prefix)| {
-                            (key == field || key == "id") && text.starts_with(prefix)
-                        })
-                    {
-                        return Some(key.clone());
-                    }
-                    if let Some(field) = scan(nested, forbidden) {
-                        return Some(field);
-                    }
-                }
-                None
-            }
-            Value::Array(values) => values.iter().find_map(|value| scan(value, forbidden)),
-            _ => None,
-        }
+    fn carried_id(
+        object: &serde_json::Map<String, Value>,
+        forbidden: &[(String, String)],
+    ) -> Option<String> {
+        object.iter().find_map(|(key, value)| {
+            value.as_str().and_then(|text| {
+                forbidden
+                    .iter()
+                    .any(|(field, prefix)| {
+                        (key == field || key == "id") && text.starts_with(prefix)
+                    })
+                    .then(|| key.clone())
+            })
+        })
     }
 
-    if let Some(field) = scan(payload, &forbidden) {
+    // A create object is either the payload itself or one direct closed-object
+    // wrapper such as `object` / `grant`. References nested inside that object
+    // may legitimately use the same typed id (for example
+    // `issuer_authority_refs[].grant_id`) and are not identities for the
+    // object being created.
+    let carried_field = payload.as_object().and_then(|payload| {
+        carried_id(payload, &forbidden).or_else(|| {
+            payload
+                .values()
+                .filter_map(Value::as_object)
+                .find_map(|object| carried_id(object, &forbidden))
+        })
+    });
+
+    if let Some(field) = carried_field {
         let mut error = event_validation_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             arkret_wire::ErrorCode::SCHEMA_VIOLATION,
@@ -403,6 +411,36 @@ mod tests {
             }),
         )
         .expect("only registry-declared create ids are producer-forbidden");
+    }
+
+    #[test]
+    fn capability_create_allows_nested_parent_grant_reference() {
+        validate_pre_schema_wire_shape(
+            "ak.capability.grant",
+            &json!({
+                "grant": {
+                    "issuer_authority_refs": [{
+                        "kind": "grant",
+                        "grant_id": "ak:grant:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"
+                    }]
+                }
+            }),
+        )
+        .expect("a parent grant reference is not the id of the grant being created");
+
+        let error = validate_pre_schema_wire_shape(
+            "ak.capability.grant",
+            &json!({
+                "grant": {
+                    "id": "ak:grant:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM"
+                }
+            }),
+        )
+        .expect_err("the newly created grant cannot carry its own id");
+        assert_eq!(
+            error.reason_code,
+            Some(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED)
+        );
     }
 
     /// The ordinary-Realm half of the restricted-history rule is a batch check

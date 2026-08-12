@@ -1136,18 +1136,28 @@ fn event_signer_device_id(record: &CanonicalEventRecord) -> Option<String> {
         .and_then(|proofs| proofs.first())
         .and_then(|proof| proof.get("verification_method"))
         .and_then(serde_json::Value::as_str)?;
-    verification_method
-        .strip_prefix(record.actor_id.as_str())
-        .and_then(|suffix| suffix.strip_prefix('#'))
-        .map(str::trim)
-        .filter(|fragment| !fragment.is_empty())
-        .map(|fragment| {
-            if fragment.starts_with("ak:device:") {
-                fragment.to_owned()
-            } else {
-                format!("ak:device:{fragment}")
-            }
-        })
+    verification_method_device_id(record.actor_id.as_str(), verification_method)
+}
+
+fn verification_method_device_id(actor_id: &str, verification_method: &str) -> Option<String> {
+    let (controller, fragment) = verification_method.rsplit_once('#')?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
+    if arkret_wire::project_full_id_to_core_id(&controller)
+        .ok()?
+        .as_str()
+        != actor_id
+    {
+        return None;
+    }
+    let fragment = fragment.trim();
+    if fragment.is_empty() {
+        return None;
+    }
+    Some(if fragment.starts_with("ak:device:") {
+        fragment.to_owned()
+    } else {
+        format!("ak:device:{fragment}")
+    })
 }
 
 pub(crate) async fn first_generation_event_seal_requirement(
@@ -1579,6 +1589,29 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_signer_device_projects_full_method_controller_to_actor_core() {
+        let full_id =
+            arkret_wire::DidFullId::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap();
+        let core_id = arkret_wire::project_full_id_to_core_id(&full_id).unwrap();
+
+        assert_eq!(
+            verification_method_device_id(
+                core_id.as_str(),
+                "did:webvh:z6Mkfull:alice.example#ak:device:primary",
+            )
+            .as_deref(),
+            Some("ak:device:primary"),
+        );
+        assert!(
+            verification_method_device_id(
+                core_id.as_str(),
+                "did:webvh:z6Mkother:bob.example#ak:device:primary",
+            )
+            .is_none()
+        );
+    }
 
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {

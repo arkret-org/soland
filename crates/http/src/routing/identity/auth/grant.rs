@@ -126,13 +126,26 @@ pub(crate) async fn validate_session_grant_binding(
             "session grant device does not match device_id",
         ));
     }
-    if !grant
-        .scopes
-        .iter()
-        .any(|scope| scope == PRINCIPAL_SESSION_BIND_SCOPE)
-    {
+    let holder_device_id = match &grant.holder_binding {
+        arkret_models_identity::session_credential::SessionGrantHolderBinding::HumanDevice {
+            device_binding,
+        } => device_binding.as_str(),
+        arkret_models_identity::session_credential::SessionGrantHolderBinding::AgentRuntime {
+            agent_id,
+            device_id,
+            ..
+        } => {
+            if agent_id.as_str() != grant.subject {
+                return Err(AppError::capability_denied(
+                    "session grant agent holder does not match subject",
+                ));
+            }
+            device_id.as_str()
+        }
+    };
+    if holder_device_id != input.device_id {
         return Err(AppError::capability_denied(
-            "session grant is missing principal-server session.bind scope",
+            "session grant holder binding does not match device_id",
         ));
     }
     if grant.expires_at <= now() {

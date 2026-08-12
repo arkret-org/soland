@@ -55,7 +55,8 @@ pub struct AdminCellStateOutcome {
     /// `mv-register` / `counter`.
     pub lattice: String,
     /// Bottom policy wire string from the cell registry binding.
-    /// `"reject"` (safety-critical) or `"expose"` (display state).
+    /// `"reject"` (safety-critical), `"expose"` (display state) or
+    /// `"inert"` (the bound lattice cannot produce Bottom).
     pub bottom_policy: String,
 }
 
