@@ -2,7 +2,7 @@ use anyhow::Context;
 use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
-use soland_http::config::AppConfig;
+use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
 use soland_http::state::AppState;
@@ -40,19 +40,29 @@ async fn run() -> anyhow::Result<()> {
         return run_healthcheck(&raw_args).await;
     }
 
-    // Configuration is parsed before the subscriber so the log format follows
-    // one parse of `SOLAND_DEVELOPMENT_MODE`. This used to be re-read here with
+    // Configuration comes first: the subscriber, the exporter and everything
+    // after all read `AppConfig`, so there is one parse of every value.
+    // Logging deliberately does not precede this. A configuration failure
+    // means the process does not start, and that error returns from `main` for
+    // the runtime to print — there is nothing for a subscriber to add. Before
+    // this order, `SOLAND_DEVELOPMENT_MODE` was parsed a second time here with
     // a case-sensitive matcher that did not accept `on`, so
     // `SOLAND_DEVELOPMENT_MODE=on` produced a development-mode server writing
-    // production logs. A configuration error before this point still surfaces:
-    // it returns from `main` and the runtime prints it.
-    let mut config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+    // production logs.
+    let values = soland::process_config::load(&raw_args)?;
+    let mut config = AppConfig::from_values(
+        &values,
+        StartupOverrides {
+            bind: arg_value(&raw_args, "--bind"),
+            first_provisioning: raw_args.iter().any(|arg| arg == "--first-provisioning"),
+        },
+    )?;
 
     // Keep this guard alive for the process lifetime so the non-blocking
     // file appender drains its channel on shutdown. Dropping the guard
     // flushes pending writes; storing it in `_file_guard` defers that drop
     // until `main` returns.
-    let _tracing_guards = init_tracing(config.log_format, config.development_mode)?;
+    let _tracing_guards = init_tracing(&config)?;
 
     // Fail fast at startup if a bundled Arkret artifact is malformed, or if the
     // Draft 2020-12 schema catalog does not compile as a whole, instead of
@@ -346,6 +356,19 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == name {
+            return iter.next().cloned();
+        }
+        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(value.to_owned());
+        }
+    }
+    None
+}
+
 /// Build the tracing subscriber.
 ///
 /// Always writes to stdout (the default, interactive-friendly destination —
@@ -363,17 +386,16 @@ struct TracingGuards {
     _otel_guard: crate::otel::OtelGuard,
 }
 
-fn init_tracing(
-    log_format: soland_http::config::LogFormat,
-    development_mode: bool,
-) -> anyhow::Result<TracingGuards> {
+fn init_tracing(config: &AppConfig) -> anyhow::Result<TracingGuards> {
+    let log_format = config.log_format;
+    let development_mode = config.development_mode;
     use soland_http::config::LogFormat;
     use tracing_subscriber::{Layer, Registry, fmt};
 
-    let filter = if std::env::var_os("RUST_LOG").is_none() && development_mode {
-        tracing_subscriber::EnvFilter::new("debug")
-    } else {
-        tracing_subscriber::EnvFilter::from_default_env()
+    let filter = match config.log_filter.as_deref() {
+        Some(directive) => tracing_subscriber::EnvFilter::new(directive),
+        None if development_mode => tracing_subscriber::EnvFilter::new("debug"),
+        None => tracing_subscriber::EnvFilter::new(""),
     };
     // Stdout writer: structured JSON in production, ANSI-decorated text in
     // development. JSON is required by the runbook log-search recipes; the
@@ -390,10 +412,7 @@ fn init_tracing(
     };
     let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![stdout_layer];
 
-    let log_file = std::env::var("SOLAND_LOG_FILE")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+    let log_file = config.log_file.clone();
 
     let file_guard = if let Some(path) = log_file {
         let path = std::path::PathBuf::from(path);
@@ -435,7 +454,7 @@ fn init_tracing(
         None
     };
 
-    let (otel_guard, otel_layer) = crate::otel::init_layer("soland")?;
+    let (otel_guard, otel_layer) = crate::otel::init_layer(&config.otel, "soland")?;
     if let Some(layer) = otel_layer {
         layers.push(layer);
     }
@@ -470,10 +489,9 @@ where
     // orchestrator (Kubernetes / systemd) that will SIGKILL after its own
     // grace period — a long-lived `events.subscribe` stream would otherwise
     // block a clean shutdown until the hard kill.
-    let shutdown_grace = std::env::var("SOLAND_SHUTDOWN_GRACE_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|secs| *secs > 0)
+    let shutdown_grace = state
+        .config()
+        .shutdown_grace_seconds
         .map(std::time::Duration::from_secs);
     // Long-lived transports get an explicit drain notice before the listener
     // stops, so peers checkpoint and reconnect instead of discovering the

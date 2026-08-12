@@ -19,7 +19,6 @@ test-support = [
 ]
 
 [dependencies]
-dotenvy.workspace = true
 anyhow.workspace = true
 arc-swap.workspace = true
 async-stream.workspace = true

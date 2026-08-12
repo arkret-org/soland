@@ -1,3 +1,4 @@
+use soland_http::config::OtelConfig;
 use tracing_subscriber::{Layer, Registry};
 
 pub type OtelLayer = Box<dyn Layer<Registry> + Send + Sync>;
@@ -20,7 +21,10 @@ impl Drop for OtelGuard {
 }
 
 #[cfg(feature = "otel")]
-pub fn init_layer(default_service_name: &str) -> anyhow::Result<(OtelGuard, Option<OtelLayer>)> {
+pub fn init_layer(
+    config: &OtelConfig,
+    default_service_name: &str,
+) -> anyhow::Result<(OtelGuard, Option<OtelLayer>)> {
     use std::time::Duration;
 
     use opentelemetry::trace::TracerProvider as _;
@@ -30,18 +34,16 @@ pub fn init_layer(default_service_name: &str) -> anyhow::Result<(OtelGuard, Opti
     use opentelemetry_sdk::propagation::TraceContextPropagator;
     use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 
-    if !otel_enabled() {
+    if !config.exporter_enabled {
         return Ok((OtelGuard { provider: None }, None));
     }
 
-    let endpoint =
-        env_non_empty("SOLAND_OTEL_ENDPOINT").unwrap_or_else(|| "http://127.0.0.1:4317".to_owned());
-    let timeout_seconds = env_u64("SOLAND_OTEL_TIMEOUT_SECS", 3).max(1);
-    let sample_ratio = env_f64("SOLAND_OTEL_SAMPLE_RATIO", 1.0)?;
-    if !(0.0..=1.0).contains(&sample_ratio) {
-        anyhow::bail!("SOLAND_OTEL_SAMPLE_RATIO must be between 0.0 and 1.0");
-    }
-    let service_name = env_non_empty("SOLAND_OTEL_SERVICE_NAME")
+    let endpoint = config.endpoint.clone();
+    let timeout_seconds = config.timeout_seconds;
+    let sample_ratio = config.sample_ratio;
+    let service_name = config
+        .service_name
+        .clone()
         .unwrap_or_else(|| default_service_name.to_owned());
 
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -73,40 +75,14 @@ pub fn init_layer(default_service_name: &str) -> anyhow::Result<(OtelGuard, Opti
 }
 
 #[cfg(not(feature = "otel"))]
-pub fn init_layer(_default_service_name: &str) -> anyhow::Result<(OtelGuard, Option<OtelLayer>)> {
-    if otel_enabled() {
+pub fn init_layer(
+    config: &OtelConfig,
+    _default_service_name: &str,
+) -> anyhow::Result<(OtelGuard, Option<OtelLayer>)> {
+    if config.exporter_enabled {
         anyhow::bail!(
             "SOLAND_OTEL_EXPORTER is set, but this binary was built without the `otel` feature"
         );
     }
     Ok((OtelGuard, None))
-}
-
-fn otel_enabled() -> bool {
-    env_non_empty("SOLAND_OTEL_EXPORTER")
-        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "otlp" | "1" | "true"))
-        .unwrap_or(false)
-}
-
-fn env_non_empty(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-#[cfg(feature = "otel")]
-fn env_u64(name: &str, default: u64) -> u64 {
-    env_non_empty(name)
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(default)
-}
-
-#[cfg(feature = "otel")]
-fn env_f64(name: &str, default: f64) -> anyhow::Result<f64> {
-    env_non_empty(name)
-        .map(|value| value.parse::<f64>())
-        .transpose()
-        .map(|value| value.unwrap_or(default))
-        .map_err(|error| anyhow::anyhow!("{name} must be a number: {error}"))
 }

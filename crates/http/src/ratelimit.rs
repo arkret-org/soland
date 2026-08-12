@@ -92,6 +92,16 @@ impl Default for RateLimiterConfig {
     }
 }
 
+/// Per-class ceiling overrides, already resolved by the configuration loader.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RateLimitOverrides {
+    pub window_seconds: Option<u32>,
+    pub default_per_minute: Option<u32>,
+    pub auth_per_minute: Option<u32>,
+    pub api_per_minute: Option<u32>,
+    pub probe_per_minute: Option<u32>,
+}
+
 impl RateLimiterConfig {
     /// Build the runtime config from the deployment posture +
     /// `SOLAND_RATE_LIMIT_*` overrides.
@@ -103,16 +113,13 @@ impl RateLimiterConfig {
     /// connect bootstraps and block sign-in. The limiter stays installed in
     /// both modes (defense in depth + an honest `hardening.rate_limit_enabled`);
     /// only the ceilings move.
-    pub fn from_source(
-        source: &crate::config_source::ConfigSource,
-        development_mode: bool,
-    ) -> Self {
+    pub fn resolve(development_mode: bool, overrides: RateLimitOverrides) -> Self {
         let base = if development_mode {
             Self::development()
         } else {
             Self::default()
         };
-        base.with_overrides(source)
+        base.with_overrides(overrides)
     }
 
     fn development() -> Self {
@@ -128,21 +135,20 @@ impl RateLimiterConfig {
         }
     }
 
-    fn with_overrides(mut self, source: &crate::config_source::ConfigSource) -> Self {
-        let env_u32 = |name: &str| source.non_empty(name).and_then(|v| v.parse::<u32>().ok());
-        if let Some(seconds) = env_u32("SOLAND_RATE_LIMIT_WINDOW_SECONDS") {
+    fn with_overrides(mut self, overrides: RateLimitOverrides) -> Self {
+        if let Some(seconds) = overrides.window_seconds {
             self.window = Duration::from_secs(u64::from(seconds.max(1)));
         }
-        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_DEFAULT_PER_MINUTE") {
+        if let Some(value) = overrides.default_per_minute {
             self.max_requests = value;
         }
-        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_AUTH_PER_MINUTE") {
+        if let Some(value) = overrides.auth_per_minute {
             self.auth_max_requests = value;
         }
-        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_API_PER_MINUTE") {
+        if let Some(value) = overrides.api_per_minute {
             self.api_max_requests = value;
         }
-        if let Some(value) = env_u32("SOLAND_RATE_LIMIT_PROBE_PER_MINUTE") {
+        if let Some(value) = overrides.probe_per_minute {
             self.probe_max_requests = value;
         }
         self
@@ -494,8 +500,7 @@ mod tests {
 
     #[test]
     fn development_mode_relaxes_every_class() {
-        let dev =
-            RateLimiterConfig::from_source(&crate::config_source::ConfigSource::default(), true);
+        let dev = RateLimiterConfig::resolve(true, RateLimitOverrides::default());
         let prod = RateLimiterConfig::default();
         assert!(dev.probe_max_requests > prod.probe_max_requests);
         assert!(dev.api_max_requests > prod.api_max_requests);

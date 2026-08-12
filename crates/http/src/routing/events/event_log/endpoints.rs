@@ -597,41 +597,13 @@ async fn maybe_delay_test_chaos_breakpoint(
     envelope: &Value,
     response: &SubmittedEventOutcome,
 ) {
-    if !state.config().development_mode {
-        return;
-    }
-    let Ok(breakpoint) = std::env::var("SOLAND_TEST_CHAOS_BREAKPOINT") else {
-        return;
-    };
-    if !matches!(
-        breakpoint.as_str(),
-        "post_commit_pre_response" | "post_wal_pre_response"
-    ) {
-        return;
-    }
-    let delay_ms = std::env::var("SOLAND_TEST_CHAOS_DELAY_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(0);
-    if delay_ms == 0 {
-        return;
-    }
     let operation_id = envelope_operation_id(envelope);
-    if let Ok(expected) = std::env::var("SOLAND_TEST_CHAOS_OPERATION_ID")
-        && Some(expected.as_str()) != operation_id.as_deref()
-        && expected != response.event_id
-    {
-        return;
-    }
-    tracing::warn!(
-        breakpoint = %breakpoint,
-        delay_ms,
-        event_id = %response.event_id,
-        operation_id = ?operation_id,
-        "test chaos delay before event response"
-    );
-    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    crate::routing::events::test_chaos::maybe_delay_before_event_response(
+        state,
+        operation_id.as_deref(),
+        &response.event_id,
+    )
+    .await;
 }
 
 fn envelope_operation_id(envelope: &Value) -> Option<String> {

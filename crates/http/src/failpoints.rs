@@ -103,11 +103,8 @@ impl FailpointRegistry {
     /// anything. A malformed entry is a hard error rather than a silent no-op:
     /// a test that believes it injected a fault but did not is worse than a
     /// failed startup.
-    pub fn from_source(
-        source: &crate::config_source::ConfigSource,
-        development_mode: bool,
-    ) -> anyhow::Result<Self> {
-        let Some(raw) = source.non_empty(FAILPOINTS_ENV) else {
+    pub fn parse(raw: Option<&str>, development_mode: bool) -> anyhow::Result<Self> {
+        let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(Self::disabled());
         };
         if !development_mode {

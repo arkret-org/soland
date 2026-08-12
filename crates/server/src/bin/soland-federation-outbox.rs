@@ -12,7 +12,7 @@
 //! `Idempotency-Key` and stamps the operator audit onto the dead letter — all
 //! in one transaction. See `routing::federation::outbox_operator`.
 
-use soland_http::config::AppConfig;
+use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::routing::federation::outbox_operator::{self, DEFAULT_LIST_LIMIT};
 use soland_services::federation::FederationDeliveryState;
 use soland_storage_postgres::Db;
@@ -25,12 +25,14 @@ const USAGE: &str = "usage:\n  \
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw_args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = raw_args.iter().skip(1).cloned().collect();
     let Some(command) = args.first().cloned() else {
         eprintln!("{USAGE}");
         std::process::exit(2);
     };
-    let config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+    let values = soland::process_config::load(&raw_args)?;
+    let config = AppConfig::from_values(&values, StartupOverrides::default())?;
     let db = Db::connect(
         config.database_url.as_deref(),
         soland_storage_postgres::PoolTuning {

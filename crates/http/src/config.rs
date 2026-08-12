@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -5,8 +6,6 @@ use std::sync::Arc;
 
 use arkret_identifiers::TrustDomainId;
 use zeroize::{Zeroize, Zeroizing};
-
-use crate::config_source::ConfigSource;
 
 /// v1 interoperability bound for HTTP message content of a non-streaming JSON operation, from
 /// `zh/conformance/scalability-constraints.md` §2.1.3. A deployment MUST NOT declare a lower
@@ -25,6 +24,13 @@ pub const PLACEHOLDER_STUN_URL: &str = "stun:stun.l.google.com:19302";
 /// non-existent host, so a production deployment still advertising it has no
 /// working relay; surfaced as a hardening warning.
 pub const PLACEHOLDER_TURN_HOST: &str = "turn.soland.local";
+
+/// Command-line-only startup choices supplied by the executable layer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StartupOverrides {
+    pub bind: Option<String>,
+    pub first_provisioning: bool,
+}
 
 /// Durable key-custody backend used by every Soland KeyStore namespace.
 #[derive(Clone, Default)]
@@ -57,14 +63,27 @@ impl fmt::Debug for KeyStoreConfig {
 }
 
 impl KeyStoreConfig {
-    /// Load the backend selector and its backend-specific settings.
-    pub fn from_source(source: &ConfigSource) -> anyhow::Result<Self> {
-        let backend = env_non_empty(source, "SOLAND_KEYSTORE_BACKEND")
-            .map(|value| value.to_ascii_lowercase());
-        let path = env_non_empty(source, "SOLAND_KEYSTORE_PATH").map(PathBuf::from);
-        let master_key_file = env_non_empty(source, "SOLAND_KEYSTORE_MASTER_KEY_FILE");
-        let raw_master_key =
-            env_non_empty_or_file(source, "SOLAND_KEYSTORE_MASTER_KEY")?.map(Zeroizing::new);
+    /// Parse and validate key-store settings from already-resolved values.
+    pub fn from_values(values: &BTreeMap<String, String>) -> anyhow::Result<Self> {
+        Self::resolve(
+            env_non_empty(values, "SOLAND_KEYSTORE_BACKEND")
+                .map(|value| value.to_ascii_lowercase())
+                .as_deref(),
+            env_non_empty(values, "SOLAND_KEYSTORE_PATH").map(PathBuf::from),
+            env_non_empty(values, "SOLAND_KEYSTORE_MASTER_KEY_FILE").as_deref(),
+            env_non_empty(values, "SOLAND_KEYSTORE_MASTER_KEY").map(Zeroizing::new),
+        )
+    }
+
+    /// Validate an already-read backend selection.
+    fn resolve(
+        backend: Option<&str>,
+        path: Option<PathBuf>,
+        master_key_file: Option<&str>,
+        raw_master_key: Option<Zeroizing<String>>,
+    ) -> anyhow::Result<Self> {
+        let backend = backend.map(str::to_owned);
+        let master_key_file = master_key_file.map(str::to_owned);
 
         match backend.as_deref() {
             None => {
@@ -399,6 +418,20 @@ pub struct AppConfig {
     /// Result of the deployment's PQ-hybrid TLS handshake probe.
     /// Env: `SOLAND_PQ_TLS_DEPLOYMENT_PROBE`.
     pub pq_hybrid_tls_probe: Option<String>,
+    /// Bounded drain: how long a graceful shutdown waits for in-flight
+    /// requests. `None` keeps the "wait indefinitely" behaviour.
+    /// Env: `SOLAND_SHUTDOWN_GRACE_SECS`.
+    pub shutdown_grace_seconds: Option<u64>,
+    /// Resolved `RUST_LOG` directive.
+    ///
+    /// Resolved here rather than by `EnvFilter::from_default_env()` so a
+    /// `RUST_LOG` supplied through `--config` is honoured: the file never
+    /// reaches the process environment, so the subscriber cannot find it there.
+    pub log_filter: Option<String>,
+    /// Env: `SOLAND_LOG_FILE`. Logs are teed to this path when set.
+    pub log_file: Option<PathBuf>,
+    /// OpenTelemetry export settings.
+    pub otel: OtelConfig,
     /// Connection-pool sizing for the Postgres backend. Held as plain values
     /// rather than `soland_storage_postgres::PoolTuning` because `soland-http`
     /// must not depend on a storage backend; `soland-server` assembles them.
@@ -517,6 +550,37 @@ pub struct AppConfig {
     pub log_format: LogFormat,
 }
 
+/// OpenTelemetry span export settings.
+///
+/// Parsed and validated with the rest of the configuration. The exporter is
+/// built after `AppConfig` exists, so it has no reason to reach for the
+/// process environment itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtelConfig {
+    /// Env: `SOLAND_OTEL_EXPORTER` — `otlp` / `1` / `true` enables export.
+    pub exporter_enabled: bool,
+    /// Env: `SOLAND_OTEL_ENDPOINT`.
+    pub endpoint: String,
+    /// Env: `SOLAND_OTEL_TIMEOUT_SECS`, at least 1.
+    pub timeout_seconds: u64,
+    /// Env: `SOLAND_OTEL_SAMPLE_RATIO`, validated to `0.0..=1.0` at load.
+    pub sample_ratio: f64,
+    /// Env: `SOLAND_OTEL_SERVICE_NAME`; the caller's default when unset.
+    pub service_name: Option<String>,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            exporter_enabled: false,
+            endpoint: "http://127.0.0.1:4317".to_owned(),
+            timeout_seconds: 3,
+            sample_ratio: 1.0,
+            service_name: None,
+        }
+    }
+}
+
 /// Tracing-subscriber output format. See [`AppConfig::log_format`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogFormat {
@@ -529,8 +593,8 @@ pub enum LogFormat {
 }
 
 impl LogFormat {
-    pub fn from_source(source: &ConfigSource, development_mode: bool) -> Self {
-        match source.var("SOLAND_LOG_FORMAT").ok().as_deref() {
+    fn from_values(values: &BTreeMap<String, String>, development_mode: bool) -> Self {
+        match lookup(values, "SOLAND_LOG_FORMAT").ok().as_deref() {
             Some("json") | Some("JSON") => LogFormat::Json,
             Some("plain") | Some("PLAIN") | Some("text") | Some("TEXT") => LogFormat::Plain,
             _ => {
@@ -667,13 +731,13 @@ pub struct LiveKitConfig {
 
 /// Load LiveKit API credentials. The secret accepts the `_FILE` indirection
 /// so operators can mount it via Kubernetes / Docker / systemd secrets.
-fn load_livekit_config(source: &ConfigSource) -> anyhow::Result<LiveKitConfig> {
-    let api_key = env_non_empty(source, "SOLAND_LIVEKIT_API_KEY");
-    let api_secret = env_non_empty_or_file(source, "SOLAND_LIVEKIT_API_SECRET")?;
-    Ok(LiveKitConfig {
+fn load_livekit_config(values: &BTreeMap<String, String>) -> LiveKitConfig {
+    let api_key = env_non_empty(values, "SOLAND_LIVEKIT_API_KEY");
+    let api_secret = env_non_empty(values, "SOLAND_LIVEKIT_API_SECRET");
+    LiveKitConfig {
         api_key,
         api_secret,
-    })
+    }
 }
 
 /// Federation fanout topology. Selected at config-load
@@ -802,6 +866,10 @@ impl AppConfig {
             rate_limiter: crate::ratelimit::RateLimiterConfig::default(),
             max_request_size_bytes: DEFAULT_MAX_REQUEST_SIZE_BYTES,
             pq_hybrid_tls_probe: None,
+            shutdown_grace_seconds: None,
+            log_filter: None,
+            log_file: None,
+            otel: OtelConfig::default(),
             db_pool_max_size: None,
             db_pool_acquire_timeout_seconds: None,
             push_bridge_cache_ttl_seconds: 900,
@@ -827,35 +895,40 @@ impl AppConfig {
 }
 
 impl AppConfig {
-    pub fn load(source: &ConfigSource) -> anyhow::Result<Self> {
-        let bind = arg_value("--bind")
-            .or_else(|| source.var("SOLAND_BIND").ok())
+    /// Parse and validate deployment configuration from explicit values.
+    ///
+    /// Reading process arguments, environment variables and files belongs to
+    /// the executable layer. This library function has no process-global input.
+    pub fn from_values(
+        values: &BTreeMap<String, String>,
+        startup: StartupOverrides,
+    ) -> anyhow::Result<Self> {
+        let bind = startup
+            .bind
+            .or_else(|| lookup(values, "SOLAND_BIND").ok())
             .unwrap_or_else(|| "127.0.0.1:8698".to_owned())
             .parse()?;
-        let metrics_bind = source
-            .var("SOLAND_METRICS_BIND")
+        let metrics_bind = lookup(values, "SOLAND_METRICS_BIND")
             .unwrap_or_else(|_| "127.0.0.1:9090".to_owned())
             .parse()?;
-        let public_base_url = source
-            .var("SOLAND_PUBLIC_BASE_URL")
-            .unwrap_or_else(|_| format!("http://{bind}"));
-        let first_provisioning = std::env::args().any(|arg| arg == "--first-provisioning")
-            || env_bool(source, "SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
-        let tls_cert_path = env_non_empty(source, "SOLAND_TLS_CERT_PATH").map(PathBuf::from);
-        let tls_key_path = env_non_empty(source, "SOLAND_TLS_KEY_PATH").map(PathBuf::from);
+        let public_base_url =
+            lookup(values, "SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
+        let first_provisioning = startup.first_provisioning
+            || env_bool(values, "SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
+        let tls_cert_path = env_non_empty(values, "SOLAND_TLS_CERT_PATH").map(PathBuf::from);
+        let tls_key_path = env_non_empty(values, "SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
             anyhow::bail!("SOLAND_TLS_CERT_PATH and SOLAND_TLS_KEY_PATH must be set together");
         }
-        let database_url = source
-            .var("DATABASE_URL")
+        let database_url = lookup(values, "DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        let object_storage = load_object_storage_config(source)?;
-        let ice = load_ice_servers_config(source)?;
-        let livekit = load_livekit_config(source)?;
-        let account_authority_url = env_non_empty(source, "SOLAND_ACCOUNT_AUTHORITY_URL");
+        let object_storage = load_object_storage_config(values)?;
+        let ice = load_ice_servers_config(values);
+        let livekit = load_livekit_config(values);
+        let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
         let account_authority_service_id =
-            env_non_empty(source, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
+            env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
         if account_authority_url.is_none() && account_authority_service_id.is_some() {
             anyhow::bail!(
                 "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
@@ -866,14 +939,11 @@ impl AppConfig {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
         }
-        let oidc_client_id = env_non_empty(source, "SOLAND_OAUTH_CLIENT_ID");
+        let oidc_client_id = env_non_empty(values, "SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
         // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
-        let development_mode = source
-            .var("SOLAND_DEVELOPMENT_MODE")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-            .unwrap_or(false);
+        let development_mode = env_bool(values, "SOLAND_DEVELOPMENT_MODE")?.unwrap_or(false);
         // Production first provisioning is authorized later, after the
         // durable identity stores are open, by `first_provisioning`.
         // Development mode may provision automatically. Config never carries
@@ -888,36 +958,34 @@ impl AppConfig {
         //   - env set → use as-is. `"*"` installs the permissive (mirror origin, no credentials)
         //     handler; any other value is treated as an explicit origin allow-list and installs the
         //     credentialed handler. See `routing::cors_handler_for_config`.
-        let cors_allow_origin = source
-            .var("SOLAND_CORS_ALLOW_ORIGIN")
+        let cors_allow_origin = lookup(values, "SOLAND_CORS_ALLOW_ORIGIN")
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
             .or_else(|| development_mode.then(|| "*".to_owned()));
         let session_grant_introspection_url =
-            env_non_empty(source, "SOLAND_SESSION_GRANT_INTROSPECTION_URL");
+            env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
-            env_non_empty_or_file(source, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER")?;
-        let did_resolver_allow_methods = env_csv(source, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
+            env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
+        let did_resolver_allow_methods = env_csv(values, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(default_did_resolver_allow_methods);
         let embedded_webvh_provider_enabled =
-            env_bool(source, "SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
+            env_bool(values, "SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
         let embedded_webvh_registration_bearer =
-            env_non_empty_or_file(source, "SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER")?;
+            env_non_empty(values, "SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER");
         let external_webvh_provider_url =
-            env_non_empty(source, "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
+            env_non_empty(values, "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
         let external_webvh_registration_bearer =
-            env_non_empty_or_file(source, "SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER")?;
+            env_non_empty(values, "SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER");
         if external_webvh_registration_bearer.is_some() && external_webvh_provider_url.is_none() {
             anyhow::bail!(
                 "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL is required when \
                  SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER is configured"
             );
         }
-        let default_webvh_provider_id = env_non_empty(source, "SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
+        let default_webvh_provider_id = env_non_empty(values, "SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
-        let jws_replay_window_seconds = source
-            .var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
+        let jws_replay_window_seconds = lookup(values, "SOLAND_JWS_REPLAY_WINDOW_SECONDS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
@@ -928,8 +996,8 @@ impl AppConfig {
                 "SOLAND_JWS_REPLAY_WINDOW_SECONDS must be > 0 when SOLAND_DEVELOPMENT_MODE is false (0 disables replay protection)"
             );
         }
-        let notary_signing_key_seed = load_notary_signing_key_seed(source)?;
-        let key_store = KeyStoreConfig::from_source(source)?;
+        let notary_signing_key_seed = load_notary_signing_key_seed(values)?;
+        let key_store = KeyStoreConfig::from_values(values)?;
         validate_persistence_key_store(database_url.as_deref(), &key_store)?;
         // T2 — without a persistent notary seed (env or KeyStore) the worker
         // mints a fresh ephemeral ed25519 identity on every restart, which
@@ -940,13 +1008,11 @@ impl AppConfig {
                 "SOLAND_NOTARY_SIGNING_KEY (or a durable SOLAND_KEYSTORE_BACKEND) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
             );
         }
-        let federation_fanout_topology = source
-            .var("SOLAND_FEDERATION_FANOUT_TOPOLOGY")
+        let federation_fanout_topology = lookup(values, "SOLAND_FEDERATION_FANOUT_TOPOLOGY")
             .ok()
             .map(|value| FederationFanoutTopology::from_env_value(&value))
             .unwrap_or(FederationFanoutTopology::Mesh);
-        let federation_peers = source
-            .var("SOLAND_FEDERATION_PEERS")
+        let federation_peers = lookup(values, "SOLAND_FEDERATION_PEERS")
             .ok()
             .map(|value| {
                 value
@@ -960,22 +1026,19 @@ impl AppConfig {
         // background worker drains the outbox; tests that don't want
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
         let federation_outbound_enabled =
-            env_bool(source, "SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
-        let admin_default_page_limit = source
-            .var("SOLAND_ADMIN_PAGE_LIMIT")
+            env_bool(values, "SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
+        let admin_default_page_limit = lookup(values, "SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(100);
-        let admin_max_page_limit = source
-            .var("SOLAND_ADMIN_MAX_PAGE_LIMIT")
+        let admin_max_page_limit = lookup(values, "SOLAND_ADMIN_MAX_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(1000)
             .max(admin_default_page_limit);
-        let admin_principal_dids = source
-            .var("SOLAND_ADMIN_PRINCIPAL_DIDS")
+        let admin_principal_dids = lookup(values, "SOLAND_ADMIN_PRINCIPAL_DIDS")
             .ok()
             .map(|value| {
                 value
@@ -985,8 +1048,7 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let to_device_queue_capacity = source
-            .var("SOLAND_TO_DEVICE_QUEUE_CAPACITY")
+        let to_device_queue_capacity = lookup(values, "SOLAND_TO_DEVICE_QUEUE_CAPACITY")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
@@ -996,74 +1058,88 @@ impl AppConfig {
         // env read inside `soland-services`.
         let key_backup_daily_download_limit =
             soland_services::runtime_guards::clamp_key_backup_daily_download_limit(
-                env_non_empty(source, "SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
+                env_non_empty(values, "SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
                     .and_then(|value| value.parse::<u32>().ok()),
             );
         let service_identity_bundle_dir =
-            env_non_empty(source, "SOLAND_SERVICE_IDENTITY_BUNDLE_DIR");
-        let verified_profiles_artifact = env_non_empty(source, "SOLAND_VERIFIED_PROFILES_ARTIFACT");
+            env_non_empty(values, "SOLAND_SERVICE_IDENTITY_BUNDLE_DIR");
+        let verified_profiles_artifact = env_non_empty(values, "SOLAND_VERIFIED_PROFILES_ARTIFACT");
         let external_webvh_provider_trust_domain =
-            env_non_empty(source, "SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN");
-        let rate_limiter =
-            crate::ratelimit::RateLimiterConfig::from_source(source, development_mode);
-        let max_request_size_bytes = Self::max_request_size_bytes(source);
-        let pq_hybrid_tls_probe = env_non_empty(source, PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV);
-        let db_pool_max_size = env_non_empty(source, "SOLAND_DB_POOL_MAX_SIZE")
+            env_non_empty(values, "SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN");
+        let rate_limiter = crate::ratelimit::RateLimiterConfig::resolve(
+            development_mode,
+            crate::ratelimit::RateLimitOverrides {
+                window_seconds: rate_limit_override(values, "SOLAND_RATE_LIMIT_WINDOW_SECONDS"),
+                default_per_minute: rate_limit_override(
+                    values,
+                    "SOLAND_RATE_LIMIT_DEFAULT_PER_MINUTE",
+                ),
+                auth_per_minute: rate_limit_override(values, "SOLAND_RATE_LIMIT_AUTH_PER_MINUTE"),
+                api_per_minute: rate_limit_override(values, "SOLAND_RATE_LIMIT_API_PER_MINUTE"),
+                probe_per_minute: rate_limit_override(values, "SOLAND_RATE_LIMIT_PROBE_PER_MINUTE"),
+            },
+        );
+        let max_request_size_bytes = Self::max_request_size_bytes(values);
+        let pq_hybrid_tls_probe = env_non_empty(values, PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV);
+        let shutdown_grace_seconds = env_non_empty(values, "SOLAND_SHUTDOWN_GRACE_SECS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|secs| *secs > 0);
+        let log_filter = env_non_empty(values, "RUST_LOG");
+        let log_file = env_non_empty(values, "SOLAND_LOG_FILE").map(PathBuf::from);
+        let otel = load_otel_config(values)?;
+        let db_pool_max_size = env_non_empty(values, "SOLAND_DB_POOL_MAX_SIZE")
             .and_then(|value| value.parse::<usize>().ok());
         let db_pool_acquire_timeout_seconds =
-            env_non_empty(source, "SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS")
+            env_non_empty(values, "SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok());
-        let push_bridge_cache_ttl_seconds = source
-            .var("SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
+        let push_bridge_cache_ttl_seconds = lookup(values, "SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(900);
-        let push_bridge_trusted_service_ids = source
-            .var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(|v| v.trim().to_owned())
-                    .filter(|v| !v.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let resumable_upload_dir = env_non_empty(source, "SOLAND_RESUMABLE_UPLOAD_DIR")
+        let push_bridge_trusted_service_ids =
+            lookup(values, "SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
+                .ok()
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(|v| v.trim().to_owned())
+                        .filter(|v| !v.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+        let resumable_upload_dir = env_non_empty(values, "SOLAND_RESUMABLE_UPLOAD_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("./soland-resumable-uploads"));
-        let resumable_upload_incomplete_ttl_seconds = source
-            .var("SOLAND_RESUMABLE_UPLOAD_TTL_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(86_400)
-            .max(60);
-        let seal_compaction_min_age_seconds = source
-            .var("SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
+        let resumable_upload_incomplete_ttl_seconds =
+            lookup(values, "SOLAND_RESUMABLE_UPLOAD_TTL_SECS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(86_400)
+                .max(60);
+        let seal_compaction_min_age_seconds = lookup(values, "SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(604_800);
-        let compaction_min_witnesses = source
-            .var("SOLAND_COMPACTION_MIN_WITNESSES")
+        let compaction_min_witnesses = lookup(values, "SOLAND_COMPACTION_MIN_WITNESSES")
             .ok()
             .and_then(|value| value.trim().parse::<u32>().ok())
             .unwrap_or(1);
         let compaction_preserve_genesis =
-            env_bool(source, "SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
+            env_bool(values, "SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
         let compaction_prune_only_singleton_successors =
-            env_bool(source, "SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
-        let compaction_prune_walk_interval_seconds = source
-            .var("SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(0);
-        let compaction_prune_walk_per_realm_limit = source
-            .var("SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .unwrap_or(50)
-            .max(1);
-        let seed_demo_data = env_bool(source, "SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
+            env_bool(values, "SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
+        let compaction_prune_walk_interval_seconds =
+            lookup(values, "SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+        let compaction_prune_walk_per_realm_limit =
+            lookup(values, "SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(50)
+                .max(1);
+        let seed_demo_data = env_bool(values, "SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
         //
         // This is now the only parse of every egress input. `security.rs` used
@@ -1073,25 +1149,25 @@ impl AppConfig {
         // policy is installed into the gate by `install_egress_policy` at
         // startup; both sides now read one value.
         let sovereign_enclave_enabled =
-            env_bool(source, "SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
+            env_bool(values, "SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
         let egress_policy = crate::security::EgressPolicy {
-            allow_private_networks: env_bool(source, "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS")?,
+            allow_private_networks: env_bool(values, "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS")?,
             allowed_hosts: crate::security::split_host_policy_entries(
-                env_non_empty(source, "SOLAND_EGRESS_ALLOWED_HOSTS").as_deref(),
+                env_non_empty(values, "SOLAND_EGRESS_ALLOWED_HOSTS").as_deref(),
             ),
             denylist: crate::security::split_host_policy_entries(
-                env_non_empty(source, "SOLAND_EGRESS_DENYLIST").as_deref(),
+                env_non_empty(values, "SOLAND_EGRESS_DENYLIST").as_deref(),
             ),
             federation_denylist: crate::security::split_federation_denylist_entries(&[
-                env_non_empty(source, "SOLAND_FEDERATION_DENYLIST").as_deref(),
-                env_non_empty(source, "SOLAND_FEDERATION_PEER_DENYLIST").as_deref(),
+                env_non_empty(values, "SOLAND_FEDERATION_DENYLIST").as_deref(),
+                env_non_empty(values, "SOLAND_FEDERATION_PEER_DENYLIST").as_deref(),
             ]),
             federation_trust_domain_allowlist: crate::security::split_host_policy_entries(
-                env_non_empty(source, "SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST").as_deref(),
+                env_non_empty(values, "SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST").as_deref(),
             ),
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts: crate::security::split_host_policy_entries(
-                env_non_empty(source, "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS").as_deref(),
+                env_non_empty(values, "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS").as_deref(),
             ),
         };
         let sovereign_enclave_allowed_outbound_hosts = egress_policy
@@ -1099,11 +1175,11 @@ impl AppConfig {
             .clone();
         crate::security::install_egress_policy(egress_policy);
         crate::ratelimit::install_forwarded_for_trust(
-            env_bool(source, "SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")?.unwrap_or(false),
+            env_bool(values, "SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")?.unwrap_or(false),
         );
         let candidate_join_policy_enabled =
-            env_bool(source, "SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
-        let trust_domain = env_non_empty(source, "SOLAND_TRUST_DOMAIN").ok_or_else(|| {
+            env_bool(values, "SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
+        let trust_domain = env_non_empty(values, "SOLAND_TRUST_DOMAIN").ok_or_else(|| {
             anyhow::anyhow!(
                 "SOLAND_TRUST_DOMAIN is required; it cannot be derived from the service core id"
             )
@@ -1111,10 +1187,12 @@ impl AppConfig {
         let trust_domain = TrustDomainId::new(trust_domain).map_err(|error| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
         })?;
-        let receive_policy_constraints = load_receive_policy_constraints(source)?;
-        let failpoints =
-            crate::failpoints::FailpointRegistry::from_source(source, development_mode)?;
-        let log_format = LogFormat::from_source(source, development_mode);
+        let receive_policy_constraints = load_receive_policy_constraints(values)?;
+        let failpoints = crate::failpoints::FailpointRegistry::parse(
+            env_non_empty(values, crate::failpoints::FAILPOINTS_ENV).as_deref(),
+            development_mode,
+        )?;
+        let log_format = LogFormat::from_values(values, development_mode);
 
         Ok(Self {
             bind,
@@ -1161,6 +1239,10 @@ impl AppConfig {
             rate_limiter,
             max_request_size_bytes,
             pq_hybrid_tls_probe,
+            shutdown_grace_seconds,
+            log_filter,
+            log_file,
+            otel,
             db_pool_max_size,
             db_pool_acquire_timeout_seconds,
             push_bridge_cache_ttl_seconds,
@@ -1190,9 +1272,8 @@ impl AppConfig {
     /// 16 MiB a fixed interoperability constant that a deployment or proxy MUST NOT declare
     /// lower, so a smaller value is clamped back up instead of silently making this service
     /// reject requests every other v1 service accepts.
-    pub fn max_request_size_bytes(source: &ConfigSource) -> usize {
-        source
-            .var("SOLAND_MAX_REQUEST_SIZE")
+    fn max_request_size_bytes(values: &BTreeMap<String, String>) -> usize {
+        lookup(values, "SOLAND_MAX_REQUEST_SIZE")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
@@ -1405,25 +1486,27 @@ impl AppConfig {
     }
 }
 
-fn load_object_storage_config(source: &ConfigSource) -> anyhow::Result<ObjectStorageConfig> {
-    let backend = env_non_empty(source, "SOLAND_OBJECT_STORAGE_BACKEND")
+fn load_object_storage_config(
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<ObjectStorageConfig> {
+    let backend = env_non_empty(values, "SOLAND_OBJECT_STORAGE_BACKEND")
         .unwrap_or_else(|| "local".to_owned())
         .to_ascii_lowercase();
-    let prefix = normalized_storage_prefix(env_non_empty(source, "SOLAND_OBJECT_STORAGE_PREFIX"));
+    let prefix = normalized_storage_prefix(env_non_empty(values, "SOLAND_OBJECT_STORAGE_PREFIX"));
     match backend.as_str() {
         "local" | "fs" | "filesystem" => {
-            let root = env_non_empty(source, "SOLAND_OBJECT_STORAGE_LOCAL_ROOT")
+            let root = env_non_empty(values, "SOLAND_OBJECT_STORAGE_LOCAL_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::temp_dir().join("soland-objects"));
             Ok(ObjectStorageConfig::Local { root, prefix })
         }
         "s3" | "s3-compatible" | "s3_compatible" => {
-            let bucket = required_env(source, "SOLAND_OBJECT_STORAGE_S3_BUCKET")?;
-            let region = env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_REGION")
+            let bucket = required_env(values, "SOLAND_OBJECT_STORAGE_S3_BUCKET")?;
+            let region = env_non_empty(values, "SOLAND_OBJECT_STORAGE_S3_REGION")
                 .unwrap_or_else(|| "us-east-1".to_owned());
-            let access_key_id = env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
+            let access_key_id = env_non_empty(values, "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
             let secret_access_key =
-                env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
+                env_non_empty(values, "SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
             if access_key_id.is_some() != secret_access_key.is_some() {
                 anyhow::bail!(
                     "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID and SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY must be set together"
@@ -1432,16 +1515,16 @@ fn load_object_storage_config(source: &ConfigSource) -> anyhow::Result<ObjectSto
             Ok(ObjectStorageConfig::S3Compatible {
                 bucket,
                 region,
-                endpoint: env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_ENDPOINT"),
+                endpoint: env_non_empty(values, "SOLAND_OBJECT_STORAGE_S3_ENDPOINT"),
                 access_key_id,
                 secret_access_key,
-                session_token: env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN"),
+                session_token: env_non_empty(values, "SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN"),
                 prefix,
-                force_path_style: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
+                force_path_style: env_bool(values, "SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
                     .unwrap_or(true),
-                allow_http: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_ALLOW_HTTP")?
+                allow_http: env_bool(values, "SOLAND_OBJECT_STORAGE_S3_ALLOW_HTTP")?
                     .unwrap_or(false),
-                skip_signature: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
+                skip_signature: env_bool(values, "SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
                     .unwrap_or(false),
             })
         }
@@ -1455,43 +1538,60 @@ fn load_object_storage_config(source: &ConfigSource) -> anyhow::Result<ObjectSto
 /// env vars. Each field falls back to the corresponding
 /// [`IceServersConfig::default`] value when its env var is absent or empty,
 /// preserving the historical hardcoded behavior.
-fn load_ice_servers_config(source: &ConfigSource) -> anyhow::Result<IceServersConfig> {
-    let defaults = IceServersConfig::default();
-    let parse_url_list = |name: &str, fallback: Vec<String>| -> Vec<String> {
-        match env_non_empty(source, name) {
-            Some(raw) => {
-                let parsed = raw
-                    .split(',')
-                    .map(|part| part.trim().to_owned())
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>();
-                if parsed.is_empty() { fallback } else { parsed }
+fn load_ice_servers_config(values: &BTreeMap<String, String>) -> IceServersConfig {
+    IceServersConfig::resolve(
+        env_non_empty(values, "SOLAND_ICE_STUN_URLS").as_deref(),
+        env_non_empty(values, "SOLAND_TURN_URLS").as_deref(),
+        env_non_empty(values, "SOLAND_ICE_TTL_SECONDS").as_deref(),
+        env_non_empty(values, "SOLAND_ICE_REFRESH_LEAD_SECONDS").as_deref(),
+        env_non_empty(values, "SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS").as_deref(),
+        env_non_empty(values, "SOLAND_TURN_SHARED_SECRET"),
+    )
+}
+
+impl IceServersConfig {
+    /// Apply the configured values over [`Self::default`].
+    ///
+    /// Takes the values themselves rather than reading them, so the fallback
+    /// rules are testable without any ambient state.
+    fn resolve(
+        stun_urls: Option<&str>,
+        turn_urls: Option<&str>,
+        ttl_seconds: Option<&str>,
+        refresh_lead_seconds: Option<&str>,
+        turn_secret_rotation_window_seconds: Option<&str>,
+        turn_shared_secret: Option<String>,
+    ) -> Self {
+        let defaults = Self::default();
+        let url_list = |raw: Option<&str>, fallback: Vec<String>| -> Vec<String> {
+            match raw {
+                Some(raw) => {
+                    let parsed = raw
+                        .split(',')
+                        .map(|part| part.trim().to_owned())
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>();
+                    if parsed.is_empty() { fallback } else { parsed }
+                }
+                None => fallback,
             }
-            None => fallback,
+        };
+        Self {
+            stun_urls: url_list(stun_urls, defaults.stun_urls),
+            turn_urls: url_list(turn_urls, defaults.turn_urls),
+            ttl_seconds: ttl_seconds
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(defaults.ttl_seconds),
+            refresh_lead_seconds: refresh_lead_seconds
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(defaults.refresh_lead_seconds),
+            turn_secret_rotation_window_seconds: turn_secret_rotation_window_seconds
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(defaults.turn_secret_rotation_window_seconds),
+            turn_shared_secret,
         }
-    };
-    let stun_urls = parse_url_list("SOLAND_ICE_STUN_URLS", defaults.stun_urls);
-    let turn_urls = parse_url_list("SOLAND_TURN_URLS", defaults.turn_urls);
-    let ttl_seconds = env_non_empty(source, "SOLAND_ICE_TTL_SECONDS")
-        .and_then(|value| value.parse::<u32>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(defaults.ttl_seconds);
-    let refresh_lead_seconds = env_non_empty(source, "SOLAND_ICE_REFRESH_LEAD_SECONDS")
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(defaults.refresh_lead_seconds);
-    let turn_secret_rotation_window_seconds =
-        env_non_empty(source, "SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS")
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(defaults.turn_secret_rotation_window_seconds);
-    let turn_shared_secret = env_non_empty_or_file(source, "SOLAND_TURN_SHARED_SECRET")?;
-    Ok(IceServersConfig {
-        stun_urls,
-        turn_urls,
-        ttl_seconds,
-        refresh_lead_seconds,
-        turn_secret_rotation_window_seconds,
-        turn_shared_secret,
-    })
+    }
 }
 
 fn normalized_storage_prefix(prefix: Option<String>) -> String {
@@ -1514,8 +1614,10 @@ fn normalized_storage_prefix(prefix: Option<String>) -> String {
 /// NotaryWorker then mints an ephemeral key with a sticky-warn).
 /// Returns `Err(_)` when the env var is set but malformed — fail-fast at
 /// startup rather than silently downgrading to ephemeral.
-fn load_notary_signing_key_seed(source: &ConfigSource) -> anyhow::Result<Option<[u8; 32]>> {
-    let raw = match source.var("SOLAND_NOTARY_SIGNING_KEY") {
+fn load_notary_signing_key_seed(
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<Option<[u8; 32]>> {
+    let raw = match lookup(values, "SOLAND_NOTARY_SIGNING_KEY") {
         Ok(value) => value.trim().to_owned(),
         Err(_) => return Ok(None),
     };
@@ -1570,9 +1672,9 @@ pub fn assert_durable_outbox_backend(
 }
 
 fn load_receive_policy_constraints(
-    source: &ConfigSource,
+    values: &BTreeMap<String, String>,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {
-    let applies_to = env_csv_cap(source, "SOLAND_RECEIVE_POLICY_APPLIES_TO")
+    let applies_to = env_csv_cap(values, "SOLAND_RECEIVE_POLICY_APPLIES_TO")
         .map(|values| {
             values
                 .into_iter()
@@ -1591,35 +1693,35 @@ fn load_receive_policy_constraints(
         })
         .transpose()?;
     let deployment_allowed_introduction_kinds =
-        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
+        env_csv_cap(values, "SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
     let deployment_denied_introduction_kinds =
-        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS")
+        env_csv_cap(values, "SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS")
             .unwrap_or_default();
     let handle_claim_max_behavior =
-        env_receive_action(source, "SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
+        env_receive_action(values, "SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
     let explicit_address_max_behavior = env_receive_action(
-        source,
+        values,
         "SOLAND_RECEIVE_POLICY_EXPLICIT_ADDRESS_MAX_BEHAVIOR",
     )?;
     let unknown_invites_max_behavior =
-        env_unknown_action(source, "SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
+        env_unknown_action(values, "SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
     let allowed_handle_domains =
-        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
+        env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
             domains
                 .into_iter()
                 .map(|domain| domain.to_ascii_lowercase())
                 .collect()
         });
     let trusted_handle_issuers =
-        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
+        env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
     let trusted_directory_services =
-        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
+        env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
     let trusted_principal_services =
-        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
+        env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
     let denied_principal_services =
-        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
+        env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
-        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
+        env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
 
     let has_any_constraint = applies_to.is_some()
         || deployment_allowed_introduction_kinds.is_some()
@@ -1657,10 +1759,10 @@ fn load_receive_policy_constraints(
 }
 
 fn env_receive_action(
-    source: &ConfigSource,
+    values: &BTreeMap<String, String>,
     name: &str,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::InviteReceiveAction>> {
-    let Some(value) = env_non_empty(source, name) else {
+    let Some(value) = env_non_empty(values, name) else {
         return Ok(None);
     };
     match value.as_str() {
@@ -1676,10 +1778,10 @@ fn env_receive_action(
 }
 
 fn env_unknown_action(
-    source: &ConfigSource,
+    values: &BTreeMap<String, String>,
     name: &str,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::UnknownInviteAction>> {
-    let Some(value) = env_non_empty(source, name) else {
+    let Some(value) = env_non_empty(values, name) else {
         return Ok(None);
     };
     match value.as_str() {
@@ -1691,8 +1793,37 @@ fn env_unknown_action(
     }
 }
 
-fn env_csv_cap(source: &ConfigSource, name: &str) -> Option<Vec<String>> {
-    let raw = source.var(name).ok()?;
+fn rate_limit_override(values: &BTreeMap<String, String>, name: &str) -> Option<u32> {
+    env_non_empty(values, name).and_then(|value| value.parse::<u32>().ok())
+}
+
+fn load_otel_config(values: &BTreeMap<String, String>) -> anyhow::Result<OtelConfig> {
+    let defaults = OtelConfig::default();
+    let sample_ratio = env_non_empty(values, "SOLAND_OTEL_SAMPLE_RATIO")
+        .map(|value| value.parse::<f64>())
+        .transpose()
+        .map_err(|error| anyhow::anyhow!("SOLAND_OTEL_SAMPLE_RATIO must be a number: {error}"))?
+        .unwrap_or(defaults.sample_ratio);
+    anyhow::ensure!(
+        (0.0..=1.0).contains(&sample_ratio),
+        "SOLAND_OTEL_SAMPLE_RATIO must be between 0.0 and 1.0"
+    );
+    Ok(OtelConfig {
+        exporter_enabled: env_non_empty(values, "SOLAND_OTEL_EXPORTER").is_some_and(|value| {
+            matches!(value.to_ascii_lowercase().as_str(), "otlp" | "1" | "true")
+        }),
+        endpoint: env_non_empty(values, "SOLAND_OTEL_ENDPOINT").unwrap_or(defaults.endpoint),
+        timeout_seconds: env_non_empty(values, "SOLAND_OTEL_TIMEOUT_SECS")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(defaults.timeout_seconds)
+            .max(1),
+        sample_ratio,
+        service_name: env_non_empty(values, "SOLAND_OTEL_SERVICE_NAME"),
+    })
+}
+
+fn env_csv_cap(values: &BTreeMap<String, String>, name: &str) -> Option<Vec<String>> {
+    let raw = lookup(values, name).ok()?;
     Some(
         raw.split(',')
             .map(|value| value.trim().to_owned())
@@ -1702,13 +1833,13 @@ fn env_csv_cap(source: &ConfigSource, name: &str) -> Option<Vec<String>> {
 }
 
 fn env_did_csv_cap(
-    source: &ConfigSource,
+    values: &BTreeMap<String, String>,
     name: &str,
 ) -> anyhow::Result<Option<Vec<arkret_identifiers::DidCoreId>>> {
-    let Some(values) = env_csv_cap(source, name) else {
+    let Some(parsed) = env_csv_cap(values, name) else {
         return Ok(None);
     };
-    values
+    parsed
         .into_iter()
         .map(|value| {
             arkret_identifiers::DidCoreId::new(value.clone()).map_err(|error| {
@@ -1719,18 +1850,17 @@ fn env_did_csv_cap(
         .map(Some)
 }
 
-fn env_csv(source: &ConfigSource, name: &str) -> Option<Vec<String>> {
-    let values: Vec<String> = source
-        .var(name)
+fn env_csv(values: &BTreeMap<String, String>, name: &str) -> Option<Vec<String>> {
+    let parsed: Vec<String> = lookup(values, name)
         .ok()?
         .split(',')
         .map(|value| value.trim().trim_start_matches("did:").to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .collect();
-    if values.is_empty() {
+    if parsed.is_empty() {
         None
     } else {
-        Some(values)
+        Some(parsed)
     }
 }
 
@@ -1741,78 +1871,19 @@ fn default_did_resolver_allow_methods() -> Vec<String> {
     vec!["webvh".to_owned(), "key".to_owned(), "uuid".to_owned()]
 }
 
-fn env_non_empty(source: &ConfigSource, name: &str) -> Option<String> {
-    source
-        .var(name)
+fn env_non_empty(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    lookup(values, name)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
 }
 
-/// Resolve a secret-like value from `$NAME` OR from a file at `$NAME_FILE`.
-///
-/// Lets operators mount a token via Kubernetes / Docker / systemd secrets
-/// instead of inlining it in env. Empty / whitespace-only files are treated
-/// as unset, mirroring [`env_non_empty`].
-///
-/// # Errors
-///
-/// - `$NAME_FILE` is set but the path cannot be read.
-/// - Both `$NAME` and `$NAME_FILE` are set to different non-empty values.
-fn env_non_empty_or_file(source: &ConfigSource, name: &str) -> anyhow::Result<Option<String>> {
-    let file_name = format!("{name}_FILE");
-    resolve_value_or_file(
-        name,
-        &file_name,
-        env_non_empty(source, name).as_deref(),
-        env_non_empty(source, &file_name).as_deref(),
-    )
+fn required_env(values: &BTreeMap<String, String>, name: &str) -> anyhow::Result<String> {
+    env_non_empty(values, name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
 }
 
-/// The decision half of [`env_non_empty_or_file`], with both inputs supplied.
-///
-/// Split out so the conflict, missing-file and whitespace rules are testable
-/// without mutating the process environment. The tests that covered them used
-/// to `unsafe { set_var }` a throwaway variable per case, which made a global
-/// mutation the price of asserting a pure rule.
-fn resolve_value_or_file(
-    name: &str,
-    file_name: &str,
-    from_env: Option<&str>,
-    file_path: Option<&str>,
-) -> anyhow::Result<Option<String>> {
-    let file_value = match file_path {
-        Some(path) => {
-            let raw = std::fs::read_to_string(path).map_err(|error| {
-                anyhow::anyhow!(
-                    "{file_name} points to {path:?} but the file could not be read: {error}"
-                )
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        }
-        None => None,
-    };
-    match (from_env.map(ToOwned::to_owned), file_value) {
-        (None, None) => Ok(None),
-        (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
-        (Some(env), Some(file)) if env == file => Ok(Some(env)),
-        (Some(_), Some(_)) => {
-            anyhow::bail!("{name} and {file_name} are both set to different values; pick one")
-        }
-    }
-}
-
-fn required_env(source: &ConfigSource, name: &str) -> anyhow::Result<String> {
-    env_non_empty(source, name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
-}
-
-fn env_bool(source: &ConfigSource, name: &str) -> anyhow::Result<Option<bool>> {
-    let Some(value) = env_non_empty(source, name) else {
+fn env_bool(values: &BTreeMap<String, String>, name: &str) -> anyhow::Result<Option<bool>> {
+    let Some(value) = env_non_empty(values, name) else {
         return Ok(None);
     };
     match value.to_ascii_lowercase().as_str() {
@@ -1820,16 +1891,6 @@ fn env_bool(source: &ConfigSource, name: &str) -> anyhow::Result<Option<bool>> {
         "0" | "false" | "no" | "off" => Ok(Some(false)),
         _ => anyhow::bail!("{name} must be true or false"),
     }
-}
-
-fn arg_value(name: &str) -> Option<String> {
-    let mut args = std::env::args();
-    while let Some(arg) = args.next() {
-        if arg == name {
-            return args.next();
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -1840,25 +1901,31 @@ mod tests {
     fn key_store_config_selects_backends() {
         use base64::Engine as _;
 
-        let empty = ConfigSource::default();
         assert!(matches!(
-            KeyStoreConfig::from_source(&empty).unwrap(),
+            KeyStoreConfig::from_values(&BTreeMap::new()).unwrap(),
             KeyStoreConfig::Disabled
         ));
 
-        let platform = ConfigSource::from_pairs([("SOLAND_KEYSTORE_BACKEND", "platform")]);
+        let platform_values =
+            BTreeMap::from([("SOLAND_KEYSTORE_BACKEND".to_owned(), "platform".to_owned())]);
         assert!(matches!(
-            KeyStoreConfig::from_source(&platform).unwrap(),
+            KeyStoreConfig::from_values(&platform_values).unwrap(),
             KeyStoreConfig::Platform
         ));
 
         let encoded = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
-        let encrypted_source = ConfigSource::from_pairs([
-            ("SOLAND_KEYSTORE_BACKEND", "encrypted_file"),
-            ("SOLAND_KEYSTORE_PATH", "soland-test-keystore.v1"),
-            ("SOLAND_KEYSTORE_MASTER_KEY", encoded.as_str()),
+        let encrypted_values = BTreeMap::from([
+            (
+                "SOLAND_KEYSTORE_BACKEND".to_owned(),
+                "encrypted_file".to_owned(),
+            ),
+            (
+                "SOLAND_KEYSTORE_PATH".to_owned(),
+                "soland-test-keystore.v1".to_owned(),
+            ),
+            ("SOLAND_KEYSTORE_MASTER_KEY".to_owned(), encoded.clone()),
         ]);
-        let encrypted = KeyStoreConfig::from_source(&encrypted_source).unwrap();
+        let encrypted = KeyStoreConfig::from_values(&encrypted_values).unwrap();
         assert_eq!(encrypted.backend_name(), Some("encrypted_file"));
         assert!(!format!("{encrypted:?}").contains(&encoded));
     }
@@ -1902,17 +1969,14 @@ mod tests {
 
     #[test]
     fn load_ice_servers_config_parses_overrides() {
-        let source = ConfigSource::from_pairs([
-            (
-                "SOLAND_ICE_STUN_URLS",
-                "stun:stun.example:3478 , stun:stun2.example:3478",
-            ),
-            ("SOLAND_TURN_URLS", "turn:turn.example:3478?transport=udp"),
-            ("SOLAND_ICE_TTL_SECONDS", "120"),
-            ("SOLAND_ICE_REFRESH_LEAD_SECONDS", "30"),
-            ("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS", "3600"),
-        ]);
-        let ice = load_ice_servers_config(&source).expect("load ice config");
+        let ice = IceServersConfig::resolve(
+            Some("stun:stun.example:3478 , stun:stun2.example:3478"),
+            Some("turn:turn.example:3478?transport=udp"),
+            Some("120"),
+            Some("30"),
+            Some("3600"),
+            None,
+        );
         assert_eq!(
             ice.stun_urls,
             vec!["stun:stun.example:3478", "stun:stun2.example:3478"]
@@ -1925,85 +1989,8 @@ mod tests {
 
     #[test]
     fn a_non_positive_ice_ttl_falls_back_to_the_default() {
-        let source = ConfigSource::from_pairs([("SOLAND_ICE_TTL_SECONDS", "0")]);
-        let ice = load_ice_servers_config(&source).expect("load ice config");
+        let ice = IceServersConfig::resolve(None, None, Some("0"), None, None, None);
         assert_eq!(ice.ttl_seconds, 300);
-    }
-
-    fn write_secret_file(suffix: &str, contents: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "soland-config-test-{}-{suffix}",
-            std::process::id()
-        ));
-        std::fs::write(&path, contents).expect("write secret file");
-        path
-    }
-
-    fn resolve(env: Option<&str>, file: Option<&str>) -> anyhow::Result<Option<String>> {
-        resolve_value_or_file("SOLAND_TEST_BEARER", "SOLAND_TEST_BEARER_FILE", env, file)
-    }
-
-    #[test]
-    fn value_only_returns_value() {
-        assert_eq!(
-            resolve(Some("from-env"), None).unwrap(),
-            Some("from-env".to_owned())
-        );
-    }
-
-    #[test]
-    fn file_only_returns_value() {
-        let path = write_secret_file("file-only", "from-file\n");
-        assert_eq!(
-            resolve(None, path.to_str()).unwrap(),
-            Some("from-file".to_owned())
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn neither_set_returns_none() {
-        assert!(resolve(None, None).unwrap().is_none());
-    }
-
-    #[test]
-    fn both_set_to_same_value_is_ok() {
-        let path = write_secret_file("both-same", "same-tok");
-        assert_eq!(
-            resolve(Some("same-tok"), path.to_str()).unwrap(),
-            Some("same-tok".to_owned())
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn both_set_to_different_values_errors() {
-        let path = write_secret_file("both-diff", "file-tok");
-        let error = resolve(Some("env-tok"), path.to_str()).expect_err("must error");
-        assert!(
-            error
-                .to_string()
-                .contains("are both set to different values"),
-            "unexpected error: {error}"
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn file_pointing_to_missing_path_errors() {
-        let error =
-            resolve(None, Some("/definitely/does/not/exist-soland-test")).expect_err("must error");
-        assert!(
-            error.to_string().contains("could not be read"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn whitespace_file_is_treated_as_unset() {
-        let path = write_secret_file("ws-file", "   \n\t  \n");
-        assert!(resolve(None, path.to_str()).unwrap().is_none());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -2022,4 +2009,11 @@ mod tests {
         )));
         assert!(!AppConfig::pq_hybrid_tls_probe_verified_from_value(None));
     }
+}
+
+fn lookup(values: &BTreeMap<String, String>, name: &str) -> Result<String, std::env::VarError> {
+    values
+        .get(name)
+        .cloned()
+        .ok_or(std::env::VarError::NotPresent)
 }

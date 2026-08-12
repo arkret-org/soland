@@ -18,6 +18,7 @@
 //! The helper is self-contained and shares only the configured KeyStore
 //! with the server process.
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use base64::Engine as _;
@@ -37,10 +38,12 @@ struct Args {
     input: Option<String>,
 }
 
-fn parse_args() -> anyhow::Result<Args> {
-    let raw: Vec<String> = std::env::args().collect();
+fn parse_args(raw: &[String], values: &BTreeMap<String, String>) -> anyhow::Result<Args> {
     let mut mode = None;
-    let mut identity_bundle = std::env::var("SOLAND_SERVICE_IDENTITY_BUNDLE").ok();
+    let mut identity_bundle = values
+        .get("SOLAND_SERVICE_IDENTITY_BUNDLE")
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     let mut output = None;
     let mut input = None;
 
@@ -78,6 +81,12 @@ fn parse_args() -> anyhow::Result<Args> {
                         .ok_or_else(|| anyhow::anyhow!("--input needs a path"))?,
                 );
             }
+            "--config" => {
+                i += 1;
+                anyhow::ensure!(raw.get(i).is_some(), "--config needs a path");
+            }
+            "--no-env-overrides" => {}
+            value if value.starts_with("--config=") => {}
             "-h" | "--help" => {
                 eprintln!(
                     "usage: soland-keystore-snapshot (--export-only | --import-only)\n\
@@ -113,8 +122,15 @@ fn parse_args() -> anyhow::Result<Args> {
 }
 
 fn main() -> ExitCode {
-    dotenvy::dotenv().ok();
-    let args = match parse_args() {
+    let raw: Vec<String> = std::env::args().collect();
+    let values = match soland::process_config::load(&raw) {
+        Ok(values) => values,
+        Err(error) => {
+            eprintln!("[keystore-snapshot] config load failed: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let args = match parse_args(&raw, &values) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("[keystore-snapshot] arg parse failed: {e}");
@@ -130,8 +146,8 @@ fn main() -> ExitCode {
     };
 
     let result = match args.mode {
-        Mode::ExportOnly => run_export_only(&args, &identity),
-        Mode::ImportOnly => run_import_only(&args, &identity),
+        Mode::ExportOnly => run_export_only(&args, &identity, &values),
+        Mode::ImportOnly => run_import_only(&args, &identity, &values),
     };
 
     match result {
@@ -155,19 +171,19 @@ enum DrillError {
 
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 
-fn open_service_identity_key_store() -> Result<Box<dyn arkret_keystore::KeyStore>, DrillError> {
-    soland_http::config::KeyStoreConfig::from_source(
-        &soland_http::config_source::ConfigSource::from_process()
-            .map_err(|error| DrillError::Io(error.to_string()))?,
-    )
-    .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
-    .open(SERVICE_IDENTITY_KEYSTORE_APP)
-    .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
-    .ok_or_else(|| {
-        DrillError::Io(
-            "SOLAND_KEYSTORE_BACKEND must select a durable backend for this snapshot".to_owned(),
-        )
-    })
+fn open_service_identity_key_store(
+    values: &BTreeMap<String, String>,
+) -> Result<Box<dyn arkret_keystore::KeyStore>, DrillError> {
+    soland_http::config::KeyStoreConfig::from_values(values)
+        .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
+        .open(SERVICE_IDENTITY_KEYSTORE_APP)
+        .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
+        .ok_or_else(|| {
+            DrillError::Io(
+                "SOLAND_KEYSTORE_BACKEND must select a durable backend for this snapshot"
+                    .to_owned(),
+            )
+        })
 }
 
 #[derive(Debug)]
@@ -237,13 +253,17 @@ fn validate_seed_binding(
 
 // ── --export-only ───────────────────────────────────────────────────────
 
-fn run_export_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<(), DrillError> {
+fn run_export_only(
+    args: &Args,
+    identity: &ResolvedServiceIdentity,
+    values: &BTreeMap<String, String>,
+) -> Result<(), DrillError> {
     let output = args
         .output
         .as_deref()
         .ok_or_else(|| DrillError::Io("--export-only requires --output".to_owned()))?;
     let key_id = &identity.signing_key_ref;
-    let store = open_service_identity_key_store()?;
+    let store = open_service_identity_key_store(values)?;
     let bytes = store
         .load(key_id)
         .map_err(|e| DrillError::Io(format!("KeyStore::load({key_id}): {e}")))?;
@@ -263,7 +283,11 @@ fn run_export_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
 
 // ── --import-only ───────────────────────────────────────────────────────
 
-fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<(), DrillError> {
+fn run_import_only(
+    args: &Args,
+    identity: &ResolvedServiceIdentity,
+    values: &BTreeMap<String, String>,
+) -> Result<(), DrillError> {
     let input = args
         .input
         .as_deref()
@@ -316,7 +340,7 @@ fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
         .map_err(|e| DrillError::Io(format!("seed_b64 decode: {e}")))?;
     validate_seed_binding(identity, &seed_bytes)?;
     let key_id = &identity.signing_key_ref;
-    let store = open_service_identity_key_store()?;
+    let store = open_service_identity_key_store(values)?;
     store
         .store(key_id, &seed_bytes)
         .map_err(|e| DrillError::Io(format!("KeyStore::store({key_id}): {e}")))?;

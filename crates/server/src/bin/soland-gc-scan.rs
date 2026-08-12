@@ -4,7 +4,7 @@
 //! GC-eligible Moves as JSON on stdout. The `--dry-run` flag is the
 //! only mode currently supported (deletion is a follow-up).
 
-use soland_http::config::AppConfig;
+use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::gc;
 use soland_storage_postgres::Db;
 
@@ -18,7 +18,8 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("soland-gc-scan: only --dry-run is supported (deletion is a follow-up)");
         std::process::exit(2);
     }
-    let config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+    let values = soland::process_config::load(&args)?;
+    let config = AppConfig::from_values(&values, StartupOverrides::default())?;
     let db = Db::connect(
         config.database_url.as_deref(),
         soland_storage_postgres::PoolTuning {
