@@ -135,7 +135,7 @@ pub(crate) async fn validate_session_grant_binding(
             device_id,
             ..
         } => {
-            if agent_id.as_str() != grant.subject {
+            if agent_id != &grant.subject {
                 return Err(AppError::capability_denied(
                     "session grant agent holder does not match subject",
                 ));
