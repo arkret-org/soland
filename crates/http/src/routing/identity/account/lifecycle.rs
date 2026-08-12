@@ -3,7 +3,6 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
-use arkret_identifiers::DidFullId;
 use arkret_models_collaboration::governance::erasure::{
     ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptPackage, ErasureReceiptProof,
     ErasureReceiptSubmitRequestBody, ErasureScope, ErasureStorageBoundary, ErasureSubject,

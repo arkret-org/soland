@@ -14,7 +14,6 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentSignerEvidenceQueryFailure, AgentSignerEvidenceQueryFailureReason,
     AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBodyBody,
     AgentSignerEvidenceQuerySelector, AgentSnapshotLease, ControllerAccountGateAttestation,
-    ControllerAccountGateAttestationIssueOutcome, ControllerAccountGateAttestationIssueRequestBody,
     CurrentAgentSignerEvidence,
 };
 use arkret_signatures::proof::PublicKeyMaterial;

@@ -1132,18 +1132,6 @@ CREATE TABLE public.mls_welcomes (
 
 CREATE INDEX mls_welcomes_recipient_pending ON public.mls_welcomes USING btree (recipient_actor_id, recipient_device_id, delivered_at, enqueued_at);
 
-CREATE TABLE public.moderation_actions (
-    id uuid PRIMARY KEY,
-    moderator_id text,
-    target_actor_id text,
-    action_kind text,
-    realm_id text,
-    payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE INDEX moderation_actions_target_idx ON public.moderation_actions USING btree (target_actor_id);
-
 -- `report` is an Event-derived kind: `id` is the create Event's 33-byte token
 -- behind a local sequential `pk`. `target_event_id` is the protocol identity of
 -- the reported Event.

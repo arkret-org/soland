@@ -367,6 +367,12 @@ fn operation_extra_validator_for_kind(kind: &arkret_wire::EventKind) -> Option<O
         arkret_wire::EventKind::RealmInheritancePolicy => {
             Some(validate_realm_inheritance_policy_payload)
         }
+        // views.md §3.1 — a shared View Event carrying `visibility="private"`
+        // is `schema_violation` / `private_view_requires_account_data`; the
+        // retired presentation-local fields are rejected in the same pass.
+        arkret_wire::EventKind::ViewCreate | arkret_wire::EventKind::ViewUpdate => {
+            Some(validate_view_payload)
+        }
         arkret_wire::EventKind::MorphCreate => Some(validate_morph_create_payload),
         arkret_wire::EventKind::MorphUpdate => Some(validate_morph_update_payload),
         arkret_wire::EventKind::MorphSchemaMigrate => Some(validate_morph_schema_migrate_payload),

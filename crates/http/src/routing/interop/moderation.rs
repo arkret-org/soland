@@ -7,7 +7,7 @@
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
 //!   by the moderation projection preflight.
 
-use arkret_identifiers::{DidFullId, EventId, Hash, RealmId};
+use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingProofEventTimeAnchor,
 };

@@ -1888,7 +1888,7 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use arkret_identifiers::{DidFullId, RealmId};
+    use arkret_identifiers::RealmId;
     use soland_services::hydration::{
         hydrate_projections_from_persistence, hydrate_realm_member_state_event,
     };

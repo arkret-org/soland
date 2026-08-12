@@ -209,15 +209,6 @@ pub(crate) fn projection_operation_from_canonical_record(
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
         .collect();
-    let authorized_refs = object
-        .get("refs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|reference| reference.get("role").and_then(Value::as_str) == Some("authorized_by"))
-        .filter_map(|reference| reference.get("id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect();
     let parsed = ValidatedEventEnvelope {
         event_id: record.event_id.clone(),
         actor_id: record.actor_id.clone(),
@@ -231,10 +222,8 @@ pub(crate) fn projection_operation_from_canonical_record(
         kind: record.kind.clone(),
         schema_id: record.schema_id.clone(),
         prev_refs,
-        authorized_refs,
         canonical_digest: record.canonical_digest.clone(),
         canonical_bytes: record.canonical_bytes.clone(),
-        data_event_query_grade: DataEventQueryGrade::Observed,
     };
     projection_operation_from_event(&parsed, &record.envelope)
 }

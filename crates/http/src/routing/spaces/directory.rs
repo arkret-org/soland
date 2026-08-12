@@ -26,9 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_hlc::CursorPurpose;
-use arkret_identifiers::{
-    BlobRef, DidFullId, EventId, MessageId, RealmId, StrandId, SubscriptionId,
-};
+use arkret_identifiers::{BlobRef, EventId, MessageId, RealmId, StrandId, SubscriptionId};
 use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload;
 use arkret_models_collaboration::objects::realm_alias::RealmAlias;
 use arkret_models_discovery::{

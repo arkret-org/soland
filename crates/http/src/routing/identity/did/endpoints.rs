@@ -434,7 +434,7 @@ pub(crate) async fn embedded_webvh_register(
     validate_log_chain(&inception)?;
     verify_scid_against_did(&location.did, &inception[0])?;
     verify_log_subject(&location.did, &inception)?;
-    validate_witness_policy_for_log(&inception, now.timestamp())?;
+    validate_witness_policy_for_log(&inception)?;
     validate_rotation_authorization_for_log(&inception)?;
     let document_record = WebvhDocumentRecord {
         did: location.did.clone(),
@@ -619,7 +619,7 @@ pub(crate) async fn embedded_webvh_rotate(
     validate_log_chain(&candidate)?;
     verify_scid_against_did(&did, &candidate[0])?;
     verify_log_subject(&did, &candidate)?;
-    validate_witness_policy_for_log(&candidate, now().timestamp())?;
+    validate_witness_policy_for_log(&candidate)?;
     validate_rotation_authorization_for_log(&candidate)?;
 
     let submitted_at = now();
@@ -1121,7 +1121,7 @@ pub(crate) async fn identity_submit_did_operation(
     validate_log_chain(&candidate)?;
     verify_scid_against_did(&did, &candidate[0])?;
     verify_log_subject(&did, &candidate)?;
-    validate_witness_policy_for_log(&candidate, now().timestamp())?;
+    validate_witness_policy_for_log(&candidate)?;
     validate_rotation_authorization_for_log(&candidate)?;
 
     let submitted_at = now();

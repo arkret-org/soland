@@ -2077,11 +2077,6 @@ mod tests {
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     arkret_bootstrap::DID_INCEPTION_REF_ROLE,
                 ),
-                initial_resolution: arkret_models_identity::ResolutionCommitment {
-                    full_id: principal_full_id.clone(),
-                    method_history_head: format!("sha256:{}", "a".repeat(64)),
-                    version_id: "1-fixture".to_owned(),
-                },
                 founding_device_descriptor: fixture_founding_device_descriptor(
                     &principal, created_at,
                 ),

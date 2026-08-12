@@ -1,5 +1,4 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::DidFullId;
 #[cfg(test)]
 use arkret_identity::DidResolver;
 use arkret_models_collaboration::governance::membership_invite::{
@@ -401,6 +400,7 @@ fn trimmed_string(value: Option<&Value>) -> Option<&str> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use arkret_identifiers::DidFullId;
     use arkret_identity::DidDocument;
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;

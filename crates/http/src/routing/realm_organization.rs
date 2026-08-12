@@ -21,7 +21,7 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
     RealmOrganizationRelationshipRow,
 };
-use arkret_wire::{DidCoreId, DidFullId, Hash};
+use arkret_wire::{DidCoreId, Hash};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;

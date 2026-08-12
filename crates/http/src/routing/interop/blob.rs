@@ -12,7 +12,7 @@
 //! is enforced at write time but not at GC.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{BlobRef, DidCoreId, DidFullId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, DidCoreId, Hash, RealmId};
 use arkret_models_collaboration::objects::blob::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
     BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,

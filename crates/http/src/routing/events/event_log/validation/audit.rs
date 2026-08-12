@@ -389,11 +389,9 @@ mod tests {
             kind: kind.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             prev_refs: Vec::new(),
-            authorized_refs: Vec::new(),
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             canonical_bytes: Vec::new(),
-            data_event_query_grade: DataEventQueryGrade::Observed,
         }
     }
 

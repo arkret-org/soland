@@ -410,13 +410,20 @@ mod tests {
     fn self_realm_owner_reconciles_without_implying_capability() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
-        let controller = "did:webvh:z6mkfixture:example.test:users:alice";
+        let controller_full_id = arkret_wire::DidFullId::new(
+            "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
+        )
+        .unwrap();
+        let controller_id = arkret_wire::DidCoreId::from(
+            arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap(),
+        );
 
         reconcile_self_realm_owner_projection(
             &state,
             realm_id,
-            controller,
-            &realm_meta(controller),
+            &controller_full_id,
+            &controller_id,
+            &realm_meta(controller_full_id.as_str()),
         )
         .expect("durable owner should repair the missing projection");
 
@@ -426,10 +433,10 @@ mod tests {
                 .realm_states
                 .get(realm_id)
                 .and_then(|realm| realm.owner.as_deref()),
-            Some(controller)
+            Some(controller_id.as_str())
         );
         assert!(!projection.issuer_has_projected_capability(
-            controller,
+            controller_id.as_str(),
             realm_id,
             CapabilityActionId::MESSAGE_CREATE,
             realm_id,
@@ -440,10 +447,18 @@ mod tests {
     #[test]
     fn self_realm_owner_reconciliation_fails_closed_on_mismatch() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let controller_full_id = arkret_wire::DidFullId::new(
+            "did:webvh:z6mkfixture:example.test:users:alice".to_owned(),
+        )
+        .unwrap();
+        let controller_id = arkret_wire::DidCoreId::from(
+            arkret_wire::project_full_id_to_core_id(&controller_full_id).unwrap(),
+        );
         let error = reconcile_self_realm_owner_projection(
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
-            "did:webvh:z6mkfixture:example.test:users:alice",
+            &controller_full_id,
+            &controller_id,
             &realm_meta("did:webvh:z6mkfixture:example.test:users:bob"),
         )
         .expect_err("mismatched durable ownership must not be overwritten");

@@ -23,15 +23,6 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
     Ok(())
 }
 
-pub(crate) fn validate_key_backup_active_series_payload(
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    operation
-        .typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>()
-        .map(|_| ())
-        .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
-}
-
 pub(crate) fn validate_invite_third_party_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -836,10 +827,7 @@ mod tests {
     use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;
 
-    use super::{
-        validate_encrypted_payload_envelope, validate_invite_create_payload,
-        validate_message_expiry_payload,
-    };
+    use super::{validate_encrypted_payload_envelope, validate_message_expiry_payload};
 
     fn message_operation(expiry: serde_json::Value) -> Operation {
         arkret_event_draft::test_support::raw_projected_operation(

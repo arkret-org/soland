@@ -2,7 +2,6 @@ use super::{ModerationStore, Mutex, PersistenceError, PersistenceResult, Value, 
 #[derive(Default)]
 pub(crate) struct MemoryModerationStore {
     reports: Mutex<Vec<Value>>,
-    actions: Mutex<Vec<Value>>,
     queue_items: Mutex<Vec<Value>>,
     appeals: Mutex<Vec<Value>>,
 }
@@ -33,17 +32,8 @@ impl ModerationStore for MemoryModerationStore {
         Ok(())
     }
 
-    async fn append_action(&self, action: Value) -> PersistenceResult<()> {
-        self.actions.lock().push(action);
-        Ok(())
-    }
-
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.reports.lock().clone())
-    }
-
-    async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.actions.lock().clone())
     }
 
     async fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {

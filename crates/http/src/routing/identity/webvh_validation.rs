@@ -9,17 +9,6 @@ use salvo::http::StatusCode;
 use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
 
-pub const WEBVH_DEGRADED_NO_WITNESS_MAX_SECS: i64 = 24 * 60 * 60;
-
-pub fn webvh_degraded_no_witness_max_secs() -> i64 {
-    std::env::var("SOLAND_WEBVH_DEGRADED_NO_WITNESS_MAX_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| value.min(WEBVH_DEGRADED_NO_WITNESS_MAX_SECS))
-        .unwrap_or(WEBVH_DEGRADED_NO_WITNESS_MAX_SECS)
-}
-
 #[derive(Clone, Debug)]
 pub struct WebvhLogEntry {
     pub payload: Value,
@@ -303,22 +292,13 @@ pub fn verify_log_subject(did: &str, log: &[WebvhLogEntry]) -> Result<(), WebvhV
     Ok(())
 }
 
-pub fn validate_witness_policy_for_log(
-    log: &[WebvhLogEntry],
-    now_unix_secs: i64,
-) -> Result<(), WebvhValidationError> {
-    validate_witness_policy_for_log_with_window(
-        log,
-        now_unix_secs,
-        webvh_degraded_no_witness_max_secs(),
-    )
-}
-
-pub fn validate_witness_policy_for_log_with_window(
-    log: &[WebvhLogEntry],
-    _now_unix_secs: i64,
-    _degraded_max_secs: i64,
-) -> Result<(), WebvhValidationError> {
+/// Reject every entry that declares a witness policy.
+///
+/// `did-freshness-profile-registry.json` registers no degraded read-only
+/// profile, so there is no window inside which an unwitnessed entry may be
+/// accepted: a declared witness policy with no verified witness signatures is
+/// always a quorum failure.
+pub fn validate_witness_policy_for_log(log: &[WebvhLogEntry]) -> Result<(), WebvhValidationError> {
     for (at_index, entry) in log.iter().enumerate() {
         let parameters = entry.payload.get("parameters").ok_or_else(|| {
             WebvhValidationError::MalformedEntry {

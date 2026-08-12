@@ -1360,15 +1360,29 @@ fn apply_projected_create(
     state.apply_projected(&operation, &writes, hlc)
 }
 
+/// The typed `initial_resolution` a managed-Agent PCR genesis MUST carry.
+/// `RealmGenesis::managed_agent_control` owns the field, so the reducer tests
+/// build it through the constructor instead of patching the serialized payload.
+fn managed_agent_initial_resolution() -> arkret_models_identity::ResolutionCommitment {
+    arkret_models_identity::ResolutionCommitment {
+        full_id: arkret_identifiers::DidFullId::new(
+            "did:webvh:z6mkreducertest:reducer-test.example",
+        )
+        .unwrap(),
+        method_history_head: format!("sha256:{}", "8".repeat(64)),
+        version_id: "1-Qmreducertest".to_owned(),
+    }
+}
+
 #[test]
 fn managed_agent_genesis_activates_agent_status_cell_once() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
     let agent_id = arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkreducertest").unwrap();
-    let agent_full_id = "did:webvh:z6mkreducertest:reducer-test.example";
     let genesis =
         arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
+            managed_agent_initial_resolution(),
             arkret_identifiers::TypedTrustDomainId::new(
                 "ak:trust_domain:managed-agent-pcr".to_owned(),
             )
@@ -1383,15 +1397,9 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
-    let mut payload =
-        arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
-            .to_value()
-            .unwrap();
-    payload["object"]["initial_resolution"] = serde_json::json!({
-        "full_id": agent_full_id,
-        "method_history_head": "fixture-managed-agent-head",
-        "version_id": "1"
-    });
+    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+        .to_value()
+        .unwrap();
     let mut state = ProjectionState::new();
 
     let (event_id, writes) = projected_cell_writes_for_actor(
@@ -1454,6 +1462,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
         arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
             arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
+            managed_agent_initial_resolution(),
             arkret_identifiers::TypedTrustDomainId::new(
                 "ak:trust_domain:managed-agent-pcr".to_owned(),
             )
@@ -1468,15 +1477,9 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
             arkret_policy::current_capability_action_registry_digest().unwrap(),
         )
         .unwrap();
-    let mut payload =
-        arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
-            .to_value()
-            .unwrap();
-    payload["object"]["initial_resolution"] = serde_json::json!({
-        "full_id": "did:webvh:z6mkreducertest:reducer-test.example",
-        "method_history_head": "fixture-managed-agent-head",
-        "version_id": "1"
-    });
+    let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
+        .to_value()
+        .unwrap();
     let mut operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
     operation.context.sender = agent_id;
     let mut state = ProjectionState::new();

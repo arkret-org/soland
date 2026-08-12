@@ -1,9 +1,10 @@
+use arkret_event_draft::EventPayloadExt as _;
+
 use super::minimal_metadata_author::{
     minimal_metadata_author_context, validate_minimal_metadata_author_proof,
 };
 use super::*;
 use crate::routing::events::event_log::submit::InternalEventAdmission;
-use arkret_event_draft::EventPayloadExt as _;
 
 fn root_anchor_event_public_key(
     signer_controller: &str,

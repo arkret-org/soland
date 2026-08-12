@@ -27,8 +27,11 @@ claim that a third-party reviewer has completed an assessment.
 - MLS KeyPackage/Welcome/Commit stores are implemented for memory and
   PostgreSQL; commits now require governance quorum and covered-frontier
   tracking.
-- did:webvh resolution revalidates chain, SCID, witness quorum, 24h
-  degraded-no-witness window, and rotation witness fail-closed behavior.
+- did:webvh resolution revalidates chain, SCID, witness quorum, and rotation
+  witness fail-closed behavior. There is no degraded-no-witness relaxation
+  window: every `did-freshness-profile-registry.json` profile is high risk and
+  synchronous-refresh-or-fail-closed, so a declared witness policy with no
+  verified witness signatures is always a quorum failure.
 
 ## Review checklist
 

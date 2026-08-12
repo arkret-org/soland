@@ -1,4 +1,3 @@
-use arkret_identifiers::DidFullId;
 pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
 pub use arkret_models_collaboration::http_bodies::{
     ContactListRow, ContactState, DirectConversationSummary, DirectConversationSummaryState,

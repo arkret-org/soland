@@ -441,13 +441,13 @@ async fn project_accepted_operations_inner(
             // third-party mention gate.
             crate::routing::events::notify::dispatch_message_notifications(state, operation).await;
         } else if kinds::operation_is_invite_create(operation) {
-            project_invite_create_operation(state, origin, operation).await;
+            project_invite_create_operation(state, operation).await;
         } else if kinds::operation_is_invite_third_party(operation) {
             project_invite_third_party_operation(state, operation).await;
         } else if kinds::operation_is_invite_claim(operation) {
             project_invite_claim_operation(state, operation).await;
         } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteAccept {
-            project_invite_accept_operation(state, origin, operation).await;
+            project_invite_accept_operation(state, operation).await;
         } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteCancel {
             project_invite_cancel_operation(state, origin, operation).await;
         } else if kinds::canonical_kind(operation) == arkret_wire::EventKind::InviteRevoke {

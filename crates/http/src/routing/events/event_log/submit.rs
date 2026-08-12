@@ -166,10 +166,8 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) kind: String,
     pub(in crate::routing) schema_id: String,
     pub(in crate::routing) prev_refs: Vec<String>,
-    pub(in crate::routing) authorized_refs: Vec<String>,
     pub(in crate::routing) canonical_digest: String,
     pub(in crate::routing) canonical_bytes: Vec<u8>,
-    pub(in crate::routing) data_event_query_grade: DataEventQueryGrade,
 }
 
 #[derive(Debug)]

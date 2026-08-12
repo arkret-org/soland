@@ -1,6 +1,6 @@
 //! Encrypted key-backup CRUD.
 
-use arkret_identifiers::{BackupId, DidCoreId, DidFullId, EventId};
+use arkret_identifiers::{BackupId, EventId};
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod, KeyBackupUnlockProof,
     KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
@@ -84,6 +84,7 @@ const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
 ];
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
     use serde_json::json;
 
     use super::*;

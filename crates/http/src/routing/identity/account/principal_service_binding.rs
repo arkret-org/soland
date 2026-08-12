@@ -165,6 +165,18 @@ pub(super) async fn commit(
     .with_status(StatusCode::PRECONDITION_FAILED))
 }
 
+/// The stored accepted-at binding for exactly this authority instance.
+///
+/// Deliberately unused today, and deliberately not deleted: it is the only
+/// selector shape `contact-and-direct-conversation.md` §9.1.2 permits, and the
+/// alternative — selecting a binding by principal core — is the same-core PCR
+/// substitution AUTH-RELAY-003 forbids. The resolver cannot call it until the
+/// `creation_required` branch carries the founder's exact authority instance,
+/// and `prepare`/`commit` above cannot produce a binding until the same carrier
+/// lands, so the only writer today is the conformance fixture. Tracked in
+/// `arkret-work/work/active/2026-08-08-1108-soland-unwired-spec-capabilities.md`:
+/// wire it or delete it together with the fixture field, never widen it.
+#[allow(dead_code)]
 pub(crate) async fn binding_for_authority(
     state: &AppState,
     authority: &PrincipalAuthorityInstance,

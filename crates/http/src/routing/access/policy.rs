@@ -22,7 +22,7 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_identifiers::{DidCoreId, Hash, RealmId};
+use arkret_identifiers::{Hash, RealmId};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
 };
@@ -781,6 +781,8 @@ pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
+
     use super::*;
 
     fn test_hash() -> Hash {

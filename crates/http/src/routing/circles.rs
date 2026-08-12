@@ -56,7 +56,6 @@ use soland_services::projection::{
 };
 
 use super::AuthArgs;
-use crate::ids;
 use crate::routing::events::event_log::{
     submit_event_value, submit_initial_event_submission, submit_one_error_to_app_error,
 };
@@ -872,19 +871,6 @@ fn caller_signed_circle_lifecycle_target(
         ));
     }
     Ok(())
-}
-
-/// Map a reducer rejection reason string to an `AppError` whose wire
-/// `code` is the canonical AKP-0007 reason (e.g. `circle_realm_mismatch`,
-/// `circle_member_must_be_realm_member`). Returned as 422
-/// `failed_precondition` so clients can branch on the reason directly.
-fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    AppError::new(
-        ErrorCode::FailedPrecondition,
-        format!("circle reducer rejected: {reason}"),
-    )
-    .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-    .with_wire_code(reason)
 }
 
 #[cfg(test)]

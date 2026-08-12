@@ -28,8 +28,7 @@ use arkret_models_collaboration::contact_operations::{
     ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
 use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationCoordinates, DirectConversationFounderBasisEvidence,
-    DirectConversationFoundingInput, DirectConversationResolveOutcome,
+    DirectConversationCoordinates, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
 use arkret_models_collaboration::direct_conversation_repair::{
@@ -207,6 +206,9 @@ mod lifecycle;
 mod principal_service_binding;
 pub(in crate::routing) mod repair;
 
+/// See [`principal_service_binding::binding_for_authority`] for why this
+/// exact-authority read path exists without a caller yet.
+#[allow(dead_code)]
 pub(crate) async fn principal_service_binding_for_authority(
     state: &AppState,
     authority: &arkret_wire::PrincipalAuthorityInstance,

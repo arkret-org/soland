@@ -57,7 +57,6 @@ DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
 DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
 DROP TABLE IF EXISTS mls_welcomes CASCADE;
-DROP TABLE IF EXISTS moderation_actions CASCADE;
 DROP TABLE IF EXISTS moderation_reports CASCADE;
 DROP TABLE IF EXISTS moderation_queue_items CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;

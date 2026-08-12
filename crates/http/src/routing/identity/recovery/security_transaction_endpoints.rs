@@ -1,9 +1,7 @@
 use arkret_event_draft::EventPayloadExt as _;
-use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_wire::{
     AcceptedStep, RecoveryBinding, RecoveryPreparedPlan, SchemaId, SecurityTransactionBinding,
     SecurityTransactionPreparedPlan, SecurityTransactionState, SecurityTransactionStep,
-    ServiceKind,
 };
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
@@ -208,10 +206,6 @@ pub(super) async fn security_transaction_continue(
             )
             .await
         }
-        _ => Err(
-            AppError::conflict("security transaction step executor is not available")
-                .with_wire_code("security_transaction_failed_precondition"),
-        ),
     }
 }
 

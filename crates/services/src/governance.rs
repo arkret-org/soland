@@ -103,7 +103,6 @@ pub trait AuditLogPort: Send + Sync {
 #[async_trait]
 pub trait ModerationPort: Send + Sync {
     async fn append_report(&self, report: Value) -> ServiceResult<()>;
-    async fn append_action(&self, action: Value) -> ServiceResult<()>;
     async fn reports(&self) -> ServiceResult<Vec<Value>>;
     async fn upsert_queue_item(&self, item: Value) -> ServiceResult<()>;
     async fn queue_items(&self) -> ServiceResult<Vec<Value>>;
@@ -421,9 +420,6 @@ impl GovernanceService {
 
     pub async fn append_moderation_report(&self, report: Value) -> ServiceResult<()> {
         self.moderation.append_report(report).await
-    }
-    pub async fn append_moderation_action(&self, action: Value) -> ServiceResult<()> {
-        self.moderation.append_action(action).await
     }
     pub async fn moderation_reports(&self) -> ServiceResult<Vec<Value>> {
         self.moderation.reports().await
@@ -749,9 +745,6 @@ mod tests {
     #[async_trait]
     impl ModerationPort for NoModeration {
         async fn append_report(&self, _report: Value) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn append_action(&self, _action: Value) -> ServiceResult<()> {
             Ok(())
         }
         async fn reports(&self) -> ServiceResult<Vec<Value>> {

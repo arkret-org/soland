@@ -1,4 +1,3 @@
-use arkret_wire::SchemaId;
 use sha2::{Digest as _, Sha256};
 use soland_services::identity::RecoverySessionState as RecoverySessionServiceState;
 
@@ -166,173 +165,6 @@ fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value 
     }
 }
 
-fn recovery_policy_basis_leaves(
-    basis: &LeaseBasisRef,
-) -> Result<Vec<arkret_identifiers::SealId>, AppError> {
-    match basis {
-        LeaseBasisRef::Seal(seal_id) => Ok(vec![seal_id.clone()]),
-        LeaseBasisRef::Joined(basis) => Ok(basis.leaves.clone()),
-        LeaseBasisRef::AnchorUnit(_) => Err(AppError::conflict(
-            "recovery policy authority cannot use a bootstrap anchor-unit basis",
-        )
-        .with_wire_code("recovery_publication_authority_invalid")),
-    }
-}
-
-async fn verify_device_quorum_rule_at_policy_basis(
-    state: &AppState,
-    active: &RecoveryPolicyState,
-    policy: &RecoveryPolicy,
-) -> Result<(), AppError> {
-    let Some(quorum) = policy.device_quorum.as_ref() else {
-        return Ok(());
-    };
-    let rule = policy
-        .publication_authorization_rules
-        .iter()
-        .find(|rule| rule.proof_kind == RecoveryProofKind::DeviceQuorum)
-        .ok_or_else(|| {
-            AppError::conflict("device quorum policy has no publication authorization rule")
-                .with_wire_code("recovery_publication_authority_invalid")
-        })?;
-    let expected_methods = quorum
-        .members
-        .iter()
-        .map(|device_id| format!("{}#{}", active.principal_id, device_id))
-        .collect::<BTreeSet<_>>();
-    let declared_methods = rule
-        .issuers
-        .iter()
-        .map(|issuer| issuer.verification_method.to_string())
-        .collect::<BTreeSet<_>>();
-    if expected_methods != declared_methods {
-        return Err(AppError::conflict(
-            "device quorum publication issuers do not match the policy member devices",
-        )
-        .with_wire_code("recovery_publication_authority_invalid"));
-    }
-
-    let leaves = recovery_policy_basis_leaves(&active.acceptance_basis)?;
-    let covered = state
-        .projections()
-        .seal_leaf_union_proof(&leaves)
-        .map_err(|error| {
-            AppError::conflict(format!(
-                "recovery policy acceptance basis cannot be resolved: {error}"
-            ))
-            .with_wire_code("recovery_publication_authority_invalid")
-        })?
-        .into_iter()
-        .flat_map(|proof| proof.covered_event_digests)
-        .map(|digest| digest.to_string())
-        .collect::<BTreeSet<_>>();
-    let events = state
-        .event_queries()
-        .accepted_events_for_actor(&active.principal_id)
-        .await
-        .map_err(recovery_service_error)?;
-    for member in &quorum.members {
-        let member = member.as_str();
-        let latest_authorize = events
-            .iter()
-            .filter(|event| {
-                covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
-            })
-            .map(|event| event.actor_seq)
-            .max();
-        let latest_revoke = events
-            .iter()
-            .filter(|event| {
-                covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::EventKind::DeviceRevoke.as_str()
-                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
-            })
-            .map(|event| event.actor_seq)
-            .max();
-        if latest_authorize.is_none()
-            || latest_revoke.is_some_and(|revoke| Some(revoke) >= latest_authorize)
-        {
-            return Err(AppError::conflict(format!(
-                "device quorum member `{member}` was not active at policy acceptance basis"
-            ))
-            .with_wire_code("recovery_publication_authority_invalid"));
-        }
-    }
-    Ok(())
-}
-
-async fn root_anchored_recovery_publication_authority_context(
-    state: &AppState,
-    active: &RecoveryPolicyState,
-    realm_id: &RealmId,
-) -> Result<RecoveryPublicationAuthorityContext, AppError> {
-    let policy: RecoveryPolicy =
-        serde_json::from_value(active.raw_payload.clone()).map_err(|error| {
-            AppError::internal(format!("stored recovery policy is invalid: {error}"))
-        })?;
-    policy.validate().map_err(|error| {
-        AppError::conflict(format!(
-            "stored recovery policy cannot define publication authority: {error}"
-        ))
-        .with_wire_code("recovery_publication_authority_invalid")
-    })?;
-    verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
-
-    let authority_set_policy = AuthoritySetPolicy {
-        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
-        policy_kind: AuthoritySetPolicyKind::PrincipalControl,
-        scope_ref: arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        source: AuthoritySetPolicySource {
-            source_kind: AuthoritySetSourceKind::RecoveryPolicy,
-            source_ref: active.policy_id.clone(),
-            source_digest: Hash::new(arkret_canonical::canonical_sha256(&policy).map_err(
-                |error| AppError::internal(format!("recovery policy digest failed: {error}")),
-            )?)
-            .map_err(|error| AppError::internal(format!("recovery policy digest: {error}")))?,
-            generation_ref: active.version.to_string(),
-        },
-        authorization_rules: policy
-            .publication_authorization_rules
-            .iter()
-            .map(|rule| AuthoritySetAuthorizationRule {
-                rule_id: rule.rule_id.clone(),
-                issuer_role: rule.issuer_role,
-                allowed_actions: rule.allowed_actions.clone(),
-                issuers: rule.issuers.clone(),
-                threshold: rule.threshold,
-            })
-            .collect(),
-    };
-    let authority_set_ref = AuthoritySetRef {
-        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
-        authority_set_digest: authority_set_policy.digest().map_err(|error| {
-            AppError::internal(format!("recovery authority policy digest failed: {error}"))
-        })?,
-    };
-    let context = RecoveryPublicationAuthorityContext {
-        identity_model: RecoveryIdentityModel::RootAnchored,
-        basis_ref: active.acceptance_basis.clone(),
-        scope_ref: authority_set_policy.scope_ref.clone(),
-        authority_set_ref,
-        authority_set_policy,
-        allowed_actions: vec![RecoveryPublicationAction::DeviceReanchor],
-    };
-    context
-        .validate_for(RecoveryIdentityModel::RootAnchored)
-        .map_err(|error| {
-            AppError::conflict(format!(
-                "recovery publication authority context is invalid: {error}"
-            ))
-            .with_wire_code("recovery_publication_authority_invalid")
-        })?;
-    Ok(context)
-}
-
 /// Load a session and enforce principal isolation: only the authenticated
 /// principal (== `session.actor`) may read or act on its own recovery sessions.
 pub(super) async fn load_owned_recovery_session(
@@ -376,7 +208,6 @@ pub(super) async fn recovery_session_create(
     aa: AuthArgs,
     body: JsonBody<RecoverySessionCreateRequestBody>,
     depot: &mut Depot,
-    res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -451,146 +282,18 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("recovery_policy_mismatch"));
     }
 
-    let device_generation =
-        crate::routing::identity::device_generation::current_device_generation(state, &principal)
-            .await
-            .map_err(recovery_store_error)?;
-    return Err(AppError::new(
+    // AUTH-RELAY-004: a recovery session MUST freeze the exact five-field
+    // `PrincipalAuthorityInstance` it was created under, and that instance must
+    // then flow into the challenge, the recovery proof and the transaction
+    // snapshot commitment. `RecoverySessionCreateRequestBody` does not carry it
+    // yet, and deriving it from the principal core or the current DID would let
+    // another PCR of the same core drive this principal's recovery, so creation
+    // fails closed.
+    Err(AppError::new(
         ErrorCode::FailedPrecondition,
         "recovery session creation requires an exact authority_instance selector",
     )
-    .with_status(StatusCode::PRECONDITION_FAILED));
-    #[allow(unreachable_code)]
-    let realm_id = unreachable!("authority-instance selector required");
-    let (
-        identity_model,
-        current_device_generation_ref,
-        device_generation_status,
-        registry_head,
-        accepted_seal_frontier,
-    ) = if let Some(generation) = device_generation {
-        let mut entries = state
-            .dids()
-            .log_events(&principal)
-            .await
-            .map_err(recovery_service_error)?;
-        entries.sort_by_key(|entry| entry.seq);
-        let registry_head = entries
-            .last()
-            .map(|entry| entry.event_digest.clone())
-            .ok_or_else(|| {
-                AppError::conflict("B-model recovery requires an accepted DID registry head")
-                    .with_wire_code("device_reanchor_entry_not_head")
-            })?;
-        let leaves =
-            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
-                state, &principal, &realm_id,
-            )
-            .await
-            .map_err(recovery_store_error)?;
-        let accepted_seal_frontier = if leaves.is_empty() {
-            None
-        } else {
-            // Both roots ship with the frontier. Unlike a Control Move's
-            // seal_basis they are not a redundant copy the receiver could
-            // recompute: they are the compare-and-swap operands the re-anchor
-            // is admitted against (event-auth-state-resolution.md 5.1).
-            let view = state
-                .projections()
-                .effective_seal_view(&leaves, &realm_id)
-                .map_err(|error| {
-                    AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
-                        .with_wire_code("device_reanchor_frontier_mismatch")
-                })?;
-            Some(arkret_wire::DeviceReanchorPreFenceBasis {
-                leaves,
-                control_event_set_root: view.control_event_set_root,
-                state_root: view.state_root,
-            })
-        };
-        (
-            RecoveryIdentityModel::RootAnchored,
-            Some(
-                NonEmptyString::new(generation.current_ref).map_err(|error| {
-                    AppError::internal(format!("invalid accepted device generation ref: {error}"))
-                })?,
-            ),
-            Some(match generation.status {
-                crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
-                    DeviceGenerationStatus::Active
-                }
-                crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
-                    DeviceGenerationStatus::Conflicted
-                }
-            }),
-            Some(Hash::new(registry_head).map_err(|error| {
-                AppError::internal(format!("invalid accepted DID registry head: {error}"))
-            })?),
-            accepted_seal_frontier,
-        )
-    } else {
-        return Err(
-            AppError::conflict("recovery requires an accepted device generation")
-                .with_wire_code("device_generation_missing"),
-        );
-    };
-
-    let publication_authority_context =
-        root_anchored_recovery_publication_authority_context(state, &active, &realm_id).await?;
-    let publication_authority_context_digest =
-        publication_authority_context.digest().map_err(|error| {
-            AppError::internal(format!(
-                "recovery publication authority context digest failed: {error}"
-            ))
-        })?;
-
-    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let record = RecoverySessionServiceState {
-        recovery_session_id: crate::ids::generate("recovery_session"),
-        principal_id: principal.clone(),
-        requesting_device_id,
-        trust_domain,
-        policy_id: active.policy_id.clone(),
-        policy_version: active.version,
-        identity_model,
-        current_device_generation_ref,
-        device_generation_status,
-        registry_head,
-        accepted_seal_frontier,
-        policy_payload: active.raw_payload.clone(),
-        publication_authority_context,
-        publication_authority_context_digest,
-        challenge: generate_recovery_challenge(),
-        state: "pending".to_owned(),
-        proof_payload: None,
-        transaction_id: None,
-        created_at: now,
-        updated_at: now,
-
-        expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
-    };
-    state
-        .recovery_sessions()
-        .create_session(record.clone())
-        .await
-        .map_err(recovery_session_store_error)?;
-
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        "ak.root.identity.recovery_session.command.create",
-        json!({
-            "recovery_session_id": record.recovery_session_id.clone(),
-            "principal_id": record.principal_id.clone(),
-            "policy_id": record.policy_id.clone(),
-            "trust_domain": record.trust_domain.clone(),
-        }),
-        "created",
-    )
-    .await;
-
-    res.status_code(StatusCode::CREATED);
-    json_ok(typed_recovery_session_state(&record)?)
+    .with_status(StatusCode::PRECONDITION_FAILED))
 }
 
 #[salvo::oapi::endpoint(
@@ -1221,13 +924,4 @@ pub(super) async fn expire_if_elapsed(
         return Ok(expired);
     }
     Ok(record)
-}
-
-/// Generate a 256-bit anti-replay challenge (base64url, no padding). Pulled
-/// from the OS CSPRNG.
-pub(super) fn generate_recovery_challenge() -> String {
-    use rand::RngExt;
-    let mut buf = [0u8; 32];
-    rand::rng().fill(&mut buf);
-    URL_SAFE_NO_PAD.encode(buf)
 }

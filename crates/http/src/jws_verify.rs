@@ -1759,8 +1759,7 @@ async fn refresh_embedded_webvh_document_for_high_risk(
         .collect();
     validate_log_chain(&log).map_err(|error| error.to_string())?;
     verify_scid_against_did(did.as_str(), &log[0]).map_err(|error| error.to_string())?;
-    validate_witness_policy_for_log(&log, chrono::Utc::now().timestamp())
-        .map_err(|error| error.to_string())?;
+    validate_witness_policy_for_log(&log).map_err(|error| error.to_string())?;
 
     state
         .dids()

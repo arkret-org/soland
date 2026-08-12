@@ -5235,6 +5235,7 @@ dependencies = [
  "arkret-lattice-registry",
  "arkret-models-collaboration",
  "arkret-models-crypto",
+ "arkret-models-identity",
  "arkret-policy",
  "arkret-schema",
  "arkret-state",

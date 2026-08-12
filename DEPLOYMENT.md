@@ -192,7 +192,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_SOVEREIGN_ENCLAVE` | `false` | Enables the sovereign-enclave profile and startup invariant checks. |
 | `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS` | empty | Comma-separated outbound host allow-list for sovereign-enclave deployments. |
 | `SOLAND_VERIFIED_PROFILES_ARTIFACT` | unset | Path to a cotest `verified-profiles.json` artifact to advertise verified profiles. |
-| `SOLAND_WEBVH_DEGRADED_NO_WITNESS_MAX_SECS` | `86400` | Tightens the degraded-no-witness WebVH window; values cannot exceed the protocol ceiling. |
 
 Validate the env block on the target host once:
 

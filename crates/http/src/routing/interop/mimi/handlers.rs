@@ -1088,7 +1088,7 @@ mod consent_proof_tests {
     use arkret_identifiers::{ConsentId, DidFullId, Hash, Hlc, RealmId};
     use arkret_models_collaboration::http_bodies::MimiConsentDecision;
     use arkret_wire::{
-        Audience, Event, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
+        Audience, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
     };
     use soland_http::error::ErrorCode;
     use soland_storage_postgres::Db;

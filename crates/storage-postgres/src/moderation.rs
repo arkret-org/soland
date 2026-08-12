@@ -1,7 +1,6 @@
 use super::{
     Binary, JsonPayloadRow, Jsonb, ModerationStore, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, RunQueryDsl, SqlUuid, Text, Value, async_trait, ids, pg_conn,
-    sql_query,
+    PersistenceResult, PgPool, RunQueryDsl, Text, Value, async_trait, ids, pg_conn, sql_query,
 };
 pub struct PgModerationStore {
     pub pool: PgPool,
@@ -57,59 +56,11 @@ impl ModerationStore for PgModerationStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn append_action(&self, action: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let extract = |key: &str| -> Option<String> {
-            action
-                .get(key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        };
-        let action_id = extract("action_id").ok_or_else(|| {
-            PersistenceError::Internal("moderation action missing action_id".to_owned())
-        })?;
-        let moderator = extract("moderator");
-        let target_actor = extract("target_actor");
-        let action_kind = extract("action_kind");
-        let realm_id = extract("realm_id");
-        let action_id_uuid = ids::typed_uuid_part_expect_internal(&action_id);
-        crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
-        sql_query(
-            "INSERT INTO moderation_actions \
-             (id, moderator_id, target_actor_id, action_kind, realm_id, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind::<SqlUuid, _>(action_id_uuid)
-        .bind::<Nullable<Text>, _>(&moderator)
-        .bind::<Nullable<Text>, _>(&target_actor)
-        .bind::<Nullable<Text>, _>(&action_kind)
-        .bind::<Nullable<Text>, _>(realm_id.as_deref())
-        .bind::<Jsonb, _>(&action)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query("SELECT payload FROM moderation_reports ORDER BY created_at ASC, pk ASC")
-            .load::<JsonPayloadRow>(&mut *conn)
-            .await
-            .map(|rows| rows.into_iter().map(|row| row.payload).collect())
-            .map_err(PersistenceError::database)
-    }
-
-    async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("SELECT payload FROM moderation_actions ORDER BY created_at ASC, id ASC")
             .load::<JsonPayloadRow>(&mut *conn)
             .await
             .map(|rows| rows.into_iter().map(|row| row.payload).collect())

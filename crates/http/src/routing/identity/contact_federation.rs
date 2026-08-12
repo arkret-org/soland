@@ -16,7 +16,7 @@
 //!   target holder's contact projection.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidCoreId, DidFullId, Hash};
+use arkret_identifiers::Hash;
 use arkret_models_collaboration::contact_operations::{
     ContactBasis, ContactBasisEvidenceBundle, ContactCurrentProof, ContactScope,
     ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
@@ -40,14 +40,8 @@ use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::ContactRecord;
 use uuid::Uuid;
-
-fn full_id_projects_to_actor(full_id: &DidFullId, actor_id: &arkret_wire::DidCoreId) -> bool {
-    arkret_wire::project_full_id_to_core_id(full_id)
-        .is_ok_and(|core| arkret_wire::DidCoreId::from(core) == *actor_id)
-}
 
 fn core_id_matches_actor(
     core_id: &arkret_wire::DidCoreId,
@@ -1765,7 +1759,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         "glare_remote_mirror_receipt",
     )?;
 
-    let (basis_id, basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
+    let (basis_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
     let observed_frontier = request_receipts
         .iter()
         .map(|receipt| receipt.core.request_event_ref.clone())

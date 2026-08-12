@@ -23,8 +23,6 @@ fn sign_contact_draft(
     device_id: &str,
     signing_key: SigningKey,
 ) -> arkret_wire::Event {
-    use arkret_wire::PayloadSigner as _;
-
     let actor = DidFullId::new(actor).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}")).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(

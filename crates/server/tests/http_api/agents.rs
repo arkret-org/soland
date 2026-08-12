@@ -1,7 +1,6 @@
 //! Integration tests - personal-agent HTTP surfaces.
 
 use arkret_state::lattice::CellState;
-use arkret_wire::PayloadSigner as _;
 
 use super::common::*;
 

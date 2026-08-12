@@ -4,7 +4,7 @@
 //! online locator resolver from `sync/invite-addressing.md`.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidCoreId, DidFullId, Hash, InviteLocatorId};
+use arkret_identifiers::{DidCoreId, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
     InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody, InviteLocatorIssueOutcome,
@@ -831,20 +831,9 @@ pub(crate) struct ReceiveDecision {
     pub(crate) disclosed_outcome: Option<DisclosedOutcome>,
 }
 
-/// Read the subject's private `invite_receive_policy`, falling back to the
-/// recommended default. `denied_subjects` written by
-/// `ak.self.contact.command.tombstone(block_peer)` are merged from the in-memory
-/// override store.
-pub(crate) fn resolve_invite_receive_policy(
-    state: &AppState,
-    subject: &DidCoreId,
-) -> InviteReceivePolicy {
-    state
-        .contacts()
-        .invite_policy(subject.as_str())
-        .unwrap_or_else(|| InviteReceivePolicy::spec_default(subject.clone()))
-}
-
+/// Read the subject's private `invite_receive_policy`. There is no default
+/// fallback here: a policy that is not bound to an exact principal authority
+/// instance cannot gate an inbound invite, so the caller fails closed.
 fn resolve_core_invite_receive_policy(
     state: &AppState,
     subject: &DidCoreId,
@@ -1742,11 +1731,8 @@ mod invite_locator_security_tests {
             kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             prev_refs: Vec::new(),
-            authorized_refs: Vec::new(),
             canonical_digest: format!("sha256:{}", "b".repeat(64)),
             canonical_bytes: Vec::new(),
-            data_event_query_grade:
-                crate::routing::events::event_log::DataEventQueryGrade::Observed,
         };
 
         assert!(

@@ -36,7 +36,7 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::{
     append_audit_log, bearer_token, handle_for_did, normalize_localpart, now, render_error,
-    validate_device_id, validate_did,
+    validate_device_id,
 };
 use crate::state::AppState;
 use crate::wire::{

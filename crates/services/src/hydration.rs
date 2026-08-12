@@ -7,7 +7,7 @@ use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_wire::{Event, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
-use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
+use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
 
 use crate::events::{DirectoryProvenance, RealmDirectoryEntry, RealmDirectoryIndex};
 

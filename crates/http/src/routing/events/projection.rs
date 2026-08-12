@@ -21,8 +21,7 @@
 
 pub(super) use super::{
     discussion_track_for_projection_event, is_valid_discoverability, message_id_from_event_id, now,
-    strand_id_for_projection_event, touch_realm, validate_content_encryption_floor,
-    validate_operation_policy, validate_operation_semantics,
+    strand_id_for_projection_event, touch_realm,
 };
 
 mod account_data;

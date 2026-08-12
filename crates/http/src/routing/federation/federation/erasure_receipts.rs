@@ -2,7 +2,7 @@ use arkret_models_collaboration::governance::erasure::{
     ErasureReceiptAcceptance, ErasureReceiptAcceptanceStatus, ErasureReceiptPackage,
     ErasureReceiptResource, ErasureReceiptSubmitOutcome, ErasureReceiptSubmitRequestBody,
 };
-use arkret_wire::{Base64UrlString, DidFullId, ProtocolSignature};
+use arkret_wire::{Base64UrlString, ProtocolSignature};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;

@@ -11,7 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_identifiers::{DidCoreId, DidFullId, RealmId, SpaceId};
+use arkret_identifiers::{DidCoreId, RealmId, SpaceId};
 use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,

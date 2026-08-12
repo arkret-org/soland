@@ -436,10 +436,6 @@ impl crate::governance::ModerationPort for PersistenceModeration {
         self.0.moderation().append_report(report).await?;
         Ok(())
     }
-    async fn append_action(&self, action: Value) -> crate::ServiceResult<()> {
-        self.0.moderation().append_action(action).await?;
-        Ok(())
-    }
     async fn reports(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.moderation().list_reports().await?)
     }

@@ -15,9 +15,7 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{
-    CallId, CellRef, DeviceId, DidCoreId, DidFullId, Hash, OperationId, RealmId,
-};
+use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
@@ -39,7 +37,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::CanonicalEventRecord;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
-use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
+use super::{now, realm_has_member, sha256_hex, validate_device_id};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

@@ -363,16 +363,16 @@ fn check_proof_envelope(
     Ok(())
 }
 
-/// `principal_signing`: the proof MUST be made by one of the update keys in the
-/// verified **current** did:webvh history head.
+/// `principal_signing`: the proof MUST be made by a principal control key that
+/// was accepted in the caller's exact PCR authority instance at
+/// `proof.created_at`.
 ///
-/// The principal DID document is deliberately not consulted for key membership:
-/// it is an identity anchor and does not carry authentication, assertion or
-/// verification-method business state. WebVH `parameters.updateKeys` is the
-/// method-native root authority. Resolving the complete history at verification
-/// time makes a rotated-out root fail closed, while requiring the canonical
-/// `did:key:<multikey>#<multikey>` method excludes unrelated device/service
-/// keys without copying them into the DID document.
+/// The request does not carry that authority instance today, and selecting a
+/// key by principal core alone would let another PCR of the same core delete
+/// this principal's backups, so the branch fails closed. Re-resolving the
+/// current did:webvh history head is not an alternative: key-backup deletion is
+/// not a registered `did-freshness-profile-registry.json` call site, so a DID
+/// host outage MUST NOT decide this authorization.
 async fn verify_principal_signing_delete(
     _state: &AppState,
     _challenge: &KeysBackupsDeleteChallenge,
@@ -383,35 +383,6 @@ async fn verify_principal_signing_delete(
     Err(AppError::capability_denied(
         "principal-signing key-backup deletion requires an exact principal authority instance",
     ))
-}
-
-/// Resolve a proof key solely from the already-verified current WebVH head and
-/// verify the canonical delete challenge. Keeping selection and signature
-/// verification in one helper prevents a caller from resolving a valid
-/// `did:key` that is not actually present in `parameters.updateKeys`.
-fn verify_current_webvh_update_key_proof(
-    current_update_keys: &[String],
-    verification_method: &str,
-    canonical: &[u8],
-    jws: &str,
-) -> Result<(), String> {
-    let matched = current_update_keys.iter().find_map(|update_key| {
-        let multikey = update_key.strip_prefix("did:key:").unwrap_or(update_key);
-        if multikey.is_empty() || multikey.contains('#') {
-            return None;
-        }
-        let expected_method = format!("did:key:{multikey}#{multikey}");
-        (verification_method == expected_method).then_some(multikey)
-    });
-    let multikey = matched.ok_or_else(|| {
-        "verification method is not an update key in the verified current history head".to_owned()
-    })?;
-    let key = decode_ed25519_key(multikey, "multibase")
-        .map_err(|error| format!("current WebVH update key is invalid: {error}"))?;
-    if !verify_detached_jws(&key, canonical, jws) {
-        return Err("signature over the canonical delete challenge is invalid".to_owned());
-    }
-    Ok(())
 }
 
 /// `device_quorum`: deduplicate by `device_id`, verify every signature over the
@@ -732,73 +703,4 @@ pub(super) async fn ensure_key_backup_delete_allowed(
 ) -> Result<(), AppError> {
     let owned_backups = owned_key_backup_snapshot(state, actor_id).await?;
     ensure_key_backup_delete_is_series_tail(actor_id, backup, &owned_backups)
-}
-
-#[cfg(test)]
-mod tests {
-    use arkret_signatures::Ed25519DetachedJwsSigner;
-
-    use super::verify_current_webvh_update_key_proof;
-
-    fn root_fixture(seed: [u8; 32]) -> (String, String, Ed25519DetachedJwsSigner) {
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let multikey = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            signing_key.verifying_key().as_bytes(),
-        );
-        let verification_method = format!("did:key:{multikey}#{multikey}");
-        let signer = Ed25519DetachedJwsSigner::from_seed(seed, &verification_method);
-        (multikey, verification_method, signer)
-    }
-
-    #[test]
-    fn current_webvh_root_authorizes_canonical_delete_challenge() {
-        let canonical = br#"{"context":"ak.keys.backup_delete.v1","nonce":"fresh"}"#;
-        let (current_root, verification_method, signer) = root_fixture([41; 32]);
-        let jws = signer.sign_detached_jws(canonical);
-
-        verify_current_webvh_update_key_proof(
-            &[current_root],
-            &verification_method,
-            canonical,
-            &jws,
-        )
-        .expect("the current verified WebVH update key must authorize the challenge");
-    }
-
-    #[test]
-    fn rotated_out_webvh_root_cannot_delete_backup() {
-        let canonical = br#"{"context":"ak.keys.backup_delete.v1","nonce":"fresh"}"#;
-        let (old_root, old_method, old_signer) = root_fixture([42; 32]);
-        let (current_root, ..) = root_fixture([43; 32]);
-        let old_jws = old_signer.sign_detached_jws(canonical);
-
-        let error = verify_current_webvh_update_key_proof(
-            &[current_root],
-            &old_method,
-            canonical,
-            &old_jws,
-        )
-        .expect_err("a valid signature by a rotated-out root must fail closed");
-
-        assert!(error.contains("not an update key"));
-        assert_ne!(old_root, "", "fixture must contain a real retired root");
-    }
-
-    #[test]
-    fn unrelated_did_key_cannot_replace_webvh_history_authority() {
-        let canonical = br#"{"context":"ak.keys.backup_delete.v1","nonce":"fresh"}"#;
-        let (current_root, ..) = root_fixture([44; 32]);
-        let (_, unrelated_method, unrelated_signer) = root_fixture([45; 32]);
-        let unrelated_jws = unrelated_signer.sign_detached_jws(canonical);
-
-        let error = verify_current_webvh_update_key_proof(
-            &[current_root],
-            &unrelated_method,
-            canonical,
-            &unrelated_jws,
-        )
-        .expect_err("a did:key absent from verified history must not authorize deletion");
-
-        assert!(error.contains("not an update key"));
-    }
 }

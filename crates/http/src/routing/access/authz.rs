@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{DidFullId, GrantId, Hash, InviteId, RealmId};
+use arkret_identifiers::{GrantId, Hash, InviteId, RealmId};
 use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,

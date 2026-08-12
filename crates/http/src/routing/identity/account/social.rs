@@ -3,8 +3,6 @@ use salvo::oapi::endpoint;
 
 use super::*;
 
-const DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES: &[&str] = &["did:peer:", "did:key:"];
-
 pub(crate) mod direct;
 
 pub(crate) use direct::{

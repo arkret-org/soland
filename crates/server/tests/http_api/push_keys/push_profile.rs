@@ -530,17 +530,6 @@ async fn push_profile_and_moderation_contracts_work() {
                 entry["action"] == "moderation.report" && entry["outcome"] == "submitted"
             })
     );
-    assert!(
-        state
-            .test_persistence()
-            .moderation()
-            .list_actions()
-            .await
-            .unwrap()
-            .iter()
-            .any(|action| action["report_id"] == report["report_id"] && action["status"] == "open")
-    );
-
     let unauthenticated_report = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&serde_json::json!({

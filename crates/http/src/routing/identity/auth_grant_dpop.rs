@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_identifiers::{DeviceId, DidCoreId, DidFullId};
+use arkret_identifiers::{DeviceId, DidCoreId};
 use arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt;
 use arkret_models_identity::session_credential::SessionGrantHolderBinding;
 use arkret_wire::FreshnessState;

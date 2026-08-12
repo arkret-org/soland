@@ -563,23 +563,6 @@ async fn resolve_remote_webvh_document_at(
     })
 }
 
-async fn resolve_remote_webvh_generation_at(
-    state: &AppState,
-    did: &arkret_identifiers::DidFullId,
-    accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<String, String> {
-    let verified = resolve_remote_webvh_history(state, did).await?;
-    verified
-        .entries
-        .iter()
-        .rev()
-        .find(|entry| entry.version_time <= accepted_at)
-        .map(|entry| entry.version_id.clone())
-        .ok_or_else(|| {
-            "DID generation history is unavailable at authorization accepted_at".to_owned()
-        })
-}
-
 async fn resolve_remote_webvh_history(
     state: &AppState,
     did: &arkret_identifiers::DidFullId,

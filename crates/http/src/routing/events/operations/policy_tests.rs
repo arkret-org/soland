@@ -126,7 +126,6 @@ fn apply_with_registered_cell_writes(
     actor_seq: u64,
     server_hlc: &soland_domain::hlc::ServerHlc,
 ) {
-    let actor = operation.context.sender.as_str();
     let mut event = arkret_wire::test_support::raw_event_at(
         operation.event_kind.as_str(),
         arkret_wire::ScopeRef::Realm {

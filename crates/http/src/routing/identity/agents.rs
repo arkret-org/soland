@@ -66,7 +66,7 @@ use soland_services::identity::{
 };
 use subtle::ConstantTimeEq as _;
 
-use super::{AuthArgs, append_audit_log, now, validate_did};
+use super::{AuthArgs, append_audit_log, now};
 use crate::ids;
 use crate::state::AppState;
 

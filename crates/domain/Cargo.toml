@@ -33,4 +33,5 @@ url = {workspace = true}
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
+arkret-models-identity = {workspace = true}
 uuid = {workspace = true,features = ["v7"]}

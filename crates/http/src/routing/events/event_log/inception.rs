@@ -280,17 +280,15 @@ pub(super) async fn resolve_event_root_anchor_method(
             format!("root-anchor DID subject validation failed: {error}"),
         )
     })?;
-    crate::routing::identity::webvh_validation::validate_witness_policy_for_log(
-        &log,
-        now().timestamp(),
-    )
-    .map_err(|error| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            format!("root-anchor DID witness validation failed: {error}"),
-        )
-    })?;
+    crate::routing::identity::webvh_validation::validate_witness_policy_for_log(&log).map_err(
+        |error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                format!("root-anchor DID witness validation failed: {error}"),
+            )
+        },
+    )?;
     crate::routing::identity::webvh_validation::validate_rotation_authorization_for_log(&log)
         .map_err(|error| {
             event_validation_error(

@@ -1,6 +1,6 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use arkret_identifiers::{AppletId, DidFullId, RealmId};
+use arkret_identifiers::{AppletId, RealmId};
 use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
 use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_integration::{

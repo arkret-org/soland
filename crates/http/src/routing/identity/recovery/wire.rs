@@ -10,11 +10,6 @@ pub(super) const ALLOWED_PROOF_KINDS: &[&str] = &[
     "threshold_recovery",
 ];
 
-/// C-P2 (REC-1) — recovery session lifetime. A freshly created session must be
-/// proven + completed within this window; afterwards it is treated as
-/// `expired`. Matches the device-lifecycle interactive recovery window.
-pub(super) const RECOVERY_SESSION_TTL_SECS: i64 = 900;
-
 pub(super) const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "schema",
     "policy_id",

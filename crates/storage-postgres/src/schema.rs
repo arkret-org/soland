@@ -758,18 +758,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    moderation_actions (id) {
-        id -> Uuid,
-        moderator_id -> Nullable<Text>,
-        target_actor_id -> Nullable<Text>,
-        action_kind -> Nullable<Text>,
-        realm_id -> Nullable<Text>,
-        payload -> Jsonb,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     moderation_reports (pk) {
         pk -> Int8,
         id -> Bytea,
@@ -1589,7 +1577,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     mls_commits,
     mls_key_packages,
     mls_welcomes,
-    moderation_actions,
     moderation_queue_items,
     moderation_reports,
     multisig_pending,

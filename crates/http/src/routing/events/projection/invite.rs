@@ -21,11 +21,7 @@ use crate::state::AppState;
 ///      (in-memory member index) so the capability grants carried on the invite take effect.
 ///
 /// Replays and mismatched senders are ignored fail-closed.
-pub(super) async fn project_invite_accept_operation(
-    state: &AppState,
-    origin: &str,
-    operation: &Operation,
-) {
+pub(super) async fn project_invite_accept_operation(state: &AppState, operation: &Operation) {
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteAccept {
         return;
     }
@@ -646,11 +642,7 @@ pub(super) fn invite_acceptance_ref_for_operation(operation: &Operation) -> Opti
         .map(str::to_owned)
 }
 
-pub(super) async fn project_invite_create_operation(
-    state: &AppState,
-    origin: &str,
-    operation: &Operation,
-) {
+pub(super) async fn project_invite_create_operation(state: &AppState, operation: &Operation) {
     if !kinds::operation_is_invite_create(operation) {
         return;
     }
@@ -1407,7 +1399,7 @@ mod tests {
         )
         .unwrap();
 
-        project_invite_create_operation(&state, inviter, &operation).await;
+        project_invite_create_operation(&state, &operation).await;
 
         assert!(
             state
@@ -1471,7 +1463,7 @@ mod tests {
         operation.payload["event_id"] = json!(invite_id.replacen("ak:invite:", "ak:event:", 1));
         operation.created_at = created_at;
 
-        project_invite_create_operation(&state, "did:web:alice.example", &operation).await;
+        project_invite_create_operation(&state, &operation).await;
 
         assert!(
             !state

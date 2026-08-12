@@ -1,6 +1,5 @@
 use arkret_identifiers::{DidFullId, RealmId};
 use chrono::Duration;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};

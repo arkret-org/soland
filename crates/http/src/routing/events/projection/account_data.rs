@@ -4,7 +4,7 @@ use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
     ActorPrivateReadCursorUpdate,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
 use soland_services::operation_semantics as kinds;
 

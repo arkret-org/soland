@@ -1,11 +1,6 @@
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
-use arkret_models_identity::{
-    AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
-    ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
-    ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
-    ResolutionMethodHistoryEvidence, ServiceResolutionRecord, ServiceResolutionRecordCore,
-};
+use arkret_models_identity::{ServiceResolutionRecord, ServiceResolutionRecordCore};
 use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::PathParam;

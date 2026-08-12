@@ -14,12 +14,6 @@ use super::{Utc, WebvhDocumentRecord};
 /// gate because soland does not perform on-demand network refreshes.
 pub const WEBVH_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
 
-/// Degraded read-only relaxation window (24h). Reuses the same duration as
-/// `routing::identity::webvh_validation::WEBVH_DEGRADED_NO_WITNESS_MAX_SECS`
-/// and is only for non-high-risk read paths in degraded mode. High-risk
-/// write paths never use this window.
-pub const WEBVH_DOCUMENT_DEGRADED_READ_MAX_SECS: i64 = 24 * 60 * 60;
-
 /// Result of `verify_did_document_freshness`. Semantics match
 /// [`DriftResult`]: high-risk paths fail closed on anything other than
 /// `Fresh`.
@@ -52,9 +46,10 @@ impl WebvhFreshness {
 ///
 /// `record.expires_at` is not read directly: it is the write-time high-risk
 /// expiry hint (`fetched_at + 15min`) used for storage and cleanup indexing
-/// per §3.4. Callers choose `max_age` by path risk: high-risk callers pass
-/// 15 minutes, while degraded read-only callers may pass 24 hours and mark
-/// the result. Persisted records always have `fetched_at`; the "no ingested
+/// per §3.4. Every registered `did-freshness-profile-registry.json` profile is
+/// `risk_tier=high` / `synchronous_refresh_or_fail_closed`, so callers pass the
+/// 15-minute high-risk window; there is no registered degraded read-only
+/// relaxation. Persisted records always have `fetched_at`; the "no ingested
 /// record" fail-closed case is handled by callers when `get_document`
 /// returns `None`.
 pub fn verify_did_document_freshness(

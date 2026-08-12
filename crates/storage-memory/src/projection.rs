@@ -1,5 +1,3 @@
-use serde_json::Value;
-
 use super::{
     Arc, BTreeMap, CircleMemberProjectionRecord, CircleProjectionRecord, CircleProjectionStore,
     MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceError, PersistenceResult,

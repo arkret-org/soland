@@ -146,8 +146,7 @@ fn validate_signed_inception(
     let did = request.inception_operation.state.id.as_str();
     verify_scid_against_did(did, &log[0]).map_err(registration_rejected)?;
     verify_log_subject(did, &log).map_err(registration_rejected)?;
-    validate_witness_policy_for_log(&log, chrono::Utc::now().timestamp())
-        .map_err(registration_rejected)?;
+    validate_witness_policy_for_log(&log).map_err(registration_rejected)?;
     validate_rotation_authorization_for_log(&log).map_err(registration_rejected)
 }
 

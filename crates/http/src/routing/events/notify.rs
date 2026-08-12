@@ -16,8 +16,8 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
-    DidCoreId, DidFullId, EventId, NotificationId, NotificationKind, NotificationPriority,
-    NotificationState, RealmId, StrandId,
+    DidCoreId, EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState,
+    RealmId, StrandId,
 };
 use serde_json::Value;
 

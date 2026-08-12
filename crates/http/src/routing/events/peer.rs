@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{DidCoreId, DidFullId, EventId, RealmId};
+use arkret_identifiers::{DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueOutcome, DirectConversationRepairRelayRequest,
 };

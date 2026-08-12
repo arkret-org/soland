@@ -551,6 +551,17 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
+    // AUTH-RELAY-003: a persistent Contact MUST pin the exact human authority
+    // instance chosen when the relationship was created, and the prepare body
+    // does not carry one yet. Deriving the holder's control Realm from the
+    // principal core would let another PCR of the same core author this
+    // Contact, so prepare fails closed here.
+    //
+    // Everything below stays: it is model-correct and blocked only on the
+    // missing selector — the frontier load, Seal basis, Event draft and
+    // reservation are all independent of how `realm_id` is chosen, and they
+    // share the machinery the live commit path already uses. Do not revive it
+    // by picking a Realm by principal core.
     return Err(AppError::new(
         ErrorCode::FailedPrecondition,
         "Contact prepare requires an exact holder authority_instance selector",
@@ -967,7 +978,7 @@ async fn plan_contact_commit(
         .as_str()
         .to_owned();
     let contacts = state.contacts();
-    let mut projection = None;
+    let projection;
     let outcome = match &reservation.branch {
         ContactReservationBranch::Request {
             granted_to_peer_scopes,

@@ -1,15 +1,14 @@
 use super::{PersistenceError, PersistenceResult, Value, async_trait};
-/// Moderation reports + assigned actions + decisions + appeals + queue items.
+/// Moderation reports, appeals and queue items.
 ///
-/// Reports and actions are append-only. Appeals and queue items support the
-/// moderation workbench; canonical decisions remain durable Events projected
-/// by `soland_domain::reducer::apply_moderation`.
+/// Reports are append-only. Appeals and queue items support the moderation
+/// workbench; canonical decisions remain durable Events projected by
+/// `soland_domain::reducer::apply_moderation`, so there is no separate
+/// moderator-action record.
 #[async_trait]
 pub trait ModerationStore: Send + Sync {
     async fn append_report(&self, report: Value) -> PersistenceResult<()>;
-    async fn append_action(&self, action: Value) -> PersistenceResult<()>;
     async fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
-    async fn list_actions(&self) -> PersistenceResult<Vec<Value>>;
 
     /// Upsert a `ModerationQueueItem` record. The JSON must carry
     /// `id`, `status`, `visibility`, `created_at`.

@@ -554,7 +554,10 @@ async fn validate_event_envelope_with_ingress(
         realm_bootstrap_contexts,
     )?;
     let data_event_cells = derived_data_event_cells(envelope, object)?;
-    let data_event_query_grade = validate_data_event_capability_refs(
+    // The returned grade only distinguishes "accepted inside the revocation
+    // freshness window" from an ordinary accept; v1 registers no response field
+    // that could carry it, so admission consumes the error side only.
+    validate_data_event_capability_refs(
         state,
         &actor_id,
         &realm_id,
@@ -649,7 +652,7 @@ async fn validate_event_envelope_with_ingress(
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
-    let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
+    event_semantic_refs(object, MAX_EVENT_REFS)?;
     validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
     validate_event_proofs(
         object,
@@ -705,10 +708,8 @@ async fn validate_event_envelope_with_ingress(
         kind,
         schema_id,
         prev_refs,
-        authorized_refs,
         canonical_digest,
         canonical_bytes,
-        data_event_query_grade,
     })
 }
 

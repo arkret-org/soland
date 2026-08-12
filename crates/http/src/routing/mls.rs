@@ -32,8 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DidFullId, Hash, OperationId, RealmId};
+use arkret_identifiers::{Hash, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_crypto::{
     Failure as KeypackageFailure, KeyOperationSignature, KeyPackageClaimRecord,

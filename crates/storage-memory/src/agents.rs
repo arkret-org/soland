@@ -125,14 +125,6 @@ impl MemoryAgentStore {
     }
 
     #[cfg(feature = "fault-injection")]
-    pub(crate) fn with_fault_injector(fault_injector: Arc<crate::FaultInjector>) -> Self {
-        Self {
-            fault_injector,
-            ..Self::default()
-        }
-    }
-
-    #[cfg(feature = "fault-injection")]
     pub(crate) fn with_events_and_fault_injector(
         events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
         fault_injector: Arc<crate::FaultInjector>,

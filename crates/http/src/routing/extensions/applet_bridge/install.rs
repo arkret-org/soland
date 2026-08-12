@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{AppletId, DidCoreId, DidFullId, EventId, GrantId, RealmId};
+use arkret_identifiers::{AppletId, DidCoreId, EventId, GrantId, RealmId};
 use arkret_identity::DidDocument;
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilitySubject, GrantConstraintKind, GrantConstraintSubkind,
@@ -761,27 +761,6 @@ pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, A
         .to_value()
         .map(Some)
         .map_err(|error| AppError::internal(format!("portal message content: {error}")))
-}
-
-pub(super) fn enrich_content_with_portal_metadata(
-    mut content: Value,
-    applet: &AppletRecord,
-    ghost: &GhostActorRecord,
-) -> Value {
-    if let Some(object) = content.as_object_mut() {
-        object.insert(
-            "portal".to_owned(),
-            json!({
-                "applet_id": applet.applet_id,
-                "portal_realm_id": applet.portal_realm_id,
-                "bot_actor_id": applet.bot_actor_id,
-                "ghost_actor_id": ghost.ghost_actor_id,
-                "external_id": ghost.external_id,
-                "display_name": ghost.display_name,
-            }),
-        );
-    }
-    content
 }
 
 pub(super) fn applet_response(record: &AppletRecord) -> AppletView {

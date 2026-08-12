@@ -7,14 +7,10 @@
 use std::sync::Arc;
 
 use arkret_identifiers::Hash;
-use arkret_models_crypto::{
-    KeyBackupDeleteProof, KeysBackupsDeleteChallenge, KeysBackupsDeleteRequestBody,
-    KeysBackupsIssueDeleteChallengeRequestBody,
-};
 use serde_json::{Map, Value};
 use soland_storage::{
     DeviceInventoryRecord, PersistenceStore, RecoveryPolicyRecord, SessionRecord,
-    WebvhDocumentRecord, WebvhLogRecord,
+    WebvhDocumentRecord,
 };
 
 use crate::common::*;
@@ -33,12 +29,6 @@ pub(crate) const POLICY_FIELDS: &[&str] = &[
 ];
 
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-
-pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-
-fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
-    arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
-}
 
 fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkret_wire::Seal) {
     let move_id = seal
@@ -73,258 +63,10 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
         .unwrap();
 }
 
-/// Build the canonical recovery-proof transcript the server reconstructs, and
-/// return a base64url Ed25519 signature over it by `signing`.
-pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
-    let model_generation_ref = recovery_model_generation_ref(session);
-    let transcript = serde_json::json!({
-        "schema": "ak.identity.recovery_proof.v1",
-        "kind": "principal_signing",
-        "principal_id": session["principal_id"],
-        "requesting_device_id": session["requesting_device_id"],
-        "trust_domain": session["trust_domain"],
-        "policy_id": session["policy_id"],
-        "policy_version": session["policy_version"],
-        "recovery_session_id": session["recovery_session_id"],
-        "identity_model": session["identity_model"],
-        "model_generation_ref": model_generation_ref,
-        "publication_authority_context_digest": session["publication_authority_context_digest"],
-        "challenge": session["challenge"],
-        "created_at": session["created_at"],
-        "expires_at": session["expires_at"],
-    });
-    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
-    URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
-}
-
-pub(crate) fn sign_trusted_recovery_service_proof(
-    signing: &SigningKey,
-    session: &Value,
-    service_id: &str,
-    verification_method: &str,
-    audience: &str,
-    attestation_ref: Option<&str>,
-) -> String {
-    let model_generation_ref = recovery_model_generation_ref(session);
-    let mut proof_body = serde_json::json!({
-        "kind": "trusted_recovery_service",
-        "challenge": session["challenge"],
-        "service_id": service_id,
-        "audience": audience,
-        "verification_method": verification_method,
-        "signature_algorithm": "Ed25519",
-    });
-    if let Some(attestation_ref) = attestation_ref {
-        proof_body["attestation_ref"] = serde_json::json!(attestation_ref);
-    }
-    let transcript = serde_json::json!({
-        "schema": "ak.identity.recovery_proof.v1",
-        "kind": "trusted_recovery_service",
-        "principal_id": session["principal_id"],
-        "requesting_device_id": session["requesting_device_id"],
-        "trust_domain": session["trust_domain"],
-        "policy_id": session["policy_id"],
-        "policy_version": session["policy_version"],
-        "recovery_session_id": session["recovery_session_id"],
-        "identity_model": session["identity_model"],
-        "model_generation_ref": model_generation_ref,
-        "publication_authority_context_digest": session["publication_authority_context_digest"],
-        "challenge": session["challenge"],
-        "created_at": session["created_at"],
-        "expires_at": session["expires_at"],
-        "proof_body": proof_body,
-    });
-    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
-    URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
-}
-
-pub(crate) fn recovery_unlock_proof(
-    signing: &SigningKey,
-    session: &Value,
-    recovery_secret_ref: &str,
-) -> Value {
-    let proof_body = serde_json::json!({
-        "kind": "recovery_unlock",
-        "challenge": session["challenge"],
-        "recovery_secret_ref": recovery_secret_ref,
-        "verification_method": recovery_secret_ref,
-        "signature_algorithm": "Ed25519",
-    });
-    let transcript = serde_json::json!({
-        "schema": "ak.identity.recovery_proof.v1",
-        "kind": "recovery_unlock",
-        "principal_id": session["principal_id"],
-        "requesting_device_id": session["requesting_device_id"],
-        "trust_domain": session["trust_domain"],
-        "policy_id": session["policy_id"],
-        "policy_version": session["policy_version"],
-        "recovery_session_id": session["recovery_session_id"],
-        "identity_model": session["identity_model"],
-        "model_generation_ref": recovery_model_generation_ref(session),
-        "publication_authority_context_digest": session["publication_authority_context_digest"],
-        "challenge": session["challenge"],
-        "created_at": session["created_at"],
-        "expires_at": session["expires_at"],
-        "proof_body": proof_body,
-    });
-    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak.recovery-session-unlock-binding-v1\n");
-    hasher.update(recovery_secret_ref.as_bytes());
-    hasher.update(&bytes);
-
-    serde_json::json!({
-        "proof": {
-            "kind": "recovery_unlock",
-            "challenge": session["challenge"],
-            "recovery_secret_ref": recovery_secret_ref,
-            "verification_method": recovery_secret_ref,
-            "signature_algorithm": "Ed25519",
-            "unlock_commitment": format!("sha256:{}", hex::encode(hasher.finalize())),
-            "signature": URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes()),
-        }
-    })
-}
-
-fn recovery_model_generation_ref(session: &Value) -> Value {
-    match session["identity_model"].as_str() {
-        Some("root_anchored") => session["current_device_generation_ref"].clone(),
-        other => panic!("unexpected recovery identity model in fixture: {other:?}"),
-    }
-}
-
 pub(crate) fn fixture_recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
     arkret_wire::LeaseBasisRef::Seal(
         arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64))).unwrap(),
     )
-}
-
-pub(crate) async fn put_key_backup(
-    state: AppState,
-    token: &str,
-    backup_id: &str,
-    body: &Value,
-    expected_status: StatusCode,
-) -> Value {
-    // `key-management.md` §7 makes `Idempotency-Key` mandatory on a key-backup
-    // PUT. The key is derived from the backup id so a retry of the same
-    // fixture write replays rather than conflicting, which is what these tests
-    // exercise — they are about recovery policy, not about idempotency.
-    let mut response = TestClient::put(format!(
-        "http://server/_arkret/self/keys/backups/{backup_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("idempotency-key", format!("fixture:{backup_id}"), true)
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(body))
-    .send(&app_from_state(state))
-    .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, expected_status, "response body: {body}");
-    body
-}
-
-/// Drive the whole §7.8.1 delete protocol: ask for a challenge, sign the
-/// canonical delete-intent transcript with the principal's control key, then
-/// DELETE.
-///
-/// It has to be the whole protocol. The previous helper posted an
-/// unauthenticated actor/backup string, which `key-management.md` §7.8
-/// judged dead precisely because it carried no server-issued freshness — a
-/// helper that skipped the challenge would be testing a path the server no
-/// longer has.
-pub(crate) async fn delete_key_backup(
-    state: AppState,
-    token: &str,
-    signing: &SigningKey,
-    verification_method: &str,
-    backup_id: &str,
-    expected_status: StatusCode,
-) -> Value {
-    let request_id = arkret_wire::Base64UrlString::new("dGVzdC1yZXF1ZXN0LWlk")
-        .expect("fixture request_id is base64url");
-    let challenge =
-        issue_key_backup_delete_challenge(state.clone(), token, backup_id, request_id.clone())
-            .await;
-
-    let transcript = challenge.delete_intent_transcript(None);
-    let canonical =
-        arkret_canonical::canonical_json_bytes(&transcript).expect("canonical transcript");
-    let payload_digest = challenge
-        .delete_intent_digest(None)
-        .expect("delete-intent digest");
-    let proof = arkret_wire::PayloadProof {
-        kind: "detached_jws".to_owned(),
-        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
-            .expect("fixture verification method is a DID URL"),
-        payload_digest,
-        // Inside the challenge window, which the server checks.
-        created_at: challenge.issued_at,
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws: arkret_signatures::jws::sign_jws_ed25519(&canonical, signing).expect("sign"),
-    };
-
-    let body = KeysBackupsDeleteRequestBody {
-        request_id,
-        challenge_id: challenge.challenge_id.clone(),
-        proof: KeyBackupDeleteProof::PrincipalSigning { proof },
-        reason: None,
-    };
-    let mut response = TestClient::delete(format!(
-        "http://server/_arkret/self/keys/backups/{backup_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&body))
-    .send(&app_from_state(state))
-    .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, expected_status, "response body: {body}");
-    body
-}
-
-pub(crate) async fn issue_key_backup_delete_challenge(
-    state: AppState,
-    token: &str,
-    backup_id: &str,
-    request_id: arkret_wire::Base64UrlString,
-) -> KeysBackupsDeleteChallenge {
-    let request = KeysBackupsIssueDeleteChallengeRequestBody { request_id };
-    let mut response = TestClient::post(format!(
-        "http://server/_arkret/self/keys/backups/{backup_id}/delete-challenge"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&request))
-    .send(&app_from_state(state))
-    .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, StatusCode::OK, "response body: {body}");
-    serde_json::from_value(body).expect("issued challenge decodes")
-}
-
-pub(crate) async fn post_recovery(
-    state: AppState,
-    token: &str,
-    path: &str,
-    body: &Value,
-    expected_status: StatusCode,
-) -> Value {
-    let mut response = TestClient::post(format!("http://server{path}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(canonical_body(body))
-        .send(&app_from_state(state.clone()))
-        .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, expected_status, "response body: {body}");
-    body
 }
 
 pub(crate) async fn get_recovery(
@@ -565,67 +307,6 @@ pub(crate) async fn ingest_pinned_recovery_did_document(
         })
         .await
         .unwrap();
-}
-
-/// Seed a complete, SDK-authored principal `did:webvh` inception so recovery
-/// proof verification stays on the durable-history path and never reaches an
-/// external resolver.
-pub(crate) async fn seed_pinned_recovery_root_history(
-    state: &AppState,
-    signing: &SigningKey,
-) -> (String, String) {
-    let endpoint = url::Url::parse("https://recovery.example").unwrap();
-    let version_time = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let next_root = SigningKey::from_bytes(&[0x55; 32]);
-    let next_root_public_key_multibase = test_ed25519_multibase_public(&next_root);
-    let root_seed = signing.to_bytes();
-    let inception = arkret_signatures::webvh::prepare_principal_inception(
-        &arkret_signatures::webvh::PrincipalInceptionInput {
-            principal_endpoint: &endpoint,
-            local_id: "recovery",
-            also_known_as: &[],
-            version_time,
-            root_seed: &root_seed,
-            next_root_public_key_multibase: &next_root_public_key_multibase,
-        },
-    )
-    .expect("SDK-authored recovery did:webvh inception");
-    let event_digest = arkret_canonical::canonical_sha256(&inception.log_entry)
-        .expect("recovery did:webvh log digest");
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .webvh()
-        .append_log_event(WebvhLogRecord {
-            event_digest: event_digest.clone(),
-            did: inception.did.clone(),
-            seq: 1,
-            operation: inception.log_entry.clone(),
-            created_at: now,
-        })
-        .await
-        .unwrap();
-    state
-        .test_persistence()
-        .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: inception.did.clone(),
-            did_document: inception.log_entry["state"].clone(),
-            key_log_head: Some(event_digest),
-            seq: 1,
-            method_evidence: serde_json::json!({
-                "mode": "test_pinned_history",
-                "version_id": inception.version_id,
-            }),
-            fetched_at: now,
-            expires_at: now + chrono::Duration::hours(1),
-            updated_at: now,
-        })
-        .await
-        .unwrap();
-    (inception.did, inception.root_verification_method)
 }
 
 pub(crate) fn signed_recovery_policy(

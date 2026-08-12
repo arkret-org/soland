@@ -10,7 +10,6 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
-use arkret_identifiers::RealmId;
 use arkret_models_identity::account::{
     AccountDataDeleteOutcome, AccountDataDeleteRequestBody, AccountDataList,
     AccountDataReplaceRequestBody, AccountDataRow,

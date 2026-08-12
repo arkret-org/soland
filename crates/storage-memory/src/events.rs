@@ -840,7 +840,6 @@ impl EventStore for MemoryEventStore {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{DidUrl, Hash};
     use chrono::Utc;
 
     use super::*;
@@ -863,43 +862,6 @@ mod tests {
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: Utc::now(),
         }
-    }
-
-    fn hash(byte: u8) -> Hash {
-        Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
-    }
-
-    fn event_store() -> MemoryEventStore {
-        MemoryEventStore::with_devices(
-            Arc::new(Mutex::new(BTreeMap::new())),
-            Arc::new(Mutex::new(BTreeMap::new())),
-            Arc::new(Mutex::new(BTreeMap::new())),
-            Arc::new(Mutex::new(BTreeMap::new())),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-    }
-
-    fn control_proposal_ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
-        let now = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
-        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
-            realm_id: arkret_wire::RealmId::new(record.realm_id.clone().unwrap()).unwrap(),
-            proposal_digest: Hash::new(record.canonical_digest.clone()).unwrap(),
-            received_at: now,
-            decision_due_at: now + policy.decision_window,
-            absolute_due_at: now + policy.absolute_horizon,
-            authority_set_ref: hash(0xaa),
-            signature: arkret_wire::PayloadSignature {
-                verification_method: DidUrl::new("did:web:principal.example#bootstrap-authority")
-                    .unwrap(),
-                payload_digest: hash(0),
-                created_at: now,
-                jws: "e30..c2ln".to_owned(),
-                extra: BTreeMap::new(),
-            },
-        };
-        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
-        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
     }
 
     #[tokio::test]

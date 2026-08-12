@@ -1678,43 +1678,6 @@ pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::
         .expect("cited Seal was built by this fixture")
 }
 
-/// A citable accepted Seal that covers no Control Move at all.
-///
-/// [`test_realm_basis_seal`] covers a genesis unit, which is exactly what a
-/// DataEvent needs and exactly what a Realm whose *first canonical* Seal the
-/// server is about to materialize must not already have: the notary refuses to
-/// build a Seal whose canonical coverage does not contain what the current
-/// frontier already covers (`notary.rs` — "existing Seal coverage is not a
-/// subset of canonical Event coverage"). A fixture that only needs something
-/// for a Control Move's `seal_basis.leaves` to point at uses this instead.
-pub(crate) fn test_realm_uncovered_basis_seal(realm_id: &str) -> arkret_wire::Seal {
-    TEST_REALM_UNCOVERED_BASES
-        .lock()
-        .expect("fixture uncovered basis Seal cache")
-        .entry(realm_id.to_owned())
-        .or_insert_with(|| {
-            let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-                [0x53; 32],
-                DidFullId::new("did:web:alice.example").unwrap(),
-                arkret_wire::DidUrl::new("did:web:alice.example#fixture-notary").unwrap(),
-            );
-            arkret_wire::Seal::sign_single(
-                RealmId::new(realm_id.to_owned()).unwrap(),
-                Vec::new(),
-                Vec::new(),
-                arkret_identifiers::Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned()).unwrap(),
-                arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
-                &signer,
-            )
-            .unwrap()
-        })
-        .clone()
-}
-
-static TEST_REALM_UNCOVERED_BASES: LazyLock<
-    std::sync::Mutex<std::collections::BTreeMap<String, arkret_wire::Seal>>,
-> = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
-
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the

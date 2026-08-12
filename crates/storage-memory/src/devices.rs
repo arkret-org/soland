@@ -95,10 +95,6 @@ pub(crate) struct MemoryDeviceMessageStore {
     lost_watermarks: Mutex<BTreeMap<(String, String), i64>>,
 }
 impl MemoryDeviceMessageStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     pub(crate) fn with_inventory(
         inventory: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     ) -> Self {

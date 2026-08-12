@@ -17,7 +17,7 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_identifiers::{DidFullId, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::realm_governance::{
     RealmPolicyServerDeleteRequestBody, RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
     RealmPolicyServerReplaceRequestBody, RealmPolicyServerView,

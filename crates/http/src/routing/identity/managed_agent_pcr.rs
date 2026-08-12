@@ -11,11 +11,8 @@ use arkret_models_crypto::{
     RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
 };
 use arkret_wire::{DidCoreId, DidUrl, Seal};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, Verifier as _};
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::events::ActiveAgentAccountabilityQuery;
 use soland_services::identity::{
@@ -450,105 +447,19 @@ pub(crate) async fn project_agent_pcr_recovery(
     })
 }
 
+/// Whether `pointer` is the controller's current accepted active-series head.
+///
+/// The `ak.key_backup.active_series` record does not carry a
+/// `PrincipalAuthorityInstance`, so neither the controller Seal frontier nor
+/// the signing device can be selected without a core-only lookup that another
+/// PCR of the same principal core would satisfy just as well. The pointer
+/// therefore cannot be proven current and every caller fails closed here.
 pub(crate) async fn active_series_pointer_is_current(
-    state: &AppState,
-    controller_id: &str,
-    pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
+    _state: &AppState,
+    _controller_id: &str,
+    _pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    // The active-series record does not yet carry a PrincipalAuthorityInstance.
-    // A core-only lookup could select another PCR, so this path fails closed.
-    return Ok(false);
-    #[allow(unreachable_code)]
-    let controller_realm: RealmId = unreachable!("authority-instance selector required");
-    let leaves = state
-        .projections()
-        .realm_seal_leaves(&controller_realm)
-        .map_err(|error| {
-            AppError::internal(format!("controller Seal frontier lookup failed: {error}"))
-        })?;
-    let mut pending = leaves;
-    let mut visited = BTreeSet::new();
-    let mut frontier_is_reachable = false;
-    while let Some(seal_id) = pending.pop() {
-        if !visited.insert(seal_id.clone()) {
-            continue;
-        }
-        if visited.len() > 10_000 {
-            return Ok(false);
-        }
-        let seal = state
-            .projections()
-            .seal_by_id(&seal_id)
-            .map_err(|error| {
-                AppError::internal(format!("controller Seal ancestry lookup failed: {error}"))
-            })?
-            .ok_or_else(|| AppError::internal("controller Seal ancestry is incomplete"))?;
-        let seal_ref_matches = pointer
-            .frontier_ref
-            .seal_ref
-            .as_ref()
-            .is_none_or(|expected| expected == &seal.id);
-        if seal_ref_matches && seal.control_event_set_root == pointer.frontier_ref.frontier_digest {
-            frontier_is_reachable = true;
-            break;
-        }
-        pending.extend(seal.predecessor_refs);
-    }
-    if !frontier_is_reachable {
-        return Ok(false);
-    }
-    if !active_series_signature_is_valid(state, controller_id, pointer).await? {
-        return Ok(false);
-    }
-
-    let event_id = &pointer.auth_data.device_authorize_event_id;
-    let frontier = &pointer.frontier_ref.device_generation_ref;
-    let current = crate::routing::identity::device_generation::current_device_generation(
-        state,
-        controller_id,
-    )
-    .await
-    .map_err(|error| {
-        AppError::internal(format!(
-            "controller device generation lookup failed: {error}"
-        ))
-    })?;
-    let Some(current) = current else {
-        return Ok(false);
-    };
-    if current.status != arkret_models_crypto::keys::DeviceGenerationStatus::Active
-        || current.current_ref != frontier.as_str()
-    {
-        return Ok(false);
-    }
-    let Some(authorize) = state
-        .event_queries()
-        .canonical_event(event_id.as_str())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("device authorize Event lookup failed: {error}"))
-        })?
-    else {
-        return Ok(false);
-    };
-    if authorize.actor_id != controller_id
-        || authorize.kind != arkret_wire::EventKind::DeviceAuthorize.as_str()
-    {
-        return Ok(false);
-    }
-    Ok(
-        crate::routing::identity::device_generation::authorized_generation_for_event(
-            state, &authorize,
-        )
-        .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "device authorize generation resolution failed: {error}"
-            ))
-        })?
-        .as_deref()
-            == Some(current.current_ref.as_str()),
-    )
+    Ok(false)
 }
 
 pub(crate) async fn validate_active_series_operation_authority(
@@ -590,92 +501,11 @@ pub(crate) async fn validate_active_series_operation_authority(
     }
     arkret_models_collaboration::events_payloads::validate_key_backup_active_series_record(&record)
         .map_err(|error| error.reason_code())?;
-    let pointer = record;
-    match active_series_pointer_is_current(state, pointer.actor_id.as_str(), &pointer).await {
+    match active_series_pointer_is_current(state, record.actor_id.as_str(), &record).await {
         Ok(true) => Ok(()),
         Ok(false) => Err("backup_frontier_stale"),
         Err(_) => Err("key_backup_active_series_authority_unavailable"),
     }
-}
-
-async fn active_series_signature_is_valid(
-    state: &AppState,
-    controller_id: &str,
-    pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
-) -> Result<bool, AppError> {
-    if pointer.auth_data.signature_algorithm
-        != arkret_models_crypto::key_backup::KeyBackupSignatureAlgorithm::Ed25519
-    {
-        return Ok(false);
-    }
-    let message = pointer.signing_payload_bytes().map_err(|error| {
-        AppError::internal(format!("active-series canonicalization failed: {error}"))
-    })?;
-    let signature = URL_SAFE_NO_PAD
-        .decode(pointer.auth_data.signature.as_str())
-        .ok()
-        .and_then(|raw| Signature::from_slice(&raw).ok());
-    let Some(signature) = signature else {
-        return Ok(false);
-    };
-    let devices = state
-        .identities()
-        .devices_for_actor(controller_id)
-        .await
-        .map_err(|error| AppError::internal(format!("controller device lookup failed: {error}")))?;
-    for device in devices {
-        if device.revoked_at.is_some() || device.verification_state != "verified" {
-            continue;
-        }
-        let Some(public_key) = device
-            .payload
-            .get("device_public_key")
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        if !active_series_verification_method_matches(
-            controller_id,
-            &device.device_id,
-            public_key,
-            pointer.auth_data.verification_method.as_str(),
-        ) {
-            continue;
-        }
-        let anchored = device
-            .payload
-            .get("device_authorize_event_id")
-            .and_then(Value::as_str)
-            == Some(pointer.auth_data.device_authorize_event_id.as_str());
-        if !anchored {
-            continue;
-        }
-        let verifying_key = match crate::routing::identity::device_signing::decode_ed25519_key(
-            public_key,
-            "multibase",
-        ) {
-            Ok(key) => key,
-            Err(_) => continue,
-        };
-        if verifying_key.verify(&message, &signature).is_ok() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn active_series_verification_method_matches(
-    principal_id: &str,
-    device_id: &str,
-    public_key: &str,
-    verification_method: &str,
-) -> bool {
-    // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
-    // be a DID URL with a `#fragment`; a bare DID never names a concrete
-    // verification method.
-    verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("did:key:{public_key}#{public_key}")
-        || verification_method == format!("did:key:{public_key}#device")
 }
 
 pub(crate) async fn resolve_agent_pcr_for_principal(
@@ -1376,6 +1206,8 @@ fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     const AGENT: &str = "ak:did_core:webvh:z6mkfixtureagent";
@@ -1593,29 +1425,4 @@ mod tests {
     // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
     // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
     // verification method and must not satisfy the active-series binding.
-    #[test]
-    fn active_series_verification_method_rejects_bare_did_key() {
-        let principal = "did:webvh:z6mkfixture:agent.example";
-        let device = "ak:device:primary";
-        let key = "z6MkSeries";
-
-        for accepted in [
-            format!("{principal}#{device}"),
-            format!("did:key:{key}#{key}"),
-            format!("did:key:{key}#device"),
-        ] {
-            assert!(active_series_verification_method_matches(
-                principal, device, key, &accepted
-            ));
-        }
-        assert!(!active_series_verification_method_matches(
-            principal,
-            device,
-            key,
-            &format!("did:key:{key}"),
-        ));
-        assert!(!active_series_verification_method_matches(
-            principal, device, key, principal
-        ));
-    }
 }

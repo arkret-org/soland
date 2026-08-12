@@ -809,7 +809,7 @@ fn validate_signed_service_inception(
         .map_err(|error| anyhow::anyhow!("identity bundle SCID is invalid: {error}"))?;
     verify_log_subject(did, &log)
         .map_err(|error| anyhow::anyhow!("identity bundle subject is invalid: {error}"))?;
-    validate_witness_policy_for_log(&log, chrono::Utc::now().timestamp())
+    validate_witness_policy_for_log(&log)
         .map_err(|error| anyhow::anyhow!("identity bundle witness policy is invalid: {error}"))?;
     validate_rotation_authorization_for_log(&log).map_err(|error| {
         anyhow::anyhow!("identity bundle rotation authorization is invalid: {error}")
@@ -951,7 +951,7 @@ fn validate_persisted_webvh_history(did: &str, history: &[WebvhLogRecord]) -> an
         .map_err(|error| anyhow::anyhow!("persisted service WebVH SCID is invalid: {error}"))?;
     verify_log_subject(did, &log)
         .map_err(|error| anyhow::anyhow!("persisted service WebVH subject is invalid: {error}"))?;
-    validate_witness_policy_for_log(&log, chrono::Utc::now().timestamp()).map_err(|error| {
+    validate_witness_policy_for_log(&log).map_err(|error| {
         anyhow::anyhow!("persisted service WebVH witness policy is invalid: {error}")
     })?;
     validate_rotation_authorization_for_log(&log).map_err(|error| {

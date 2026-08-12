@@ -14,7 +14,6 @@ use arkret_wire::{Event, ReadCursorScope, ReadScopeKind};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
-use serde_json::json;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
@@ -268,6 +267,8 @@ fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     const ACTOR_ID: &str = "did:webvh:z6mkalice:alice.example";
