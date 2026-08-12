@@ -469,7 +469,7 @@ fn session_binding_from_introspection(
         verification_method,
     } = &grant.holder_binding
     {
-        if agent_id.as_str() != grant.subject || grant.device_id.as_ref() != Some(device_id) {
+        if agent_id != &grant.subject || grant.device_id.as_ref() != Some(device_id) {
             return Err(unauthenticated(
                 "agent holder binding does not match introspected subject/device",
             ));
@@ -534,7 +534,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
     Ok(SessionRecord {
         token_hash,
-        actor: grant.subject.clone(),
+        actor: grant.subject.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.as_str().to_owned()),
@@ -679,7 +679,7 @@ pub(crate) fn session_from_verified_grant(
             grant_jwt,
             state.service_id(),
         ),
-        actor: grant.subject,
+        actor: grant.subject.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.into_string()),
@@ -814,7 +814,7 @@ mod tests {
             )
             .unwrap(),
             issuer: "did:web:coauth.local".to_owned(),
-            subject: "did:web:alice.example".to_owned(),
+            subject: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             service_account_id: "alice".to_owned(),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
@@ -862,7 +862,7 @@ mod tests {
     fn agent_holder_binding_materializes_closed_authorization_context() {
         let mut grant = test_introspection_grant();
         let device_id = grant.device_id.clone().unwrap();
-        grant.subject = "did:web:agent.example".to_owned();
+        grant.subject = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),

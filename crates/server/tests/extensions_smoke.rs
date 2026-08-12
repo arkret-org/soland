@@ -1821,7 +1821,7 @@ async fn signed_install_events(
             schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
             realm_id: Some(realm_id.clone()),
             issuer: actor_core_id.clone(),
-            subject: CapabilitySubject::Did(package.service_id.clone()),
+            subject: CapabilitySubject::CoreDid(package.service_id.clone()),
             subject_authority_instance: None,
             actions: vec![action.clone()],
             resources: vec![

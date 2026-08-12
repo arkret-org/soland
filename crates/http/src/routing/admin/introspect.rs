@@ -115,14 +115,7 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id =
-        arkret_identifiers::DidCoreId::new(grant.subject.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::CapabilityDenied,
-                format!("admin scope introspection returned invalid subject DID: {error}"),
-            )
-            .with_status(StatusCode::FORBIDDEN)
-        })?;
+    let principal_id = grant.subject;
 
     Ok(SessionGrantIntrospection {
         active: true,

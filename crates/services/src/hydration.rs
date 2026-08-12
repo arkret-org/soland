@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_identifiers::{CircleId, DidCoreId, RealmId};
+use arkret_models_collaboration::events_payloads::RealmPurpose;
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_wire::{Event, PlaintextDataClassKind};
@@ -324,6 +325,34 @@ async fn hydrate_canonical_realm_bootstraps(
         .enumerate()
         .filter(|(_, record)| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
+        // PCR and managed-Agent control Realms have their own closed genesis
+        // protocols. They are durable canonical Events too, but they are not
+        // ordinary Realm bootstrap transactions and must never be fed to the
+        // ordinary Realm validator/reducer below.
+        //
+        // Decode the shared wire DTO before selecting the hydration branch.
+        // Inspecting an untyped JSON field here previously let the live and
+        // restart paths silently grow different interpretations.
+        let create_event =
+            serde_json::from_value::<Event>(create.envelope.clone()).map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "canonical Realm create failed SDK Event decode: {error}"
+                ))
+            })?;
+        let create_payload = create_event
+            .typed_payload::<arkret_wire::event_spec::RealmCreate>()
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "canonical Realm create failed typed payload decode: {error}"
+                ))
+            })?;
+        if matches!(
+            create_payload.object.purpose,
+            RealmPurpose::PrincipalControl | RealmPurpose::ManagedAgentControl
+        ) {
+            continue;
+        }
+
         let mut unit = vec![create];
         let mut previous_event_id = create.event_id.as_str();
         let mut expected_seq = create.actor_seq.saturating_add(1);

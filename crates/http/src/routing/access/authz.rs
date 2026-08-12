@@ -413,8 +413,12 @@ fn capability_grant_from_authz_grant(
     let issuer = arkret_wire::DidCoreId::new(grant.issuer.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let subject = arkret_wire::DidCoreId::new(grant.subject.clone())
-        .map(CapabilitySubject::Did)
-        .unwrap_or_else(|_| CapabilitySubject::Selector(json!(grant.subject)));
+        .map(CapabilitySubject::CoreDid)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "stored authorization grant subject is not a core DID: {error}"
+            ))
+        })?;
     let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
     let constraints = grant
         .constraints

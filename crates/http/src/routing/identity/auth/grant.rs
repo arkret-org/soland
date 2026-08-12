@@ -111,7 +111,7 @@ pub(crate) async fn validate_session_grant_binding(
             "session grant audience does not match this principal server",
         ));
     }
-    if grant.subject != input.principal_id {
+    if grant.subject.as_str() != input.principal_id {
         return Err(AppError::capability_denied(
             "session grant subject does not match principal_id",
         ));

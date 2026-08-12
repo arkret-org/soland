@@ -165,7 +165,7 @@ fn validate_formal_install_events(
             || grant.realm_id.as_ref() != Some(realm_id)
             || !matches!(
                 &grant.subject,
-                CapabilitySubject::Did(subject)
+                CapabilitySubject::CoreDid(subject)
                     if subject.as_str() == package.service_id.as_str()
             )
             || grant.resources.len() != 1

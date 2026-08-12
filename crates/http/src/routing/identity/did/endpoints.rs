@@ -924,11 +924,12 @@ pub(crate) async fn identity_log(
         return Err(AppError::invalid_param("invalid did"));
     }
     let method = did_method_token(&did)?;
-    let (native_history, entries) = match method.as_str() {
+    let (method, native_history, entries) = match method.as_str() {
         // The persisted operation is the accepted method-native did.jsonl
         // object. Returning it directly avoids creating a second Arkret log
         // envelope, sequence, digest chain, or proof transcript.
         "did:webvh" => (
+            arkret_models_identity::DidMethodUri::Webvh,
             Some(true),
             state
                 .dids()
@@ -940,7 +941,11 @@ pub(crate) async fn identity_log(
                 .collect(),
         ),
         // did:web has no method-native append-only history.
-        "did:web" => (Some(false), Vec::new()),
+        "did:web" => (
+            arkret_models_identity::DidMethodUri::Web,
+            Some(false),
+            Vec::new(),
+        ),
         _ => {
             return Err(AppError::invalid_param(
                 "DID method does not expose a supported native history",
@@ -1015,7 +1020,7 @@ pub(crate) async fn identity_submit_did_operation(
         .strip_prefix("did:")
         .and_then(|value| value.split(':').next())
         .ok_or_else(|| AppError::invalid_param("invalid did"))?;
-    if body.did_method != did_method {
+    if body.did_method.as_str() != did_method {
         return Err(AppError::invalid_param(
             "did_method must exactly match the DID method discriminator",
         ));
