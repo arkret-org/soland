@@ -5287,6 +5287,7 @@ dependencies = [
  "bs58",
  "bytes",
  "chrono",
+ "dotenvy",
  "ed25519-dalek",
  "futures-util",
  "hex",

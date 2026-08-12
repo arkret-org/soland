@@ -94,12 +94,22 @@ impl ServiceError {
         matches!(self, Self::Conflict(reason) if reason == expected)
     }
 
+    /// The registered conflict code this error carries, if any.
+    ///
+    /// Routing layers `match` on this. They must not inspect [`Self::detail`]
+    /// to decide a status, a wire reason, or a signed decision -- see
+    /// [`soland_storage::ConflictCode`].
+    #[must_use]
+    pub fn conflict_code(&self) -> Option<soland_storage::ConflictCode> {
+        match self {
+            Self::Conflict(detail) => soland_storage::ConflictCode::from_detail(detail),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn is_realm_already_exists(&self) -> bool {
-        matches!(
-            self,
-            Self::Conflict(reason) if reason.contains("realm_already_exists")
-        )
+        self.conflict_code() == Some(soland_storage::ConflictCode::RealmAlreadyExists)
     }
 }
 

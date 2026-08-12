@@ -1466,7 +1466,6 @@ pub(super) async fn lifecycle_transition(
     new_state: AgentLifecycleState,
     event_kind: &str,
     reason: Option<String>,
-    sidecar_exposure_ack: Option<Value>,
     lifecycle_event: Option<arkret_wire::EventInitialSubmission>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     // Authentication is deliberately completed by the endpoint before this
@@ -1477,8 +1476,6 @@ pub(super) async fn lifecycle_transition(
     let terminal_notification = (event_kind == "ak.self.agent.deactivate")
         .then(|| account_notification_context(&record))
         .flatten();
-    let sidecar_exposure_ack =
-        normalize_sidecar_exposure_ack(sidecar_exposure_ack, &session.actor)?;
     // Never synthesize an Agent-authored control Event from a session request.
     // Pause/resume carry the exact SDK-authored envelope. Deactivate remains
     // fail-closed until its request can carry the complete lifecycle + key +
@@ -1495,46 +1492,10 @@ pub(super) async fn lifecycle_transition(
         )
         .with_wire_code("agent_lifecycle_fanout_unavailable"));
     };
-    // Resume re-disclosure (key-management.md §3.6.1): sidecar circles the
-    // controller created while the agent was paused re-enter the agent's
-    // eligibility set on resume, so the controller MUST explicitly
-    // re-acknowledge them; silent resume is forbidden.
-    if event_kind == "ak.self.agent.resume" {
-        // Resume is a pure lifecycle-intent write and MUST NOT interlock with an
-        // open pairing handle (key-management.md §3.6.1): an in-flight
-        // replacement handle keeps running across resume and closes only on
-        // consumption or expiry.
-        let paused_at = Some(record.updated_at);
-        let new_sidecar_ids = controller_sidecars_since(state, &session.actor, paused_at);
-        if !new_sidecar_ids.is_empty() {
-            let acked: std::collections::BTreeSet<String> = sidecar_exposure_ack
-                .as_ref()
-                .and_then(|ack| ack.get("sidecar_refs"))
-                .and_then(Value::as_array)
-                .map(|refs| {
-                    refs.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            let missing: Vec<&String> = new_sidecar_ids
-                .iter()
-                .filter(|circle_id| !acked.contains(*circle_id))
-                .collect();
-            if !missing.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "resume requires explicit sidecar exposure acknowledgement for {} sidecar circle(s) created while paused",
-                        missing.len()
-                    ),
-                )
-                .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-                .with_reason_code("sidecar_exposure_ack_required"));
-            }
-        }
-    }
+    // Resume is a pure lifecycle-intent write and MUST NOT interlock with an
+    // open pairing handle (key-management.md §3.6.1): an in-flight replacement
+    // handle keeps running across resume and closes only on consumption or
+    // expiry. Sidecar desired rosters are re-derived after Event admission.
     let status_changed_at = chrono::Utc::now();
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
@@ -1554,7 +1515,6 @@ pub(super) async fn lifecycle_transition(
         event_kind,
         previous_status.as_wire_str(),
         reason.as_deref(),
-        sidecar_exposure_ack.as_ref(),
         lifecycle_event,
     )
     .await?;
@@ -1577,12 +1537,6 @@ pub(super) async fn lifecycle_transition(
         updated_record.runtime_attestation_digest = None;
         updated_record.approval_notification_id = None;
     }
-    if matches!(
-        new_state,
-        AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
-    ) {
-        sidecar::remove_agent_from_controller_sidecars(state, &session.actor, &agent_id).await?;
-    }
     state
         .agent_pairings()
         .save_agent(updated_record)
@@ -1602,28 +1556,6 @@ pub(super) async fn lifecycle_transition(
         ok: true,
         status: new_state,
     })
-}
-
-/// Active native Sidecars owned by `controller` created strictly
-/// after `since`. `since=None` fails closed by treating every Sidecar as new,
-/// forcing an explicit acknowledgement.
-fn controller_sidecars_since(
-    state: &AppState,
-    controller: &str,
-    since: Option<chrono::DateTime<chrono::Utc>>,
-) -> Vec<String> {
-    let projection = state.projections().snapshot();
-    projection
-        .sidecars
-        .values()
-        .filter(|sidecar| {
-            sidecar.controller_id == controller
-                && sidecar.state
-                    == arkret_models_collaboration::agent_operations::AgentSidecarState::Active
-                && since.is_none_or(|since| sidecar.created_at > since)
-        })
-        .map(|sidecar| sidecar.sidecar_id.clone())
-        .collect()
 }
 
 #[endpoint(
@@ -1650,7 +1582,6 @@ pub(super) async fn pause_agent(
             AgentLifecycleState::Paused,
             "ak.self.agent.pause",
             body.reason.map(arkret_wire::NonEmptyString::into_string),
-            None,
             Some(body.lifecycle_event),
         )
         .await?,
@@ -1681,12 +1612,6 @@ pub(super) async fn resume_agent(
             AgentLifecycleState::Active,
             "ak.self.agent.resume",
             None,
-            body.sidecar_exposure_ack
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    AppError::invalid_param(format!("sidecar_exposure_ack invalid: {error}"))
-                })?,
             Some(body.lifecycle_event),
         )
         .await?,
@@ -1721,7 +1646,6 @@ pub(super) async fn deactivate_agent(
         "ak.self.agent.deactivate",
         record.state.as_wire_str(),
         reason,
-        None,
         &body.lifecycle_event.event,
     )?;
 
@@ -1737,7 +1661,6 @@ pub(super) async fn deactivate_agent(
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
             body.reason.map(arkret_wire::NonEmptyString::into_string),
-            None,
             Some(body.lifecycle_event),
         )
         .await?,
@@ -1907,7 +1830,6 @@ mod deactivation_tests {
                 "did:web:agent.example".to_owned(),
                 AgentLifecycleState::Paused,
                 "ak.self.agent.pause",
-                None,
                 None,
                 None,
             )

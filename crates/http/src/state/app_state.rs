@@ -929,6 +929,11 @@ impl AppState {
             )),
         ));
 
+        // Read before `config` is moved into the struct below.
+        let verified_profiles = crate::verified_profiles::load_from_configured_path(
+            config.verified_profiles_artifact.as_deref(),
+        );
+
         Self {
             config,
             service_id: service_id.clone(),
@@ -978,12 +983,12 @@ impl AppState {
             control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
             notary_signing_key,
             notary_signing_key_origin,
-            // G4.T3 — load verified-profile descriptors at startup. The env
-            // var IS the feature flag; absence keeps the dev-mode
+            // G4.T3 — load verified-profile descriptors at startup. An unset
+            // artifact path IS the feature flag; absence keeps the dev-mode
             // verified_profiles=[] invariant. See
-            // crate::verified_profiles::load_from_env for the file
+            // crate::verified_profiles::load_from_configured_path for the file
             // schema and logging policy.
-            verified_profiles: crate::verified_profiles::load_from_env(),
+            verified_profiles,
             member_identity: Arc::new(Mutex::new(MemberIdentityRegistry::new())),
         }
     }

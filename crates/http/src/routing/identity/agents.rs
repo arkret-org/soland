@@ -43,7 +43,7 @@ use arkret_models_collaboration::agent_operations::{
     AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
     AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
 };
-use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
+use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
     AgentParticipationEntry, AgentParticipationOutcome, MAX_PARTICIPATION_REPLACE_EXPECTED_VERSION,
@@ -700,41 +700,6 @@ mod tests {
 
         assert_eq!(decoded["r"], json!("agent_pairing_request:0193"));
         assert_eq!(decoded["c"], json!("12345678"));
-    }
-
-    #[test]
-    fn resume_sidecar_exposure_ack_is_validated_and_normalized() {
-        let ack = normalize_sidecar_exposure_ack(
-            Some(json!({
-                "acknowledged_at": "2026-06-18T12:00:00.000Z",
-                "acknowledged_by": "did:web:controller.example",
-                "sidecar_refs": [
-                    "ak:circle:AapALysveT_m0ubp6kTGkXSK9371_ilR-kAJwNFmxyjr",
-                    "ak:strand:AUJCoQiXEV11T2wYGgq5vjXcfFcLnKQHPCp3GyzHYTDe"
-                ]
-            })),
-            "did:web:controller.example",
-        )
-        .expect("valid sidecar exposure ack should normalize")
-        .expect("ack should be present");
-
-        assert_eq!(ack["acknowledged_by"], "did:web:controller.example");
-        assert_eq!(ack["sidecar_refs"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn resume_sidecar_exposure_ack_rejects_wrong_controller() {
-        let err = normalize_sidecar_exposure_ack(
-            Some(json!({
-                "acknowledged_at": "2026-06-18T12:00:00.000Z",
-                "acknowledged_by": "did:web:other.example",
-                "sidecar_refs": ["ak:circle:AapALysveT_m0ubp6kTGkXSK9371_ilR-kAJwNFmxyjr"]
-            })),
-            "did:web:controller.example",
-        )
-        .expect_err("ack by another controller must reject");
-
-        assert_eq!(err.wire_code(), "capability_denied");
     }
 
     #[test]

@@ -6,6 +6,8 @@ use std::sync::Arc;
 use arkret_identifiers::TrustDomainId;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::config_source::ConfigSource;
+
 /// v1 interoperability bound for HTTP message content of a non-streaming JSON operation, from
 /// `zh/conformance/scalability-constraints.md` §2.1.3. A deployment MUST NOT declare a lower
 /// global value (§2.1.6): a legal 8 MiB canonical body has to stay portable across services, and
@@ -56,13 +58,13 @@ impl fmt::Debug for KeyStoreConfig {
 
 impl KeyStoreConfig {
     /// Load the backend selector and its backend-specific settings.
-    pub fn from_env() -> anyhow::Result<Self> {
-        let backend =
-            env_non_empty("SOLAND_KEYSTORE_BACKEND").map(|value| value.to_ascii_lowercase());
-        let path = env_non_empty("SOLAND_KEYSTORE_PATH").map(PathBuf::from);
-        let master_key_file = env_non_empty("SOLAND_KEYSTORE_MASTER_KEY_FILE");
+    pub fn from_source(source: &ConfigSource) -> anyhow::Result<Self> {
+        let backend = env_non_empty(source, "SOLAND_KEYSTORE_BACKEND")
+            .map(|value| value.to_ascii_lowercase());
+        let path = env_non_empty(source, "SOLAND_KEYSTORE_PATH").map(PathBuf::from);
+        let master_key_file = env_non_empty(source, "SOLAND_KEYSTORE_MASTER_KEY_FILE");
         let raw_master_key =
-            env_non_empty_or_file("SOLAND_KEYSTORE_MASTER_KEY")?.map(Zeroizing::new);
+            env_non_empty_or_file(source, "SOLAND_KEYSTORE_MASTER_KEY")?.map(Zeroizing::new);
 
         match backend.as_deref() {
             None => {
@@ -370,6 +372,40 @@ pub struct AppConfig {
     /// next to-device response can carry `lost=true`.
     /// Env: `SOLAND_TO_DEVICE_QUEUE_CAPACITY` (default 10_000).
     pub to_device_queue_capacity: usize,
+    /// Rolling-24h per-principal cap on full-ciphertext key-backup downloads
+    /// (`key-management.md` §7.8), already clamped to the range
+    /// `soland_services::runtime_guards` allows.
+    /// Env: `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT`.
+    pub key_backup_daily_download_limit: u32,
+    /// Directory holding the service-identity bundle, when the deployment
+    /// provisions identity from files rather than from the database.
+    /// Env: `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`.
+    pub service_identity_bundle_dir: Option<String>,
+    /// Path to the verified-profile artifact. Absence is the feature flag:
+    /// no artifact keeps the dev-mode `verified_profiles = []` invariant.
+    /// Env: `SOLAND_VERIFIED_PROFILES_ARTIFACT`.
+    pub verified_profiles_artifact: Option<String>,
+    /// Trust domain the external webvh provider's `/describe` must present.
+    /// Falls back to this deployment's own trust domain when unset.
+    /// Env: `SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN`.
+    pub external_webvh_provider_trust_domain: Option<String>,
+    /// Per-class rate-limit ceilings, parsed once so the enforced quota and
+    /// the ceilings `describe` advertises cannot disagree.
+    /// Env: `SOLAND_RATE_LIMIT_*`.
+    pub rate_limiter: crate::ratelimit::RateLimiterConfig,
+    /// Env: `SOLAND_MAX_REQUEST_SIZE`, clamped up to the v1 interoperability
+    /// floor.
+    pub max_request_size_bytes: usize,
+    /// Result of the deployment's PQ-hybrid TLS handshake probe.
+    /// Env: `SOLAND_PQ_TLS_DEPLOYMENT_PROBE`.
+    pub pq_hybrid_tls_probe: Option<String>,
+    /// Connection-pool sizing for the Postgres backend. Held as plain values
+    /// rather than `soland_storage_postgres::PoolTuning` because `soland-http`
+    /// must not depend on a storage backend; `soland-server` assembles them.
+    /// Env: `SOLAND_DB_POOL_MAX_SIZE`.
+    pub db_pool_max_size: Option<usize>,
+    /// Env: `SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS`.
+    pub db_pool_acquire_timeout_seconds: Option<u64>,
     /// Max age (in seconds) a cached outbound push bridge contract is allowed
     /// to keep its trusted state without re-verification. Snapshots whose
     /// `freshness_at` is older than this are treated as stale on cache_hit and
@@ -493,8 +529,8 @@ pub enum LogFormat {
 }
 
 impl LogFormat {
-    pub fn from_env(development_mode: bool) -> Self {
-        match std::env::var("SOLAND_LOG_FORMAT").ok().as_deref() {
+    pub fn from_source(source: &ConfigSource, development_mode: bool) -> Self {
+        match source.var("SOLAND_LOG_FORMAT").ok().as_deref() {
             Some("json") | Some("JSON") => LogFormat::Json,
             Some("plain") | Some("PLAIN") | Some("text") | Some("TEXT") => LogFormat::Plain,
             _ => {
@@ -631,9 +667,9 @@ pub struct LiveKitConfig {
 
 /// Load LiveKit API credentials. The secret accepts the `_FILE` indirection
 /// so operators can mount it via Kubernetes / Docker / systemd secrets.
-fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {
-    let api_key = env_non_empty("SOLAND_LIVEKIT_API_KEY");
-    let api_secret = env_non_empty_or_file("SOLAND_LIVEKIT_API_SECRET")?;
+fn load_livekit_config(source: &ConfigSource) -> anyhow::Result<LiveKitConfig> {
+    let api_key = env_non_empty(source, "SOLAND_LIVEKIT_API_KEY");
+    let api_secret = env_non_empty_or_file(source, "SOLAND_LIVEKIT_API_SECRET")?;
     Ok(LiveKitConfig {
         api_key,
         api_secret,
@@ -758,6 +794,16 @@ impl AppConfig {
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
             to_device_queue_capacity: 10_000,
+            key_backup_daily_download_limit:
+                soland_services::runtime_guards::clamp_key_backup_daily_download_limit(None),
+            service_identity_bundle_dir: None,
+            verified_profiles_artifact: None,
+            external_webvh_provider_trust_domain: None,
+            rate_limiter: crate::ratelimit::RateLimiterConfig::default(),
+            max_request_size_bytes: DEFAULT_MAX_REQUEST_SIZE_BYTES,
+            pq_hybrid_tls_probe: None,
+            db_pool_max_size: None,
+            db_pool_acquire_timeout_seconds: None,
             push_bridge_cache_ttl_seconds: 900,
             push_bridge_trusted_service_ids: Vec::new(),
             resumable_upload_dir: PathBuf::from("./soland-resumable-uploads"),
@@ -781,31 +827,35 @@ impl AppConfig {
 }
 
 impl AppConfig {
-    pub fn from_env_and_args() -> anyhow::Result<Self> {
+    pub fn load(source: &ConfigSource) -> anyhow::Result<Self> {
         let bind = arg_value("--bind")
-            .or_else(|| std::env::var("SOLAND_BIND").ok())
+            .or_else(|| source.var("SOLAND_BIND").ok())
             .unwrap_or_else(|| "127.0.0.1:8698".to_owned())
             .parse()?;
-        let metrics_bind = std::env::var("SOLAND_METRICS_BIND")
+        let metrics_bind = source
+            .var("SOLAND_METRICS_BIND")
             .unwrap_or_else(|_| "127.0.0.1:9090".to_owned())
             .parse()?;
-        let public_base_url =
-            std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
+        let public_base_url = source
+            .var("SOLAND_PUBLIC_BASE_URL")
+            .unwrap_or_else(|_| format!("http://{bind}"));
         let first_provisioning = std::env::args().any(|arg| arg == "--first-provisioning")
-            || env_bool("SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
-        let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);
-        let tls_key_path = env_non_empty("SOLAND_TLS_KEY_PATH").map(PathBuf::from);
+            || env_bool(source, "SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
+        let tls_cert_path = env_non_empty(source, "SOLAND_TLS_CERT_PATH").map(PathBuf::from);
+        let tls_key_path = env_non_empty(source, "SOLAND_TLS_KEY_PATH").map(PathBuf::from);
         if tls_cert_path.is_some() != tls_key_path.is_some() {
             anyhow::bail!("SOLAND_TLS_CERT_PATH and SOLAND_TLS_KEY_PATH must be set together");
         }
-        let database_url = std::env::var("DATABASE_URL")
+        let database_url = source
+            .var("DATABASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        let object_storage = load_object_storage_config()?;
-        let ice = load_ice_servers_config()?;
-        let livekit = load_livekit_config()?;
-        let account_authority_url = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_URL");
-        let account_authority_service_id = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
+        let object_storage = load_object_storage_config(source)?;
+        let ice = load_ice_servers_config(source)?;
+        let livekit = load_livekit_config(source)?;
+        let account_authority_url = env_non_empty(source, "SOLAND_ACCOUNT_AUTHORITY_URL");
+        let account_authority_service_id =
+            env_non_empty(source, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
         if account_authority_url.is_none() && account_authority_service_id.is_some() {
             anyhow::bail!(
                 "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
@@ -816,11 +866,12 @@ impl AppConfig {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID is invalid: {error}")
             })?;
         }
-        let oidc_client_id = env_non_empty("SOLAND_OAUTH_CLIENT_ID");
+        let oidc_client_id = env_non_empty(source, "SOLAND_OAUTH_CLIENT_ID");
         // Default to a production-safe posture (no `dev_login`, no relaxed DID
         // validation, no admin snapshot endpoints). Local development must opt
         // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
-        let development_mode = std::env::var("SOLAND_DEVELOPMENT_MODE")
+        let development_mode = source
+            .var("SOLAND_DEVELOPMENT_MODE")
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
             .unwrap_or(false);
         // Production first provisioning is authorized later, after the
@@ -837,33 +888,36 @@ impl AppConfig {
         //   - env set → use as-is. `"*"` installs the permissive (mirror origin, no credentials)
         //     handler; any other value is treated as an explicit origin allow-list and installs the
         //     credentialed handler. See `routing::cors_handler_for_config`.
-        let cors_allow_origin = std::env::var("SOLAND_CORS_ALLOW_ORIGIN")
+        let cors_allow_origin = source
+            .var("SOLAND_CORS_ALLOW_ORIGIN")
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
             .or_else(|| development_mode.then(|| "*".to_owned()));
         let session_grant_introspection_url =
-            env_non_empty("SOLAND_SESSION_GRANT_INTROSPECTION_URL");
+            env_non_empty(source, "SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let session_grant_introspection_bearer =
-            env_non_empty_or_file("SOLAND_SESSION_GRANT_INTROSPECTION_BEARER")?;
-        let did_resolver_allow_methods = env_csv("SOLAND_DID_RESOLVER_ALLOW_METHODS")
+            env_non_empty_or_file(source, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER")?;
+        let did_resolver_allow_methods = env_csv(source, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
             .unwrap_or_else(default_did_resolver_allow_methods);
         let embedded_webvh_provider_enabled =
-            env_bool("SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
+            env_bool(source, "SOLAND_EMBEDDED_WEBVH_PROVIDER_ENABLED")?.unwrap_or(true);
         let embedded_webvh_registration_bearer =
-            env_non_empty_or_file("SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER")?;
-        let external_webvh_provider_url = env_non_empty("SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
+            env_non_empty_or_file(source, "SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER")?;
+        let external_webvh_provider_url =
+            env_non_empty(source, "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL");
         let external_webvh_registration_bearer =
-            env_non_empty_or_file("SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER")?;
+            env_non_empty_or_file(source, "SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER")?;
         if external_webvh_registration_bearer.is_some() && external_webvh_provider_url.is_none() {
             anyhow::bail!(
                 "SOLAND_EXTERNAL_WEBVH_PROVIDER_URL is required when \
                  SOLAND_EXTERNAL_WEBVH_REGISTRATION_BEARER is configured"
             );
         }
-        let default_webvh_provider_id = env_non_empty("SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
+        let default_webvh_provider_id = env_non_empty(source, "SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
         // 0 disables replay-window enforcement; default 5 min per spec.
-        let jws_replay_window_seconds = std::env::var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
+        let jws_replay_window_seconds = source
+            .var("SOLAND_JWS_REPLAY_WINDOW_SECONDS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(300);
@@ -874,8 +928,8 @@ impl AppConfig {
                 "SOLAND_JWS_REPLAY_WINDOW_SECONDS must be > 0 when SOLAND_DEVELOPMENT_MODE is false (0 disables replay protection)"
             );
         }
-        let notary_signing_key_seed = load_notary_signing_key_seed()?;
-        let key_store = KeyStoreConfig::from_env()?;
+        let notary_signing_key_seed = load_notary_signing_key_seed(source)?;
+        let key_store = KeyStoreConfig::from_source(source)?;
         validate_persistence_key_store(database_url.as_deref(), &key_store)?;
         // T2 — without a persistent notary seed (env or KeyStore) the worker
         // mints a fresh ephemeral ed25519 identity on every restart, which
@@ -886,11 +940,13 @@ impl AppConfig {
                 "SOLAND_NOTARY_SIGNING_KEY (or a durable SOLAND_KEYSTORE_BACKEND) is required when SOLAND_DEVELOPMENT_MODE is false; an ephemeral notary key breaks the Seal signature chain across restarts"
             );
         }
-        let federation_fanout_topology = std::env::var("SOLAND_FEDERATION_FANOUT_TOPOLOGY")
+        let federation_fanout_topology = source
+            .var("SOLAND_FEDERATION_FANOUT_TOPOLOGY")
             .ok()
             .map(|value| FederationFanoutTopology::from_env_value(&value))
             .unwrap_or(FederationFanoutTopology::Mesh);
-        let federation_peers = std::env::var("SOLAND_FEDERATION_PEERS")
+        let federation_peers = source
+            .var("SOLAND_FEDERATION_PEERS")
             .ok()
             .map(|value| {
                 value
@@ -903,19 +959,23 @@ impl AppConfig {
         // G3.S0 — outbound dispatcher toggle. Defaults to enabled so the
         // background worker drains the outbox; tests that don't want
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
-        let federation_outbound_enabled = env_bool("SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
-        let admin_default_page_limit = std::env::var("SOLAND_ADMIN_PAGE_LIMIT")
+        let federation_outbound_enabled =
+            env_bool(source, "SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
+        let admin_default_page_limit = source
+            .var("SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(100);
-        let admin_max_page_limit = std::env::var("SOLAND_ADMIN_MAX_PAGE_LIMIT")
+        let admin_max_page_limit = source
+            .var("SOLAND_ADMIN_MAX_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(1000)
             .max(admin_default_page_limit);
-        let admin_principal_dids = std::env::var("SOLAND_ADMIN_PRINCIPAL_DIDS")
+        let admin_principal_dids = source
+            .var("SOLAND_ADMIN_PRINCIPAL_DIDS")
             .ok()
             .map(|value| {
                 value
@@ -925,70 +985,125 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let to_device_queue_capacity = std::env::var("SOLAND_TO_DEVICE_QUEUE_CAPACITY")
+        let to_device_queue_capacity = source
+            .var("SOLAND_TO_DEVICE_QUEUE_CAPACITY")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_TO_DEVICE_QUEUE_CAPACITY);
-        let push_bridge_cache_ttl_seconds = std::env::var("SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
+        // Parsed here, clamped by the guard that owns the range. Previously
+        // `runtime_guards` read this from the environment itself, which put an
+        // env read inside `soland-services`.
+        let key_backup_daily_download_limit =
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(
+                env_non_empty(source, "SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
+                    .and_then(|value| value.parse::<u32>().ok()),
+            );
+        let service_identity_bundle_dir =
+            env_non_empty(source, "SOLAND_SERVICE_IDENTITY_BUNDLE_DIR");
+        let verified_profiles_artifact = env_non_empty(source, "SOLAND_VERIFIED_PROFILES_ARTIFACT");
+        let external_webvh_provider_trust_domain =
+            env_non_empty(source, "SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN");
+        let rate_limiter =
+            crate::ratelimit::RateLimiterConfig::from_source(source, development_mode);
+        let max_request_size_bytes = Self::max_request_size_bytes(source);
+        let pq_hybrid_tls_probe = env_non_empty(source, PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV);
+        let db_pool_max_size = env_non_empty(source, "SOLAND_DB_POOL_MAX_SIZE")
+            .and_then(|value| value.parse::<usize>().ok());
+        let db_pool_acquire_timeout_seconds =
+            env_non_empty(source, "SOLAND_DB_POOL_ACQUIRE_TIMEOUT_SECS")
+                .and_then(|value| value.parse::<u64>().ok());
+        let push_bridge_cache_ttl_seconds = source
+            .var("SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(900);
-        let push_bridge_trusted_service_ids =
-            std::env::var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
-                .ok()
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(|v| v.trim().to_owned())
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-        let resumable_upload_dir = env_non_empty("SOLAND_RESUMABLE_UPLOAD_DIR")
+        let push_bridge_trusted_service_ids = source
+            .var("SOLAND_PUSH_BRIDGE_TRUSTED_SERVICE_IDS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|v| v.trim().to_owned())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let resumable_upload_dir = env_non_empty(source, "SOLAND_RESUMABLE_UPLOAD_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("./soland-resumable-uploads"));
-        let resumable_upload_incomplete_ttl_seconds =
-            std::env::var("SOLAND_RESUMABLE_UPLOAD_TTL_SECS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .unwrap_or(86_400)
-                .max(60);
-        let seal_compaction_min_age_seconds = std::env::var("SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
+        let resumable_upload_incomplete_ttl_seconds = source
+            .var("SOLAND_RESUMABLE_UPLOAD_TTL_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(86_400)
+            .max(60);
+        let seal_compaction_min_age_seconds = source
+            .var("SOLAND_COMPACTION_MIN_SEAL_AGE_SECS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(604_800);
-        let compaction_min_witnesses = std::env::var("SOLAND_COMPACTION_MIN_WITNESSES")
+        let compaction_min_witnesses = source
+            .var("SOLAND_COMPACTION_MIN_WITNESSES")
             .ok()
             .and_then(|value| value.trim().parse::<u32>().ok())
             .unwrap_or(1);
         let compaction_preserve_genesis =
-            env_bool("SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
+            env_bool(source, "SOLAND_COMPACTION_PRESERVE_GENESIS")?.unwrap_or(true);
         let compaction_prune_only_singleton_successors =
-            env_bool("SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
-        let compaction_prune_walk_interval_seconds =
-            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-        let compaction_prune_walk_per_realm_limit =
-            std::env::var("SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .unwrap_or(50)
-                .max(1);
-        let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
+            env_bool(source, "SOLAND_COMPACTION_PRUNE_ONLY_SINGLETON_SUCCESSORS")?.unwrap_or(true);
+        let compaction_prune_walk_interval_seconds = source
+            .var("SOLAND_COMPACTION_PRUNE_WALK_INTERVAL_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        let compaction_prune_walk_per_realm_limit = source
+            .var("SOLAND_COMPACTION_PRUNE_WALK_PER_REALM_LIMIT")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(50)
+            .max(1);
+        let seed_demo_data = env_bool(source, "SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
-        let sovereign_enclave_enabled = env_bool("SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
-        // Read back from the egress gate rather than re-parsed here. A second
-        // parse of the same variable is a second answer: this field used to be
-        // an independent copy whose only consumer was a startup log, so an
-        // operator could read a list the boundary never enforced.
-        let sovereign_enclave_allowed_outbound_hosts =
-            crate::security::sovereign_enclave_allowed_outbound_hosts();
+        //
+        // This is now the only parse of every egress input. `security.rs` used
+        // to read the same eight variables itself with a stricter, case-
+        // sensitive matcher, so `SOLAND_SOVEREIGN_ENCLAVE=on` turned the
+        // enclave on here and left the outbound gate off there. The parsed
+        // policy is installed into the gate by `install_egress_policy` at
+        // startup; both sides now read one value.
+        let sovereign_enclave_enabled =
+            env_bool(source, "SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
+        let egress_policy = crate::security::EgressPolicy {
+            allow_private_networks: env_bool(source, "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS")?,
+            allowed_hosts: crate::security::split_host_policy_entries(
+                env_non_empty(source, "SOLAND_EGRESS_ALLOWED_HOSTS").as_deref(),
+            ),
+            denylist: crate::security::split_host_policy_entries(
+                env_non_empty(source, "SOLAND_EGRESS_DENYLIST").as_deref(),
+            ),
+            federation_denylist: crate::security::split_federation_denylist_entries(&[
+                env_non_empty(source, "SOLAND_FEDERATION_DENYLIST").as_deref(),
+                env_non_empty(source, "SOLAND_FEDERATION_PEER_DENYLIST").as_deref(),
+            ]),
+            federation_trust_domain_allowlist: crate::security::split_host_policy_entries(
+                env_non_empty(source, "SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST").as_deref(),
+            ),
+            sovereign_enclave_enabled,
+            sovereign_enclave_allowed_outbound_hosts: crate::security::split_host_policy_entries(
+                env_non_empty(source, "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS").as_deref(),
+            ),
+        };
+        let sovereign_enclave_allowed_outbound_hosts = egress_policy
+            .sovereign_enclave_allowed_outbound_hosts
+            .clone();
+        crate::security::install_egress_policy(egress_policy);
+        crate::ratelimit::install_forwarded_for_trust(
+            env_bool(source, "SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")?.unwrap_or(false),
+        );
         let candidate_join_policy_enabled =
-            env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
-        let trust_domain = env_non_empty("SOLAND_TRUST_DOMAIN").ok_or_else(|| {
+            env_bool(source, "SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
+        let trust_domain = env_non_empty(source, "SOLAND_TRUST_DOMAIN").ok_or_else(|| {
             anyhow::anyhow!(
                 "SOLAND_TRUST_DOMAIN is required; it cannot be derived from the service core id"
             )
@@ -996,9 +1111,10 @@ impl AppConfig {
         let trust_domain = TrustDomainId::new(trust_domain).map_err(|error| {
             anyhow::anyhow!("SOLAND_TRUST_DOMAIN must be ak:trust_domain:<scope>: {error}")
         })?;
-        let receive_policy_constraints = load_receive_policy_constraints()?;
-        let failpoints = crate::failpoints::FailpointRegistry::from_env(development_mode)?;
-        let log_format = LogFormat::from_env(development_mode);
+        let receive_policy_constraints = load_receive_policy_constraints(source)?;
+        let failpoints =
+            crate::failpoints::FailpointRegistry::from_source(source, development_mode)?;
+        let log_format = LogFormat::from_source(source, development_mode);
 
         Ok(Self {
             bind,
@@ -1038,6 +1154,15 @@ impl AppConfig {
             admin_max_page_limit,
             admin_principal_dids,
             to_device_queue_capacity,
+            key_backup_daily_download_limit,
+            service_identity_bundle_dir,
+            verified_profiles_artifact,
+            external_webvh_provider_trust_domain,
+            rate_limiter,
+            max_request_size_bytes,
+            pq_hybrid_tls_probe,
+            db_pool_max_size,
+            db_pool_acquire_timeout_seconds,
             push_bridge_cache_ttl_seconds,
             push_bridge_trusted_service_ids,
             resumable_upload_dir,
@@ -1065,8 +1190,9 @@ impl AppConfig {
     /// 16 MiB a fixed interoperability constant that a deployment or proxy MUST NOT declare
     /// lower, so a smaller value is clamped back up instead of silently making this service
     /// reject requests every other v1 service accepts.
-    pub fn max_request_size_bytes_from_env() -> usize {
-        std::env::var("SOLAND_MAX_REQUEST_SIZE")
+    pub fn max_request_size_bytes(source: &ConfigSource) -> usize {
+        source
+            .var("SOLAND_MAX_REQUEST_SIZE")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
@@ -1143,12 +1269,11 @@ impl AppConfig {
     }
 
     pub fn pq_hybrid_tls_probe_verified(&self) -> bool {
-        let value = env_non_empty(PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV);
-        Self::pq_hybrid_tls_probe_verified_from_value(value.as_deref())
+        Self::pq_hybrid_tls_probe_verified_from_value(self.pq_hybrid_tls_probe.as_deref())
     }
 
     pub fn pq_hybrid_tls_probe_configured(&self) -> bool {
-        env_non_empty(PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV).is_some()
+        self.pq_hybrid_tls_probe.is_some()
     }
 
     pub fn pq_hybrid_tls_ready(&self) -> bool {
@@ -1280,24 +1405,25 @@ impl AppConfig {
     }
 }
 
-fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
-    let backend = env_non_empty("SOLAND_OBJECT_STORAGE_BACKEND")
+fn load_object_storage_config(source: &ConfigSource) -> anyhow::Result<ObjectStorageConfig> {
+    let backend = env_non_empty(source, "SOLAND_OBJECT_STORAGE_BACKEND")
         .unwrap_or_else(|| "local".to_owned())
         .to_ascii_lowercase();
-    let prefix = normalized_storage_prefix(env_non_empty("SOLAND_OBJECT_STORAGE_PREFIX"));
+    let prefix = normalized_storage_prefix(env_non_empty(source, "SOLAND_OBJECT_STORAGE_PREFIX"));
     match backend.as_str() {
         "local" | "fs" | "filesystem" => {
-            let root = env_non_empty("SOLAND_OBJECT_STORAGE_LOCAL_ROOT")
+            let root = env_non_empty(source, "SOLAND_OBJECT_STORAGE_LOCAL_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::temp_dir().join("soland-objects"));
             Ok(ObjectStorageConfig::Local { root, prefix })
         }
         "s3" | "s3-compatible" | "s3_compatible" => {
-            let bucket = required_env("SOLAND_OBJECT_STORAGE_S3_BUCKET")?;
-            let region = env_non_empty("SOLAND_OBJECT_STORAGE_S3_REGION")
+            let bucket = required_env(source, "SOLAND_OBJECT_STORAGE_S3_BUCKET")?;
+            let region = env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_REGION")
                 .unwrap_or_else(|| "us-east-1".to_owned());
-            let access_key_id = env_non_empty("SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
-            let secret_access_key = env_non_empty("SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
+            let access_key_id = env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID");
+            let secret_access_key =
+                env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY");
             if access_key_id.is_some() != secret_access_key.is_some() {
                 anyhow::bail!(
                     "SOLAND_OBJECT_STORAGE_S3_ACCESS_KEY_ID and SOLAND_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY must be set together"
@@ -1306,15 +1432,16 @@ fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
             Ok(ObjectStorageConfig::S3Compatible {
                 bucket,
                 region,
-                endpoint: env_non_empty("SOLAND_OBJECT_STORAGE_S3_ENDPOINT"),
+                endpoint: env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_ENDPOINT"),
                 access_key_id,
                 secret_access_key,
-                session_token: env_non_empty("SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN"),
+                session_token: env_non_empty(source, "SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN"),
                 prefix,
-                force_path_style: env_bool("SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
+                force_path_style: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_FORCE_PATH_STYLE")?
                     .unwrap_or(true),
-                allow_http: env_bool("SOLAND_OBJECT_STORAGE_S3_ALLOW_HTTP")?.unwrap_or(false),
-                skip_signature: env_bool("SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
+                allow_http: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_ALLOW_HTTP")?
+                    .unwrap_or(false),
+                skip_signature: env_bool(source, "SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE")?
                     .unwrap_or(false),
             })
         }
@@ -1328,10 +1455,10 @@ fn load_object_storage_config() -> anyhow::Result<ObjectStorageConfig> {
 /// env vars. Each field falls back to the corresponding
 /// [`IceServersConfig::default`] value when its env var is absent or empty,
 /// preserving the historical hardcoded behavior.
-fn load_ice_servers_config() -> anyhow::Result<IceServersConfig> {
+fn load_ice_servers_config(source: &ConfigSource) -> anyhow::Result<IceServersConfig> {
     let defaults = IceServersConfig::default();
     let parse_url_list = |name: &str, fallback: Vec<String>| -> Vec<String> {
-        match env_non_empty(name) {
+        match env_non_empty(source, name) {
             Some(raw) => {
                 let parsed = raw
                     .split(',')
@@ -1345,18 +1472,18 @@ fn load_ice_servers_config() -> anyhow::Result<IceServersConfig> {
     };
     let stun_urls = parse_url_list("SOLAND_ICE_STUN_URLS", defaults.stun_urls);
     let turn_urls = parse_url_list("SOLAND_TURN_URLS", defaults.turn_urls);
-    let ttl_seconds = env_non_empty("SOLAND_ICE_TTL_SECONDS")
+    let ttl_seconds = env_non_empty(source, "SOLAND_ICE_TTL_SECONDS")
         .and_then(|value| value.parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(defaults.ttl_seconds);
-    let refresh_lead_seconds = env_non_empty("SOLAND_ICE_REFRESH_LEAD_SECONDS")
+    let refresh_lead_seconds = env_non_empty(source, "SOLAND_ICE_REFRESH_LEAD_SECONDS")
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(defaults.refresh_lead_seconds);
     let turn_secret_rotation_window_seconds =
-        env_non_empty("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS")
+        env_non_empty(source, "SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS")
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(defaults.turn_secret_rotation_window_seconds);
-    let turn_shared_secret = env_non_empty_or_file("SOLAND_TURN_SHARED_SECRET")?;
+    let turn_shared_secret = env_non_empty_or_file(source, "SOLAND_TURN_SHARED_SECRET")?;
     Ok(IceServersConfig {
         stun_urls,
         turn_urls,
@@ -1387,8 +1514,8 @@ fn normalized_storage_prefix(prefix: Option<String>) -> String {
 /// NotaryWorker then mints an ephemeral key with a sticky-warn).
 /// Returns `Err(_)` when the env var is set but malformed — fail-fast at
 /// startup rather than silently downgrading to ephemeral.
-fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
-    let raw = match std::env::var("SOLAND_NOTARY_SIGNING_KEY") {
+fn load_notary_signing_key_seed(source: &ConfigSource) -> anyhow::Result<Option<[u8; 32]>> {
+    let raw = match source.var("SOLAND_NOTARY_SIGNING_KEY") {
         Ok(value) => value.trim().to_owned(),
         Err(_) => return Ok(None),
     };
@@ -1442,9 +1569,10 @@ pub fn assert_durable_outbox_backend(
     )
 }
 
-fn load_receive_policy_constraints()
--> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {
-    let applies_to = env_csv_cap("SOLAND_RECEIVE_POLICY_APPLIES_TO")
+fn load_receive_policy_constraints(
+    source: &ConfigSource,
+) -> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {
+    let applies_to = env_csv_cap(source, "SOLAND_RECEIVE_POLICY_APPLIES_TO")
         .map(|values| {
             values
                 .into_iter()
@@ -1463,31 +1591,35 @@ fn load_receive_policy_constraints()
         })
         .transpose()?;
     let deployment_allowed_introduction_kinds =
-        env_csv_cap("SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
+        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
     let deployment_denied_introduction_kinds =
-        env_csv_cap("SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS").unwrap_or_default();
+        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS")
+            .unwrap_or_default();
     let handle_claim_max_behavior =
-        env_receive_action("SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
-    let explicit_address_max_behavior =
-        env_receive_action("SOLAND_RECEIVE_POLICY_EXPLICIT_ADDRESS_MAX_BEHAVIOR")?;
+        env_receive_action(source, "SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
+    let explicit_address_max_behavior = env_receive_action(
+        source,
+        "SOLAND_RECEIVE_POLICY_EXPLICIT_ADDRESS_MAX_BEHAVIOR",
+    )?;
     let unknown_invites_max_behavior =
-        env_unknown_action("SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
+        env_unknown_action(source, "SOLAND_RECEIVE_POLICY_UNKNOWN_INVITES_MAX_BEHAVIOR")?;
     let allowed_handle_domains =
-        env_csv_cap("SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
+        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_ALLOWED_HANDLE_DOMAINS").map(|domains| {
             domains
                 .into_iter()
                 .map(|domain| domain.to_ascii_lowercase())
                 .collect()
         });
-    let trusted_handle_issuers = env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
+    let trusted_handle_issuers =
+        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
     let trusted_directory_services =
-        env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
+        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
     let trusted_principal_services =
-        env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
+        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
     let denied_principal_services =
-        env_did_csv_cap("SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
+        env_did_csv_cap(source, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
-        env_csv_cap("SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
+        env_csv_cap(source, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
 
     let has_any_constraint = applies_to.is_some()
         || deployment_allowed_introduction_kinds.is_some()
@@ -1525,9 +1657,10 @@ fn load_receive_policy_constraints()
 }
 
 fn env_receive_action(
+    source: &ConfigSource,
     name: &str,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::InviteReceiveAction>> {
-    let Some(value) = env_non_empty(name) else {
+    let Some(value) = env_non_empty(source, name) else {
         return Ok(None);
     };
     match value.as_str() {
@@ -1543,9 +1676,10 @@ fn env_receive_action(
 }
 
 fn env_unknown_action(
+    source: &ConfigSource,
     name: &str,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::UnknownInviteAction>> {
-    let Some(value) = env_non_empty(name) else {
+    let Some(value) = env_non_empty(source, name) else {
         return Ok(None);
     };
     match value.as_str() {
@@ -1557,8 +1691,8 @@ fn env_unknown_action(
     }
 }
 
-fn env_csv_cap(name: &str) -> Option<Vec<String>> {
-    let raw = std::env::var(name).ok()?;
+fn env_csv_cap(source: &ConfigSource, name: &str) -> Option<Vec<String>> {
+    let raw = source.var(name).ok()?;
     Some(
         raw.split(',')
             .map(|value| value.trim().to_owned())
@@ -1567,8 +1701,11 @@ fn env_csv_cap(name: &str) -> Option<Vec<String>> {
     )
 }
 
-fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_identifiers::DidCoreId>>> {
-    let Some(values) = env_csv_cap(name) else {
+fn env_did_csv_cap(
+    source: &ConfigSource,
+    name: &str,
+) -> anyhow::Result<Option<Vec<arkret_identifiers::DidCoreId>>> {
+    let Some(values) = env_csv_cap(source, name) else {
         return Ok(None);
     };
     values
@@ -1582,8 +1719,9 @@ fn env_did_csv_cap(name: &str) -> anyhow::Result<Option<Vec<arkret_identifiers::
         .map(Some)
 }
 
-fn env_csv(name: &str) -> Option<Vec<String>> {
-    let values: Vec<String> = std::env::var(name)
+fn env_csv(source: &ConfigSource, name: &str) -> Option<Vec<String>> {
+    let values: Vec<String> = source
+        .var(name)
         .ok()?
         .split(',')
         .map(|value| value.trim().trim_start_matches("did:").to_ascii_lowercase())
@@ -1603,8 +1741,9 @@ fn default_did_resolver_allow_methods() -> Vec<String> {
     vec!["webvh".to_owned(), "key".to_owned(), "uuid".to_owned()]
 }
 
-fn env_non_empty(name: &str) -> Option<String> {
-    std::env::var(name)
+fn env_non_empty(source: &ConfigSource, name: &str) -> Option<String> {
+    source
+        .var(name)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -1620,12 +1759,31 @@ fn env_non_empty(name: &str) -> Option<String> {
 ///
 /// - `$NAME_FILE` is set but the path cannot be read.
 /// - Both `$NAME` and `$NAME_FILE` are set to different non-empty values.
-fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
-    let from_env = env_non_empty(name);
+fn env_non_empty_or_file(source: &ConfigSource, name: &str) -> anyhow::Result<Option<String>> {
     let file_name = format!("{name}_FILE");
-    let file_value = match env_non_empty(&file_name) {
+    resolve_value_or_file(
+        name,
+        &file_name,
+        env_non_empty(source, name).as_deref(),
+        env_non_empty(source, &file_name).as_deref(),
+    )
+}
+
+/// The decision half of [`env_non_empty_or_file`], with both inputs supplied.
+///
+/// Split out so the conflict, missing-file and whitespace rules are testable
+/// without mutating the process environment. The tests that covered them used
+/// to `unsafe { set_var }` a throwaway variable per case, which made a global
+/// mutation the price of asserting a pure rule.
+fn resolve_value_or_file(
+    name: &str,
+    file_name: &str,
+    from_env: Option<&str>,
+    file_path: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let file_value = match file_path {
         Some(path) => {
-            let raw = std::fs::read_to_string(&path).map_err(|error| {
+            let raw = std::fs::read_to_string(path).map_err(|error| {
                 anyhow::anyhow!(
                     "{file_name} points to {path:?} but the file could not be read: {error}"
                 )
@@ -1639,7 +1797,7 @@ fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
         }
         None => None,
     };
-    match (from_env, file_value) {
+    match (from_env.map(ToOwned::to_owned), file_value) {
         (None, None) => Ok(None),
         (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
         (Some(env), Some(file)) if env == file => Ok(Some(env)),
@@ -1649,12 +1807,12 @@ fn env_non_empty_or_file(name: &str) -> anyhow::Result<Option<String>> {
     }
 }
 
-fn required_env(name: &str) -> anyhow::Result<String> {
-    env_non_empty(name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
+fn required_env(source: &ConfigSource, name: &str) -> anyhow::Result<String> {
+    env_non_empty(source, name).ok_or_else(|| anyhow::anyhow!("{name} is required"))
 }
 
-fn env_bool(name: &str) -> anyhow::Result<Option<bool>> {
-    let Some(value) = env_non_empty(name) else {
+fn env_bool(source: &ConfigSource, name: &str) -> anyhow::Result<Option<bool>> {
+    let Some(value) = env_non_empty(source, name) else {
         return Ok(None);
     };
     match value.to_ascii_lowercase().as_str() {
@@ -1675,7 +1833,6 @@ fn arg_value(name: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -1683,36 +1840,27 @@ mod tests {
     fn key_store_config_selects_backends() {
         use base64::Engine as _;
 
-        let backend = ScopedEnv::new("SOLAND_KEYSTORE_BACKEND");
-        let path = ScopedEnv::new("SOLAND_KEYSTORE_PATH");
-        let master_key = ScopedEnv::new("SOLAND_KEYSTORE_MASTER_KEY");
-
+        let empty = ConfigSource::default();
         assert!(matches!(
-            KeyStoreConfig::from_env().unwrap(),
+            KeyStoreConfig::from_source(&empty).unwrap(),
             KeyStoreConfig::Disabled
         ));
 
-        backend.set_env("platform");
+        let platform = ConfigSource::from_pairs([("SOLAND_KEYSTORE_BACKEND", "platform")]);
         assert!(matches!(
-            KeyStoreConfig::from_env().unwrap(),
+            KeyStoreConfig::from_source(&platform).unwrap(),
             KeyStoreConfig::Platform
         ));
 
-        backend.set_env("encrypted_file");
-        path.set_env("soland-test-keystore.v1");
         let encoded = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
-        master_key.set_env(&encoded);
-        let encrypted = KeyStoreConfig::from_env().unwrap();
+        let encrypted_source = ConfigSource::from_pairs([
+            ("SOLAND_KEYSTORE_BACKEND", "encrypted_file"),
+            ("SOLAND_KEYSTORE_PATH", "soland-test-keystore.v1"),
+            ("SOLAND_KEYSTORE_MASTER_KEY", encoded.as_str()),
+        ]);
+        let encrypted = KeyStoreConfig::from_source(&encrypted_source).unwrap();
         assert_eq!(encrypted.backend_name(), Some("encrypted_file"));
         assert!(!format!("{encrypted:?}").contains(&encoded));
-
-        backend.clear();
-        path.clear();
-        master_key.clear();
-        assert!(matches!(
-            KeyStoreConfig::from_env().unwrap(),
-            KeyStoreConfig::Disabled
-        ));
     }
 
     #[test]
@@ -1753,22 +1901,18 @@ mod tests {
     }
 
     #[test]
-    fn load_ice_servers_config_parses_env_overrides() {
-        // All SOLAND_ICE_* / SOLAND_TURN_* vars are exercised in a single
-        // test so the fixed (non-unique) env-var names cannot race against a
-        // sibling test reading the same keys.
-        let stun = ScopedEnv::new("SOLAND_ICE_STUN_URLS");
-        let turn = ScopedEnv::new("SOLAND_TURN_URLS");
-        let ttl = ScopedEnv::new("SOLAND_ICE_TTL_SECONDS");
-        let lead = ScopedEnv::new("SOLAND_ICE_REFRESH_LEAD_SECONDS");
-        let rotation = ScopedEnv::new("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS");
-        stun.set_env("stun:stun.example:3478 , stun:stun2.example:3478");
-        turn.set_env("turn:turn.example:3478?transport=udp");
-        ttl.set_env("120");
-        lead.set_env("30");
-        rotation.set_env("3600");
-
-        let ice = load_ice_servers_config().expect("load ice config");
+    fn load_ice_servers_config_parses_overrides() {
+        let source = ConfigSource::from_pairs([
+            (
+                "SOLAND_ICE_STUN_URLS",
+                "stun:stun.example:3478 , stun:stun2.example:3478",
+            ),
+            ("SOLAND_TURN_URLS", "turn:turn.example:3478?transport=udp"),
+            ("SOLAND_ICE_TTL_SECONDS", "120"),
+            ("SOLAND_ICE_REFRESH_LEAD_SECONDS", "30"),
+            ("SOLAND_TURN_SECRET_ROTATION_WINDOW_SECS", "3600"),
+        ]);
+        let ice = load_ice_servers_config(&source).expect("load ice config");
         assert_eq!(
             ice.stun_urls,
             vec!["stun:stun.example:3478", "stun:stun2.example:3478"]
@@ -1777,55 +1921,13 @@ mod tests {
         assert_eq!(ice.ttl_seconds, 120);
         assert_eq!(ice.refresh_lead_seconds, 30);
         assert_eq!(ice.turn_secret_rotation_window_seconds, 3600);
+    }
 
-        // A non-positive TTL is rejected and falls back to the default.
-        ttl.set_env("0");
-        let ice = load_ice_servers_config().expect("load ice config");
+    #[test]
+    fn a_non_positive_ice_ttl_falls_back_to_the_default() {
+        let source = ConfigSource::from_pairs([("SOLAND_ICE_TTL_SECONDS", "0")]);
+        let ice = load_ice_servers_config(&source).expect("load ice config");
         assert_eq!(ice.ttl_seconds, 300);
-    }
-
-    /// Guard that scopes env-var mutation to a single test. The Rust
-    /// 2024 edition marks `set_var`/`remove_var` `unsafe`; this wrapper
-    /// localises the unsafe block and restores env on drop so tests
-    /// running in parallel against unique names never leak state.
-    struct ScopedEnv {
-        name: String,
-        file_name: String,
-    }
-
-    impl ScopedEnv {
-        fn new(name: &str) -> Self {
-            let guard = Self {
-                name: name.to_owned(),
-                file_name: format!("{name}_FILE"),
-            };
-            guard.clear();
-            guard
-        }
-
-        fn set_env(&self, value: &str) {
-            // SAFETY: scoped to a unique env var per test; clear() runs on drop.
-            unsafe { std::env::set_var(&self.name, value) };
-        }
-
-        fn set_file(&self, value: &str) {
-            // SAFETY: scoped to a unique env var per test; clear() runs on drop.
-            unsafe { std::env::set_var(&self.file_name, value) };
-        }
-
-        fn clear(&self) {
-            // SAFETY: scoped to env vars this guard owns.
-            unsafe {
-                std::env::remove_var(&self.name);
-                std::env::remove_var(&self.file_name);
-            }
-        }
-    }
-
-    impl Drop for ScopedEnv {
-        fn drop(&mut self) {
-            self.clear();
-        }
     }
 
     fn write_secret_file(suffix: &str, contents: &str) -> std::path::PathBuf {
@@ -1837,23 +1939,23 @@ mod tests {
         path
     }
 
+    fn resolve(env: Option<&str>, file: Option<&str>) -> anyhow::Result<Option<String>> {
+        resolve_value_or_file("SOLAND_TEST_BEARER", "SOLAND_TEST_BEARER_FILE", env, file)
+    }
+
     #[test]
-    fn env_only_returns_value() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_ENV_ONLY");
-        env.set_env("from-env");
+    fn value_only_returns_value() {
         assert_eq!(
-            env_non_empty_or_file(&env.name).unwrap(),
+            resolve(Some("from-env"), None).unwrap(),
             Some("from-env".to_owned())
         );
     }
 
     #[test]
     fn file_only_returns_value() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_FILE_ONLY");
         let path = write_secret_file("file-only", "from-file\n");
-        env.set_file(path.to_str().unwrap());
         assert_eq!(
-            env_non_empty_or_file(&env.name).unwrap(),
+            resolve(None, path.to_str()).unwrap(),
             Some("from-file".to_owned())
         );
         let _ = std::fs::remove_file(&path);
@@ -1861,18 +1963,14 @@ mod tests {
 
     #[test]
     fn neither_set_returns_none() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_NEITHER");
-        assert!(env_non_empty_or_file(&env.name).unwrap().is_none());
+        assert!(resolve(None, None).unwrap().is_none());
     }
 
     #[test]
     fn both_set_to_same_value_is_ok() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_BOTH_SAME");
-        env.set_env("same-tok");
         let path = write_secret_file("both-same", "same-tok");
-        env.set_file(path.to_str().unwrap());
         assert_eq!(
-            env_non_empty_or_file(&env.name).unwrap(),
+            resolve(Some("same-tok"), path.to_str()).unwrap(),
             Some("same-tok".to_owned())
         );
         let _ = std::fs::remove_file(&path);
@@ -1880,11 +1978,8 @@ mod tests {
 
     #[test]
     fn both_set_to_different_values_errors() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_BOTH_DIFF");
-        env.set_env("env-tok");
         let path = write_secret_file("both-diff", "file-tok");
-        env.set_file(path.to_str().unwrap());
-        let error = env_non_empty_or_file(&env.name).expect_err("must error");
+        let error = resolve(Some("env-tok"), path.to_str()).expect_err("must error");
         assert!(
             error
                 .to_string()
@@ -1896,9 +1991,8 @@ mod tests {
 
     #[test]
     fn file_pointing_to_missing_path_errors() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_MISSING_FILE");
-        env.set_file("/definitely/does/not/exist-soland-test");
-        let error = env_non_empty_or_file(&env.name).expect_err("must error");
+        let error =
+            resolve(None, Some("/definitely/does/not/exist-soland-test")).expect_err("must error");
         assert!(
             error.to_string().contains("could not be read"),
             "unexpected error: {error}"
@@ -1907,10 +2001,8 @@ mod tests {
 
     #[test]
     fn whitespace_file_is_treated_as_unset() {
-        let env = ScopedEnv::new("SOLAND_TEST_BEARER_WS_FILE");
         let path = write_secret_file("ws-file", "   \n\t  \n");
-        env.set_file(path.to_str().unwrap());
-        assert!(env_non_empty_or_file(&env.name).unwrap().is_none());
+        assert!(resolve(None, path.to_str()).unwrap().is_none());
         let _ = std::fs::remove_file(&path);
     }
 

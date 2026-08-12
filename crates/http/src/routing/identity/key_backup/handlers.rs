@@ -499,7 +499,7 @@ pub(super) async fn unlock_key_backup(
     // (429) and MUST land in the audit log as a `key_backup_read` access
     // record; encrypted backups are offline KDF-cracking ammunition, so bulk
     // dumps are throttled even for the owner's own authenticated session.
-    let daily_limit = key_backup_daily_download_limit();
+    let daily_limit = state.config().key_backup_daily_download_limit;
     let quota = state.record_key_backup_download(&session.actor, daily_limit);
     if quota.rate_limited {
         append_audit_log(

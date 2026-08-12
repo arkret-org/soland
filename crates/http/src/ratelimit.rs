@@ -103,13 +103,16 @@ impl RateLimiterConfig {
     /// connect bootstraps and block sign-in. The limiter stays installed in
     /// both modes (defense in depth + an honest `hardening.rate_limit_enabled`);
     /// only the ceilings move.
-    pub fn from_env(development_mode: bool) -> Self {
+    pub fn from_source(
+        source: &crate::config_source::ConfigSource,
+        development_mode: bool,
+    ) -> Self {
         let base = if development_mode {
             Self::development()
         } else {
             Self::default()
         };
-        base.with_env_overrides()
+        base.with_overrides(source)
     }
 
     fn development() -> Self {
@@ -125,7 +128,8 @@ impl RateLimiterConfig {
         }
     }
 
-    fn with_env_overrides(mut self) -> Self {
+    fn with_overrides(mut self, source: &crate::config_source::ConfigSource) -> Self {
+        let env_u32 = |name: &str| source.non_empty(name).and_then(|v| v.parse::<u32>().ok());
         if let Some(seconds) = env_u32("SOLAND_RATE_LIMIT_WINDOW_SECONDS") {
             self.window = Duration::from_secs(u64::from(seconds.max(1)));
         }
@@ -192,10 +196,6 @@ impl RateLimiterConfig {
             ..arkret_models_discovery::service_description::RateLimitPolicy::default()
         }
     }
-}
-
-fn env_u32(name: &str) -> Option<u32> {
-    std::env::var(name).ok()?.trim().parse::<u32>().ok()
 }
 
 /// Endpoint class — derived from the request path. Each class participates
@@ -325,17 +325,27 @@ impl RateLimiterMiddleware {
 }
 
 fn forwarded_for_trusted() -> bool {
-    std::env::var("SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on" | "yes"
-            )
-        })
-        .unwrap_or(false)
+    TRUST_FORWARDED_FOR.get().copied().unwrap_or(false)
 }
 
-fn trusted_forwarded_client(req: &Request) -> Option<String> {
+static TRUST_FORWARDED_FOR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Install whether `X-Forwarded-For` may be trusted for client attribution.
+///
+/// Read once by the configuration loader. The first call wins.
+pub fn install_forwarded_for_trust(trusted: bool) {
+    let _ = TRUST_FORWARDED_FOR.set(trusted);
+}
+
+/// The client address to attribute a request to, or `None` when
+/// `X-Forwarded-For` is not trusted.
+///
+/// This is the only implementation. It takes the **rightmost parseable IP** in
+/// the chain — the entry this deployment's own proxy appended. Leftmost
+/// entries are supplied by the caller and are therefore forgeable, which
+/// matters wherever the result is used as a rate-limit key or recorded as
+/// request provenance.
+pub(crate) fn trusted_forwarded_client(req: &Request) -> Option<String> {
     if !forwarded_for_trusted() {
         return None;
     }
@@ -484,7 +494,8 @@ mod tests {
 
     #[test]
     fn development_mode_relaxes_every_class() {
-        let dev = RateLimiterConfig::from_env(true);
+        let dev =
+            RateLimiterConfig::from_source(&crate::config_source::ConfigSource::default(), true);
         let prod = RateLimiterConfig::default();
         assert!(dev.probe_max_requests > prod.probe_max_requests);
         assert!(dev.api_max_requests > prod.api_max_requests);

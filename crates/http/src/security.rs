@@ -1,20 +1,55 @@
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 #[cfg(test)]
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use reqwest::Url;
 
-const SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS: &str = "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS";
-const SOLAND_EGRESS_ALLOWED_HOSTS: &str = "SOLAND_EGRESS_ALLOWED_HOSTS";
-const SOLAND_EGRESS_DENYLIST: &str = "SOLAND_EGRESS_DENYLIST";
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const SOLAND_FEDERATION_DENYLIST: &str = "SOLAND_FEDERATION_DENYLIST";
-const SOLAND_FEDERATION_PEER_DENYLIST: &str = "SOLAND_FEDERATION_PEER_DENYLIST";
-const SOLAND_SOVEREIGN_ENCLAVE: &str = "SOLAND_SOVEREIGN_ENCLAVE";
-const SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS: &str =
-    "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS";
-const SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST: &str = "SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST";
+
+/// Every input that can change an egress or federation verdict, parsed once.
+///
+/// These used to be eight separate `std::env::var` reads spread across this
+/// file, each with its own parser. `SOLAND_SOVEREIGN_ENCLAVE` in particular had
+/// a second parser in `AppConfig` that accepted `on` and was case-insensitive
+/// while this file's did not, so `SOLAND_SOVEREIGN_ENCLAVE=on` enforced the
+/// enclave posture at startup while leaving this gate — the one that actually
+/// denies outbound federation — switched off.
+///
+/// The values are installed once at startup by [`install_egress_policy`] and
+/// are immutable afterwards, which is what lets the ~74 call sites of the
+/// functions below stay parameterless.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EgressPolicy {
+    pub allow_private_networks: Option<bool>,
+    pub allowed_hosts: Vec<String>,
+    pub denylist: Vec<String>,
+    pub federation_denylist: Vec<String>,
+    pub federation_trust_domain_allowlist: Vec<String>,
+    pub sovereign_enclave_enabled: bool,
+    pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
+}
+
+static EGRESS_POLICY: OnceLock<EgressPolicy> = OnceLock::new();
+
+/// Install the process egress policy. The first call wins; later calls are
+/// ignored so a test harness cannot silently reconfigure a live gate.
+pub fn install_egress_policy(policy: EgressPolicy) {
+    let _ = EGRESS_POLICY.set(policy);
+}
+
+/// The installed policy, or an empty one.
+///
+/// An empty policy is the fail-closed reading everywhere it matters: no
+/// sovereign enclave, no allowlists, no denylists, and
+/// `allow_private_networks` deferring to `development_mode`.
+fn egress_policy() -> &'static EgressPolicy {
+    static EMPTY: OnceLock<EgressPolicy> = OnceLock::new();
+    EGRESS_POLICY
+        .get()
+        .unwrap_or_else(|| EMPTY.get_or_init(EgressPolicy::default))
+}
 
 /// The hosts outbound HTTP may reach when the sovereign enclave profile is on.
 ///
@@ -24,12 +59,14 @@ const SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST: &str = "SOLAND_FEDERATION_TRUST_
 /// log, so what an operator read back was not, by construction, what the
 /// egress gate enforced.
 pub fn sovereign_enclave_allowed_outbound_hosts() -> Vec<String> {
-    host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS)
+    egress_policy()
+        .sovereign_enclave_allowed_outbound_hosts
+        .clone()
 }
 
 /// Whether the sovereign enclave profile is enabled for this process.
 pub fn sovereign_enclave_enabled() -> bool {
-    env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false)
+    egress_policy().sovereign_enclave_enabled
 }
 
 /// `sync/sovereign-deployment.md` §8 (normative) — before a federation request
@@ -54,9 +91,10 @@ pub fn federation_outbound_trust_domain_denial(
     peer_service_id: &str,
     peer_trust_domain: Option<&str>,
 ) -> Option<String> {
+    let policy = egress_policy();
     federation_outbound_trust_domain_denial_with_policy(
-        sovereign_enclave_enabled(),
-        &host_policy_entries(SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST),
+        policy.sovereign_enclave_enabled,
+        &policy.federation_trust_domain_allowlist,
         peer_service_id,
         peer_trust_domain,
     )
@@ -112,7 +150,9 @@ fn federation_outbound_trust_domain_denial_with_policy(
 /// `development_mode`, but the explicit env var should be preferred to pin the
 /// posture independently.
 pub fn private_networks_allowed(development_mode: bool) -> bool {
-    env_bool(SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS).unwrap_or(development_mode)
+    egress_policy()
+        .allow_private_networks
+        .unwrap_or(development_mode)
 }
 
 /// Stable digest of every input that can change an egress verdict.
@@ -130,15 +170,10 @@ pub fn egress_policy_version(development_mode: bool) -> String {
     } else {
         "0"
     });
+    let policy = egress_policy();
     for (name, entries) in [
-        (
-            SOLAND_EGRESS_ALLOWED_HOSTS,
-            host_policy_entries(SOLAND_EGRESS_ALLOWED_HOSTS),
-        ),
-        (
-            SOLAND_EGRESS_DENYLIST,
-            host_policy_entries(SOLAND_EGRESS_DENYLIST),
-        ),
+        ("SOLAND_EGRESS_ALLOWED_HOSTS", policy.allowed_hosts.clone()),
+        ("SOLAND_EGRESS_DENYLIST", policy.denylist.clone()),
     ] {
         canonical.push('\n');
         canonical.push_str(name);
@@ -166,7 +201,7 @@ pub fn egress_policy_version(development_mode: bool) -> String {
     canonical.push_str(&enclave_hosts.join(","));
     // §8's outbound allowlist changes an egress verdict, so a `policy_suppressed`
     // federation row must revalidate when it changes.
-    let mut federation_allowlist = host_policy_entries(SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST);
+    let mut federation_allowlist = policy.federation_trust_domain_allowlist.clone();
     federation_allowlist.sort();
     federation_allowlist.dedup();
     canonical.push_str("\nfederation_trust_domain_allowlist=");
@@ -494,25 +529,12 @@ fn egress_denial_reason(error: &str) -> &'static str {
 }
 
 fn federation_denylist_entries() -> Vec<String> {
-    [SOLAND_FEDERATION_DENYLIST, SOLAND_FEDERATION_PEER_DENYLIST]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .flat_map(|raw| {
-            raw.split([',', ';', '\n'])
-                .map(|entry| entry.trim().to_ascii_lowercase())
-                .filter(|entry| !entry.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .collect()
+    egress_policy().federation_denylist.clone()
 }
 
 fn validate_host_policy(host: &str, purpose: &str) -> Result<(), String> {
-    validate_host_policy_with_entries(
-        host,
-        purpose,
-        &host_policy_entries(SOLAND_EGRESS_DENYLIST),
-        &host_policy_entries(SOLAND_EGRESS_ALLOWED_HOSTS),
-    )
+    let policy = egress_policy();
+    validate_host_policy_with_entries(host, purpose, &policy.denylist, &policy.allowed_hosts)
 }
 
 fn validate_host_policy_with_entries(
@@ -538,13 +560,28 @@ fn validate_host_policy_with_entries(
     Ok(())
 }
 
-fn host_policy_entries(name: &str) -> Vec<String> {
-    std::env::var(name)
-        .ok()
-        .into_iter()
+/// Split a comma / semicolon / newline separated host policy list.
+///
+/// Public so the configuration loader — the only parser — can produce the
+/// entries this module consumes.
+pub fn split_host_policy_entries(raw: Option<&str>) -> Vec<String> {
+    raw.into_iter()
         .flat_map(|raw| {
             raw.split([',', ';', '\n'])
                 .map(|entry| entry.trim().trim_end_matches('.').to_ascii_lowercase())
+                .filter(|entry| !entry.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Same split, without the trailing-dot trim, for federation denylist entries.
+pub fn split_federation_denylist_entries(raws: &[Option<&str>]) -> Vec<String> {
+    raws.iter()
+        .filter_map(|raw| *raw)
+        .flat_map(|raw| {
+            raw.split([',', ';', '\n'])
+                .map(|entry| entry.trim().to_ascii_lowercase())
                 .filter(|entry| !entry.is_empty())
                 .collect::<Vec<_>>()
         })
@@ -615,12 +652,6 @@ fn did_web_domain(did: &str) -> Option<String> {
         .trim_end_matches('.')
         .to_ascii_lowercase();
     (!domain.trim().is_empty()).then_some(domain)
-}
-
-fn env_bool(name: &str) -> Option<bool> {
-    std::env::var(name)
-        .ok()
-        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[cfg(test)]

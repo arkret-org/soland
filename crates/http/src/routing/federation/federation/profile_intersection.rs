@@ -288,20 +288,15 @@ impl SemanticAtoms {
 fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     let mut description = wire::describe(
         state.service_resolution_commitment().as_ref(),
-        &state.config().public_base_url,
         state.jobs().storage_mode(),
-        state.config().development_mode,
-        state.config().account_authority_url.as_deref(),
-        state.config().oidc_client_id.as_deref(),
-        state.config().trust_domain.as_str(),
-        state.config().resumable_upload_incomplete_ttl_seconds,
-        state.config().to_device_queue_capacity,
+        state.config(),
     );
     description.receive_policy_constraints = state.config().receive_policy_constraints.clone();
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
         state.settings().candidate_join_policy_enabled,
+        state.config().sovereign_enclave_enabled,
     );
     let mut profiles = profile_ids_from_description(&description);
     profiles.insert(ProfileId::FEDERATION_MINIMAL_V1.to_owned());

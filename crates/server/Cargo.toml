@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "soland"
 version.workspace = true
 edition.workspace = true
@@ -95,3 +95,6 @@ soland-test-support = {workspace = true}
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation
 # auth-failure timing-bucket pad deterministically without a real sleep.
 tokio = {workspace = true,features = ["test-util"]}
+
+[lints]
+workspace = true

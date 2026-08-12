@@ -40,7 +40,15 @@ static DB_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn test_pool() -> Option<PgPool> {
     TEST_POOL
-        .get_or_init(|| async { Db::from_env().await.expect("initialize test database").pool })
+        .get_or_init(|| async {
+            Db::connect(
+                std::env::var("DATABASE_URL").ok().as_deref(),
+                Default::default(),
+            )
+            .await
+            .expect("initialize test database")
+            .pool
+        })
         .await
         .clone()
 }

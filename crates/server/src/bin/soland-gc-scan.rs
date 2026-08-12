@@ -18,10 +18,15 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("soland-gc-scan: only --dry-run is supported (deletion is a follow-up)");
         std::process::exit(2);
     }
-
-    dotenvy::dotenv().ok();
-    let config = AppConfig::from_env_and_args()?;
-    let db = Db::from_env().await?;
+    let config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+    let db = Db::connect(
+        config.database_url.as_deref(),
+        soland_storage_postgres::PoolTuning {
+            max_size: config.db_pool_max_size,
+            acquire_timeout_seconds: config.db_pool_acquire_timeout_seconds,
+        },
+    )
+    .await?;
     let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let resolution_commitment = bootstrap
         .resolution_commitment

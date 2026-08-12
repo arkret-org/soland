@@ -1517,6 +1517,10 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RejectedControlEventEntry {
     pub event_digest: String,
+    /// The reason the signed `ControlProposalDecision` carries. Operators and
+    /// tests read this; `reason` below is free-form diagnostics that must not
+    /// be parsed.
+    pub reason_code: arkret_wire::ControlProposalRejectReason,
     pub reason: String,
 }
 
@@ -1588,9 +1592,10 @@ async fn admin_sign_seal(
             let rejected = outcome
                 .rejected_events
                 .into_iter()
-                .map(|(digest, reason)| RejectedControlEventEntry {
+                .map(|(digest, rejection)| RejectedControlEventEntry {
                     event_digest: digest.as_str().to_owned(),
-                    reason,
+                    reason_code: rejection.reason,
+                    reason: rejection.detail,
                 })
                 .collect();
             json_ok(SignSealOutcome {
@@ -1977,11 +1982,15 @@ mod tests {
         // (§6.3.2), not by a Move id: v1 has no Move object.
         let r = RejectedControlEventEntry {
             event_digest: "sha256:00".to_owned(),
+            reason_code: arkret_wire::ControlProposalRejectReason::SchemaViolation,
             reason: "bad sig".to_owned(),
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("event_digest"));
         assert!(!s.contains("move_id"));
         assert!(s.contains("reason"));
+        // The classified reason travels as a value, not as prose an operator
+        // (or a client) would have to pattern-match.
+        assert!(s.contains(r#""reason_code":"schema_violation""#), "{s}");
     }
 }

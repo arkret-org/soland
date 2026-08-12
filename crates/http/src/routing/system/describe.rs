@@ -350,14 +350,8 @@ fn unsupported_profiles_from_limits(
 pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     let mut description = describe(
         state.service_resolution_commitment().as_ref(),
-        &state.config().public_base_url,
         state.jobs().storage_mode(),
-        state.config().development_mode,
-        state.config().account_authority_url.as_deref(),
-        state.config().oidc_client_id.as_deref(),
-        state.config().trust_domain.as_str(),
-        state.config().resumable_upload_incomplete_ttl_seconds,
-        state.config().to_device_queue_capacity,
+        state.config(),
     );
     crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
     description.receive_policy_constraints = state.config().receive_policy_constraints.clone();
@@ -381,6 +375,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
         &mut description,
         state.verified_profiles(),
         state.settings().candidate_join_policy_enabled,
+        state.config().sovereign_enclave_enabled,
     );
 
     // Round 4 (B1) — validate the v2 invariants. development_mode=true MUST
@@ -424,6 +419,7 @@ pub(crate) fn apply_claim_level_partition(
     description: &mut arkret_models_discovery::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
     candidate_join_policy_enabled: bool,
+    sovereign_enclave_enabled: bool,
 ) {
     const JOIN_OPERATIONS: &[&str] = &[
         "ak.self.realm.join_application.command.submit",
@@ -575,15 +571,12 @@ pub(crate) fn apply_claim_level_partition(
     // happens at `main.rs` startup via
     // `routing::extensions::sovereign::assert_enclave_invariants`.
     //
-    // NOTE: `apply_claim_level_partition` is called from inside
-    // `server_describe`, which doesn't carry config through to this
-    // signature. We probe the env var directly here — the same way
-    // `AppConfig::from_env_and_args` does — so the claim follows the
-    // operator's posture without expanding this function's signature.
-    if matches!(
-        std::env::var("SOLAND_SOVEREIGN_ENCLAVE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
-    ) {
+    // The flag arrives as a value from `AppConfig`. It used to be re-read
+    // here from the environment with a third, stricter parser: that one was
+    // case-sensitive, did not trim, and did not accept `on`, so
+    // `SOLAND_SOVEREIGN_ENCLAVE=on` enforced the enclave posture while
+    // `/describe` silently declined to claim the profile.
+    if sovereign_enclave_enabled {
         claimed_profiles.push(
             arkret_models_discovery::service_description::ClaimedProfileEntry {
                 notes: Some(
@@ -861,7 +854,7 @@ mod tests {
             TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
             ServiceKind::PrincipalServer,
         );
-        apply_claim_level_partition(&mut description, &[], true);
+        apply_claim_level_partition(&mut description, &[], true, false);
         assert!(
             description
                 .supported_profiles
@@ -889,7 +882,7 @@ mod tests {
         }
         assert!(description.validate().is_ok());
 
-        apply_claim_level_partition(&mut description, &[], false);
+        apply_claim_level_partition(&mut description, &[], false, false);
         assert!(
             !description
                 .supported_profiles
@@ -919,7 +912,7 @@ mod tests {
         description
             .supported_profiles
             .push("ak.profile.chat_mvp.v1".to_owned());
-        apply_claim_level_partition(&mut description, &[], false);
+        apply_claim_level_partition(&mut description, &[], false, false);
         for feature in [
             "discussion_history_visibility",
             "supported_event_kinds",

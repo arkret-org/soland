@@ -434,14 +434,12 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
             }
             let detail = error.detail();
             let code = if error.is_conflict_kind() {
-                if detail.contains("duplicate") {
-                    "duplicate_conflict"
-                } else if detail.contains("applet_revoked") {
-                    "applet_revoked"
-                } else if detail.contains("cas_conflict") {
-                    "cas_conflict"
-                } else {
-                    "failed_precondition"
+                // Route on the registered code, never on the diagnostic text.
+                match error.conflict_code() {
+                    Some(ConflictCode::DuplicateConflict) => "duplicate_conflict",
+                    Some(ConflictCode::AppletRevoked) => "applet_revoked",
+                    Some(ConflictCode::CasConflict) => "cas_conflict",
+                    _ => "failed_precondition",
                 }
             } else {
                 "internal_error"

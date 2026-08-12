@@ -2157,7 +2157,14 @@ pub(super) async fn submit_event_value_with_context(
         }
         if error.is_conflict_kind() {
             let message = error.detail();
-            if message.contains("cas_conflict") {
+            // The commit lane's conflict code decides the status and the wire
+            // reason. Reading it as a value (rather than substring-matching
+            // the diagnostic) is what keeps a reworded message from silently
+            // moving an admission decision, and what makes an unregistered
+            // conflict visible instead of falling through to a 500 labelled
+            // "events store unavailable".
+            let conflict = error.conflict_code();
+            if conflict == Some(ConflictCode::CasConflict) {
                 let current_frontier = super::super::endpoints::load_realm_actor_frontier(
                     state,
                     RealmId::new(parsed.realm_id.clone()).map_err(|_| {
@@ -2195,42 +2202,28 @@ pub(super) async fn submit_event_value_with_context(
                     },
                 ));
             }
-            if message.contains("fork_quarantine") {
+            if conflict == Some(ConflictCode::ForkQuarantine) {
                 return Err(SubmitOneError::quarantine(
                     parsed.event_id.clone(),
                     "fork_quarantine",
                     "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
                 ));
             }
-            if message.contains("schema_violation") {
+            if conflict == Some(ConflictCode::SchemaViolation) {
                 return Err(SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
                     message,
                 ));
             }
-            if message.contains("device_pairing_not_found") {
+            if conflict == Some(ConflictCode::DevicePairingNotFound) {
                 return Err(SubmitOneError::new(
                     StatusCode::NOT_FOUND,
                     "not_found",
                     "device pairing request not found",
                 ));
             }
-            if message.contains("contact_basis_conflict") {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "contact_basis_conflict",
-                    "Contact basis changed concurrently",
-                ));
-            }
-            if message.contains("contact_lineage_conflict") {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "contact_lineage_conflict",
-                    "Contact lineage changed concurrently",
-                ));
-            }
-            if message.contains("duplicate") {
+            if conflict == Some(ConflictCode::DuplicateConflict) {
                 if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await
                     && existing.canonical_bytes == parsed.canonical_bytes
                 {
@@ -2300,6 +2293,21 @@ pub(super) async fn submit_event_value_with_context(
         }
         if let Some(collision) = map_event_hash_collision(parsed.event_id.clone(), &error) {
             return Err(collision);
+        }
+        if error.is_conflict_kind() {
+            // The commit lane rejected the write for a reason this routing
+            // layer has no registered code for. Fail closed, but do not claim
+            // the store is unavailable: that message sent operators looking at
+            // the database for what is a classification gap in this file.
+            tracing::error!(
+                %error,
+                "commit rejected a canonical event with an unregistered conflict code"
+            );
+            return Err(SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "unclassified persistence conflict",
+            ));
         }
         tracing::error!(%error, "failed to persist canonical event");
         return Err(SubmitOneError::new(

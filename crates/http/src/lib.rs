@@ -8,6 +8,7 @@ pub mod authz;
 pub mod canonical_body;
 pub mod compactor;
 pub mod config;
+pub mod config_source;
 pub mod content_encoding;
 mod control_proposal;
 pub mod control_seal_coordinator;

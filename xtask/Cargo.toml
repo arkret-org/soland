@@ -15,3 +15,6 @@ serde_json.workspace = true
 [[bin]]
 name = "check_layering"
 path = "src/bin/check_layering.rs"
+
+[lints]
+workspace = true

@@ -6,7 +6,12 @@ async fn legacy_database_without_full_digest_contract_is_rejected_when_requested
         return;
     }
 
-    let error = match Db::from_env().await {
+    let error = match Db::connect(
+        std::env::var("DATABASE_URL").ok().as_deref(),
+        Default::default(),
+    )
+    .await
+    {
         Ok(_) => panic!("legacy database unexpectedly passed the schema contract fence"),
         Err(error) => error,
     };

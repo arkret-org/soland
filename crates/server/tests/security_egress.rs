@@ -1,13 +1,19 @@
-use std::ffi::OsString;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::OnceLock;
+//! Egress guard behaviour that holds under the default (empty) egress policy.
+//!
+//! The sovereign-enclave cases that used to live here configured the gate by
+//! mutating `SOLAND_SOVEREIGN_ENCLAVE*` in the process environment behind an
+//! `unsafe` block and a process-wide lock. The gate now reads a typed
+//! `EgressPolicy` installed once at startup, so those cases belong with the
+//! parameterised checks in `soland_http::security`
+//! (`federation_outbound_trust_domain_denial_with_policy`), which take the
+//! policy as an argument and need no globals at all.
 
-use parking_lot::{Mutex, MutexGuard};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use reqwest::Url;
 
 #[test]
 fn production_egress_rejects_private_targets() {
-    let _env = clean_egress_env();
     for raw in [
         "http://127.0.0.1:8080/sink",
         "https://10.0.0.2/federation",
@@ -28,7 +34,6 @@ fn production_egress_rejects_private_targets() {
 
 #[test]
 fn production_egress_rejects_transition_dns_private_answers() {
-    let _env = clean_egress_env();
     let url = Url::parse("https://relay.example/federation").unwrap();
     for ip in [
         IpAddr::V6("64:ff9b::a00:1".parse().unwrap()),
@@ -50,14 +55,12 @@ fn production_egress_rejects_transition_dns_private_answers() {
 
 #[test]
 fn production_egress_allows_public_ip_literal() {
-    let _env = clean_egress_env();
     let url = Url::parse("https://93.184.216.34/federation").unwrap();
     assert!(soland_http::security::validate_url_for_egress(&url, "test", false).is_ok());
 }
 
 #[test]
 fn production_egress_rejects_dns_private_answers() {
-    let _env = clean_egress_env();
     let url = Url::parse("https://relay.example/federation").unwrap();
     let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
         &url,
@@ -74,7 +77,6 @@ fn production_egress_rejects_dns_private_answers() {
 
 #[test]
 fn production_egress_rejects_mixed_dns_answers_to_limit_rebinding() {
-    let _env = clean_egress_env();
     let url = Url::parse("https://relay.example/federation").unwrap();
     let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
         &url,
@@ -91,86 +93,6 @@ fn production_egress_rejects_mixed_dns_answers_to_limit_rebinding() {
 
 #[test]
 fn development_egress_can_allow_loopback() {
-    let _env = clean_egress_env();
     let url = Url::parse("http://127.0.0.1:8698/health").unwrap();
     assert!(soland_http::security::validate_url_for_egress(&url, "test", true).is_ok());
-}
-
-#[test]
-fn sovereign_enclave_egress_denies_by_default() {
-    let _env = clean_egress_env();
-    unsafe {
-        std::env::set_var("SOLAND_SOVEREIGN_ENCLAVE", "1");
-    }
-    let url = Url::parse("https://relay.example/federation").unwrap();
-    let error = soland_http::security::validate_url_for_egress_with_resolved_ips(
-        &url,
-        "federation",
-        false,
-        &[IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
-    )
-    .unwrap_err();
-    assert!(error.contains("sovereign_enclave_outbound_not_allowed"));
-}
-
-#[test]
-fn sovereign_enclave_egress_allows_configured_host() {
-    let _env = clean_egress_env();
-    unsafe {
-        std::env::set_var("SOLAND_SOVEREIGN_ENCLAVE", "1");
-        std::env::set_var(
-            "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS",
-            "relay.example",
-        );
-    }
-    let url = Url::parse("https://relay.example/federation").unwrap();
-    assert!(
-        soland_http::security::validate_url_for_egress_with_resolved_ips(
-            &url,
-            "federation",
-            false,
-            &[IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
-        )
-        .is_ok()
-    );
-}
-
-struct CleanEgressEnvGuard {
-    _lock: MutexGuard<'static, ()>,
-    saved: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl Drop for CleanEgressEnvGuard {
-    fn drop(&mut self) {
-        for (name, value) in &self.saved {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
-
-fn clean_egress_env() -> CleanEgressEnvGuard {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let lock = LOCK.get_or_init(|| Mutex::new(())).lock();
-    let vars = [
-        "SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS",
-        "SOLAND_EGRESS_ALLOWED_HOSTS",
-        "SOLAND_EGRESS_DENYLIST",
-        "SOLAND_SOVEREIGN_ENCLAVE",
-        "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS",
-    ];
-    let saved = vars
-        .iter()
-        .map(|name| (*name, std::env::var_os(name)))
-        .collect::<Vec<_>>();
-    unsafe {
-        for name in vars {
-            std::env::remove_var(name);
-        }
-    }
-    CleanEgressEnvGuard { _lock: lock, saved }
 }

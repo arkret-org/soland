@@ -30,10 +30,15 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("{USAGE}");
         std::process::exit(2);
     };
-
-    dotenvy::dotenv().ok();
-    let config = AppConfig::from_env_and_args()?;
-    let db = Db::from_env().await?;
+    let config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+    let db = Db::connect(
+        config.database_url.as_deref(),
+        soland_storage_postgres::PoolTuning {
+            max_size: config.db_pool_max_size,
+            acquire_timeout_seconds: config.db_pool_acquire_timeout_seconds,
+        },
+    )
+    .await?;
     if db.pool.is_none() {
         eprintln!(
             "soland-federation-outbox: DATABASE_URL is not configured; the in-memory outbox is \

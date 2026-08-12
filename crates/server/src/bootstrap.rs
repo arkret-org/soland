@@ -99,10 +99,9 @@ pub async fn retry_service_identity(
     key_store: Option<Arc<dyn KeyStore>>,
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
     let first_provisioning = config.development_mode || config.first_provisioning;
-    let bundle_backend = std::env::var("SOLAND_SERVICE_IDENTITY_BUNDLE_DIR")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    let bundle_backend = config
+        .service_identity_bundle_dir
+        .clone()
         .map(FileIdentityBundleBackend::new);
 
     let state = resolve_service_identity(

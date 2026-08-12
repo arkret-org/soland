@@ -156,16 +156,18 @@ enum DrillError {
 const SERVICE_IDENTITY_KEYSTORE_APP: &str = "soland.service-identity";
 
 fn open_service_identity_key_store() -> Result<Box<dyn arkret_keystore::KeyStore>, DrillError> {
-    soland_http::config::KeyStoreConfig::from_env()
-        .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
-        .open(SERVICE_IDENTITY_KEYSTORE_APP)
-        .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
-        .ok_or_else(|| {
-            DrillError::Io(
-                "SOLAND_KEYSTORE_BACKEND must select a durable backend for this snapshot"
-                    .to_owned(),
-            )
-        })
+    soland_http::config::KeyStoreConfig::from_source(
+        &soland_http::config_source::ConfigSource::from_process()
+            .map_err(|error| DrillError::Io(error.to_string()))?,
+    )
+    .map_err(|error| DrillError::Io(format!("invalid KeyStore configuration: {error}")))?
+    .open(SERVICE_IDENTITY_KEYSTORE_APP)
+    .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
+    .ok_or_else(|| {
+        DrillError::Io(
+            "SOLAND_KEYSTORE_BACKEND must select a durable backend for this snapshot".to_owned(),
+        )
+    })
 }
 
 #[derive(Debug)]

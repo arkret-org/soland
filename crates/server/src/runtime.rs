@@ -51,11 +51,10 @@ pub fn build_app_state(
     );
     let realm_directory = soland_http::state::build_realm_directory(&config);
     let object_storage = build_object_storage(&config.object_storage)?;
-    let database_url = config
-        .database_url
-        .clone()
-        .or_else(|| std::env::var("DATABASE_URL").ok());
-    let event_broadcast = event_broadcast(db.pool.clone(), database_url, 1024);
+    // `AppConfig::from_env_and_args` already resolved `DATABASE_URL`, and it
+    // dropped a blank value to `None`. Re-reading the environment here only
+    // reintroduced the blank case as `Some("")`.
+    let event_broadcast = event_broadcast(db.pool.clone(), config.database_url.clone(), 1024);
     let storage_mode = db.mode();
     let pool = db.pool.clone();
 

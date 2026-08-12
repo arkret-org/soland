@@ -1366,21 +1366,27 @@ fn canonical_time(value: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 fn map_storage(error: PersistenceError) -> OrganizationRegistrationError {
+    // Registered conflict codes decide the outcome; the detail is diagnostics.
+    let conflict_code = error.conflict_code();
     match error {
         PersistenceError::NotFound(detail) => not_found(detail),
-        PersistenceError::Conflict(detail) if detail.contains("challenge_invalid") => {
-            OrganizationRegistrationError::challenge(detail)
-        }
-        PersistenceError::Conflict(detail) if detail.contains("registration_revoked") => {
-            OrganizationRegistrationError::new(OrganizationRegistrationErrorCode::Revoked, detail)
-        }
-        PersistenceError::Conflict(detail) if detail.contains("registration_stale") => {
-            OrganizationRegistrationError::new(OrganizationRegistrationErrorCode::Stale, detail)
-        }
+        PersistenceError::Conflict(detail) => match conflict_code {
+            Some(soland_storage::ConflictCode::OrganizationRegistrationChallengeInvalid) => {
+                OrganizationRegistrationError::challenge(detail)
+            }
+            Some(soland_storage::ConflictCode::OrganizationRegistrationRevoked) => {
+                OrganizationRegistrationError::new(
+                    OrganizationRegistrationErrorCode::Revoked,
+                    detail,
+                )
+            }
+            Some(soland_storage::ConflictCode::OrganizationRegistrationStale) => {
+                OrganizationRegistrationError::new(OrganizationRegistrationErrorCode::Stale, detail)
+            }
+            _ => internal(detail),
+        },
         PersistenceError::SchemaViolation(detail) => schema(detail),
-        PersistenceError::Conflict(detail)
-        | PersistenceError::Database(detail)
-        | PersistenceError::Internal(detail) => internal(detail),
+        PersistenceError::Database(detail) | PersistenceError::Internal(detail) => internal(detail),
     }
 }
 
@@ -2507,9 +2513,12 @@ mod tests {
     #[tokio::test]
     async fn embedded_fixture_runner_executes_all_19_semantic_outcomes_in_postgres_when_configured()
     {
-        let database = soland_storage_postgres::Db::from_env()
-            .await
-            .expect("initialize test database");
+        let database = soland_storage_postgres::Db::connect(
+            std::env::var("DATABASE_URL").ok().as_deref(),
+            Default::default(),
+        )
+        .await
+        .expect("initialize test database");
         let Some(pool) = database.pool else {
             return;
         };

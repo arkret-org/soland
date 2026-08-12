@@ -6,13 +6,12 @@ use salvo::prelude::*;
 use soland_http::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 
 use super::*;
-use crate::config::AppConfig;
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
     // Derive the limiter ceilings from the deployment posture (+ env overrides)
     // so the live `describe` policy and the enforced quota share one source.
-    let rate_limiter_config = RateLimiterConfig::from_env(state.config().development_mode);
+    let rate_limiter_config = state.config().rate_limiter.clone();
     router_with_rate_limiter_config(state, rate_limiter_config)
 }
 
@@ -20,10 +19,11 @@ pub fn router_with_rate_limiter_config(
     state: AppState,
     rate_limiter_config: RateLimiterConfig,
 ) -> Router {
+    let max_request_size_bytes = state.config().max_request_size_bytes;
     router_with_rate_limiter_and_request_size_config(
         state,
         rate_limiter_config,
-        AppConfig::max_request_size_bytes_from_env(),
+        max_request_size_bytes,
     )
 }
 

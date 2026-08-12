@@ -946,17 +946,16 @@ async fn validate_sidecar_mention_subjects(
     if subjects.is_empty() {
         return Ok(());
     }
-    let eligible = crate::routing::identity::agents::sidecar::eligible_sidecar_agents(
+    let desired = crate::routing::identity::agents::sidecar::derive_sidecar_desired_agent_ids(
         state,
         &realm_id,
         &controller_id,
-        &[],
     )
     .await
     .map_err(|_| "addressed_agent_not_eligible")?;
     if subjects
         .iter()
-        .any(|subject| !eligible.iter().any(|agent| agent == subject))
+        .any(|subject| !desired.iter().any(|agent| agent == subject))
     {
         Err("addressed_agent_not_eligible")
     } else {

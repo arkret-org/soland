@@ -101,9 +101,7 @@ impl RuntimeSettings {
             federation_fanout_topology: config.federation_fanout_topology,
             push_bridge_trusted_service_ids: config.push_bridge_trusted_service_ids.clone(),
             candidate_join_policy_enabled: config.candidate_join_policy_enabled,
-            rate_limit: RateLimitSettings::from_limiter_config(&RateLimiterConfig::from_env(
-                config.development_mode,
-            )),
+            rate_limit: RateLimitSettings::from_limiter_config(&config.rate_limiter),
         }
     }
 

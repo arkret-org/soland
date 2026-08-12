@@ -206,7 +206,14 @@ pub(super) struct ModerationReportSafety {
 }
 
 pub(super) fn moderation_request_source_ip_hash(req: &Request) -> String {
-    let source = trusted_forwarded_client(req).unwrap_or_else(|| req.remote_addr().to_string());
+    // Shared with the rate limiter. The local copy this replaced differed on
+    // both halves: it required the trust flag to be exactly `"1"` (so `=true`
+    // silently disabled it here while the limiter honoured it), and it took
+    // the *leftmost* `X-Forwarded-For` token without checking it parses as an
+    // IP — a caller-supplied value, which made the recorded report provenance
+    // forgeable whenever the flag was on.
+    let source = crate::ratelimit::trusted_forwarded_client(req)
+        .unwrap_or_else(|| req.remote_addr().to_string());
     sha256_hex(source.as_bytes())
 }
 
@@ -313,25 +320,6 @@ async fn validate_moderation_report_content_safety(
         evidence_package,
         franking_proof,
     })
-}
-
-fn trusted_forwarded_client(req: &Request) -> Option<String> {
-    if std::env::var("SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")
-        .ok()
-        .as_deref()
-        != Some("1")
-    {
-        return None;
-    }
-    let header = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())?;
-    header
-        .split(',')
-        .map(str::trim)
-        .find(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn moderation_effective_scope_value(

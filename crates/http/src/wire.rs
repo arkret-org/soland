@@ -744,18 +744,25 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
     })]
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors AppConfig fields; callers pass them positionally once
+/// Build the service description.
+///
+/// The seven configuration values this used to take positionally were, by its
+/// own comment, "AppConfig fields" — so it takes `AppConfig`. Every caller
+/// already had `state.config()` in hand, and threading them one by one is how
+/// a tenth (`key_backup_daily_download_limit`) would otherwise have been added
+/// to a signature that already carried a `too_many_arguments` waiver.
 pub fn describe(
     service_resolution: &arkret_models_identity::ResolutionCommitment,
-    public_base_url: &str,
     storage: &'static str,
-    development_mode: bool,
-    account_authority_url: Option<&str>,
-    oidc_client_id: Option<&str>,
-    trust_domain: &str,
-    resumable_upload_incomplete_ttl_seconds: u64,
-    to_device_queue_capacity: usize,
+    config: &crate::config::AppConfig,
 ) -> ServiceDescribe {
+    let public_base_url = config.public_base_url.as_str();
+    let development_mode = config.development_mode;
+    let account_authority_url = config.account_authority_url.as_deref();
+    let oidc_client_id = config.oidc_client_id.as_deref();
+    let trust_domain = config.trust_domain.as_str();
+    let resumable_upload_incomplete_ttl_seconds = config.resumable_upload_incomplete_ttl_seconds;
+    let to_device_queue_capacity = config.to_device_queue_capacity;
     // Account Authority discovery (service-surface §2.5.1): the client-visible
     // owner of the auth-side `/_arkret/gate/account/*` ops the client posts to
     // (session-grant issuance + hard logout). Those are served by the Auth
@@ -942,8 +949,7 @@ pub fn describe(
         // enforcement can never drift — a conformant client budgeting against
         // this policy cannot trip a 429 it could not predict.
         rate_limit_policy: Some(
-            soland_http::ratelimit::RateLimiterConfig::from_env(development_mode)
-                .advertised_policy(),
+            config.rate_limiter.advertised_policy(),
         ),
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
@@ -1236,7 +1242,7 @@ pub fn describe(
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,
-                "daily_principal_download_limit": soland_services::runtime_guards::key_backup_daily_download_limit(),
+                "daily_principal_download_limit": config.key_backup_daily_download_limit,
                 "max_to_device_page": 1000,
                 "max_to_device_queue_per_device": to_device_queue_capacity
             },
@@ -1337,14 +1343,12 @@ mod tests {
     fn service_describe_advertises_realm_key_history_features() {
         let description = describe(
             &fixture_service_resolution(),
-            "https://soland.example/",
             "memory",
-            true,
-            None,
-            None,
-            "ak:trust_domain:soland.example",
-            86_400,
-            10_000,
+            &crate::config::AppConfig {
+                public_base_url: "https://soland.example/".to_owned(),
+                development_mode: true,
+                ..crate::config::AppConfig::test_default()
+            },
         );
         let value = serde_json::to_value(description).expect("description serializes");
         let features = value["supported_features"]
@@ -1366,14 +1370,12 @@ mod tests {
     fn service_describe_supported_bindings_advertise_public_base_url() {
         let description = describe(
             &fixture_service_resolution(),
-            "https://soland.example/",
             "memory",
-            true,
-            None,
-            None,
-            "ak:trust_domain:soland.example",
-            86_400,
-            10_000,
+            &crate::config::AppConfig {
+                public_base_url: "https://soland.example/".to_owned(),
+                development_mode: true,
+                ..crate::config::AppConfig::test_default()
+            },
         );
         let value = serde_json::to_value(description).expect("description serializes");
         assert_eq!(

@@ -15,11 +15,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub(crate) mod bootstrap;
 pub(crate) mod object_storage;
 pub(crate) mod otel;
-pub(crate) mod process_environment;
 pub(crate) mod runtime;
 
 fn main() -> anyhow::Result<()> {
-    crate::process_environment::prepare()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -42,18 +40,19 @@ async fn run() -> anyhow::Result<()> {
         return run_healthcheck(&raw_args).await;
     }
 
+    // Configuration is parsed before the subscriber so the log format follows
+    // one parse of `SOLAND_DEVELOPMENT_MODE`. This used to be re-read here with
+    // a case-sensitive matcher that did not accept `on`, so
+    // `SOLAND_DEVELOPMENT_MODE=on` produced a development-mode server writing
+    // production logs. A configuration error before this point still surfaces:
+    // it returns from `main` and the runtime prints it.
+    let mut config = AppConfig::load(&soland_http::config_source::ConfigSource::from_process()?)?;
+
     // Keep this guard alive for the process lifetime so the non-blocking
     // file appender drains its channel on shutdown. Dropping the guard
     // flushes pending writes; storing it in `_file_guard` defers that drop
     // until `main` returns.
-    // We need to read SOLAND_DEVELOPMENT_MODE + SOLAND_LOG_FORMAT before
-    // building the subscriber so production deployments get structured JSON
-    // logs by default. Use the same env helper the rest of the loader uses.
-    let dev_mode_for_logging = std::env::var("SOLAND_DEVELOPMENT_MODE")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"))
-        .unwrap_or(false);
-    let log_format = soland_http::config::LogFormat::from_env(dev_mode_for_logging);
-    let _tracing_guards = init_tracing(log_format, dev_mode_for_logging)?;
+    let _tracing_guards = init_tracing(config.log_format, config.development_mode)?;
 
     // Fail fast at startup if a bundled Arkret artifact is malformed, or if the
     // Draft 2020-12 schema catalog does not compile as a whole, instead of
@@ -72,22 +71,18 @@ async fn run() -> anyhow::Result<()> {
         "protocol schema catalog compiled at startup"
     );
 
-    let mut config = AppConfig::from_env_and_args()?;
-    if let Some(database_url) = &config.database_url {
-        // SAFETY: invoked once, before any worker thread starts touching the
-        // env, so there is no concurrent reader. Diesel's `Pool::builder`
-        // reads `DATABASE_URL` internally; pushing the parsed value back into
-        // the env keeps that path working when the URL came from `--bind`-
-        // style arg parsing.
-        unsafe {
-            std::env::set_var("DATABASE_URL", database_url);
-        }
-    }
     // Connect the database and resolve this deployment's own service identity
     // before anything derived from it is constructed. The DID remains runtime
     // state; only the derived trust-domain value is copied into operational
     // config for existing policy consumers.
-    let db = Db::from_env().await?;
+    let db = Db::connect(
+        config.database_url.as_deref(),
+        soland_storage_postgres::PoolTuning {
+            max_size: config.db_pool_max_size,
+            acquire_timeout_seconds: config.db_pool_acquire_timeout_seconds,
+        },
+    )
+    .await?;
     // Fail fast before anything is accepted: an outbound-federating deployment
     // on the in-memory outbox would silently drop pending deliveries on every
     // restart (`sync/federation.md` §4.1).
@@ -144,8 +139,9 @@ async fn run() -> anyhow::Result<()> {
     // active. The configured URL remains visible in `/identity/describe` even
     // when the probe fails so coauth can show the operator's intended setup.
     if let Some(url) = config.external_webvh_provider_url.clone() {
-        let expected_trust_domain = std::env::var("SOLAND_EXTERNAL_WEBVH_PROVIDER_TRUST_DOMAIN")
-            .ok()
+        let expected_trust_domain = config
+            .external_webvh_provider_trust_domain
+            .clone()
             .unwrap_or_else(|| config.trust_domain.to_string());
         match soland_http::state::did_resolver_chain::probe_webvh_provider_describe(
             &url,

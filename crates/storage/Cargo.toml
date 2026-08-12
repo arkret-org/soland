@@ -29,3 +29,6 @@ uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

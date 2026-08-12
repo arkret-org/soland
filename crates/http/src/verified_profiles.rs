@@ -10,12 +10,13 @@ pub const SOLAND_SERVICE_ROLE: &str = "principal_server";
 
 pub type VerifiedProfileDescriptor = VerifiedProfileArtifactEntry;
 
-pub fn load_from_env() -> Arc<Vec<VerifiedProfileDescriptor>> {
-    let configured_path = std::env::var(VERIFIED_PROFILES_ARTIFACT_ENV).ok();
-    load_from_configured_path(configured_path.as_deref())
-}
-
-fn load_from_configured_path(path: Option<&str>) -> Arc<Vec<VerifiedProfileDescriptor>> {
+/// Load the descriptors named by the configured artifact path.
+///
+/// The path arrives from `AppConfig::verified_profiles_artifact`; this module
+/// used to read `SOLAND_VERIFIED_PROFILES_ARTIFACT` itself, which made the
+/// artifact the one piece of deployment configuration that did not appear in
+/// `AppConfig` at all.
+pub fn load_from_configured_path(path: Option<&str>) -> Arc<Vec<VerifiedProfileDescriptor>> {
     let Some(path) = path.filter(|value| !value.is_empty()) else {
         tracing::debug!(
             target: "verified_profiles",

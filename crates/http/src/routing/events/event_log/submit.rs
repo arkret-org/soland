@@ -7,6 +7,7 @@ use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
 use arkret_wire::ReasonCode;
 use ed25519_dalek::Signer as _;
+use soland_storage::ConflictCode;
 
 use super::*;
 use crate::invite_claim_proofs::{

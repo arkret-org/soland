@@ -46,3 +46,6 @@ arkret-event-draft = { workspace = true, features = ["test-support"] }
 soland-storage-memory.workspace = true
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

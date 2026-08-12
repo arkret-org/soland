@@ -229,9 +229,12 @@ async fn optional_pg_app_state() -> Option<AppState> {
         .ok()
         .filter(|url| !url.trim().is_empty())
         .as_ref()?;
-    let db = Db::from_env()
-        .await
-        .expect("postgres migrations should run");
+    let db = Db::connect(
+        std::env::var("DATABASE_URL").ok().as_deref(),
+        Default::default(),
+    )
+    .await
+    .expect("postgres migrations should run");
     let state = app_state_for_postgres(test_config(), db);
     state.hydrate().await.expect("postgres state hydrates");
     Some(state)

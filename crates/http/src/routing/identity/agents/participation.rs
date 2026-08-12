@@ -114,51 +114,6 @@ pub(super) async fn set_agent_participation(
     json_ok(load_agent_participation_outcome(state, &agent_id).await?)
 }
 
-pub(super) fn normalize_sidecar_exposure_ack(
-    value: Option<Value>,
-    controller_id: &str,
-) -> Result<Option<Value>, AppError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let ack: AgentSidecarExposureAck = serde_json::from_value(value)
-        .map_err(|err| AppError::invalid_param(format!("sidecar_exposure_ack invalid: {err}")))?;
-    if ack.acknowledged_by.as_str() != controller_id {
-        return Err(AppError::capability_denied(
-            "sidecar_exposure_ack.acknowledged_by must match the controller session",
-        ));
-    }
-    if ack.sidecar_refs.is_empty() {
-        return Err(AppError::invalid_param(
-            "sidecar_exposure_ack.sidecar_refs must be non-empty when present",
-        ));
-    }
-    if ack.sidecar_refs.len() > 128 {
-        return Err(AppError::invalid_param(
-            "sidecar_exposure_ack.sidecar_refs exceeds the 128 item limit",
-        ));
-    }
-    let mut refs = std::collections::BTreeSet::new();
-    for sidecar_ref in &ack.sidecar_refs {
-        if sidecar_ref.trim().is_empty() {
-            return Err(AppError::invalid_param(
-                "sidecar_exposure_ack.sidecar_refs must not contain empty refs",
-            ));
-        }
-        if !refs.insert(sidecar_ref.as_str()) {
-            return Err(AppError::invalid_param(
-                "sidecar_exposure_ack.sidecar_refs must be unique",
-            ));
-        }
-    }
-    serde_json::to_value(ack)
-        .map(Some)
-        .map_err(|err| AppError::internal(format!("sidecar_exposure_ack serialize failed: {err}")))
-}
-
 #[endpoint(
     operation_id = "ak.self.agent.participation.resource.get",
     summary = "Get an agent's participation policy",

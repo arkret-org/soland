@@ -995,9 +995,12 @@ async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
     std::env::var("DATABASE_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())?;
-    let db = soland_storage_postgres::Db::from_env()
-        .await
-        .expect("postgres migrations should run");
+    let db = soland_storage_postgres::Db::connect(
+        std::env::var("DATABASE_URL").ok().as_deref(),
+        Default::default(),
+    )
+    .await
+    .expect("postgres migrations should run");
     let pool = db.pool.clone().expect("postgres test requires a pool");
     let config = outbox_test_config();
     let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> =

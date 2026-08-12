@@ -23,8 +23,6 @@ use soland_services::identity::{
 
 use super::*;
 
-pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
-
 const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
 const SIDECAR_LIST_PAGE_SIZE: usize = 100;
 
@@ -173,35 +171,27 @@ fn validate_sidecar_context_projection(
     Ok(())
 }
 
-pub(crate) async fn eligible_sidecar_agents(
+pub(crate) async fn derive_sidecar_desired_agent_ids(
     state: &AppState,
     realm_id: &str,
     controller: &str,
-    addressed_agents: &[String],
 ) -> Result<Vec<String>, AppError> {
     let records = state
         .agent_pairings()
         .agents_for_controller(controller)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
-    let eligible = records
+    let desired = records
         .iter()
-        .filter(|record| agent_record_is_sidecar_eligible(state, realm_id, controller, record))
+        .filter(|record| {
+            agent_record_is_desired_sidecar_member(state, realm_id, controller, record)
+        })
         .map(|record| record.id.clone())
         .collect::<BTreeSet<_>>();
-    if addressed_agents
-        .iter()
-        .any(|addressed| !eligible.contains(addressed))
-    {
-        return Err(sidecar_failed_precondition(
-            ADDRESSED_AGENT_NOT_ELIGIBLE,
-            "addressed agent is not eligible for this Sidecar Realm",
-        ));
-    }
-    Ok(eligible.into_iter().collect())
+    Ok(desired.into_iter().collect())
 }
 
-fn agent_record_is_sidecar_eligible(
+fn agent_record_is_desired_sidecar_member(
     state: &AppState,
     realm_id: &str,
     controller: &str,
@@ -218,17 +208,6 @@ fn agent_record_is_sidecar_eligible(
                 Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
             ) && projection.agent_has_authorized_key(agent_id)
         }
-}
-
-pub(crate) async fn remove_agent_from_controller_sidecars(
-    _state: &AppState,
-    _controller: &str,
-    _agent_id: &str,
-) -> Result<(), AppError> {
-    // Sidecar participants are a read-only projection of canonical ownership.
-    // Removing ownership therefore needs no Sidecar member Event; MLS removal
-    // reconciliation is derived from the changed authority transcript.
-    Ok(())
 }
 
 fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppError> {
@@ -260,11 +239,7 @@ fn sidecar_access_readiness(
     controller_device_ready: bool,
     frontier_contested: bool,
 ) -> AgentSidecarAccessReadiness {
-    if pending.iter().any(|item| {
-        item.provisioning_phase == PendingSidecarAccessReconciliationStage::BackingScopeMembership
-    }) {
-        AgentSidecarAccessReadiness::AccessReconciliationPending
-    } else if frontier_contested
+    if frontier_contested
         || pending.iter().any(|item| {
             matches!(
                 item.provisioning_phase,
@@ -281,8 +256,8 @@ fn sidecar_access_readiness(
     }
 }
 
-fn typed_desired_agents(desired: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, AppError> {
-    desired
+fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, AppError> {
+    agent_ids
         .iter()
         .cloned()
         .map(arkret_wire::DidCoreId::new)
@@ -304,44 +279,23 @@ fn sidecar_control_frontier(
     })?])
 }
 
-async fn owned_sidecar_agents(state: &AppState, controller: &str) -> Result<Vec<String>, AppError> {
-    let mut owned = state
-        .agent_pairings()
-        .agents_for_controller(controller)
-        .await
-        .map_err(|error| AppError::internal(format!("Agent ownership lookup failed: {error}")))?
-        .into_iter()
-        .filter(|record| record.controller_id == controller)
-        .map(|record| record.id)
-        .collect::<Vec<_>>();
-    owned.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-    owned.dedup();
-    Ok(owned)
-}
-
-pub(crate) async fn expected_sidecar_mls_binding(
-    state: &AppState,
+fn sidecar_mls_binding_for_desired(
     record: &AgentSidecarRecord,
+    desired_agent_ids: &[arkret_wire::DidCoreId],
+    projection: &soland_services::projection::ProjectionSnapshot,
 ) -> Result<SidecarMlsBinding, AppError> {
-    let effective =
-        eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
-    let owned = owned_sidecar_agents(state, &record.controller_id).await?;
-    let owned_typed = typed_desired_agents(&owned)?;
-    let effective_typed = typed_desired_agents(&effective)?;
     let sidecar_id = SidecarId::new(record.sidecar_id.clone())
         .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
     let realm_id = RealmId::new(record.realm_id.clone())
         .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
     let controller_id = arkret_identifiers::DidCoreId::new(record.controller_id.clone())
         .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?;
-    let projection = state.projections().snapshot();
-    let control_frontier = sidecar_control_frontier(&projection, record)?;
+    let control_frontier = sidecar_control_frontier(projection, record)?;
     let participant_authority_digest = agent_sidecar_participant_authority_digest(
         sidecar_id.clone(),
         realm_id,
         controller_id,
-        &owned_typed,
-        &effective_typed,
+        desired_agent_ids,
     )
     .map_err(|error| {
         AppError::internal(format!("Sidecar participant authority digest: {error}"))
@@ -351,6 +305,17 @@ pub(crate) async fn expected_sidecar_mls_binding(
         participant_authority_digest,
         control_frontier,
     })
+}
+
+pub(crate) async fn expected_sidecar_mls_binding(
+    state: &AppState,
+    record: &AgentSidecarRecord,
+) -> Result<SidecarMlsBinding, AppError> {
+    let desired =
+        derive_sidecar_desired_agent_ids(state, &record.realm_id, &record.controller_id).await?;
+    let desired_typed = typed_agent_ids(&desired)?;
+    let projection = state.projections().snapshot();
+    sidecar_mls_binding_for_desired(record, &desired_typed, &projection)
 }
 
 /// Admission gate for `ak.agent.sidecar.exchange.control`. The Event is legal
@@ -541,13 +506,11 @@ async fn sidecar_view(
     record: &AgentSidecarRecord,
     controller_device_id: &str,
 ) -> Result<AgentSidecarView, AppError> {
-    let eligible =
-        eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
-    let owned = owned_sidecar_agents(state, &record.controller_id).await?;
-    let owned_typed = typed_desired_agents(&owned)?;
-    let eligible_typed = typed_desired_agents(&eligible)?;
-    let expected_binding = expected_sidecar_mls_binding(state, record).await?;
+    let desired =
+        derive_sidecar_desired_agent_ids(state, &record.realm_id, &record.controller_id).await?;
+    let desired_typed = typed_agent_ids(&desired)?;
     let projection = state.projections().snapshot();
+    let expected_binding = sidecar_mls_binding_for_desired(record, &desired_typed, &projection)?;
     let expected_scope = json!({
         "kind": "sidecar",
         "realm_id": record.realm_id,
@@ -563,14 +526,14 @@ async fn sidecar_view(
     let controller_device_ready = epoch_binding_current
         && epoch_row.is_some_and(|row| row.creator_device_id == controller_device_id);
     let effective = if epoch_binding_current {
-        eligible_typed
+        desired_typed.clone()
     } else {
         Vec::new()
     };
     let pending = if epoch_binding_current {
         Vec::new()
     } else {
-        eligible
+        desired
             .iter()
             .cloned()
             .map(|agent_id| {
@@ -600,18 +563,8 @@ async fn sidecar_view(
         epoch_row.is_some_and(|row| row.frontier_contested)
             || (epoch_row.is_some() && !epoch_binding_current),
     );
-    let participant_authority_digest = agent_sidecar_participant_authority_digest(
-        expected_binding.sidecar_id.clone(),
-        RealmId::new(record.realm_id.clone())
-            .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?,
-        arkret_identifiers::DidCoreId::new(record.controller_id.clone())
-            .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?,
-        &owned_typed,
-        &effective,
-    )
-    .map_err(|error| AppError::internal(format!("Sidecar authority digest: {error}")))?;
     let mls_context = AgentSidecarMlsContext {
-        participant_authority_digest,
+        participant_authority_digest: expected_binding.participant_authority_digest.clone(),
         control_frontier: expected_binding.control_frontier.clone(),
         mls_group_id: epoch_row
             .map(|row| MlsGroupId::new(row.group_id.clone()))
@@ -626,7 +579,7 @@ async fn sidecar_view(
     };
     let view = AgentSidecarView {
         sidecar: sidecar_from_record(record)?,
-        owned_agent_ids: owned_typed,
+        desired_agent_ids: desired_typed,
         effective_agent_ids: effective,
         mls_context,
         access_readiness,

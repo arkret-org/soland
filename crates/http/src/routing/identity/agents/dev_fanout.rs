@@ -217,7 +217,6 @@ pub(super) fn validate_durable_agent_lifecycle(
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
-    sidecar_exposure_ack: Option<&Value>,
     event: &Event,
 ) -> Result<(), AppError> {
     let (transition, next_status) = match event_kind {
@@ -251,14 +250,12 @@ pub(super) fn validate_durable_agent_lifecycle(
         );
     }
     let payload_reason = event.payload.get("reason").and_then(Value::as_str);
-    let payload_ack = event.payload.get("sidecar_exposure_ack");
     if event.payload.get("agent_id").and_then(Value::as_str) != Some(agent_id)
         || event.payload.get("controller_id").and_then(Value::as_str)
             != Some(session.actor.as_str())
         || event.payload.get("transition").and_then(Value::as_str) != Some(transition)
         || event.payload.get("previous_status").and_then(Value::as_str) != Some(previous_status)
         || payload_reason != reason
-        || payload_ack != sidecar_exposure_ack
     {
         return Err(AppError::invalid_param(
             "lifecycle_event payload does not match the requested transition",
@@ -325,7 +322,6 @@ pub(super) async fn submit_durable_agent_lifecycle(
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
-    sidecar_exposure_ack: Option<&Value>,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
     validate_durable_agent_lifecycle(
@@ -336,7 +332,6 @@ pub(super) async fn submit_durable_agent_lifecycle(
         event_kind,
         previous_status,
         reason,
-        sidecar_exposure_ack,
         &submission.event,
     )?;
     submit_signed_agent_event(state, session, submission).await

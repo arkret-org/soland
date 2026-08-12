@@ -501,9 +501,12 @@ async fn postgres_startup_migrations_are_gated_by_database_url() {
         return;
     }
 
-    let db = Db::from_env()
-        .await
-        .expect("postgres migrations should run");
+    let db = Db::connect(
+        std::env::var("DATABASE_URL").ok().as_deref(),
+        Default::default(),
+    )
+    .await
+    .expect("postgres migrations should run");
     let health: Value = TestClient::get("http://server/health")
         .send(&app_from_state(app_state_for_postgres(test_config(), db)))
         .await

@@ -209,20 +209,15 @@ async fn events_describe(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
         state.service_resolution_commitment().as_ref(),
-        &state.config().public_base_url,
         state.jobs().storage_mode(),
-        state.config().development_mode,
-        state.config().account_authority_url.as_deref(),
-        state.config().oidc_client_id.as_deref(),
-        state.config().trust_domain.as_str(),
-        state.config().resumable_upload_incomplete_ttl_seconds,
-        state.config().to_device_queue_capacity,
+        state.config(),
     );
     crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
         state.settings().candidate_join_policy_enabled,
+        state.config().sovereign_enclave_enabled,
     );
     // Advertise the live rate-limit ceilings (see the canonical describe
     // handler) so wire and enforcement stay in lock-step after a hot-swap.

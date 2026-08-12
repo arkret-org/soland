@@ -34,7 +34,9 @@ use anyhow::Result;
 use arkret_identifiers::{CellRef, DidFullId, Hash, Hlc, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::state::{StoreError, compute_state_root, control_event_set_root, join_cell};
+use arkret_state::state::{
+    ControlMoveReject, StoreError, compute_state_root, control_event_set_root, join_cell,
+};
 use arkret_wire::{
     ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalRejectReason, Event,
     NotarySig, PayloadSignature, Seal,
@@ -56,8 +58,61 @@ pub struct NotaryOutcome {
     /// `EventSealSubmitOutcome` both define it. Not reducer apply order — that is
     /// causal-then-digest-descending and no client can reproduce it.
     pub accepted_event_digests: Vec<Hash>,
-    pub rejected_events: Vec<(Hash, String)>,
+    pub rejected_events: Vec<(Hash, ControlMoveRejection)>,
     pub post_state_root: Hash,
+}
+
+/// Why the coordinator rejected one Control Move.
+///
+/// `reason` is what the signed `ControlProposalDecision` carries onto the wire
+/// and eventually into a Seal, so it is derived from the *typed* verifier
+/// outcome at the point of rejection. `detail` is operator diagnostics only:
+/// nothing may re-derive `reason` from it. The previous shape kept only the
+/// `Display` text and recovered the reason with substring heuristics, which
+/// mapped a `PrestateBindingMismatch` (a CAS conflict) and every internal
+/// registry failure onto `schema_violation` -- i.e. it blamed the caller for
+/// this service's own faults.
+#[derive(Clone, Debug)]
+pub struct ControlMoveRejection {
+    pub reason: ControlProposalRejectReason,
+    pub detail: String,
+}
+
+impl ControlMoveRejection {
+    fn new(reason: ControlProposalRejectReason, detail: impl Into<String>) -> Self {
+        Self {
+            reason,
+            detail: detail.into(),
+        }
+    }
+
+    /// Classify a verifier rejection.
+    ///
+    /// `ControlMoveReject::Registry` is not a caller fault: it means this
+    /// node could not read its own cell registry. Signing a rejection for it
+    /// would notarise a false statement about the proposer, so it aborts the
+    /// signing pass instead.
+    fn from_verifier(reject: &ControlMoveReject) -> Result<Self, NotaryError> {
+        let reason = match reject {
+            ControlMoveReject::SchemaViolation(_)
+            | ControlMoveReject::InvalidSignature(_)
+            | ControlMoveReject::ProjectionFailed(_) => {
+                ControlProposalRejectReason::SchemaViolation
+            }
+            ControlMoveReject::CapabilityDenied(_) => ControlProposalRejectReason::CapabilityDenied,
+            ControlMoveReject::FailedPrecondition { .. }
+            | ControlMoveReject::FailedBottom { .. }
+            | ControlMoveReject::PrestateBindingMismatch { .. } => {
+                ControlProposalRejectReason::CasConflict
+            }
+            ControlMoveReject::Registry(detail) => {
+                return Err(NotaryError::Store(format!(
+                    "cell registry unavailable while verifying a Control Move: {detail}"
+                )));
+            }
+        };
+        Ok(Self::new(reason, reject.to_string()))
+    }
 }
 
 /// One Control Move that passed `verify_control_move`, together with the
@@ -402,7 +457,7 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<(Hash, String)> = Vec::new();
+        let mut rejected: Vec<(Hash, ControlMoveRejection)> = Vec::new();
         let mut staged_anchor_state = pre_state.clone();
         let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
         for (digest, event) in ordered {
@@ -425,13 +480,25 @@ impl NotaryWorker {
                 ))
             })?;
             let Some(hlc) = event.hlc.clone() else {
-                rejected.push((digest, "Control Move carries no hlc".to_owned()));
+                rejected.push((
+                    digest,
+                    ControlMoveRejection::new(
+                        ControlProposalRejectReason::SchemaViolation,
+                        "Control Move carries no hlc",
+                    ),
+                ));
                 continue;
             };
             let writes = match state.projections().project_accepted_cell_writes(&event) {
                 Ok(writes) => writes,
                 Err(reason) => {
-                    rejected.push((digest, format!("reducer_projection_failed: {reason}")));
+                    rejected.push((
+                        digest,
+                        ControlMoveRejection::new(
+                            ControlProposalRejectReason::SchemaViolation,
+                            format!("reducer_projection_failed: {reason}"),
+                        ),
+                    ));
                     continue;
                 }
             };
@@ -447,7 +514,15 @@ impl NotaryWorker {
                     replay_overrides,
                 )
             {
-                rejected.push((digest, format!("replay_window: {reject}")));
+                // The Move's own HLC is outside the accepted freshness window:
+                // the envelope is invalid, not the pre-state it reads.
+                rejected.push((
+                    digest,
+                    ControlMoveRejection::new(
+                        ControlProposalRejectReason::SchemaViolation,
+                        format!("replay_window: {reject}"),
+                    ),
+                ));
                 continue;
             }
             let context = if leaves.is_empty() {
@@ -474,7 +549,7 @@ impl NotaryWorker {
                         &pre_state,
                         &predecessor_closure,
                     ) {
-                        rejected.push((digest, reject.to_string()));
+                        rejected.push((digest, ControlMoveRejection::from_verifier(&reject)?));
                         continue;
                     }
                     if leaves.is_empty() {
@@ -506,14 +581,17 @@ impl NotaryWorker {
                         effects,
                     });
                 }
-                Err(reject) => rejected.push((digest, reject.to_string())),
+                Err(reject) => {
+                    rejected.push((digest, ControlMoveRejection::from_verifier(&reject)?));
+                }
             }
         }
-        for (digest, reason) in &rejected {
+        for (digest, rejection) in &rejected {
             tracing::warn!(
                 %realm_id,
                 proposal_digest = %digest,
-                %reason,
+                reason = ?rejection.reason,
+                detail = %rejection.detail,
                 "control-seal coordinator signed a proposal rejection"
             );
         }
@@ -607,7 +685,6 @@ impl NotaryWorker {
                 },
             )
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
-        self.record_signed_rejections(state, realm_id, &effect.rejected_events, proposal_policy)?;
         if tracing::enabled!(tracing::Level::DEBUG) {
             let projected_cells = state.projections().realm_cells(realm_id)?;
             tracing::debug!(
@@ -663,7 +740,10 @@ impl NotaryWorker {
         Ok(Some(NotaryOutcome {
             seal_id: effect.seal,
             accepted_event_digests,
-            rejected_events: rejected.into_iter().chain(effect.rejected_events).collect(),
+            // `apply_seal` rejects nothing: `SealEffect::rejected_events` is
+            // constructed empty on every SDK path, so the coordinator's own
+            // per-Move verdicts are the whole set.
+            rejected_events: rejected,
             post_state_root: effect.post_state_root,
         }))
     }
@@ -964,7 +1044,7 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        rejected: &[(Hash, String)],
+        rejected: &[(Hash, ControlMoveRejection)],
         proposal_policy: ControlProposalDecisionPolicy,
     ) -> Result<(), NotaryError> {
         if rejected.is_empty() {
@@ -984,7 +1064,7 @@ impl NotaryWorker {
                 Some((digest, record))
             })
             .collect::<BTreeMap<_, _>>();
-        for (digest, raw_reason) in rejected {
+        for (digest, rejection) in rejected {
             let Some(record) = by_digest.get(digest) else {
                 return Err(NotaryError::Store(format!(
                     "rejected Control Move {digest} has no pending record"
@@ -1013,7 +1093,7 @@ impl NotaryWorker {
             {
                 continue;
             }
-            let reason_code = closed_reject_reason(raw_reason);
+            let reason_code = rejection.reason;
             let (notary, _) = self
                 .current_notary_profile_for_events(
                     state,
@@ -1215,24 +1295,6 @@ impl NotaryWorker {
             created_at: chrono::Utc::now(),
             jws,
         })
-    }
-}
-
-fn closed_reject_reason(reason: &str) -> ControlProposalRejectReason {
-    let reason = reason.to_ascii_lowercase();
-    if reason.contains("cas_conflict") || reason.contains("precondition") {
-        ControlProposalRejectReason::CasConflict
-    } else if reason.contains("capability")
-        || reason.contains("authorization")
-        || reason.contains("not authorized")
-    {
-        ControlProposalRejectReason::CapabilityDenied
-    } else if reason.contains("policy") {
-        ControlProposalRejectReason::PolicyDenied
-    } else if reason.contains("superseded") {
-        ControlProposalRejectReason::Superseded
-    } else {
-        ControlProposalRejectReason::SchemaViolation
     }
 }
 

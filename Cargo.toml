@@ -24,6 +24,21 @@ repository = "https://github.com/arkret-org/soland"
 homepage = "https://github.com/arkret-org/soland"
 authors = ["Arkret contributors"]
 
+# Workspace lint baseline. Every member opts in with `[lints] workspace = true`.
+#
+# The entries below are all at zero occurrences today, so this is a ratchet
+# rather than a cleanup: it stops the next one from landing. `unsafe_code` is
+# denied outright; the process-environment wrappers that genuinely need it
+# carry a local `#[allow(unsafe_code, reason = ...)]` naming the reason.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+mem_forget = "deny"
+todo = "deny"
+unimplemented = "deny"
+
 [workspace.dependencies]
 anyhow = "1.0.102"
 arc-swap = "1.9.1"

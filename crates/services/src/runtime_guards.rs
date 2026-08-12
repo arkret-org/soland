@@ -259,13 +259,6 @@ impl RuntimeGuardService {
     }
 }
 
-pub fn key_backup_daily_download_limit() -> u32 {
-    let configured = std::env::var("SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT")
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok());
-    clamp_key_backup_daily_download_limit(configured)
-}
-
 pub fn clamp_key_backup_daily_download_limit(configured: Option<u32>) -> u32 {
     configured
         .map(|value| {

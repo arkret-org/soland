@@ -132,6 +132,183 @@ impl PersistenceError {
     pub fn database(error: impl std::fmt::Display) -> Self {
         Self::Database(error.to_string())
     }
+
+    /// The registered conflict code this error carries, if any.
+    ///
+    /// See [`ConflictCode`] for why callers must use this instead of
+    /// inspecting the detail text.
+    #[must_use]
+    pub fn conflict_code(&self) -> Option<ConflictCode> {
+        match self {
+            Self::Conflict(detail) => ConflictCode::from_detail(detail),
+            _ => None,
+        }
+    }
+}
+
+/// A conflict reason that a routing layer is allowed to act on.
+///
+/// [`PersistenceError::Conflict`] carries a detail string shaped as either the
+/// bare code (`"cas_conflict"`) or `"<code>: <diagnostics>"`. Everything that
+/// turns a conflict into an HTTP status, a wire reason, or a signed decision
+/// MUST read the code through [`ConflictCode::from_detail`] and `match` it
+/// exhaustively. Substring matching on the detail is forbidden: it makes the
+/// routing decision depend on diagnostic wording, it silently reorders into an
+/// undeclared priority when several branches match, and it cannot distinguish
+/// "this conflict has no registered code" from "no branch matched" -- which is
+/// how an unclassified conflict used to leave the event-submit lane as a 500.
+///
+/// A detail with no registered prefix yields `None`. That is a real state:
+/// several persistence conflicts are local invariant breaches with no protocol
+/// code, and they must surface as an internal failure rather than be guessed
+/// into a caller-facing reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ConflictCode {
+    /// The applet was revoked between admission and commit.
+    AppletRevoked,
+    /// `actor_seq` is older than the accepted actor frontier.
+    CasConflict,
+    /// The device pairing request the Event refers to does not exist.
+    DevicePairingNotFound,
+    /// The same identity already exists with different canonical bytes.
+    DuplicateConflict,
+    /// Two verified Event variants share one full EventId. Internal name for
+    /// what the wire calls `witness_disagreement`.
+    EventHashCollision,
+    /// A stored Event id does not match its canonical digest.
+    EventIdDigestMismatch,
+    /// A projection was requested for an Event that was never accepted.
+    EventNotAccepted,
+    /// A declared precondition does not hold.
+    FailedPrecondition,
+    /// The actor chain exceeded its sibling or predecessor fork cap.
+    ForkQuarantine,
+    /// A Realm with this id already exists.
+    RealmAlreadyExists,
+    /// The organization registration challenge does not match.
+    OrganizationRegistrationChallengeInvalid,
+    /// The organization registration was revoked.
+    OrganizationRegistrationRevoked,
+    /// The organization registration generation is stale.
+    OrganizationRegistrationStale,
+    /// The value violates its registered schema.
+    SchemaViolation,
+    /// A key-backup series sequence went backwards.
+    SeriesSeqNotMonotonic,
+}
+
+impl ConflictCode {
+    /// Every registered code, in the order the variants are declared.
+    pub const ALL: [Self; 15] = [
+        Self::AppletRevoked,
+        Self::CasConflict,
+        Self::DevicePairingNotFound,
+        Self::DuplicateConflict,
+        Self::EventHashCollision,
+        Self::EventIdDigestMismatch,
+        Self::EventNotAccepted,
+        Self::FailedPrecondition,
+        Self::ForkQuarantine,
+        Self::RealmAlreadyExists,
+        Self::OrganizationRegistrationChallengeInvalid,
+        Self::OrganizationRegistrationRevoked,
+        Self::OrganizationRegistrationStale,
+        Self::SchemaViolation,
+        Self::SeriesSeqNotMonotonic,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AppletRevoked => "applet_revoked",
+            Self::CasConflict => "cas_conflict",
+            Self::DevicePairingNotFound => "device_pairing_not_found",
+            Self::DuplicateConflict => "duplicate_conflict",
+            Self::EventHashCollision => "event_hash_collision",
+            Self::EventIdDigestMismatch => "event_id_digest_mismatch",
+            Self::EventNotAccepted => "event_not_accepted",
+            Self::FailedPrecondition => "failed_precondition",
+            Self::ForkQuarantine => "fork_quarantine",
+            Self::RealmAlreadyExists => "realm_already_exists",
+            Self::OrganizationRegistrationChallengeInvalid => {
+                "organization_registration_challenge_invalid"
+            }
+            Self::OrganizationRegistrationRevoked => "organization_registration_revoked",
+            Self::OrganizationRegistrationStale => "organization_registration_stale",
+            Self::SchemaViolation => "schema_violation",
+            Self::SeriesSeqNotMonotonic => "series_seq_not_monotonic",
+        }
+    }
+
+    /// Read the code prefix out of a conflict detail.
+    ///
+    /// The prefix is the whole detail, or everything before the first `": "`.
+    /// Matching is exact on that token, so a diagnostic that merely mentions a
+    /// code elsewhere in its text never routes.
+    #[must_use]
+    pub fn from_detail(detail: &str) -> Option<Self> {
+        let token = detail.split_once(": ").map_or(detail, |(head, _)| head);
+        Self::ALL.into_iter().find(|code| code.as_str() == token)
+    }
+}
+
+impl std::fmt::Display for ConflictCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod conflict_code_tests {
+    use super::{ConflictCode, PersistenceError};
+
+    #[test]
+    fn bare_code_and_prefixed_detail_both_resolve() {
+        assert_eq!(
+            ConflictCode::from_detail("cas_conflict"),
+            Some(ConflictCode::CasConflict)
+        );
+        assert_eq!(
+            ConflictCode::from_detail("fork_quarantine: actor sequence sibling limit"),
+            Some(ConflictCode::ForkQuarantine)
+        );
+    }
+
+    #[test]
+    fn a_code_mentioned_inside_diagnostics_does_not_route() {
+        // The old substring matcher classified this as `cas_conflict`.
+        assert_eq!(
+            ConflictCode::from_detail("localpart `cas_conflict` is already assigned"),
+            None
+        );
+        assert_eq!(
+            ConflictCode::from_detail("schema_violation is not the prefix here"),
+            None
+        );
+    }
+
+    #[test]
+    fn unregistered_conflicts_are_reported_as_such() {
+        assert_eq!(
+            ConflictCode::from_detail("organization registration current pointer CAS failed"),
+            None
+        );
+        assert_eq!(
+            PersistenceError::Internal("cas_conflict".to_owned()).conflict_code(),
+            None
+        );
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_wire_token() {
+        for code in ConflictCode::ALL {
+            assert_eq!(ConflictCode::from_detail(code.as_str()), Some(code));
+            assert_eq!(
+                ConflictCode::from_detail(&format!("{code}: detail")),
+                Some(code)
+            );
+        }
+    }
 }
 
 /// Account, identity, messaging, and device persistence registry.
