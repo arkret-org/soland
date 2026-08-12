@@ -110,22 +110,14 @@ async fn validate_event_envelope_with_ingress(
             "Event Envelope must be a JSON object",
         )
     })?;
-    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
+    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         event_validation_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
             format!("session actor is invalid: {error}"),
         )
-    })?;
-    let session_actor_id = arkret_wire::project_full_id_to_core_id(&session_full_id)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("session actor projection failed: {error}"),
-            )
-        })?
-        .to_string();
+    })?
+    .to_string();
     validate_event_critical_features(state, object)?;
     // `effective_scope` is reducer output and is intentionally absent from
     // the closed SDK Event DTO. Reject it from the raw envelope before

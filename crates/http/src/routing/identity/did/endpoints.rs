@@ -923,16 +923,12 @@ pub(crate) async fn identity_log(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let method = did
-        .strip_prefix("did:")
-        .and_then(|value| value.split(':').next())
-        .ok_or_else(|| AppError::invalid_param("invalid did method"))?
-        .to_owned();
+    let method = did_method_token(&did)?;
     let (native_history, entries) = match method.as_str() {
         // The persisted operation is the accepted method-native did.jsonl
         // object. Returning it directly avoids creating a second Arkret log
         // envelope, sequence, digest chain, or proof transcript.
-        "webvh" => (
+        "did:webvh" => (
             Some(true),
             state
                 .dids()
@@ -944,7 +940,7 @@ pub(crate) async fn identity_log(
                 .collect(),
         ),
         // did:web has no method-native append-only history.
-        "web" => (Some(false), Vec::new()),
+        "did:web" => (Some(false), Vec::new()),
         _ => {
             return Err(AppError::invalid_param(
                 "DID method does not expose a supported native history",
@@ -959,6 +955,31 @@ pub(crate) async fn identity_log(
         next_cursor: None,
         has_more: false,
     })
+}
+
+fn did_method_token(did: &str) -> Result<String, AppError> {
+    let method_name = did
+        .strip_prefix("did:")
+        .and_then(|value| value.split(':').next())
+        .ok_or_else(|| AppError::invalid_param("invalid did method"))?;
+    Ok(format!("did:{method_name}"))
+}
+
+#[cfg(test)]
+mod identity_log_tests {
+    use super::did_method_token;
+
+    #[test]
+    fn identity_log_reports_the_full_registered_did_method_token() {
+        assert_eq!(
+            did_method_token("did:webvh:scid:example.com:webvh:alice").expect("valid did:webvh"),
+            "did:webvh"
+        );
+        assert_eq!(
+            did_method_token("did:web:example.com:alice").expect("valid did:web"),
+            "did:web"
+        );
+    }
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.root.identity.receipts.read.list", tags("identity"))]
