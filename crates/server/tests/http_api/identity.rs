@@ -27,12 +27,19 @@ async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principa
 #[tokio::test(flavor = "multi_thread")]
 async fn identity_surface_works() {
     let state = soland_test_support::app_state(test_config());
+    let expected_service_id =
+        arkret_wire::project_full_id_to_core_id(&state.service_resolution_commitment().full_id)
+            .expect("service full id projects to a core id");
     let describe: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
+    let typed_describe: arkret_models_identity::identity::IdentityDescription =
+        serde_json::from_value(describe.clone())
+            .expect("identity describe uses the SDK's canonical wire types");
+    assert_eq!(typed_describe.service_id, expected_service_id);
     assert_eq!(describe["protocol_version"], "1.0");
     assert_eq!(
         describe["resolver_policy"]["allow_methods"],
@@ -42,13 +49,13 @@ async fn identity_surface_works() {
     let trust_roots = describe["resolver_policy"]["trust_roots"]
         .as_array()
         .expect("resolver trust roots");
-    // Trust roots carry a stable slug `id`; the service DID moved to the
-    // dedicated `service_id` field.
+    // Trust roots carry a stable slug `id` and the canonical projected
+    // service identifier in the dedicated `service_id` field.
     assert!(
         trust_roots
             .iter()
             .any(|root| root["id"] == "soland.local_identity_store"
-                && root["service_id"] == "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+                && root["service_id"].as_str() == Some(expected_service_id.as_str())
                 && root["kind"] == "local_identity_store"
                 && root["proof_verification"]["webvh_witness_quorum"]
                     == "required_when_policy_present"),

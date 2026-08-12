@@ -12,7 +12,7 @@ pub struct RawDidDocumentJson(pub serde_json::Value);
 pub struct IdentityRegistryDescription {
     pub protocol_version: String,
     pub service_kind: String,
-    pub service_id: DidFullId,
+    pub service_id: DidCoreId,
     pub trust_domain: String,
     pub registry_mode: String,
     pub supported_receipts: Vec<String>,
@@ -118,7 +118,7 @@ pub(crate) async fn identity_describe(
     if did_webvh["enabled"].as_bool().unwrap_or(false) {
         profiles.push("ak.identity.webvh.provider.v1".to_owned());
     }
-    let service_id = state.service_resolution_commitment().full_id.clone();
+    let (service_id, _) = crate::routing::system::service_resolution::service_ids(state)?;
     let supported_did_methods = state
         .config()
         .did_resolver_allow_methods

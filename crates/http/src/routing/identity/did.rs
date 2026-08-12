@@ -14,7 +14,7 @@
 //! Long-term DID state is accessed through the identity application service; the
 //! `did_resolver` remains an in-process bounded cache over durable records.
 
-use arkret_identifiers::{DidFullId, Hash};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash};
 use arkret_models_identity::http_bodies::IdentityDocumentViewOutcome;
 use arkret_models_identity::identity::{
     DidOperationSubmitOutcome, DidOperationSubmitRequestBody, IdentityDocumentView,
