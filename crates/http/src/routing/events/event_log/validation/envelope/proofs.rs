@@ -432,6 +432,54 @@ pub(crate) async fn validate_event_proofs(
                     "Agent Event proof requires matching independently verified Agent signer evidence",
                 ));
             }
+            // A development login is an explicit local-only credential: it
+            // carries no SessionGrant and therefore has no accepted PCR/device
+            // authority instance to resolve below. Keep its wire shape honest
+            // (principal-rooted canonical device method and strict Event proof
+            // transcript) while using the deterministic development key that
+            // the test client derives from the same method. SessionGrant-backed
+            // and production sessions never enter this branch.
+            if state.config().development_mode && session.session_grant.is_none() {
+                let device_fragment = verification_method
+                    .rsplit_once('#')
+                    .map(|(_, fragment)| fragment)
+                    .ok_or_else(|| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "development device Event proof method has no device fragment",
+                        )
+                    })?;
+                arkret_wire::DeviceId::new(device_fragment.to_owned()).map_err(
+                    |_| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "development device Event proof method fragment is not a canonical device id",
+                        )
+                    },
+                )?;
+                let signing_key = arkret_signatures::development_signing_key(&verification_method);
+                let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: signing_key.verifying_key().to_bytes().to_vec(),
+                };
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "development device Event proof verification failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "development device Event proof JWS verification failed",
+                    )
+                })?;
+                continue;
+            }
             // §5.4/§8.2: `{principal}#{device_id}` resolves from the current
             // device-set projection. DID control/delegation methods resolve
             // from the DID document and retain the high-risk freshness gate.
