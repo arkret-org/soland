@@ -1000,12 +1000,29 @@ impl ProjectionState {
         cell_store: &dyn CellStore,
         cell_registry: &dyn CellRegistry,
     ) -> Result<(), StoreError> {
+        let mut resolved_cells = Vec::new();
         for cell in cell_store.list_cells(realm_id)? {
             let ops = cell_store.sealed_ops_for_cell(realm_id, &cell)?;
             let binding = cell_registry
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
             let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            resolved_cells.push((cell, resolved));
+        }
+        self.install_reloaded_cells(realm_id, resolved_cells);
+        Ok(())
+    }
+
+    /// Install already-resolved sealed cell values for one Realm.
+    ///
+    /// Keeping installation separate lets service adapters perform durable
+    /// store I/O before they acquire the projection-state mutex.
+    pub fn install_reloaded_cells(
+        &mut self,
+        realm_id: &RealmId,
+        resolved_cells: impl IntoIterator<Item = (CellRef, CellState)>,
+    ) {
+        for (cell, resolved) in resolved_cells {
             match cell.as_str() {
                 arkret_wire::REALM_PROFILE_CELL => {
                     self.realm_profile_cells
@@ -1047,7 +1064,6 @@ impl ProjectionState {
                 }
             }
         }
-        Ok(())
     }
 
     /// Apply a single operation and return the effect.

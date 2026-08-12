@@ -2034,9 +2034,22 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
     ) -> Result<(), arkret_state::StoreError> {
+        let mut resolved_cells = Vec::new();
+        for cell in self.cell_store().list_cells(realm_id)? {
+            let ops = self.cell_store().sealed_ops_for_cell(realm_id, &cell)?;
+            let binding = self
+                .cell_registry()
+                .resolve(realm_id, &cell)
+                .map_err(|error| {
+                    arkret_state::StoreError::Backend(format!("cell registry resolve: {error}"))
+                })?;
+            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            resolved_cells.push((cell, resolved));
+        }
         self.state
             .lock()
-            .reload_cells_from_store(realm_id, self.cell_store(), self.cell_registry())
+            .install_reloaded_cells(realm_id, resolved_cells);
+        Ok(())
     }
 
     pub fn key_backup_active_series(
