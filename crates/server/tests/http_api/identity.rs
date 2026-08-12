@@ -536,6 +536,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let next_root = SigningKey::from_bytes(&[52u8; 32]);
     let inception = arkret_signatures::webvh::prepare_principal_inception(
         &arkret_signatures::webvh::PrincipalInceptionInput {
+            provider_endpoint: &endpoint,
             principal_endpoint: &endpoint,
             local_id: "bobwebvh",
             also_known_as: &["acct:alice@example.com".to_owned()],
@@ -544,6 +545,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
                 .with_timezone(&chrono::Utc),
             root_seed: &[51u8; 32],
             next_root_public_key_multibase: &test_ed25519_multibase_public(&next_root),
+            witness_policy: None,
         },
     )
     .unwrap();
@@ -727,6 +729,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
     let also_known_as = vec!["acct:rotation@example.com".to_owned()];
     let inception = arkret_signatures::webvh::prepare_principal_inception(
         &arkret_signatures::webvh::PrincipalInceptionInput {
+            provider_endpoint: &endpoint,
             principal_endpoint: &endpoint,
             local_id: "rotation",
             also_known_as: &also_known_as,
@@ -735,6 +738,7 @@ async fn submit_did_operation_accepts_precommitted_rotation_and_rejects_sibling(
                 .with_timezone(&chrono::Utc),
             root_seed: &root_seed,
             next_root_public_key_multibase: &committed_root_public,
+            witness_policy: None,
         },
     )
     .unwrap();

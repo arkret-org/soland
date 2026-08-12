@@ -981,6 +981,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
 
     // Bob blocks Alice. The entry is sealed account data: the service stores
     // ciphertext and cannot evaluate it.
+    let bob_id = arkret_identifiers::DidCoreId::new(bob.to_owned()).unwrap();
     let bob_blocklist = submit_actor_private_event(
         state.clone(),
         &bob_token,
@@ -995,7 +996,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],
-                    bob,
+                    &bob_id,
                     "ak.account.blocklist",
                     &serde_json::json!({"entries": [{"target": ALICE}]}),
                     [10u8; 24],
