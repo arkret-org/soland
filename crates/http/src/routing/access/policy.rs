@@ -22,7 +22,7 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_identifiers::{Hash, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, Hash, RealmId, project_full_id_to_core_id};
 use arkret_models_collaboration::governance::policy_check::{
     PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
 };
@@ -39,7 +39,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::governance::PolicyDocumentRecord;
 
-use super::{now, validate_canonical_json_value, validate_did};
+use super::{now, validate_canonical_json_value};
 use crate::ids;
 use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
@@ -166,9 +166,8 @@ async fn upsert_policy_document(
     if !is_valid_policy_scope(&body.scope) {
         return Err(AppError::invalid_param("invalid policy scope"));
     }
-    if body.subject_ref != "*" && validate_did(&body.subject_ref).is_err() {
-        return Err(AppError::invalid_param("invalid policy subject_ref"));
-    }
+    let subject_ref = canonical_policy_subject_ref(&body.subject_ref)
+        .ok_or_else(|| AppError::invalid_param("invalid policy subject_ref"))?;
     if !is_valid_policy_kind(&body.policy_kind) || !is_supported_policy_effect(&body.effect) {
         return Err(AppError::invalid_param("invalid policy type or effect"));
     }
@@ -207,7 +206,7 @@ async fn upsert_policy_document(
         policy_id: policy_id.clone(),
         owner: session.actor,
         scope: body.scope,
-        subject_ref: body.subject_ref,
+        subject_ref,
         policy_kind: body.policy_kind,
         payload: json!({
             "effect": body.effect,
@@ -619,7 +618,21 @@ fn policy_scope_matches(scope: &str, request_realm_id: &str) -> bool {
 }
 
 fn policy_subject_matches(subject_ref: &str, actor: &str) -> bool {
-    subject_ref == "*" || subject_ref == actor
+    subject_ref == "*"
+        || canonical_policy_subject_ref(subject_ref).is_some_and(|subject_ref| subject_ref == actor)
+}
+
+fn canonical_policy_subject_ref(subject_ref: &str) -> Option<String> {
+    if subject_ref == "*" {
+        return Some(subject_ref.to_owned());
+    }
+    DidCoreId::new(subject_ref.to_owned())
+        .or_else(|_| {
+            DidFullId::new(subject_ref.to_owned())
+                .and_then(|full_id| project_full_id_to_core_id(&full_id))
+        })
+        .ok()
+        .map(|core_id| core_id.to_string())
 }
 
 fn policy_actions_match(actions: &Value, action: &str) -> bool {
@@ -781,9 +794,24 @@ pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::DidCoreId;
-
     use super::*;
+
+    #[test]
+    fn policy_subject_matching_projects_full_did_to_core_identity() {
+        assert_eq!(
+            canonical_policy_subject_ref("did:web:alice.example").as_deref(),
+            Some("ak:did_core:web:alice.example")
+        );
+        assert!(policy_subject_matches(
+            "did:web:alice.example",
+            "ak:did_core:web:alice.example"
+        ));
+        assert!(policy_subject_matches(
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:alice.example"
+        ));
+        assert!(policy_subject_matches("*", "ak:did_core:web:alice.example"));
+    }
 
     fn test_hash() -> Hash {
         Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap()
@@ -818,57 +846,57 @@ mod tests {
     #[test]
     fn policy_check_actor_must_match_session_by_default() {
         let request = policy_request(
-            "did:web:alice.example",
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:soland.example",
             Value::Null,
         );
         assert!(policy_check_actor_bound_to_session(
             &request,
-            "did:web:alice.example"
+            "ak:did_core:web:alice.example"
         ));
         assert!(!policy_check_actor_bound_to_session(
             &request,
-            "did:web:service.example"
+            "ak:did_core:web:service.example"
         ));
     }
 
     #[test]
     fn policy_check_actor_can_be_bound_by_explicit_service_delegation() {
         let request = policy_request(
-            "did:web:alice.example",
-            "did:web:service.example",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:service.example",
             json!({
                 "service_delegation": {
                     "kind": "service_delegation",
-                    "subject_actor_id": "did:web:alice.example",
-                    "executed_by": "did:web:service.example",
+                    "subject_actor_id": "ak:did_core:web:alice.example",
+                    "executed_by": "ak:did_core:web:service.example",
                     "authorization_ref": "ak:grant:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt"
                 }
             }),
         );
         assert!(policy_check_actor_bound_to_session(
             &request,
-            "did:web:service.example"
+            "ak:did_core:web:service.example"
         ));
     }
 
     #[test]
     fn policy_check_delegation_requires_source_service_binding() {
         let request = policy_request(
-            "did:web:alice.example",
-            "did:web:other-service.example",
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:other-service.example",
             json!({
                 "service_delegation": {
                     "kind": "service_delegation",
-                    "subject_actor_id": "did:web:alice.example",
-                    "executed_by": "did:web:service.example",
+                    "subject_actor_id": "ak:did_core:web:alice.example",
+                    "executed_by": "ak:did_core:web:service.example",
                     "authorization_ref": "ak:grant:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt"
                 }
             }),
         );
         assert!(!policy_check_actor_bound_to_session(
             &request,
-            "did:web:service.example"
+            "ak:did_core:web:service.example"
         ));
     }
 }
