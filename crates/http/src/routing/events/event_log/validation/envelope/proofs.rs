@@ -462,6 +462,23 @@ pub(crate) async fn validate_event_proofs(
                     )
                     .await
                 } else {
+                    let device_fragment = verification_method
+                        .rsplit_once('#')
+                        .map(|(_, fragment)| fragment)
+                        .ok_or_else(|| {
+                            event_validation_error(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_proof",
+                                "ordinary device Event proof method has no device fragment",
+                            )
+                        })?;
+                    arkret_wire::DeviceId::new(device_fragment.to_owned()).map_err(|_| {
+                        event_validation_error(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "ordinary device Event proof method fragment is not a canonical device id",
+                        )
+                    })?;
                     crate::jws_verify::verify_principal_authorized_event_proof_async(
                         &typed_proof,
                         envelope_bytes,

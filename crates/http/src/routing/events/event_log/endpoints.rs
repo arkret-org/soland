@@ -124,21 +124,13 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
-    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
+    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::PolicyViolation,
-            format!("Seal submitter full DID is invalid: {error}"),
+            format!("Seal submitter DID core id is invalid: {error}"),
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let session_core_id =
-        arkret_wire::project_full_id_to_core_id(&session_full_id).map_err(|error| {
-            AppError::new(
-                ErrorCode::PolicyViolation,
-                format!("Seal submitter full DID cannot be projected: {error}"),
-            )
-            .with_status(StatusCode::FORBIDDEN)
-        })?;
     let own_pcr = state
         .projections()
         .snapshot()
@@ -315,144 +307,161 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
         return;
     }
 
-    // §6 generic idempotency key path. When present, the key is scoped to the
-    // authenticated principal: a replay carrying the SAME canonical body
-    // returns the cached first response; the SAME key with a DIFFERENT
-    // canonical body is a `duplicate_conflict`. Event-ID idempotency below
-    // still applies independently (a write with no header relies on it).
-    if let Some(key) = idempotency_key.as_deref() {
-        let request_hash = match arkret_canonical::canonical_sha256(&submit) {
-            Ok(hash) => hash,
-            Err(error) => {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    &format!("request body is not canonical-hashable: {error}"),
-                );
-                return;
+    submit_event_authenticated(state, &session, idempotency_key, submit, res).await;
+}
+
+fn submit_event_authenticated<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
+    idempotency_key: Option<String>,
+    submit: SolandEventsSubmitRequestBody,
+    res: &'a mut Response,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        // §6 generic idempotency key path. When present, the key is scoped to the
+        // authenticated principal: a replay carrying the SAME canonical body
+        // returns the cached first response; the SAME key with a DIFFERENT
+        // canonical body is a `duplicate_conflict`. Event-ID idempotency below
+        // still applies independently (a write with no header relies on it).
+        if let Some(key) = idempotency_key.as_deref() {
+            let request_hash = match arkret_canonical::canonical_sha256(&submit) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    render_error(
+                        res,
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        &format!("request body is not canonical-hashable: {error}"),
+                    );
+                    return;
+                }
+            };
+            match state.jobs().idempotency_record(&session.actor, key).await {
+                Ok(Some(record)) if record.request_hash == request_hash => {
+                    // Replay: re-emit the cached first response verbatim, no
+                    // re-execution and no second side effect.
+                    let status = StatusCode::from_u16(record.response_status as u16)
+                        .unwrap_or(StatusCode::OK);
+                    res.status_code(status);
+                    res.render(Json(record.response_body));
+                    return;
+                }
+                Ok(Some(_)) => {
+                    render_error(
+                        res,
+                        StatusCode::CONFLICT,
+                        "duplicate_conflict",
+                        "Idempotency-Key was reused with a different request body",
+                    );
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    render_error(
+                        res,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        &format!("idempotency lookup failed: {error}"),
+                    );
+                    return;
+                }
             }
-        };
-        match state.jobs().idempotency_record(&session.actor, key).await {
-            Ok(Some(record)) if record.request_hash == request_hash => {
-                // Replay: re-emit the cached first response verbatim, no
-                // re-execution and no second side effect.
-                let status =
-                    StatusCode::from_u16(record.response_status as u16).unwrap_or(StatusCode::OK);
-                res.status_code(status);
-                res.render(Json(record.response_body));
-                return;
-            }
-            Ok(Some(_)) => {
-                render_error(
-                    res,
-                    StatusCode::CONFLICT,
-                    "duplicate_conflict",
-                    "Idempotency-Key was reused with a different request body",
-                );
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                render_error(
-                    res,
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    &format!("idempotency lookup failed: {error}"),
-                );
-                return;
-            }
-        }
-        let (status, body, idempotency_committed) = match submit {
-            SolandEventsSubmitRequestBody::Single(envelope) => {
-                let envelope_for_chaos = envelope.clone();
-                let result = submit_event_value_with_idempotency(
+            let (status, body, idempotency_committed) = match submit {
+                SolandEventsSubmitRequestBody::Single(envelope) => {
+                    let envelope_for_chaos = envelope.clone();
+                    let result = submit_event_value_with_idempotency(
+                        state,
+                        session,
+                        envelope,
+                        EventCommitIdempotency {
+                            principal_id: session.actor.clone(),
+                            key: key.to_owned(),
+                            service_id: state.service_id().clone(),
+                            request_hash: request_hash.clone(),
+                        },
+                    )
+                    .await;
+                    match result {
+                        Ok(response) => {
+                            maybe_delay_test_chaos_breakpoint(
+                                state,
+                                &envelope_for_chaos,
+                                &response,
+                            )
+                            .await;
+                            let committed = !response.duplicate;
+                            (
+                                StatusCode::OK,
+                                submit_outcome_value(&response.outcome),
+                                committed,
+                            )
+                        }
+                        Err(error) => {
+                            let (status, body) = submit_one_error_value(error);
+                            (status, body, false)
+                        }
+                    }
+                }
+                other => {
+                    let (status, body) = submit_event_dispatch(state, session, other).await;
+                    (status, body, false)
+                }
+            };
+            // Only deterministic outcomes are cached: a 5xx is transient, so caching
+            // it would wrongly pin a server-side failure under the key and block a
+            // legitimate retry. The client may safely re-send the same key.
+            if !status.is_server_error() && !idempotency_committed {
+                persist_idempotency_first_response(
                     state,
-                    &session,
-                    envelope,
-                    EventCommitIdempotency {
-                        principal_id: session.actor.clone(),
-                        key: key.to_owned(),
-                        service_id: state.service_id().clone(),
-                        request_hash: request_hash.clone(),
-                    },
+                    &session.actor,
+                    key,
+                    &request_hash,
+                    status,
+                    &body,
                 )
                 .await;
-                match result {
+            }
+            res.status_code(status);
+            res.render(Json(body));
+            return;
+        }
+
+        match submit {
+            SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+            SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
+                match submit_direct_conversation_founding_unit(state, session, submission).await {
+                    Ok(outcome) => res.render(Json(outcome)),
+                    Err(error) => render_submit_one_error(res, error),
+                }
+            }
+            SolandEventsSubmitRequestBody::Initial(submission) => {
+                match submit_initial_event_submission(state, session, submission).await {
+                    Ok(response) => res.render(Json(response.outcome)),
+                    Err(error) => render_submit_one_error(res, error),
+                }
+            }
+            SolandEventsSubmitRequestBody::InitialBatch(batch) => {
+                match submit_initial_event_batch_outcome(state, session, batch.events).await {
+                    Ok(outcome) => res.render(Json(outcome)),
+                    Err(error) => render_submit_one_error(res, error),
+                }
+            }
+            SolandEventsSubmitRequestBody::Batch(batch) => {
+                submit_event_batch(state, session, batch.events, res).await;
+            }
+            SolandEventsSubmitRequestBody::Single(envelope) => {
+                let envelope_for_chaos = envelope.clone();
+                match submit_event_value(state, session, envelope).await {
                     Ok(response) => {
                         maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response)
                             .await;
-                        let committed = !response.duplicate;
-                        (
-                            StatusCode::OK,
-                            submit_outcome_value(&response.outcome),
-                            committed,
-                        )
+                        res.render(Json(response.outcome));
                     }
-                    Err(error) => {
-                        let (status, body) = submit_one_error_value(error);
-                        (status, body, false)
-                    }
+                    Err(error) => render_submit_one_error(res, error),
                 }
             }
-            other => {
-                let (status, body) = submit_event_dispatch(state, &session, other).await;
-                (status, body, false)
-            }
-        };
-        // Only deterministic outcomes are cached: a 5xx is transient, so caching
-        // it would wrongly pin a server-side failure under the key and block a
-        // legitimate retry. The client may safely re-send the same key.
-        if !status.is_server_error() && !idempotency_committed {
-            persist_idempotency_first_response(
-                state,
-                &session.actor,
-                key,
-                &request_hash,
-                status,
-                &body,
-            )
-            .await;
         }
-        res.status_code(status);
-        res.render(Json(body));
-        return;
-    }
-
-    match submit {
-        SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
-        SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
-            match submit_direct_conversation_founding_unit(state, &session, submission).await {
-                Ok(outcome) => res.render(Json(outcome)),
-                Err(error) => render_submit_one_error(res, error),
-            }
-        }
-        SolandEventsSubmitRequestBody::Initial(submission) => {
-            match submit_initial_event_submission(state, &session, submission).await {
-                Ok(response) => res.render(Json(response.outcome)),
-                Err(error) => render_submit_one_error(res, error),
-            }
-        }
-        SolandEventsSubmitRequestBody::InitialBatch(batch) => {
-            match submit_initial_event_batch_outcome(state, &session, batch.events).await {
-                Ok(outcome) => res.render(Json(outcome)),
-                Err(error) => render_submit_one_error(res, error),
-            }
-        }
-        SolandEventsSubmitRequestBody::Batch(batch) => {
-            submit_event_batch(state, &session, batch.events, res).await;
-        }
-        SolandEventsSubmitRequestBody::Single(envelope) => {
-            let envelope_for_chaos = envelope.clone();
-            match submit_event_value(state, &session, envelope).await {
-                Ok(response) => {
-                    maybe_delay_test_chaos_breakpoint(state, &envelope_for_chaos, &response).await;
-                    res.render(Json(response.outcome));
-                }
-                Err(error) => render_submit_one_error(res, error),
-            }
-        }
-    }
+    })
 }
 
 /// How long a generic `Idempotency-Key` mapping is retained. api-conventions.md
@@ -809,10 +818,8 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierAccountClientState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone())
+    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    let session_core_id = arkret_wire::project_full_id_to_core_id(&session_full_id)
-        .map_err(|error| AppError::internal(format!("session actor projection failed: {error}")))?;
     let query_body = if req.method().as_str() == "QUERY" {
         Some(
             req.parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
