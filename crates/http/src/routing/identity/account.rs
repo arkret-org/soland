@@ -362,6 +362,12 @@ fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, Ap
         .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))
 }
 
+fn account_core_id_from_path(value: String) -> Result<String, AppError> {
+    DidCoreId::new(value)
+        .map(|account_id| account_id.to_string())
+        .map_err(|_| AppError::invalid_param("invalid account core id"))
+}
+
 fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError {
     if error.is_not_found() {
         AppError::not_found(error.detail())
@@ -895,8 +901,7 @@ async fn list_account_localparts(
 ) -> JsonResult<AccountLocalpartListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_did.into_inner();
-    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    let account_did = account_core_id_from_path(account_did.into_inner())?;
     account_exists(state, &account_did).await?;
     let records = state
         .identities()
@@ -927,8 +932,7 @@ async fn add_account_localpart(
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_did.into_inner();
-    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    let account_did = account_core_id_from_path(account_did.into_inner())?;
     account_exists(state, &account_did).await?;
     let body = body.into_inner();
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
@@ -974,8 +978,7 @@ async fn update_account_localpart(
 ) -> JsonResult<AccountLocalpartMutationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_did.into_inner();
-    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    let account_did = account_core_id_from_path(account_did.into_inner())?;
     account_exists(state, &account_did).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let body = body.into_inner();
@@ -1018,8 +1021,7 @@ async fn delete_account_localpart(
 ) -> JsonResult<AccountLocalpartDeleteOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
-    let account_did = account_did.into_inner();
-    validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    let account_did = account_core_id_from_path(account_did.into_inner())?;
     account_exists(state, &account_did).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state

@@ -559,9 +559,7 @@ pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, Ap
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("directory actor preview missing actor DID"))?;
     Ok(ActorPreview {
-        actor_id: arkret_identifiers::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
-            AppError::internal(format!("directory actor DID is invalid: {error}"))
-        })?,
+        actor_id: directory_actor_core_id(actor_id)?,
         handle: actor
             .get("handle")
             .and_then(Value::as_str)

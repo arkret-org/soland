@@ -715,16 +715,24 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
     if event.proofs.len() != 1 {
         return Some("event does not carry exactly one proof");
     }
-    let prefix = format!("{}#ak:device:", event.actor_id);
-    if !event.proofs[0]
-        .verification_method
-        .as_str()
-        .strip_prefix(&prefix)
-        .is_some_and(|device| !device.is_empty())
-    {
+    if self_principal_pcr_device_id(event).is_none() {
         return Some("event proof is not actor#ak:device:<id>");
     }
     None
+}
+
+fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
+    let (controller, fragment) = event.proofs[0]
+        .verification_method
+        .as_str()
+        .rsplit_once('#')?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
+    let controller_id = arkret_wire::project_full_id_to_core_id(&controller).ok()?;
+    (controller_id == event.actor_id)
+        .then_some(fragment)
+        .filter(|fragment| fragment.starts_with("ak:device:"))
+        .filter(|fragment| fragment.len() > "ak:device:".len())
+        .map(ToOwned::to_owned)
 }
 
 /// Return the first failed authority condition for an Ack-less self-PCR Move.
@@ -775,16 +783,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         return Ok(Some("current notary is not single_did == principal"));
     }
 
-    let proof = &event.proofs[0];
-    let proof_prefix = format!("{}#", event.actor_id);
-    let Some(device_id) = proof
-        .verification_method
-        .as_str()
-        .strip_prefix(&proof_prefix)
-        .filter(|fragment| fragment.starts_with("ak:device:"))
-        .filter(|fragment| fragment.len() > "ak:device:".len())
-        .map(ToOwned::to_owned)
-    else {
+    let Some(device_id) = self_principal_pcr_device_id(event) else {
         return Ok(Some("event proof device id is malformed"));
     };
     let Some(device) = state

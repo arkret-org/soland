@@ -26,7 +26,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_hlc::CursorPurpose;
-use arkret_identifiers::{BlobRef, EventId, MessageId, RealmId, StrandId, SubscriptionId};
+use arkret_identifiers::{
+    BlobRef, DidCoreId, DidFullId, EventId, MessageId, RealmId, StrandId, SubscriptionId,
+    project_full_id_to_core_id,
+};
 use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload;
 use arkret_models_collaboration::objects::realm_alias::RealmAlias;
 use arkret_models_discovery::{
@@ -84,6 +87,17 @@ use super::{
 use crate::ids;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};
+
+fn directory_actor_core_id(value: &str) -> Result<DidCoreId, AppError> {
+    if let Ok(core_id) = DidCoreId::new(value.to_owned()) {
+        return Ok(core_id);
+    }
+    let full_id = DidFullId::new(value.to_owned())
+        .map_err(|error| AppError::internal(format!("directory actor DID is invalid: {error}")))?;
+    project_full_id_to_core_id(&full_id).map_err(|error| {
+        AppError::internal(format!("directory actor DID projection failed: {error}"))
+    })
+}
 
 mod actors_users;
 mod agent_selector;

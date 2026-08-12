@@ -106,9 +106,7 @@ pub(super) fn project_search_users_row(
         .ok_or_else(|| AppError::internal("directory user search row missing DID"))?;
     Ok(UserSearchOutcome {
         handle: (!canonical.is_empty()).then_some(canonical),
-        principal_id: Some(DidCoreId::new(did.to_owned()).map_err(|error| {
-            AppError::internal(format!("directory user principal id is invalid: {error}"))
-        })?),
+        principal_id: Some(directory_actor_core_id(did)?),
         display_name: actor
             .get("display_name")
             .and_then(Value::as_str)
@@ -119,4 +117,3 @@ pub(super) fn project_search_users_row(
         member_delivery_binding: None,
     })
 }
-use arkret_identifiers::DidCoreId;
