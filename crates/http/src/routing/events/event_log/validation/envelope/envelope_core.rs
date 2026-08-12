@@ -856,10 +856,7 @@ async fn enforce_device_generation_fence(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: verification_method
-                .rsplit_once('#')
-                .map(|(controller, _)| controller.to_owned())
-                .unwrap_or_else(|| actor_id.to_owned()),
+            actor_id: actor_id.to_owned(),
             device_id: device_id.clone(),
         })
         .await

@@ -43,7 +43,6 @@ use soland_services::identity::{
     SessionIdentityState as SessionRecord,
 };
 
-use super::auth::PRINCIPAL_SESSION_BIND_SCOPE;
 use crate::state::AppState;
 use crate::wire::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
@@ -53,7 +52,6 @@ use crate::wire::{
 /// Device-scope prefix carried in a `ak.session.grant`'s scope set
 /// (`urn:arkret:client:device:<device_id>`). A grant that drives
 /// `/_arkret/self/*` MUST carry one so the request is device-bound.
-const DEVICE_SCOPE_PREFIX: &str = "urn:arkret:client:device:";
 
 /// TTL for the session-grant introspection cache (api-conventions.md §3.3 D2:
 /// SHOULD ≤ 120s). The revocation-visibility upper bound equals this TTL;
@@ -489,34 +487,19 @@ fn session_binding_from_introspection(
         ));
     }
 
-    if !grant
-        .scopes
-        .iter()
-        .any(|scope| scope == PRINCIPAL_SESSION_BIND_SCOPE)
+    let SessionGrantHolderBinding::HumanDevice { device_binding } = &grant.holder_binding else {
+        return Err(unauthenticated("unsupported session grant holder binding"));
+    };
+    let device_id = DeviceId::new(device_binding.clone())
+        .map_err(|_| unauthenticated("session grant holder binding has an invalid device id"))?;
+    if let Some(bound) = grant.device_id.as_ref()
+        && bound != &device_id
     {
         return Err(unauthenticated(
-            "session grant is missing the principal-server session.bind scope",
+            "session grant device metadata does not match its holder binding",
         ));
     }
-    let scope_device_id = grant
-        .scopes
-        .iter()
-        .find_map(|scope| scope.strip_prefix(DEVICE_SCOPE_PREFIX))
-        .map(str::to_owned);
-    let Some(scope_device_id) = scope_device_id else {
-        return Err(unauthenticated("session grant is missing a device scope"));
-    };
-
-    let device_id = match grant.device_id.as_ref().map(DeviceId::as_str) {
-        Some(bound) if bound != scope_device_id => {
-            return Err(unauthenticated(
-                "session grant device binding does not match its device scope",
-            ));
-        }
-        Some(bound) => bound.to_owned(),
-        None => scope_device_id,
-    };
-    Ok((device_id, None))
+    Ok((device_id.into_string(), None))
 }
 
 pub(crate) fn session_record_from_introspected_grant_for_logout(
@@ -629,8 +612,7 @@ pub(crate) async fn grant_dpop_session(
         ));
     }
 
-    // 6a/6b. Human/device grants carry `session.bind` + a device scope; agent
-    // grants carry fresh resource-scope metadata instead.
+    // 6a/6b. Human/device and agent grants carry closed typed holder bindings.
     let (device_id, agent_session) = session_binding_from_introspection(&grant)?;
 
     // 6c. grant not expired.
@@ -825,10 +807,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            scopes: vec![
-                PRINCIPAL_SESSION_BIND_SCOPE.to_owned(),
-                format!("{DEVICE_SCOPE_PREFIX}ak:device:0196419b-0000-7000-8000-000000000001"),
-            ],
+            scopes: vec!["ak.self.events.read.scan".to_owned()],
             expires_at: crate::wire::now() + Duration::minutes(5),
             revoked_at: None,
             revocation_ref: "ak:session:grant-1".to_owned(),
@@ -841,28 +820,32 @@ mod tests {
             credential_class:
                 arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard,
             holder_binding: SessionGrantHolderBinding::HumanDevice {
-                device_binding: "accepted-device-binding".to_owned(),
+                device_binding: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             },
         }
     }
 
     #[test]
-    fn device_session_binding_requires_device_scope() {
+    fn device_session_binding_rejects_metadata_mismatch() {
         let mut grant = test_introspection_grant();
-        grant.scopes = vec![PRINCIPAL_SESSION_BIND_SCOPE.to_owned()];
+        grant.device_id =
+            Some(DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000002").unwrap());
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
 
         assert_eq!(err.0, StatusCode::UNAUTHORIZED);
         assert_eq!(err.1, "unauthenticated");
-        assert_eq!(err.2, "session grant is missing a device scope");
+        assert_eq!(
+            err.2,
+            "session grant device metadata does not match its holder binding"
+        );
     }
 
     #[test]
     fn agent_holder_binding_materializes_closed_authorization_context() {
         let mut grant = test_introspection_grant();
         let device_id = grant.device_id.clone().unwrap();
-        grant.subject = "did:web:agent.example".to_owned();
+        grant.subject = "ak:did_core:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.read.scan".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),

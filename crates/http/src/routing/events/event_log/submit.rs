@@ -1599,6 +1599,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
     if let Some(outcome) =
         existing_pcr_genesis_outcome(state, request, accepted_device_id.clone()).await?
     {
+        persist_pcr_registration_did_evidence(state, request, &outcome.receipt).await?;
         return Ok(outcome);
     }
     // Only a new admission needs a currently valid creation proof. An exact
@@ -1653,7 +1654,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         }),
     )
     .await?;
-    existing_pcr_genesis_outcome(state, request, accepted_device_id)
+    let outcome = existing_pcr_genesis_outcome(state, request, accepted_device_id)
         .await?
         .ok_or_else(|| {
             SubmitOneError::new(
@@ -1661,7 +1662,54 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
                 "internal_error",
                 "accepted PCR genesis receipt is unavailable",
             )
-        })
+        })?;
+    persist_pcr_registration_did_evidence(state, request, &outcome.receipt).await?;
+    Ok(outcome)
+}
+
+async fn persist_pcr_registration_did_evidence(
+    state: &AppState,
+    request: &arkret_models_collaboration::principal_operations::PcrGenesisSubmitRequestBody,
+    receipt: &arkret_wire::EventBatchReceipt,
+) -> Result<(), SubmitOneError> {
+    let receipt_digest = arkret_wire::Hash::new(
+        arkret_canonical::canonical_sha256(receipt).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("PCR genesis receipt digest failed: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("PCR genesis receipt digest is invalid: {error}"),
+        )
+    })?;
+    let authority = arkret_wire::PrincipalAuthorityInstance::new(
+        request.principal_id.clone(),
+        receipt.issuer.clone(),
+        request.pcr_realm_id.clone(),
+        receipt_digest,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("PCR authority instance is invalid: {error}"),
+        )
+    })?;
+    crate::jws_verify::persist_registration_did_evidence(
+        state,
+        &authority,
+        &request.registration_did_evidence,
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+    })
 }
 
 async fn existing_pcr_genesis_outcome(
@@ -3146,7 +3194,7 @@ async fn verify_accepted_principal_service_binding(
             .service_acceptance_proof
             .verification_method
             .as_str(),
-        binding.service_id.as_str(),
+        binding.service_verification_method.controller.as_str(),
         &binding.service_verification_method.public_key_multibase,
         state,
     )
@@ -3158,18 +3206,25 @@ async fn verify_accepted_principal_service_binding(
             &binding.principal_authorization_proof.verification_method,
         )
         .map_err(|error| error.to_string())?;
-    crate::jws_verify::verify_principal_authorized_ed25519_signature_async(
-        &principal_input,
-        binding.principal_authorization_proof.jws.as_str(),
-        binding
-            .principal_authorization_proof
-            .verification_method
-            .as_str(),
-        binding.principal_id.as_str(),
+    crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
         state,
+        &binding.principal_authorization_evidence,
     )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| format!("principal binding device evidence is invalid: {error}"))?;
+    let public_key_multibase = binding
+        .principal_authorization_evidence
+        .device_signing_key
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| "principal binding device key is not did:key".to_owned())?;
+    let public_key = arkret_canonical::decode_ed25519_multibase(public_key_multibase)
+        .map_err(|error| format!("principal binding device key is invalid: {error}"))?;
+    crate::jws_verify::verify_ed25519_signature_with_public_key(
+        &principal_input,
+        binding.principal_authorization_proof.jws.as_str(),
+        &public_key,
+    )
 }
 
 async fn verify_principal_service_binding_continuity(

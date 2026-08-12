@@ -152,7 +152,6 @@ async fn submit_event_seal(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    let expected_method = format!("{}#{}", session.actor, session.device_id);
     let NotarySig::Single(signature) = &seal.notary_signature else {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
@@ -160,7 +159,11 @@ async fn submit_event_seal(
         )
         .with_status(StatusCode::FORBIDDEN));
     };
-    if signature.verification_method != expected_method {
+    if !crate::routing::federation::move_seal::session_device_verification_method_matches(
+        session_core_id.as_str(),
+        &session.device_id,
+        &signature.verification_method,
+    ) {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "Seal signer does not match the authenticated session device",

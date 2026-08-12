@@ -765,20 +765,53 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         let envelope: Value = serde_json::from_slice(envelope_bytes)
             .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
 
-        // Ordinary principal Events select their exact authority through the PCR
-        // realm carried by the signed envelope. A controller-authored managed-Agent
-        // Event belongs to the Agent PCR instead, so it selects the controller PCR
-        // through the immutable authority instance persisted with the provisioning
-        // allocation. The signed authorization_ref binds that record to this Event.
+        // Ordinary principal Events select their exact authority through the
+        // accepted authorization of the device that signed them. The Event's own
+        // realm may be any collaboration Realm and is not a PCR selector. A
+        // controller-authored managed-Agent Event instead uses the immutable
+        // authority instance persisted with the provisioning allocation. The
+        // signed authorization_ref binds that record to this Event.
         let authority_instance = if actor_id == &expected_principal_id {
-            let realm_id = envelope
-                .get("realm_id")
+            let signing_device = state
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: expected_principal_id.to_string(),
+                    device_id: device_id.to_string(),
+                })
+                .await
+                .map_err(|error| {
+                    fail(format!(
+                        "principal device signing state unavailable: {error}"
+                    ))
+                })?
+                .ok_or_else(|| fail("principal Event signer device is unavailable".to_owned()))?;
+            let authorize_event_id = signing_device
+                .payload
+                .get("device_authorize_event_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    fail("principal Event does not select a PCR authority realm".to_owned())
+                    fail("principal Event signer has no accepted authorization Event".to_owned())
                 })?;
-            let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
-                .map_err(|error| fail(format!("principal Event PCR realm is invalid: {error}")))?;
+            let authorize_event = state
+                .event_queries()
+                .canonical_event(authorize_event_id)
+                .await
+                .map_err(|error| {
+                    fail(format!(
+                        "principal device authorization lookup failed: {error}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    fail("principal device authorization Event is unavailable".to_owned())
+                })?;
+            let realm_id = authorize_event.realm_id.as_deref().ok_or_else(|| {
+                fail("principal device authorization has no PCR realm".to_owned())
+            })?;
+            let realm_id = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|error| {
+                fail(format!(
+                    "principal device authorization PCR is invalid: {error}"
+                ))
+            })?;
             state
                 .persistence()
                 .principal_resolution_for_realm(&realm_id)
@@ -1358,19 +1391,122 @@ pub async fn federated_device_signing_key_evidence(
         .find(|record| record.event_id == authorize_event_id.as_str())
         .map(|record| record.received_at)
         .ok_or_else(|| "device authorization acceptance timestamp is unavailable".to_owned())?;
-    let _ = (
+    let authority_instance = state
+        .persistence()
+        .principal_resolution_for_realm(&realm_id)
+        .await
+        .map_err(|error| format!("PCR authority lookup failed: {error}"))?
+        .ok_or_else(|| "PCR authority instance is unavailable".to_owned())?
+        .authority_instance;
+    let registration_did_evidence = load_registration_did_evidence(
+        state,
+        actor_id,
+        &authority_instance.authority_instance_digest,
+    )
+    .await?
+    .ok_or_else(|| "PCR registration accepted-at DID evidence is unavailable".to_owned())?;
+    let evidence = arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence {
+        actor_id: actor_id.clone(),
+        device_id: device_id.clone(),
+        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
+            .map_err(|error| format!("device verification method is invalid: {error}"))?,
         device_signing_key,
-        accepted_at,
-        genesis_receipt,
+        authorization_accepted_at: accepted_at,
+        authority_instance,
+        registration_did_evidence,
+        principal_genesis_receipt: genesis_receipt,
         authorization_chain,
         accepted_seal,
-        projection,
-        federated_range_completeness_evidence(state, &realm_id, &realm_records)?,
-    );
-    Err(
-        "PCR registration accepted-at DID evidence is unavailable; refusing to emit incomplete federated device evidence"
-            .to_owned(),
+        current_device_projection: projection,
+        range_completeness_evidence: federated_range_completeness_evidence(
+            state,
+            &realm_id,
+            &realm_records,
+        )?,
+    };
+    evidence
+        .validate_shape()
+        .map_err(|error| format!("constructed federated device evidence is invalid: {error}"))?;
+    Ok(evidence)
+}
+
+fn registration_did_evidence_key(authority_instance_digest: &arkret_wire::Hash) -> String {
+    format!(
+        "ak.internal.registration_did_evidence.v1:{}",
+        authority_instance_digest.as_str()
     )
+}
+
+async fn load_registration_did_evidence(
+    state: &AppState,
+    actor_id: &arkret_wire::DidCoreId,
+    authority_instance_digest: &arkret_wire::Hash,
+) -> Result<Option<arkret_wire::RegistrationDidEvidence>, String> {
+    state
+        .account_data()
+        .entry(
+            actor_id.as_str(),
+            &registration_did_evidence_key(authority_instance_digest),
+        )
+        .await
+        .map_err(|error| format!("registration DID evidence lookup failed: {error}"))?
+        .map(|entry| {
+            serde_json::from_value::<arkret_wire::RegistrationDidEvidence>(entry.payload)
+                .map_err(|error| format!("stored registration DID evidence is invalid: {error}"))
+        })
+        .transpose()
+}
+
+pub(crate) async fn persist_registration_did_evidence(
+    state: &AppState,
+    authority_instance: &arkret_wire::PrincipalAuthorityInstance,
+    evidence: &arkret_wire::RegistrationDidEvidence,
+) -> Result<(), String> {
+    evidence
+        .validate_shape()
+        .map_err(|error| format!("registration DID evidence is invalid: {error}"))?;
+    if evidence.principal_id != authority_instance.principal_id {
+        return Err(
+            "registration DID evidence principal does not match authority instance".to_owned(),
+        );
+    }
+    let key = registration_did_evidence_key(&authority_instance.authority_instance_digest);
+    let payload = serde_json::to_value(evidence)
+        .map_err(|error| format!("registration DID evidence encode failed: {error}"))?;
+    for _ in 0..8 {
+        let current = state
+            .account_data()
+            .entry(authority_instance.principal_id.as_str(), &key)
+            .await
+            .map_err(|error| format!("registration DID evidence lookup failed: {error}"))?;
+        if let Some(current) = &current {
+            if current.payload == payload {
+                return Ok(());
+            }
+            return Err(
+                "registration DID evidence conflicts for the same authority instance".to_owned(),
+            );
+        }
+        let record = soland_services::identity::AccountDataState {
+            actor_id: authority_instance.principal_id.to_string(),
+            account_data_key: key.clone(),
+            revision: 1,
+            payload: payload.clone(),
+            tombstone: false,
+            updated_at: chrono::Utc::now(),
+        };
+        if matches!(
+            state
+                .account_data()
+                .compare_and_set(record, 0)
+                .await
+                .map_err(|error| format!("registration DID evidence persist failed: {error}"))?,
+            soland_services::identity::AccountDataCasOutcome::Applied(_)
+        ) {
+            return Ok(());
+        }
+    }
+    Err("registration DID evidence changed concurrently".to_owned())
 }
 
 fn federated_range_completeness_evidence(

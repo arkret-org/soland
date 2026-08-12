@@ -137,9 +137,29 @@ pub(crate) fn verify_contact_service_signature_bytes(
     signature_bytes: &[u8],
     evidence_field: &str,
 ) -> Result<(), AppError> {
-    let expected_method =
-        crate::routing::federation::federation_service_signature_key_id(expected_service_id);
-    if signature.verification_method.as_str() != expected_method {
+    let (controller, fragment) = signature
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                format!("{evidence_field}.signature.verification_method is not a DID URL"),
+            )
+        })?;
+    let controller = arkret_wire::DidFullId::new(controller.to_owned()).map_err(|_| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            format!("{evidence_field}.signature.verification_method controller is invalid"),
+        )
+    })?;
+    let controller_core = arkret_wire::project_full_id_to_core_id(&controller).map_err(|_| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            format!("{evidence_field}.signature.verification_method controller is invalid"),
+        )
+    })?;
+    if controller_core.as_str() != expected_service_id || fragment != "federation-fanout-key" {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             format!(
@@ -151,7 +171,7 @@ pub(crate) fn verify_contact_service_signature_bytes(
         state.notary_verifying_key()
     } else {
         state
-            .federation_peer_verification_method_key(&expected_method)
+            .federation_peer_verification_method_key(signature.verification_method.as_str())
             .ok_or_else(|| {
                 AppError::new(
                     ErrorCode::FailedPrecondition,
@@ -220,7 +240,9 @@ fn service_signature<T: Serialize>(
     let signature = state.notary_signing_key().sign(&bytes);
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_full_id().as_str(),
+            ),
         )
         .map_err(|error| AppError::internal(format!("service verification method: {error}")))?,
         created_at,
@@ -551,24 +573,10 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
-    // AUTH-RELAY-003: a persistent Contact MUST pin the exact human authority
-    // instance chosen when the relationship was created, and the prepare body
-    // does not carry one yet. Deriving the holder's control Realm from the
-    // principal core would let another PCR of the same core author this
-    // Contact, so prepare fails closed here.
-    //
-    // Everything below stays: it is model-correct and blocked only on the
-    // missing selector — the frontier load, Seal basis, Event draft and
-    // reservation are all independent of how `realm_id` is chosen, and they
-    // share the machinery the live commit path already uses. Do not revive it
-    // by picking a Realm by principal core.
-    return Err(AppError::new(
-        ErrorCode::FailedPrecondition,
-        "Contact prepare requires an exact holder authority_instance selector",
-    )
-    .with_status(StatusCode::PRECONDITION_FAILED));
-    #[allow(unreachable_code)]
-    let realm_id: RealmId = unreachable!("authority-instance selector required");
+    // The authenticated device (or managed-Agent allocation) selects one exact
+    // PCR lineage. Never resolve a PCR from the principal core alone: the same
+    // core may have another independent authority instance.
+    let realm_id = contact_authority_realm(state, session, &holder).await?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         realm_id.clone(),
@@ -630,6 +638,119 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     )
     .await?;
     json_ok(prepared_outcome(&reservation))
+}
+
+async fn contact_authority_realm(
+    state: &AppState,
+    session: &SessionRecord,
+    holder: &ContactPeer,
+) -> Result<RealmId, AppError> {
+    let realm_id = match holder {
+        ContactPeer::Human { principal_id } => {
+            let device = state
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
+                    actor_id: principal_id.to_string(),
+                    device_id: session.device_id.clone(),
+                })
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("Contact holder device lookup: {error}"))
+                })?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FailedPrecondition,
+                        "Contact holder device is unavailable",
+                    )
+                })?;
+            if device.revoked_at.is_some() || device.verification_state != "verified" {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact holder device is not active",
+                ));
+            }
+            let payload = serde_json::from_value::<
+                crate::routing::identity::device_signing::ProjectedDevicePayload,
+            >(device.payload)
+            .map_err(|error| {
+                AppError::internal(format!("Contact holder device evidence: {error}"))
+            })?;
+            let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact holder device has no accepted authorization Event",
+                )
+            })?;
+            let authorize_event = state
+                .event_queries()
+                .canonical_event(authorize_event_id.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("Contact device authorization lookup: {error}"))
+                })?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FailedPrecondition,
+                        "Contact holder device authorization Event is unavailable",
+                    )
+                })?;
+            if authorize_event.actor_id != principal_id.as_str()
+                || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+            {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact holder device authorization is invalid",
+                ));
+            }
+            authorize_event.realm_id.ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact holder device authorization has no PCR realm",
+                )
+            })?
+        }
+        ContactPeer::Agent { agent_id, .. } => {
+            state
+                .agent_pairings()
+                .agent(agent_id.as_str())
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("Contact holder Agent lookup: {error}"))
+                })?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::FailedPrecondition,
+                        "Contact holder Agent allocation is unavailable",
+                    )
+                })?
+                .principal_control_realm_id
+        }
+    };
+    let realm_id = RealmId::new(realm_id).map_err(|error| {
+        AppError::internal(format!("Contact authority PCR id is invalid: {error}"))
+    })?;
+    let authority = state
+        .persistence()
+        .principal_resolution_for_realm(&realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Contact authority lookup: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Contact authority instance is unavailable",
+            )
+        })?
+        .authority_instance;
+    if authority.principal_id != holder.contact_actor_id()
+        || authority.pcr_realm_id != realm_id
+        || authority.principal_server_id.as_str() != state.service_id()
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Contact authority instance does not match the authenticated holder",
+        ));
+    }
+    Ok(realm_id)
 }
 
 fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Result<(), AppError> {
@@ -711,13 +832,7 @@ fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactBasis, Has
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: canonical_contact_digest(receipt)?,
     };
-    let mut stable_semantics = serde_json::to_value(&basis)
-        .map_err(|error| AppError::internal(format!("Contact basis serialize: {error}")))?;
-    stable_semantics
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("Contact basis must serialize as an object"))?
-        .insert("domain".to_owned(), json!("ak.contact.basis.v1"));
-    let basis_id = canonical_contact_digest(&stable_semantics)?;
+    let basis_id = contact_hash("ak.contact.basis.v1", &basis)?;
     Ok((basis, basis_id))
 }
 
@@ -850,6 +965,55 @@ fn signed_current_proof(
         fresh_until,
         signature: service_signature(state, &unsigned)?,
     })
+}
+
+async fn local_requester_current_proof(
+    state: &AppState,
+    basis_id: &Hash,
+    request_receipt: &RequestAcceptanceReceipt,
+) -> Result<Option<ContactCurrentProof>, AppError> {
+    let Some(record) = state
+        .event_queries()
+        .canonical_event(request_receipt.core.request_event_ref.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Contact request Event lookup: {error}")))?
+    else {
+        return Ok(None);
+    };
+    let request_event = serde_json::from_value::<Event>(record.envelope).map_err(|error| {
+        AppError::internal(format!(
+            "accepted Contact request Event is invalid: {error}"
+        ))
+    })?;
+    if request_event.kind != arkret_wire::EventKind::ContactRequested
+        || request_event.actor_id != request_receipt.core.holder.contact_actor_id()
+        || Hash::new(request_event.event_digest().map_err(|error| {
+            AppError::internal(format!("accepted Contact request digest: {error}"))
+        })?)
+        .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?
+            != request_receipt.core.request_digest
+    {
+        return Err(AppError::internal(
+            "accepted Contact request does not match its signed receipt",
+        ));
+    }
+    let Some(resolution) = state
+        .persistence()
+        .principal_resolution_for_realm(&request_event.realm_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("Contact requester authority lookup: {error}"))
+        })?
+    else {
+        return Ok(None);
+    };
+    if resolution.authority_instance.principal_id != request_event.actor_id
+        || resolution.authority_instance.pcr_realm_id != request_event.realm_id
+        || resolution.authority_instance.principal_server_id.as_str() != state.service_id()
+    {
+        return Ok(None);
+    }
+    signed_current_proof(state, basis_id.clone(), &request_event).map(Some)
 }
 
 async fn commit(
@@ -1183,6 +1347,8 @@ async fn plan_contact_commit(
                 signature: service_signature(state, &unsigned_receipt)?,
             };
             let current_proof = signed_current_proof(state, basis_id.clone(), event)?;
+            let requester_current_proof =
+                local_requester_current_proof(state, basis_id, request_receipt).await?;
             record.status = "accepted".to_owned();
             record.basis_id = Some(basis_id.to_string());
             record.version = Some(1);
@@ -1195,9 +1361,15 @@ async fn plan_contact_commit(
                 request_receipts: vec![request_receipt.clone()],
                 normal_response_receipt: Some(response_receipt.clone()),
                 glare_concurrency_attestations: None,
-                // The requester-side proof is returned by the peer carrier and
-                // is merged before this bundle can authorize a founding unit.
-                current_proofs: vec![current_proof.clone()],
+                // A same-service pair already has the requester's accepted
+                // PCR Event and exact local authority instance, so its source
+                // can issue both holder checkpoints without a transport
+                // round-trip. Cross-service pairs still merge the requester
+                // proof returned by the peer carrier.
+                current_proofs: requester_current_proof
+                    .into_iter()
+                    .chain(std::iter::once(current_proof.clone()))
+                    .collect(),
             });
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             projection = Some(soland_services::events::CommitContactProjection {
