@@ -737,13 +737,7 @@ fn normalize_persisted_realm_id(id: &str) -> String {
 }
 
 fn session_actor_core_id(session: &SessionRecord) -> Option<arkret_wire::DidCoreId> {
-    arkret_wire::DidCoreId::new(session.actor.clone())
-        .or_else(|_| {
-            arkret_wire::DidFullId::new(session.actor.clone())
-                .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
-                .map(arkret_wire::DidCoreId::from)
-        })
-        .ok()
+    arkret_wire::DidCoreId::new(session.actor.clone()).ok()
 }
 
 pub(crate) async fn event_visible_to_session(

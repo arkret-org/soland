@@ -46,10 +46,8 @@ pub(super) async fn require_controller_principal_control_realm(
         AppError::invalid_param(format!("controller authority_instance is invalid: {error}"))
             .with_reason_code("principal_authority_instance_mismatch")
     })?;
-    let controller_full_id = arkret_wire::DidFullId::new(session.actor.clone())
+    let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    let controller_id = arkret_wire::project_full_id_to_core_id(&controller_full_id)
-        .map_err(|error| AppError::internal(format!("session actor projection failed: {error}")))?;
     if authority_instance.principal_id != controller_id
         || authority_instance.principal_server_id.as_str() != state.service_id()
     {
@@ -114,24 +112,17 @@ pub(super) async fn require_controller_principal_control_realm(
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
             .with_reason_code("self_realm_metadata_missing")
         })?;
-    reconcile_self_realm_owner_projection(
-        state,
-        &realm_id,
-        &controller_full_id,
-        &controller_id,
-        &meta,
-    )?;
+    reconcile_self_realm_owner_projection(state, &realm_id, &controller_id, &meta)?;
     Ok(realm_id)
 }
 
 fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
-    controller_full_id: &arkret_wire::DidFullId,
     controller_id: &arkret_wire::DidCoreId,
     meta: &soland_services::events::RealmMetadata,
 ) -> Result<(), AppError> {
-    if meta.owner != controller_full_id.as_str() {
+    if meta.owner != controller_id.as_str() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "self Realm owner does not match the authenticated controller",
@@ -185,14 +176,9 @@ pub(super) async fn submit_provision_event(
     let payload =
         arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload::try_from(event)
             .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
-        AppError::invalid_param(format!("session full DID is invalid: {error}"))
+    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+        AppError::invalid_param(format!("session DID core id is invalid: {error}"))
     })?;
-    let session_core_id = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&session_full_id).map_err(|error| {
-            AppError::invalid_param(format!("session full DID cannot be projected: {error}"))
-        })?,
-    );
     if event.actor_id != session_core_id
         || event.realm_id.as_str() != controller_realm_id
         || payload.agent_id != *agent_id
@@ -421,7 +407,6 @@ mod tests {
         reconcile_self_realm_owner_projection(
             &state,
             realm_id,
-            &controller_full_id,
             &controller_id,
             &realm_meta(controller_full_id.as_str()),
         )
@@ -457,7 +442,6 @@ mod tests {
         let error = reconcile_self_realm_owner_projection(
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
-            &controller_full_id,
             &controller_id,
             &realm_meta("did:webvh:z6mkfixture:example.test:users:bob"),
         )

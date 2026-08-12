@@ -2,12 +2,18 @@ use super::*;
 use crate::routing::events::event_log::submit::InternalEventAdmission;
 
 #[cfg(test)]
-pub(crate) async fn validate_event_envelope(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: &Value,
-) -> Result<ValidatedEventEnvelope, EventValidationError> {
-    validate_event_envelope_with_context(state, session, envelope, &[], None).await
+pub(crate) fn validate_event_envelope<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
+    envelope: &'a Value,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
+            + Send
+            + 'a,
+    >,
+> {
+    validate_event_envelope_with_context(state, session, envelope, &[], None)
 }
 
 fn require_verified_mls_commit_frontier_material(kind: &str) -> Result<(), EventValidationError> {
@@ -22,30 +28,48 @@ fn require_verified_mls_commit_frontier_material(kind: &str) -> Result<(), Event
     })
 }
 
-pub(crate) async fn validate_event_envelope_with_context(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: &Value,
-    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
-    internal_admission: Option<&InternalEventAdmission>,
-) -> Result<ValidatedEventEnvelope, EventValidationError> {
-    validate_event_envelope_with_ingress(
+pub(crate) fn validate_event_envelope_with_context<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
+    envelope: &'a Value,
+    realm_bootstrap_contexts: &'a [RealmBootstrapBatchContext],
+    internal_admission: Option<&'a InternalEventAdmission>,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
+            + Send
+            + 'a,
+    >,
+> {
+    Box::pin(validate_event_envelope_with_ingress(
         state,
         session,
         envelope,
         realm_bootstrap_contexts,
         internal_admission,
         false,
-    )
-    .await
+    ))
 }
 
-pub(in crate::routing) async fn validate_private_invite_envelope(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: &Value,
-) -> Result<ValidatedEventEnvelope, EventValidationError> {
-    validate_event_envelope_with_ingress(state, session, envelope, &[], None, true).await
+pub(in crate::routing) fn validate_private_invite_envelope<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
+    envelope: &'a Value,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ValidatedEventEnvelope, EventValidationError>>
+            + Send
+            + 'a,
+    >,
+> {
+    Box::pin(validate_event_envelope_with_ingress(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        true,
+    ))
 }
 
 /// Spec `zh/models/event-and-patch.md` section 2.5.1 bound (a).
@@ -110,19 +134,12 @@ async fn validate_event_envelope_with_ingress(
             "Event Envelope must be a JSON object",
         )
     })?;
-    let session_full_id = arkret_wire::DidFullId::new(session.actor.clone()).map_err(|error| {
-        event_validation_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("session actor is invalid: {error}"),
-        )
-    })?;
-    let session_actor_id = arkret_wire::project_full_id_to_core_id(&session_full_id)
+    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| {
             event_validation_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("session actor projection failed: {error}"),
+                format!("session actor is invalid: {error}"),
             )
         })?
         .to_string();

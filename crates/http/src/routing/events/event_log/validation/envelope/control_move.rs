@@ -106,8 +106,7 @@ pub(super) async fn reject_revoked_actor_device_signature(
         candidate_devices.insert(device_id);
     }
 
-    let directory_actor_id = arkret_wire::DidFullId::new(session.actor.clone())
-        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+    let directory_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .is_ok_and(|session_actor_id| session_actor_id.as_str() == actor_id)
         .then_some(session.actor.as_str())
         .unwrap_or(actor_id);
