@@ -1674,6 +1674,7 @@ impl AppState {
     /// capability Event does. A test that seals a governance basis directly
     /// never runs the accept path, so without this the authz surface denies
     /// actions the sealed basis grants.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn upsert_projected_grant_for_test(&self, grant: arkret_policy::authz::authority::Grant) {
         self.authorization().upsert_projected_grant(grant);

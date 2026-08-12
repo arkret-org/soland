@@ -390,7 +390,7 @@ pub(crate) async fn embedded_webvh_register(
         "method": WEBVH_METHOD_VERSION,
         "updateKeys": [body.update_public_key_multibase.clone()],
         "nextKeyHashes": [
-            crate::routing::identity::webvh_validation::sha256_multihash_base58btc(
+            arkret_canonical::sha256_multihash_base58btc(
                 body.next_update_public_key_multibase.as_bytes()
             )
         ],

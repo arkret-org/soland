@@ -303,10 +303,11 @@ fn soland_local_router() -> Router {
         // Catch-all for the `/_soland/...` tree, mirroring the `/_arkret/`
         // one: unmatched paths/methods get the canonical Arkret JSON error
         // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`
-        // + `Allow`) instead of salvo's bare defaults, so the compat mirror
-        // and the protocol tree answer errors identically. This router is
-        // pushed last under the shared `_soland` parent, so the catch-all is
-        // the final fallthrough for the whole namespace (admin included).
+        // + `Allow`) instead of salvo's bare defaults, so the local
+        // namespace and the protocol tree answer errors identically. This
+        // router is pushed last under the shared `_soland` parent, so the
+        // catch-all is the final fallthrough for the whole namespace (admin
+        // included).
         .push(
             Router::with_path("{**rest}")
                 .options(cors_preflight)

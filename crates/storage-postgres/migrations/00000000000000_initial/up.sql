@@ -119,21 +119,6 @@ CREATE TABLE public.handle_releases (
     released_at timestamp with time zone NOT NULL
 );
 
-CREATE TABLE public.agent_keys (
-    id uuid PRIMARY KEY,
-    agent_id text NOT NULL,
-    verification_method text NOT NULL,
-    state text DEFAULT 'authorized'::text NOT NULL,
-    authorized_at timestamp with time zone NOT NULL,
-    revoked_at timestamp with time zone,
-    revocation_reason text,
-    CONSTRAINT agent_keys_state_check CHECK ((state = ANY (ARRAY['authorized'::text, 'revoked'::text])))
-);
-
-CREATE INDEX agent_keys_principal_idx ON public.agent_keys USING btree (agent_id);
-
-CREATE INDEX agent_keys_state_idx ON public.agent_keys USING btree (state);
-
 CREATE TABLE public.agent_participation (
     id uuid PRIMARY KEY,
     agent_id text NOT NULL,
@@ -240,9 +225,6 @@ CREATE TABLE public.agent_runtime_messages (
 CREATE INDEX agent_runtime_messages_agent_time_idx
     ON public.agent_runtime_messages USING btree (agent_id, enqueued_at);
 
-ALTER TABLE ONLY public.agent_keys
-    ADD CONSTRAINT agent_keys_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
-
 ALTER TABLE ONLY public.agent_participation
     ADD CONSTRAINT agent_participation_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
@@ -279,25 +261,6 @@ CREATE TABLE public.agent_sidecar_contexts (
     created_at timestamp with time zone NOT NULL,
     PRIMARY KEY (sidecar_pk, normalized_context_ref_digest, version)
 );
-
-CREATE TABLE public.agent_sessions (
-    id uuid PRIMARY KEY,
-    agent_id text NOT NULL,
-    verification_method text NOT NULL,
-    runtime_attestation jsonb,
-    state text DEFAULT 'active'::text NOT NULL,
-    expires_at timestamp with time zone,
-    revoked_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_sessions_state_check CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text])))
-);
-
-CREATE INDEX agent_sessions_principal_idx ON public.agent_sessions USING btree (agent_id);
-
-CREATE INDEX agent_sessions_state_idx ON public.agent_sessions USING btree (state);
-
-ALTER TABLE ONLY public.agent_sessions
-    ADD CONSTRAINT agent_sessions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
 
 CREATE TABLE public.applet_registrations (
     id text PRIMARY KEY,
@@ -362,26 +325,6 @@ CREATE INDEX audit_logs_actor_idx ON public.audit_logs USING btree (actor_id, cr
 
 CREATE INDEX audit_logs_space_idx ON public.audit_logs USING btree (realm_id);
 
-CREATE TABLE public.backup_series (
-    id uuid PRIMARY KEY,
-    actor_id text NOT NULL,
-    backup_kind text NOT NULL,
-    head_backup_id uuid,
-    head_seq bigint DEFAULT 0 NOT NULL,
-    frontier_ref text,
-    retired_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT backup_series_backup_class_check CHECK ((backup_kind = ANY (ARRAY['secret_storage'::text, 'mls_history'::text, 'external'::text]))),
-    CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
-);
-
-CREATE UNIQUE INDEX backup_series_actor_class_uniq ON public.backup_series USING btree (actor_id, backup_kind) WHERE (retired_at IS NULL);
-
-CREATE INDEX backup_series_actor_idx ON public.backup_series USING btree (actor_id);
-
-CREATE INDEX backup_series_class_idx ON public.backup_series USING btree (backup_kind);
-
 CREATE TABLE public.blobs (
     id text PRIMARY KEY,
     sha256 text NOT NULL,
@@ -393,7 +336,6 @@ CREATE TABLE public.blobs (
     storage_backend text NOT NULL,
     storage_key text NOT NULL,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
-    retention_expires_at timestamp with time zone,
     legal_hold boolean DEFAULT false NOT NULL,
     redacted boolean DEFAULT false NOT NULL,
     visibility text DEFAULT 'realm_bound'::text NOT NULL,
@@ -1501,27 +1443,6 @@ CREATE TRIGGER agent_runtime_approval_notification_projection
 AFTER INSERT OR UPDATE ON public.agent_principals
 FOR EACH ROW EXECUTE FUNCTION public.project_agent_runtime_approval_notification();
 
-CREATE TABLE public.pending_agent_drafts (
-    id uuid PRIMARY KEY,
-    agent_id text NOT NULL,
-    controller_id text NOT NULL,
-    draft_payload jsonb NOT NULL,
-    state text DEFAULT 'pending'::text NOT NULL,
-    proposed_at timestamp with time zone NOT NULL,
-    decided_at timestamp with time zone,
-    decided_by_id text,
-    CONSTRAINT pending_agent_drafts_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'expired'::text])))
-);
-
-CREATE INDEX pending_agent_drafts_controller_idx ON public.pending_agent_drafts USING btree (controller_id);
-
-CREATE INDEX pending_agent_drafts_principal_idx ON public.pending_agent_drafts USING btree (agent_id);
-
-CREATE INDEX pending_agent_drafts_state_idx ON public.pending_agent_drafts USING btree (state);
-
-ALTER TABLE ONLY public.pending_agent_drafts
-    ADD CONSTRAINT pending_agent_drafts_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agent_principals(id) ON DELETE CASCADE;
-
 CREATE TABLE public.policy_documents (
     id uuid PRIMARY KEY,
     owner_id text NOT NULL,
@@ -1963,12 +1884,8 @@ CREATE TABLE public.spaces (
     discoverability text DEFAULT 'invite_only'::text NOT NULL,
     payload jsonb NOT NULL,
     history_visibility text DEFAULT 'joined'::text NOT NULL,
-    history_sharing_policy jsonb,
-    history_sharing_policy_digest text,
     preview_policy jsonb,
-    preview_policy_digest text,
     encryption_profile text DEFAULT 'mls_rfc9420'::text NOT NULL,
-    plaintext_visible_services jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT spaces_encryption_profile_check CHECK ((encryption_profile = ANY (ARRAY['none'::text, 'plaintext'::text, 'mls_rfc9420'::text]))),
@@ -1979,11 +1896,7 @@ CREATE TABLE public.spaces (
 
 CREATE INDEX spaces_discoverability_updated_idx ON public.spaces USING btree (discoverability, updated_at, pk);
 
-CREATE INDEX spaces_history_sharing_policy_digest_idx ON public.spaces USING btree (history_sharing_policy_digest) WHERE (history_sharing_policy_digest IS NOT NULL);
-
 CREATE INDEX spaces_history_visibility_updated_idx ON public.spaces USING btree (history_visibility, updated_at, pk);
-
-CREATE INDEX spaces_preview_policy_digest_idx ON public.spaces USING btree (preview_policy_digest) WHERE (preview_policy_digest IS NOT NULL);
 
 CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,
@@ -2062,20 +1975,6 @@ CREATE TABLE public.control_proposal_authority_acks (
     response_body jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL
 );
-
-CREATE TABLE public.webrtc_sessions (
-    id uuid PRIMARY KEY,
-    realm_id text NOT NULL,
-    initiator_id text NOT NULL,
-    ice_config jsonb DEFAULT '{}'::jsonb NOT NULL,
-    signaling_state jsonb NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE INDEX webrtc_sessions_expires_idx ON public.webrtc_sessions USING btree (expires_at);
-
-CREATE INDEX webrtc_sessions_space_idx ON public.webrtc_sessions USING btree (realm_id);
 
 CREATE TABLE public.webvh_documents (
     id text PRIMARY KEY,

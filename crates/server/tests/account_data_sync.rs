@@ -433,15 +433,14 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
 }
 
 fn encrypted_account_data_value(
-    actor_id: &str,
+    actor_id: &DidCoreId,
     account_data_key: &str,
     plaintext: &Value,
 ) -> Value {
-    let actor_id = arkret_identifiers::DidCoreId::new(actor_id.to_owned()).unwrap();
     serde_json::to_value(
         arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
             &[7u8; 32],
-            &actor_id,
+            actor_id,
             account_data_key,
             plaintext,
             [9u8; 24],
@@ -695,7 +694,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     );
 
     let encrypted_blocklist = encrypted_account_data_value(
-        alice_actor_core.as_str(),
+        &alice_actor_core,
         "ak.account.blocklist",
         &plaintext_blocklist,
     );
@@ -743,7 +742,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
             "expected_revision": 0,
             "owner": alice_actor_core.as_str(),
             "body": encrypted_account_data_value(
-                alice_actor_core.as_str(),
+                &alice_actor_core,
                 "ak.account.blocklist",
                 &json!({"version": 1, "entries": []}),
             ),

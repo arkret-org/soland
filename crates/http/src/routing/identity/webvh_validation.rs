@@ -368,12 +368,6 @@ pub(crate) fn webvh_entry_hash_multibase(
     arkret_identity::did_webvh_entry_hash(entry, previous_anchor).map_err(|error| error.to_string())
 }
 
-pub(crate) fn sha256_multihash_base58btc(bytes: &[u8]) -> String {
-    let mut multihash = vec![0x12, 0x20];
-    multihash.extend_from_slice(&arkret_canonical::sha256_bytes(bytes));
-    arkret_canonical::encode_base58btc(&multihash)
-}
-
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {
     let key =
         arkret_canonical::decode_ed25519_multibase(value).map_err(|error| error.to_string())?;

@@ -9,7 +9,9 @@ use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_identifiers::{DidFullId, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_identifiers::{
+    DidCoreId, DidFullId, OperationId, RealmId, new_prefixed_uuid7,
+};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -49,6 +51,15 @@ static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
 
 pub(crate) fn test_event_signer_did() -> &'static str {
     TEST_EVENT_SIGNER_DID.as_str()
+}
+
+/// Project a fixture's full DID onto the stable core id that account-data AAD,
+/// key derivation and owner projections are bound to.
+pub(crate) fn fixture_actor_core_id(actor: &str) -> DidCoreId {
+    arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor full DID projects to a core id")
 }
 pub(crate) fn test_config() -> AppConfig {
     AppConfig {
@@ -1387,8 +1398,7 @@ pub(crate) async fn register_account(
     device_id: &str,
 ) -> String {
     let full_id = DidFullId::new(did.to_owned()).expect("fixture account full DID");
-    let principal_id =
-        arkret_wire::project_full_id_to_core_id(&full_id).expect("fixture account core id");
+    let principal_id = fixture_actor_core_id(did);
     let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
             "principal_id": principal_id,
@@ -2029,7 +2039,7 @@ pub(crate) fn test_embedded_webvh_proof(
             "scid": "{SCID}",
             "method": "did:webvh:1.0",
             "updateKeys": [update_public_key_multibase],
-            "nextKeyHashes": [test_sha256_multihash_base58btc(
+            "nextKeyHashes": [arkret_canonical::sha256_multihash_base58btc(
                 next_update_public_key_multibase.as_bytes()
             )],
         },
@@ -2096,7 +2106,7 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 
 pub(crate) fn test_scid(value: &Value) -> String {
     let canonical = arkret_canonical::canonical_json_bytes(value).unwrap();
-    test_sha256_multihash_base58btc(&canonical)
+    arkret_canonical::sha256_multihash_base58btc(&canonical)
 }
 
 /// did:webvh v1.0 entry-hash preimage: drop `proof`, set `versionId` to the
@@ -2111,7 +2121,7 @@ pub(crate) fn test_webvh_entry_hash(value: &Value, prev_anchor: &str) -> String 
         );
     }
     let canonical = arkret_canonical::canonical_json_bytes(&clone).unwrap();
-    test_sha256_multihash_base58btc(&canonical)
+    arkret_canonical::sha256_multihash_base58btc(&canonical)
 }
 
 pub(crate) fn test_replace_scid(value: Value, scid: &str) -> Value {
@@ -2121,16 +2131,6 @@ pub(crate) fn test_replace_scid(value: Value, scid: &str) -> Value {
             .replace("{SCID}", scid),
     )
     .unwrap()
-}
-
-/// Bare base58btc sha256 multihash — no multibase `z` prefix (did:webvh v1.0).
-pub(crate) fn test_sha256_multihash_base58btc(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut multihash = Vec::with_capacity(34);
-    multihash.push(0x12);
-    multihash.push(0x20);
-    multihash.extend_from_slice(&digest);
-    bs58::encode(multihash).into_string()
 }
 
 // `standard_entity_types_and_reverse_domain_custom_types_work` and

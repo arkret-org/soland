@@ -10,8 +10,9 @@ use crate::util::{is_valid_sync_token, render_error};
 #[derive(Clone)]
 pub struct ArkretOpenApiDoc(pub Value);
 
-/// Catch-all handler under `/_arkret/*` (and the `/_soland/*` compat mirror,
-/// which mounts the same protocol handlers and must answer errors identically).
+/// Catch-all handler under `/_arkret/*` (and the deployment-local
+/// `/_soland/*` operator + product namespace, which carries its own
+/// catch-all and must answer errors identically).
 ///
 /// Per `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10:
 /// * Unknown path -> `404 Not Found` + JSON envelope `{"error":{"code": "unrecognized_endpoint",
@@ -73,12 +74,13 @@ pub fn populate_known_routes(registered_routes: &BTreeMap<String, BTreeSet<Strin
         for (path, methods) in registered_routes {
             // The protocol surface (`/_arkret/...`, trust segments
             // self/gate/root/find/peer/open/edge) is spec-mandated to return
-            // the canonical error envelope; the `/_soland/...` compat mirror
-            // reuses the same handlers and carries its own catch-all, so it
-            // participates in 404/405 disambiguation too — otherwise the two
-            // mounts would answer wrong-method requests differently. Other
-            // prefixes (`/health`, `/.well-known/...`) are out of scope for
-            // the `unrecognized_endpoint` / `method_not_allowed` contract.
+            // the canonical error envelope; the deployment-local
+            // `/_soland/...` operator + product namespace carries its own
+            // catch-all, so it participates in 404/405 disambiguation too —
+            // otherwise the two mounts would answer wrong-method requests
+            // differently. Other prefixes (`/health`, `/.well-known/...`) are
+            // out of scope for the `unrecognized_endpoint` /
+            // `method_not_allowed` contract.
             if !(path.starts_with("/_arkret/") || path.starts_with("/_soland/")) {
                 continue;
             }

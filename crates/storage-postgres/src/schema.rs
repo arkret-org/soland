@@ -44,18 +44,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    agent_keys (id) {
-        id -> Uuid,
-        agent_id -> Text,
-        verification_method -> Text,
-        state -> Text,
-        authorized_at -> Timestamptz,
-        revoked_at -> Nullable<Timestamptz>,
-        revocation_reason -> Nullable<Text>,
-    }
-}
-
-diesel::table! {
     agent_participation (id) {
         id -> Uuid,
         agent_id -> Text,
@@ -122,19 +110,6 @@ diesel::table! {
         state_changed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    agent_sessions (id) {
-        id -> Uuid,
-        agent_id -> Text,
-        verification_method -> Text,
-        runtime_attestation -> Nullable<Jsonb>,
-        state -> Text,
-        expires_at -> Nullable<Timestamptz>,
-        revoked_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
     }
 }
 
@@ -217,20 +192,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    backup_series (id) {
-        id -> Uuid,
-        actor_id -> Text,
-        backup_kind -> Text,
-        head_backup_id -> Nullable<Uuid>,
-        head_seq -> Int8,
-        frontier_ref -> Nullable<Text>,
-        retired_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     blobs (id) {
         id -> Text,
         sha256 -> Text,
@@ -242,7 +203,6 @@ diesel::table! {
         storage_backend -> Text,
         storage_key -> Text,
         payload -> Jsonb,
-        retention_expires_at -> Nullable<Timestamptz>,
         legal_hold -> Bool,
         redacted -> Bool,
         visibility -> Text,
@@ -870,19 +830,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    pending_agent_drafts (id) {
-        id -> Uuid,
-        agent_id -> Text,
-        controller_id -> Text,
-        draft_payload -> Jsonb,
-        state -> Text,
-        proposed_at -> Timestamptz,
-        decided_at -> Nullable<Timestamptz>,
-        decided_by_id -> Nullable<Text>,
-    }
-}
-
-diesel::table! {
     policy_documents (id) {
         id -> Uuid,
         owner_id -> Text,
@@ -1380,12 +1327,8 @@ diesel::table! {
         discoverability -> Text,
         payload -> Jsonb,
         history_visibility -> Text,
-        history_sharing_policy -> Nullable<Jsonb>,
-        history_sharing_policy_digest -> Nullable<Text>,
         preview_policy -> Nullable<Jsonb>,
-        preview_policy_digest -> Nullable<Text>,
         encryption_profile -> Text,
-        plaintext_visible_services -> Jsonb,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
@@ -1478,18 +1421,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    webrtc_sessions (id) {
-        id -> Uuid,
-        realm_id -> Text,
-        initiator_id -> Text,
-        ice_config -> Jsonb,
-        signaling_state -> Jsonb,
-        expires_at -> Timestamptz,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     webvh_documents (id) {
         id -> Text,
         did_document -> Jsonb,
@@ -1513,9 +1444,7 @@ diesel::table! {
 }
 
 diesel::joinable!(account_localparts -> accounts (account_id));
-diesel::joinable!(agent_keys -> agent_principals (agent_id));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
-diesel::joinable!(agent_sessions -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> canonical_events (event_pk));
@@ -1526,7 +1455,6 @@ diesel::joinable!(projection_events -> canonical_realms (realm_pk));
 diesel::joinable!(spaces -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
-diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::joinable!(principal_resolution_events -> principal_resolutions (authority_instance_digest));
@@ -1535,17 +1463,14 @@ diesel::allow_tables_to_appear_in_same_query!(
     account_lifecycle,
     account_localparts,
     accounts,
-    agent_keys,
     agent_participation,
     agent_participation_ceiling,
     agent_principals,
-    agent_sessions,
     agent_sidecar_contexts,
     agent_sidecars,
     applet_registrations,
     applet_transactions,
     audit_logs,
-    backup_series,
     blobs,
     canonical_events,
     canonical_realms,
@@ -1584,7 +1509,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     organization_policies,
     organizations,
     peer_keypackage_claims,
-    pending_agent_drafts,
     policy_documents,
     principal_resolution_events,
     principal_resolutions,
@@ -1631,7 +1555,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     state_seals,
     sync_cursor_handles,
     sync_cursor_revocations,
-    webrtc_sessions,
     websocket_auth_challenges,
     websocket_auth_replay_ledger,
     webvh_documents,

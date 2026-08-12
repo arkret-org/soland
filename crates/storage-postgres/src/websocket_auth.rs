@@ -3,8 +3,8 @@ use diesel_async::AsyncConnection;
 use soland_storage::{WebsocketAuthChallengeRecord, WebsocketAuthReplayRecord, WebsocketAuthStore};
 
 use super::{
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
-    Text, Timestamptz, Utc, async_trait, pg_conn, sql_query,
+    ExistsRow, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
+    RunQueryDsl, Text, Timestamptz, Utc, async_trait, pg_conn, sql_query,
 };
 use crate::PgTransactionError;
 
@@ -119,19 +119,17 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let found = sql_query(
-            "SELECT cnf_jkt, jti, proof_context, consumed_at, retain_until \
-             FROM websocket_auth_replay_ledger \
-             WHERE cnf_jkt = $1 AND jti = $2 AND proof_context = $3",
+        sql_query(
+            "SELECT EXISTS(SELECT 1 FROM websocket_auth_replay_ledger \
+             WHERE cnf_jkt = $1 AND jti = $2 AND proof_context = $3) AS present",
         )
         .bind::<Text, _>(cnf_jkt)
         .bind::<Text, _>(jti)
         .bind::<Text, _>(proof_context)
-        .get_result::<WebsocketReplayRow>(&mut *conn)
+        .get_result::<ExistsRow>(&mut *conn)
         .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        Ok(found.is_some())
+        .map(|row| row.present)
+        .map_err(PersistenceError::database)
     }
 
     async fn consume_challenge(
@@ -205,23 +203,4 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
             .map_err(PersistenceError::database)?;
         Ok(challenges + ledger)
     }
-}
-
-#[derive(QueryableByName)]
-struct WebsocketReplayRow {
-    #[diesel(sql_type = Text)]
-    #[allow(dead_code)]
-    cnf_jkt: String,
-    #[diesel(sql_type = Text)]
-    #[allow(dead_code)]
-    jti: String,
-    #[diesel(sql_type = Text)]
-    #[allow(dead_code)]
-    proof_context: String,
-    #[diesel(sql_type = Timestamptz)]
-    #[allow(dead_code)]
-    consumed_at: chrono::DateTime<Utc>,
-    #[diesel(sql_type = Timestamptz)]
-    #[allow(dead_code)]
-    retain_until: chrono::DateTime<Utc>,
 }
