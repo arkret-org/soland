@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DidCoreId, DidFullId, RealmId};
+use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_wire::PlaintextDataClassKind;
 use serde_json::Value;
@@ -949,7 +949,7 @@ fn claim_binding_matches(
             .is_none_or(|invite_expiry| expires_at <= invite_expiry)
 }
 
-fn invitee_for_operation(operation: &Operation) -> Option<DidFullId> {
+fn invitee_for_operation(operation: &Operation) -> Option<DidCoreId> {
     operation
         .payload
         .get("invitee")
@@ -958,7 +958,7 @@ fn invitee_for_operation(operation: &Operation) -> Option<DidFullId> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .and_then(|value| DidFullId::new(value.to_owned()).ok())
+        .and_then(|value| DidCoreId::new(value.to_owned()).ok())
 }
 
 fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
