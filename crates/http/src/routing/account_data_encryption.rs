@@ -329,9 +329,14 @@ fn validate_encrypted_envelope_metadata(
 ) -> Result<(), AccountDataEncryptionError> {
     let envelope: AccountDataEncryptedValue = serde_json::from_value(value.clone())
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
+    let expected_actor_id = expected_actor_id
+        .map(|value| arkret_wire::DidCoreId::new(value.to_owned()))
+        .transpose()
+        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?
+        .unwrap_or_else(|| envelope.aad.actor_id.clone());
     arkret_crypto::account_data_crypto::validate_account_data_encrypted_value(
         &envelope,
-        expected_actor_id.unwrap_or(&envelope.aad.actor_id),
+        &expected_actor_id,
         account_data_key,
     )
     .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
@@ -348,10 +353,12 @@ mod tests {
     }
 
     fn encrypted_envelope(account_data_key: &str) -> Value {
+        let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+            .expect("test actor core id");
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
-                "did:web:alice.example",
+                &actor_id,
                 account_data_key,
                 &json!({"private": true}),
                 [9u8; 24],

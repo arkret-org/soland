@@ -813,10 +813,12 @@ mod tests {
     }
 
     fn encrypted_envelope(account_data_key: &str) -> Value {
+        let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+            .expect("test actor core id");
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
-                "did:web:alice.example",
+                &actor_id,
                 account_data_key,
                 &json!({"private": true}),
                 [9u8; 24],
