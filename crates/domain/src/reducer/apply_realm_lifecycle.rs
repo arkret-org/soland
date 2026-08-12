@@ -127,8 +127,7 @@ impl ProjectionState {
             };
         };
         if target != arkret_wire::CORE_REDUCER_PROFILE
-            || !arkret_policy::generated::profiles::is_reducer_profile_id(target)
-            || !arkret_policy::generated::profiles::can_upgrade_reducer_profile(&current, target)
+            || !arkret_wire::can_upgrade_reducer_profile(&current, target)
         {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),
@@ -1201,7 +1200,7 @@ impl ProjectionState {
                 };
             };
             if profile != arkret_wire::CORE_REDUCER_PROFILE
-                || !arkret_policy::generated::profiles::is_reducer_profile_id(profile)
+                || !arkret_wire::is_reducer_profile_id(profile)
             {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),

@@ -83,7 +83,7 @@ async fn health_and_describe_work() {
     for profile in reducer_profiles {
         let profile = profile.as_str().expect("reducer profile id is a string");
         assert!(
-            arkret_policy::generated::profiles::is_reducer_profile_id(profile),
+            arkret_wire::is_reducer_profile_id(profile),
             "advertised reducer profile {profile} is not in the reducer-profile registry"
         );
     }
