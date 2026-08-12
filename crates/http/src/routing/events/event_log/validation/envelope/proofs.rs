@@ -462,15 +462,19 @@ pub(crate) async fn validate_event_proofs(
                 let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
                     bytes: signing_key.verifying_key().to_bytes().to_vec(),
                 };
-                if arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-                    &typed_proof,
-                    envelope_bytes,
-                    &actor_did,
-                    &material,
-                    digest_suite,
-                )
-                .is_ok()
-                {
+                let development_verification =
+                    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                        &typed_proof,
+                        envelope_bytes,
+                        &actor_did,
+                        &material,
+                        digest_suite,
+                    );
+                crate::metrics::record_signature_verify(
+                    crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
+                    development_verification.is_ok(),
+                );
+                if development_verification.is_ok() {
                     continue;
                 }
                 tracing::debug!(
