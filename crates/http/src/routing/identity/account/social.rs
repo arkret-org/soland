@@ -207,7 +207,7 @@ async fn contact_list_rows(
     records.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
-            .then_with(|| left.basis_id.cmp(&right.basis_id))
+            .then_with(|| left.contact_round_id.cmp(&right.contact_round_id))
     });
     for record in records {
         let peer = if record.requester == actor {
@@ -257,10 +257,10 @@ async fn contact_list_rows(
             None
         };
         let next_prepare_input = if row_state == ContactState::Accepted {
-            let basis_id = record
-                .basis_id
+            let contact_round_id = record
+                .contact_round_id
                 .as_deref()
-                .ok_or_else(|| AppError::internal("accepted Contact has no basis_id"))?;
+                .ok_or_else(|| AppError::internal("accepted Contact has no contact_round_id"))?;
             let current_version = record
                 .version
                 .ok_or_else(|| AppError::internal("accepted Contact has no lineage version"))?;
@@ -273,8 +273,8 @@ async fn contact_list_rows(
                 AppError::internal("accepted Contact has no holder-local lineage head")
             })?;
             Some(ContactNextPrepareInput {
-                basis_id: Hash::new(basis_id.to_owned()).map_err(|error| {
-                    AppError::internal(format!("stored Contact basis_id invalid: {error}"))
+                contact_round_id: Hash::new(contact_round_id.to_owned()).map_err(|error| {
+                    AppError::internal(format!("stored Contact contact_round_id invalid: {error}"))
                 })?,
                 version: current_version.checked_add(1).ok_or_else(|| {
                     AppError::internal("accepted Contact lineage version overflow")
@@ -564,10 +564,10 @@ pub(super) fn contact_has_scope_for_both(contact: &ContactRecord, scope: &str) -
 }
 
 pub(super) fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
-    if let Some(bundle) = contact.basis_evidence.as_ref()
+    if let Some(bundle) = contact.contact_round_evidence.as_ref()
         && matches!(
-            &bundle.basis,
-            arkret_models_collaboration::contact_operations::ContactBasis::Glare { .. }
+            &bundle.contact_round,
+            arkret_models_collaboration::contact_operations::ContactRound::Glare { .. }
         )
     {
         return bundle.request_receipts.len() == 2
@@ -587,10 +587,10 @@ pub(super) fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
 }
 
 fn contact_fact_refs(contact: &ContactRecord) -> Vec<String> {
-    if let Some(bundle) = contact.basis_evidence.as_ref()
-        && let arkret_models_collaboration::contact_operations::ContactBasis::Glare {
+    if let Some(bundle) = contact.contact_round_evidence.as_ref()
+        && let arkret_models_collaboration::contact_operations::ContactRound::Glare {
             requests, ..
-        } = &bundle.basis
+        } = &bundle.contact_round
     {
         return requests
             .iter()

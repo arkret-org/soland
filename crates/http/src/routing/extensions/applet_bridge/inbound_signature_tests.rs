@@ -1,6 +1,8 @@
 use serde_json::json;
 
-use super::signature::{applet_source_signature_anchor, applet_validate_signature_input};
+use super::signature::{
+    applet_delivery_authentication_record_digest, applet_validate_signature_input,
+};
 
 fn params(created: i64, expires: i64) -> String {
     format!(
@@ -39,13 +41,13 @@ fn keyid_mismatch_is_invalid_signature() {
 }
 
 #[test]
-fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
+fn delivery_authentication_record_digest_binds_registration_epoch_and_webhook_auth() {
     let webhook_auth = json!({
         "kind": "http_message_signature",
         "key_ref": "did:web:app#applet-service-key",
         "accepted_signature_algorithms": ["ed25519"]
     });
-    let base = applet_source_signature_anchor(
+    let base = applet_delivery_authentication_record_digest(
         "did:web:app",
         "did:web:edge",
         "idem-1",
@@ -58,7 +60,7 @@ fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
         &params(1, 60),
         "sig1=:abc:",
     );
-    let epoch_rotated = applet_source_signature_anchor(
+    let epoch_rotated = applet_delivery_authentication_record_digest(
         "did:web:app",
         "did:web:edge",
         "idem-1",
@@ -71,7 +73,7 @@ fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
         &params(1, 60),
         "sig1=:abc:",
     );
-    let key_rotated = applet_source_signature_anchor(
+    let key_rotated = applet_delivery_authentication_record_digest(
         "did:web:app",
         "did:web:edge",
         "idem-1",

@@ -719,7 +719,7 @@ async fn persist_and_project_realm_genesis_event(
 /// Two closed exceptions carry no basis field at all and are listed by §5, not
 /// derived from the kind's plane: the `ak.realm.create` genesis anchor unit and
 /// the B-model `ak.device.reanchor`, which fixes its frontier in
-/// `payload.pre_fence_basis`. Non-reducer-input kinds carry no CBA field either
+/// `payload.pre_fence_seal_frontier`. Non-reducer-input kinds carry no CBA field either
 /// (`Event::validate_for_submit_structural`).
 pub fn apply_registered_cba_plane(
     event: &mut arkret_wire::Event,

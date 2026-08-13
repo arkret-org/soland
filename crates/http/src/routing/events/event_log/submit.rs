@@ -924,8 +924,8 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         )
     })?;
     let trust_domain_id = state.config().trust_domain.clone();
-    let (pair_key, founder_id, authorization_core) = match &submission.founder_basis_evidence {
-        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human { .. } => {
+    let (pair_key, founder_id, authorization_core) = match &submission.founding_authority_evidence {
+        evidence @ arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human { .. } => {
             evidence
                 .human_pair_key_and_authorization_core(trust_domain_id.clone())
                 .map_err(|error| {
@@ -936,7 +936,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                     )
                 })?
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::ControllerAgent {
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
             agent_provision_digest,
             controller_binding_digest,
@@ -973,7 +973,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "only the founder derived from the root basis may submit this unit",
+            "only the founder derived from the root Contact round may submit this unit",
         ));
     }
     submission
@@ -1028,13 +1028,13 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         });
     }
     let accepted_at = now();
-    match &submission.founder_basis_evidence {
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human {
-            basis_evidence_bundle,
+    match &submission.founding_authority_evidence {
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
+            contact_round_evidence,
             ..
         } => {
             let ([left, right], _) = submission
-                .founder_basis_evidence
+                .founding_authority_evidence
                 .participants_and_founder()
                 .map_err(|error| {
                     SubmitOneError::new(
@@ -1071,14 +1071,14 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             .into_iter()
             .flatten()
             .collect::<std::collections::BTreeSet<_>>();
-            let evidence_heads = basis_evidence_bundle
+            let evidence_heads = contact_round_evidence
                 .current_proofs
                 .iter()
                 .map(|proof| proof.head_event_ref.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
-            if current.basis_id.as_deref() != Some(basis_evidence_bundle.basis_id.as_str())
+            if current.contact_round_id.as_deref() != Some(contact_round_evidence.contact_round_id.as_str())
                 || current_heads != evidence_heads
-                || basis_evidence_bundle
+                || contact_round_evidence
                     .current_proofs
                     .iter()
                     .any(|proof| proof.terminal || proof.fresh_until <= accepted_at)
@@ -1090,7 +1090,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 ));
             }
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::ControllerAgent {
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::ControllerAgent {
             agent_provision_ref,
             agent_provision_digest,
             ..
@@ -1265,7 +1265,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         .iter()
         .map(|event| event.authorization_lease.clone())
         .collect::<Vec<_>>();
-    let basis_evidence = submission.founder_basis_evidence.clone();
+    let contact_round_evidence = submission.founding_authority_evidence.clone();
     let ordinary_outcome = submit_realm_bootstrap_batch(
         state,
         session,
@@ -1275,7 +1275,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
         Some(realm_bootstrap::DirectConversationFoundingCommitContext {
             slot,
             receipt: receipt.clone(),
-            founder_basis_evidence: basis_evidence,
+            founding_authority_evidence: contact_round_evidence,
             source_service_binding: submission.source_service_binding.clone(),
         }),
     )
@@ -3107,7 +3107,7 @@ async fn submit_direct_conversation_federation(
             res,
             StatusCode::CONFLICT,
             "dependency_missing",
-            "the Direct Conversation Contact basis mirror is not available",
+            "the Direct Conversation Contact round mirror is not available",
         );
         return;
     }

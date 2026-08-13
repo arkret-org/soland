@@ -18,7 +18,7 @@
 use arkret_canonical as canonical;
 use arkret_identifiers::Hash;
 use arkret_models_collaboration::contact_operations::{
-    ContactBasis, ContactBasisEvidenceBundle, ContactCurrentProof, ContactScope,
+    ContactCurrentProof, ContactRound, ContactRoundEvidenceBundle, ContactScope,
     ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
     PeerContactControlKind, PeerContactControlReceipt, PeerContactControlReceiptDomain,
     PeerContactControlSubmitOutcome, PeerContactDisposition, PeerContactEventSubmitOutcome,
@@ -562,7 +562,7 @@ async fn peer_contacts_submit(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::internal("projected Contact row disappeared"))?;
-        record.basis_evidence.and_then(|bundle| {
+        record.contact_round_evidence.and_then(|bundle| {
             bundle
                 .current_proofs
                 .into_iter()
@@ -729,8 +729,8 @@ async fn handle_contact_control_request(
             return Ok(Some(outcome));
         }
         PeerContactSubmitRequestBody::GlareFinalize {
-            basis_id,
-            basis,
+            contact_round_id,
+            contact_round,
             request_receipts,
             remote_mirror_receipt,
             glare_concurrency_attestation,
@@ -742,12 +742,12 @@ async fn handle_contact_control_request(
                     "contact_address.recipient_service_id does not match this service",
                 ));
             }
-            let outcome = finalize_glare_contact_basis(
+            let outcome = finalize_glare_contact_round(
                 state,
                 request,
                 source_service_id,
-                basis_id,
-                basis,
+                contact_round_id,
+                contact_round,
                 request_receipts,
                 remote_mirror_receipt,
                 glare_concurrency_attestation,
@@ -838,7 +838,7 @@ async fn validate_proof_refresh_evidence(
             && full_id_str_projects_to_actor(&record.requester, &contact_address.subject_id);
         matches!(record.status.as_str(), "accepted" | "pending")
             && record.peer_service_id.as_deref() == Some(source_service_id)
-            && record.basis_id.as_deref() == Some(current_proof.basis_id.as_str())
+            && record.contact_round_id.as_deref() == Some(current_proof.contact_round_id.as_str())
             && (remote_is_requester || remote_is_target)
             && (record.request_receipts.iter().any(|stored| {
                 stored.core.request_event_ref == current_proof.head_event_ref
@@ -853,7 +853,7 @@ async fn validate_proof_refresh_evidence(
     if !durable_match {
         return Err(AppError::new(
             soland_http::error::ErrorCode::FailedPrecondition,
-            "proof_refresh durable Contact basis/head evidence is unavailable",
+            "proof_refresh durable Contact round/head evidence is unavailable",
         ));
     }
     Ok(())
@@ -885,7 +885,7 @@ async fn finalize_contact_proof_refresh(
         .ok_or_else(|| {
             AppError::new(
                 soland_http::error::ErrorCode::FailedPrecondition,
-                "proof-refresh Contact basis is unavailable",
+                "proof-refresh Contact round is unavailable",
             )
         })?;
     let request_digest = contact_control_request_digest(request)?;
@@ -909,16 +909,17 @@ async fn finalize_contact_proof_refresh(
             "proof-refresh source service does not match durable Contact peer",
         ));
     }
-    let mut bundle = record.basis_evidence.clone().ok_or_else(|| {
+    let mut bundle = record.contact_round_evidence.clone().ok_or_else(|| {
         AppError::new(
             soland_http::error::ErrorCode::FailedPrecondition,
-            "proof-refresh Contact basis evidence is unavailable",
+            "proof-refresh Contact round evidence is unavailable",
         )
     })?;
-    if bundle.basis_id != current_proof.basis_id || bundle.glare_concurrency_attestations.is_none()
+    if bundle.contact_round_id != current_proof.contact_round_id
+        || bundle.glare_concurrency_attestations.is_none()
     {
         return Err(super::super::events::peer::schema_violation(
-            "proof-refresh does not bind the durable glare basis",
+            "proof-refresh does not bind the durable glare contact_round",
         ));
     }
     if bundle.current_proofs.iter().any(|proof| {
@@ -942,7 +943,7 @@ async fn finalize_contact_proof_refresh(
     });
     let pair_has_both_current_proofs = bundle.current_proofs.len() == 2
         && bundle.current_proofs.iter().all(|proof| {
-            proof.basis_id == bundle.basis_id
+            proof.contact_round_id == bundle.contact_round_id
                 && !proof.terminal
                 && proof.complete_through > 0
                 && proof.fresh_until > now()
@@ -952,7 +953,7 @@ async fn finalize_contact_proof_refresh(
         record.version = Some(1);
     }
     let expected_updated_at = record.updated_at;
-    record.basis_evidence = Some(bundle);
+    record.contact_round_evidence = Some(bundle);
     advance_contact_revision(&mut record, expected_updated_at);
     let result_digest = super::account::canonical_contact_digest(current_proof)?;
     let control_receipt = sign_contact_control_receipt(
@@ -977,8 +978,8 @@ async fn finalize_contact_proof_refresh(
 fn validate_glare_finalize_evidence(
     state: &AppState,
     source_service_id: &str,
-    basis_id: &Hash,
-    basis: &ContactBasis,
+    contact_round_id: &Hash,
+    contact_round: &ContactRound,
     request_receipts: &[RequestAcceptanceReceipt; 2],
     remote_mirror_receipt: &PeerContactMirrorReceipt,
     attestation: &GlareConcurrencyAttestation,
@@ -1047,34 +1048,34 @@ fn validate_glare_finalize_evidence(
     }
     let mut pair = [local_subject_full_id, attestation.issuer.clone()];
     pair.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let expected_basis = ContactBasis::Glare {
+    let expected_contact_round = ContactRound::Glare {
         sorted_pair_members: pair,
         requests: [
-            arkret_models_collaboration::contact_operations::ContactBasisRequestRef {
+            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
                 request_event_ref: first.0.clone(),
                 request_acceptance_receipt_digest: first.1.clone(),
             },
-            arkret_models_collaboration::contact_operations::ContactBasisRequestRef {
+            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
                 request_event_ref: second.0.clone(),
                 request_acceptance_receipt_digest: second.1.clone(),
             },
         ],
     };
-    if super::account::canonical_contact_digest(basis)?
-        != super::account::canonical_contact_digest(&expected_basis)?
+    if super::account::canonical_contact_digest(contact_round)?
+        != super::account::canonical_contact_digest(&expected_contact_round)?
     {
         return Err(super::super::events::peer::schema_violation(
-            "glare basis does not match the exact request receipts",
+            "glare contact_round does not match the exact request receipts",
         ));
     }
-    if &contact_basis_id(&expected_basis)? != basis_id
+    if &self::contact_round_id(&expected_contact_round)? != contact_round_id
         || attestation.request_receipt_digests != [first.1.clone(), second.1.clone()]
         || !attestation.observed_frontier.contains(&first.0)
         || !attestation.observed_frontier.contains(&second.0)
         || attestation.complete_through == 0
     {
         return Err(super::super::events::peer::schema_violation(
-            "glare basis/attestation digest or frontier coordinates are invalid",
+            "glare contact_round/attestation digest or frontier coordinates are invalid",
         ));
     }
     let source_receipt = request_receipts
@@ -1135,12 +1136,12 @@ fn verify_contact_service_signature_bytes(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn finalize_glare_contact_basis(
+async fn finalize_glare_contact_round(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     source_service_id: &str,
-    basis_id: &Hash,
-    basis: &ContactBasis,
+    contact_round_id: &Hash,
+    contact_round: &ContactRound,
     request_receipts: &[RequestAcceptanceReceipt; 2],
     remote_mirror_receipt: &PeerContactMirrorReceipt,
     remote_attestation: &GlareConcurrencyAttestation,
@@ -1178,14 +1179,14 @@ async fn finalize_glare_contact_basis(
     validate_glare_finalize_evidence(
         state,
         source_service_id,
-        basis_id,
-        basis,
+        contact_round_id,
+        contact_round,
         request_receipts,
         remote_mirror_receipt,
         remote_attestation,
         contact_address,
     )?;
-    if record.status != "pending" || record.basis_evidence.is_some() {
+    if record.status != "pending" || record.contact_round_evidence.is_some() {
         return Err(AppError::conflict(
             "Contact request slot is already consumed",
         ));
@@ -1278,7 +1279,7 @@ async fn finalize_glare_contact_basis(
         "domain": "ak.contact.glare-unconsumed-slot.v1",
         "holder": local_holder,
         "peer": remote_holder,
-        "basis_id": basis_id,
+        "contact_round_id": contact_round_id,
         "request_receipt_digests": ordered_digests,
         "observed_frontier": observed_frontier,
         "complete_through": complete_through,
@@ -1313,7 +1314,7 @@ async fn finalize_glare_contact_basis(
 
     let fresh_until = observed_at + chrono::Duration::minutes(10);
     let mut local_current_proof = ContactCurrentProof {
-        basis_id: basis_id.clone(),
+        contact_round_id: contact_round_id.clone(),
         issuer: local_issuer,
         terminal: false,
         head_event_ref: local_request.core.request_event_ref.clone(),
@@ -1342,14 +1343,14 @@ async fn finalize_glare_contact_basis(
             .as_bytes()
             .cmp(right.issuer.as_str().as_bytes())
     });
-    let previous_terminal_basis_id = request_receipts
+    let previous_terminal_contact_round_id = request_receipts
         .iter()
-        .filter_map(|receipt| receipt.core.previous_terminal_basis_id.clone())
+        .filter_map(|receipt| receipt.core.previous_terminal_contact_round_id.clone())
         .next();
-    let partial_bundle = ContactBasisEvidenceBundle {
-        basis_id: basis_id.clone(),
-        previous_terminal_basis_id,
-        basis: basis.clone(),
+    let partial_bundle = ContactRoundEvidenceBundle {
+        contact_round_id: contact_round_id.clone(),
+        previous_terminal_contact_round_id,
+        contact_round: contact_round.clone(),
         request_receipts: request_receipts.to_vec(),
         normal_response_receipt: None,
         glare_concurrency_attestations: Some(attestations),
@@ -1360,8 +1361,8 @@ async fn finalize_glare_contact_basis(
         current_proofs: vec![local_current_proof.clone()],
     };
     let expected_updated_at = record.updated_at;
-    record.basis_id = Some(basis_id.to_string());
-    record.basis_evidence = Some(partial_bundle);
+    record.contact_round_id = Some(contact_round_id.to_string());
+    record.contact_round_evidence = Some(partial_bundle);
     record.updated_at = observed_at.max(expected_updated_at + chrono::Duration::microseconds(1));
     let result_digest = super::account::canonical_contact_digest(&json!({
         "glare_concurrency_attestation": local_attestation,
@@ -1457,7 +1458,7 @@ fn mirrored_contact_current_proof(
 ) -> Result<ContactCurrentProof, AppError> {
     let created_at = now();
     let mut proof = ContactCurrentProof {
-        basis_id: source.basis_id.clone(),
+        contact_round_id: source.contact_round_id.clone(),
         issuer,
         terminal: source.terminal,
         head_event_ref: source.head_event_ref.clone(),
@@ -1477,27 +1478,27 @@ fn mirrored_contact_current_proof(
     Ok(proof)
 }
 
-fn normal_contact_basis(
+fn normal_contact_round(
     receipt: &RequestAcceptanceReceipt,
-) -> Result<(ContactBasis, Hash), AppError> {
+) -> Result<(ContactRound, Hash), AppError> {
     let mut participants = [
         receipt.core.holder.contact_actor_id().clone(),
         receipt.core.peer.contact_actor_id().clone(),
     ];
     participants.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let basis = ContactBasis::Normal {
+    let contact_round = ContactRound::Normal {
         sorted_pair_members: participants,
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: super::account::canonical_contact_digest(receipt)?,
     };
-    let mut transcript = serde_json::to_value(&basis)
-        .map_err(|error| AppError::internal(format!("Contact basis encode: {error}")))?;
+    let mut transcript = serde_json::to_value(&contact_round)
+        .map_err(|error| AppError::internal(format!("Contact round encode: {error}")))?;
     transcript
         .as_object_mut()
-        .ok_or_else(|| AppError::internal("Contact basis must encode as an object"))?
-        .insert("domain".to_owned(), json!("ak.contact.basis.v1"));
-    let basis_id = super::account::canonical_contact_digest(&transcript)?;
-    Ok((basis, basis_id))
+        .ok_or_else(|| AppError::internal("Contact round must encode as an object"))?
+        .insert("domain".to_owned(), json!("ak.contact.round.v1"));
+    let contact_round_id = super::account::canonical_contact_digest(&transcript)?;
+    Ok((contact_round, contact_round_id))
 }
 
 fn validate_contact_lineage_carrier(
@@ -1510,7 +1511,7 @@ fn validate_contact_lineage_carrier(
 ) -> Result<(), AppError> {
     if lineage.event_ref != event.event_id
         || !core_id_matches_actor(&lineage.issuer.contact_actor_id(), &event.actor_id)
-        || lineage.basis_id != current_proof.basis_id
+        || lineage.contact_round_id != current_proof.contact_round_id
         || current_proof.head_event_ref != event.event_id
         || terminal != lineage.terminal.unwrap_or(false)
     {
@@ -1531,7 +1532,7 @@ fn validate_contact_lineage_carrier(
                 )
             })?;
             if lineage.peer != payload.peer
-                || lineage.basis_id != payload.basis_id
+                || lineage.contact_round_id != payload.contact_round_id
                 || lineage.version != payload.version
                 || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
                 || lineage.granted_to_peer_scopes != payload.granted_to_peer_scopes
@@ -1553,7 +1554,7 @@ fn validate_contact_lineage_carrier(
                 )
             })?;
             if lineage.peer != payload.peer
-                || lineage.basis_id != payload.basis_id
+                || lineage.contact_round_id != payload.contact_round_id
                 || lineage.version != payload.version
                 || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
                 || !lineage.granted_to_peer_scopes.is_empty()
@@ -1707,7 +1708,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         return Ok(false);
     };
     if record.status != "pending"
-        || record.basis_evidence.is_some()
+        || record.contact_round_evidence.is_some()
         || record.request_receipts.len() != 2
     {
         return Ok(false);
@@ -1759,7 +1760,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         "glare_remote_mirror_receipt",
     )?;
 
-    let (basis_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
+    let (contact_round_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
     let observed_frontier = request_receipts
         .iter()
         .map(|receipt| receipt.core.request_event_ref.clone())
@@ -1770,7 +1771,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         "domain": "ak.contact.glare-unconsumed-slot.v1",
         "holder": holder,
         "peer": peer,
-        "basis_id": basis_id,
+        "contact_round_id": contact_round_id,
         "request_receipt_digests": receipt_digests,
         "observed_frontier": observed_frontier,
         "complete_through": complete_through,
@@ -1803,7 +1804,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
 
 fn derive_glare_basis(
     request_receipts: &[RequestAcceptanceReceipt; 2],
-) -> Result<(Hash, ContactBasis, [Hash; 2]), AppError> {
+) -> Result<(Hash, ContactRound, [Hash; 2]), AppError> {
     let receipt_digests = [
         super::account::canonical_contact_digest(&request_receipts[0])?,
         super::account::canonical_contact_digest(&request_receipts[1])?,
@@ -1813,33 +1814,33 @@ fn derive_glare_basis(
         request_receipts[1].core.holder.contact_actor_id().clone(),
     ];
     pair.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let basis = ContactBasis::Glare {
+    let contact_round = ContactRound::Glare {
         sorted_pair_members: pair,
         requests: [
-            arkret_models_collaboration::contact_operations::ContactBasisRequestRef {
+            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
                 request_event_ref: request_receipts[0].core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: receipt_digests[0].clone(),
             },
-            arkret_models_collaboration::contact_operations::ContactBasisRequestRef {
+            arkret_models_collaboration::contact_operations::ContactRoundRequestRef {
                 request_event_ref: request_receipts[1].core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: receipt_digests[1].clone(),
             },
         ],
     };
-    let basis_id = contact_basis_id(&basis)?;
-    Ok((basis_id, basis, receipt_digests))
+    let contact_round_id = contact_round_id(&contact_round)?;
+    Ok((contact_round_id, contact_round, receipt_digests))
 }
 
-fn contact_basis_id(basis: &ContactBasis) -> Result<Hash, AppError> {
+fn contact_round_id(contact_round: &ContactRound) -> Result<Hash, AppError> {
     #[derive(serde::Serialize)]
     struct BasisDigestTranscript<'a> {
         domain: &'static str,
         #[serde(flatten)]
-        basis: &'a ContactBasis,
+        contact_round: &'a ContactRound,
     }
     super::account::canonical_contact_digest(&BasisDigestTranscript {
-        domain: "ak.contact.basis.v1",
-        basis,
+        domain: "ak.contact.round.v1",
+        contact_round,
     })
 }
 
@@ -1852,8 +1853,8 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
     match (request, outcome) {
         (
             PeerContactSubmitRequestBody::GlareFinalize {
-                basis_id,
-                basis,
+                contact_round_id,
+                contact_round,
                 request_receipts,
                 remote_mirror_receipt,
                 glare_concurrency_attestation: local_attestation,
@@ -1882,17 +1883,18 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     "current_proof": remote_proof,
                 }))?),
             )?;
-            let (derived_basis_id, derived_basis, receipt_digests) =
+            let (derived_contact_round_id, derived_basis, receipt_digests) =
                 derive_glare_basis(request_receipts)?;
-            if &derived_basis_id != basis_id
+            if &derived_contact_round_id != contact_round_id
                 || serde_json::to_value(&derived_basis)
-                    .map_err(|error| AppError::internal(format!("glare basis: {error}")))?
-                    != serde_json::to_value(basis)
-                        .map_err(|error| AppError::internal(format!("glare basis: {error}")))?
+                    .map_err(|error| AppError::internal(format!("glare contact_round: {error}")))?
+                    != serde_json::to_value(contact_round).map_err(|error| {
+                        AppError::internal(format!("glare contact_round: {error}"))
+                    })?
                 || !core_id_matches_actor(&remote_attestation.issuer, &contact_address.subject_id)
                 || remote_attestation.peer != local_attestation.issuer
                 || remote_attestation.request_receipt_digests != receipt_digests
-                || remote_proof.basis_id != *basis_id
+                || remote_proof.contact_round_id != *contact_round_id
                 || !core_id_matches_actor(&remote_proof.issuer, &contact_address.subject_id)
                 || remote_proof.terminal
                 || remote_proof.fresh_until <= now()
@@ -1980,17 +1982,19 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                         "glare finalize has no local-holder request receipt",
                     )
                 })?;
-            let mut bundle = if let Some(bundle) = record.basis_evidence.clone() {
-                if bundle.basis_id != *basis_id || bundle.glare_concurrency_attestations.is_none() {
+            let mut bundle = if let Some(bundle) = record.contact_round_evidence.clone() {
+                if bundle.contact_round_id != *contact_round_id
+                    || bundle.glare_concurrency_attestations.is_none()
+                {
                     return Err(AppError::conflict(
-                        "outbound glare outcome conflicts with durable Contact basis",
+                        "outbound glare outcome conflicts with durable Contact round",
                     ));
                 }
                 bundle
             } else {
                 let observed_at = now();
                 let mut local_proof = ContactCurrentProof {
-                    basis_id: basis_id.clone(),
+                    contact_round_id: contact_round_id.clone(),
                     issuer: local_attestation.issuer.clone(),
                     terminal: false,
                     head_event_ref: local_request.core.request_event_ref.clone(),
@@ -2017,12 +2021,12 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                         .as_bytes()
                         .cmp(right.issuer.as_str().as_bytes())
                 });
-                ContactBasisEvidenceBundle {
-                    basis_id: basis_id.clone(),
-                    previous_terminal_basis_id: request_receipts
-                        .iter()
-                        .find_map(|receipt| receipt.core.previous_terminal_basis_id.clone()),
-                    basis: basis.clone(),
+                ContactRoundEvidenceBundle {
+                    contact_round_id: contact_round_id.clone(),
+                    previous_terminal_contact_round_id: request_receipts.iter().find_map(
+                        |receipt| receipt.core.previous_terminal_contact_round_id.clone(),
+                    ),
+                    contact_round: contact_round.clone(),
                     request_receipts: request_receipts.to_vec(),
                     normal_response_receipt: None,
                     glare_concurrency_attestations: Some(attestations),
@@ -2057,10 +2061,10 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             });
             if !outcome_stored || record.status != "accepted" {
                 let expected_updated_at = record.updated_at;
-                record.basis_id = Some(basis_id.to_string());
+                record.contact_round_id = Some(contact_round_id.to_string());
                 record.version = Some(1);
                 record.status = "accepted".to_owned();
-                record.basis_evidence = Some(bundle);
+                record.contact_round_evidence = Some(bundle);
                 if !outcome_stored {
                     record.control_outcomes.push(outcome.clone());
                 }
@@ -2069,13 +2073,12 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             }
 
             let proof_digest = super::account::canonical_contact_digest(&local_proof)?;
-            let idempotency_key =
-                IdempotencyKey::new(format!("contact-proof-refresh:{basis_id}:{proof_digest}"))
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "proof-refresh idempotency key invalid: {error}"
-                        ))
-                    })?;
+            let idempotency_key = IdempotencyKey::new(format!(
+                "contact-proof-refresh:{contact_round_id}:{proof_digest}"
+            ))
+            .map_err(|error| {
+                AppError::internal(format!("proof-refresh idempotency key invalid: {error}"))
+            })?;
             let delivery = PeerContactSubmitRequestBody::ProofRefresh {
                 idempotency_key,
                 prior_mirror_receipt: remote_mirror_receipt.clone(),
@@ -2207,7 +2210,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         )
     })?;
     if !core_id_matches_actor(&returned_proof.issuer, &contact_address.subject_id)
-        || returned_proof.basis_id != sent_proof.basis_id
+        || returned_proof.contact_round_id != sent_proof.contact_round_id
         || returned_proof.terminal != terminal
         || returned_proof.head_event_ref != signed_event.event_id
         || returned_proof.head_digest != sent_proof.head_digest
@@ -2246,15 +2249,15 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("outbound Contact projection disappeared"))?;
-    let mut bundle = record.basis_evidence.clone().ok_or_else(|| {
+    let mut bundle = record.contact_round_evidence.clone().ok_or_else(|| {
         AppError::new(
             soland_http::error::ErrorCode::FailedPrecondition,
-            "outbound Contact projection has no basis evidence",
+            "outbound Contact projection has no contact_round evidence",
         )
     })?;
-    if bundle.basis_id != returned_proof.basis_id {
+    if bundle.contact_round_id != returned_proof.contact_round_id {
         return Err(super::super::events::peer::schema_violation(
-            "recipient Contact proof names another basis",
+            "recipient Contact proof names another contact_round",
         ));
     }
     let returned_proof_digest = super::account::canonical_contact_digest(returned_proof)?;
@@ -2291,7 +2294,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
             "Contact Event outcome does not complete the exact pair proof set",
         ));
     }
-    record.basis_evidence = Some(bundle);
+    record.contact_round_evidence = Some(bundle);
     advance_contact_revision(&mut record, expected_updated_at);
     save_contact_cas(contacts, expected_updated_at, record).await
 }
@@ -2663,7 +2666,8 @@ async fn project_delivered_contact_fact(
                     "ak.contact.requested peer does not match the addressed holder",
                 ));
             }
-            if request_receipt.core.previous_terminal_basis_id != request.previous_terminal_basis_id
+            if request_receipt.core.previous_terminal_contact_round_id
+                != request.previous_terminal_contact_round_id
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact request receipt continuity pointer does not match signed_event",
@@ -2688,18 +2692,18 @@ async fn project_delivered_contact_fact(
                 .map_err(|error| AppError::internal(error.to_string()))?
             {
                 if existing.status == "tombstoned" {
-                    let terminal = existing.basis_evidence.clone().ok_or_else(|| {
+                    let terminal = existing.contact_round_evidence.clone().ok_or_else(|| {
                         AppError::new(
                             soland_http::error::ErrorCode::FailedPrecondition,
-                            "terminal Contact basis evidence is unavailable",
+                            "terminal Contact round evidence is unavailable",
                         )
                     })?;
-                    if request.previous_terminal_basis_id.as_ref() != Some(&terminal.basis_id)
+                    if request.previous_terminal_contact_round_id.as_ref()
+                        != Some(&terminal.contact_round_id)
                         || terminal.current_proofs.len() != 2
-                        || terminal
-                            .current_proofs
-                            .iter()
-                            .any(|proof| !proof.terminal || proof.basis_id != terminal.basis_id)
+                        || terminal.current_proofs.iter().any(|proof| {
+                            !proof.terminal || proof.contact_round_id != terminal.contact_round_id
+                        })
                     {
                         return Err(super::super::events::peer::schema_violation(
                             "recontact request does not bind the durable terminal head",
@@ -2707,7 +2711,7 @@ async fn project_delivered_contact_fact(
                     }
                     arkret_models_collaboration::contact_operations::validate_recontact_continuity(
                         &terminal,
-                        &existing.basis_evidence_history,
+                        &existing.contact_round_evidence_history,
                     )
                     .map_err(|error| {
                         AppError::new(
@@ -2717,20 +2721,24 @@ async fn project_delivered_contact_fact(
                     })?;
                     let expected_updated_at = existing.updated_at;
                     let created_at = existing.created_at;
-                    let mut history =
-                        Vec::with_capacity(existing.basis_evidence_history.len().saturating_add(1));
+                    let mut history = Vec::with_capacity(
+                        existing
+                            .contact_round_evidence_history
+                            .len()
+                            .saturating_add(1),
+                    );
                     history.push(terminal);
-                    history.extend(existing.basis_evidence_history);
+                    history.extend(existing.contact_round_evidence_history);
                     if history.len() > 64 {
                         return Err(AppError::new(
                             soland_http::error::ErrorCode::FailedPrecondition,
-                            "Contact basis continuity exceeds 64 predecessors",
+                            "Contact round continuity exceeds 64 predecessors",
                         ));
                     }
                     let replacement = ContactRecord {
                         requester: issuer.to_owned(),
                         target: subject_id.to_owned(),
-                        basis_id: None,
+                        contact_round_id: None,
                         version: None,
                         granted_to_target_scopes: projected_scopes.clone(),
                         granted_to_requester_scopes: Vec::new(),
@@ -2738,8 +2746,8 @@ async fn project_delivered_contact_fact(
                         request_event_ref: Some(contact_event_id.to_owned()),
                         request_receipts: vec![request_receipt.clone()],
                         request_mirror_receipts: Vec::new(),
-                        basis_evidence: None,
-                        basis_evidence_history: history,
+                        contact_round_evidence: None,
+                        contact_round_evidence_history: history,
                         control_outcomes: Vec::new(),
                         response_event_ref: None,
                         tombstone_event_ref: None,
@@ -2762,21 +2770,21 @@ async fn project_delivered_contact_fact(
                 }
                 if existing.status == "rejected" {
                     let expected_previous = existing
-                        .basis_evidence_history
+                        .contact_round_evidence_history
                         .first()
-                        .map(|bundle| &bundle.basis_id);
-                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                        .map(|bundle| &bundle.contact_round_id);
+                    if request.previous_terminal_contact_round_id.as_ref() != expected_previous {
                         return Err(super::super::events::peer::schema_violation(
                             "new Contact request does not preserve terminal continuity",
                         ));
                     }
                     let expected_updated_at = existing.updated_at;
                     let created_at = existing.created_at;
-                    let history = existing.basis_evidence_history;
+                    let history = existing.contact_round_evidence_history;
                     let replacement = ContactRecord {
                         requester: issuer.to_owned(),
                         target: subject_id.to_owned(),
-                        basis_id: None,
+                        contact_round_id: None,
                         version: None,
                         granted_to_target_scopes: projected_scopes.clone(),
                         granted_to_requester_scopes: Vec::new(),
@@ -2784,8 +2792,8 @@ async fn project_delivered_contact_fact(
                         request_event_ref: Some(contact_event_id.to_owned()),
                         request_receipts: vec![request_receipt.clone()],
                         request_mirror_receipts: Vec::new(),
-                        basis_evidence: None,
-                        basis_evidence_history: history,
+                        contact_round_evidence: None,
+                        contact_round_evidence_history: history,
                         control_outcomes: Vec::new(),
                         response_event_ref: None,
                         tombstone_event_ref: None,
@@ -2826,10 +2834,10 @@ async fn project_delivered_contact_fact(
                     && existing.request_event_ref.as_deref() != Some(contact_event_id)
                 {
                     let expected_previous = existing
-                        .basis_evidence_history
+                        .contact_round_evidence_history
                         .first()
-                        .map(|bundle| &bundle.basis_id);
-                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                        .map(|bundle| &bundle.contact_round_id);
+                    if request.previous_terminal_contact_round_id.as_ref() != expected_previous {
                         return Err(super::super::events::peer::schema_violation(
                             "glare recontact requests do not bind the same terminal predecessor",
                         ));
@@ -2860,7 +2868,7 @@ async fn project_delivered_contact_fact(
             let contact = ContactRecord {
                 requester: issuer.to_owned(),
                 target: subject_id.to_owned(),
-                basis_id: None,
+                contact_round_id: None,
                 version: None,
                 granted_to_target_scopes: projected_scopes,
                 granted_to_requester_scopes: Vec::new(),
@@ -2868,8 +2876,8 @@ async fn project_delivered_contact_fact(
                 request_event_ref: Some(contact_event_id.to_owned()),
                 request_receipts: vec![request_receipt.clone()],
                 request_mirror_receipts: Vec::new(),
-                basis_evidence: None,
-                basis_evidence_history: Vec::new(),
+                contact_round_evidence: None,
+                contact_round_evidence_history: Vec::new(),
                 control_outcomes: Vec::new(),
                 response_event_ref: None,
                 tombstone_event_ref: None,
@@ -2940,7 +2948,7 @@ async fn project_delivered_contact_fact(
                     return Ok("duplicate");
                 }
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.accepted conflicts with the accepted Contact basis",
+                    "ak.contact.accepted conflicts with the accepted Contact round",
                 ));
             }
             if contact.status != "pending" || contact.request_event_ref.is_none() {
@@ -2967,21 +2975,21 @@ async fn project_delivered_contact_fact(
             })?;
             if super::account::canonical_contact_digest(&response_receipt.request_receipt)?
                 != super::account::canonical_contact_digest(&request_receipt)?
-                || response_receipt.basis_id != accepted.basis_id
+                || response_receipt.contact_round_id != accepted.contact_round_id
             {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.accepted response receipt does not bind the durable request",
                 ));
             }
-            let (basis, derived_basis_id) = normal_contact_basis(&request_receipt)?;
-            if derived_basis_id != accepted.basis_id {
+            let (contact_round, derived_contact_round_id) = normal_contact_round(&request_receipt)?;
+            if derived_contact_round_id != accepted.contact_round_id {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.accepted basis id is not derived from the durable request",
+                    "ak.contact.accepted contact_round id is not derived from the durable request",
                 ));
             }
             let expected_updated_at = contact.updated_at;
             contact.granted_to_requester_scopes = granted_scopes(payload);
-            contact.basis_id = Some(accepted.basis_id.to_string());
+            contact.contact_round_id = Some(accepted.contact_round_id.to_string());
             contact.version = Some(accepted.version);
             contact.status = "accepted".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
@@ -2993,9 +3001,11 @@ async fn project_delivered_contact_fact(
                 contact.peer_service_id = Some(source.to_owned());
             }
             if let Some(remote_proof) = carrier_current_proof {
-                if remote_proof.basis_id != accepted.basis_id || remote_proof.terminal {
+                if remote_proof.contact_round_id != accepted.contact_round_id
+                    || remote_proof.terminal
+                {
                     return Err(super::super::events::peer::schema_violation(
-                        "ak.contact.accepted current proof has invalid basis or terminal state",
+                        "ak.contact.accepted current proof has invalid contact_round or terminal state",
                     ));
                 }
                 let local_proof = mirrored_contact_current_proof(
@@ -3012,13 +3022,13 @@ async fn project_delivered_contact_fact(
                         .as_bytes()
                         .cmp(right.issuer.as_str().as_bytes())
                 });
-                contact.basis_evidence = Some(ContactBasisEvidenceBundle {
-                    basis_id: accepted.basis_id.clone(),
-                    previous_terminal_basis_id: request_receipt
+                contact.contact_round_evidence = Some(ContactRoundEvidenceBundle {
+                    contact_round_id: accepted.contact_round_id.clone(),
+                    previous_terminal_contact_round_id: request_receipt
                         .core
-                        .previous_terminal_basis_id
+                        .previous_terminal_contact_round_id
                         .clone(),
-                    basis,
+                    contact_round,
                     request_receipts: vec![request_receipt],
                     normal_response_receipt: Some(response_receipt.clone()),
                     glare_concurrency_attestations: None,
@@ -3134,7 +3144,7 @@ async fn project_delivered_contact_fact(
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.scope.update references no accepted basis",
+                    "ak.contact.scope.update references no accepted contact_round",
                 ));
             };
             let predecessor = if contact.requester == issuer {
@@ -3143,7 +3153,7 @@ async fn project_delivered_contact_fact(
                 contact.response_event_ref.as_deref()
             };
             if contact.status != "accepted"
-                || contact.basis_id.as_deref() != Some(update.basis_id.as_str())
+                || contact.contact_round_id.as_deref() != Some(update.contact_round_id.as_str())
                 || contact.version.and_then(|value| value.checked_add(1)) != Some(update.version)
                 || predecessor != Some(update.predecessor_event_ref.as_str())
             {
@@ -3165,15 +3175,15 @@ async fn project_delivered_contact_fact(
                     "ak.contact.scope.update carrier is missing its current proof",
                 )
             })?;
-            let mut bundle = contact.basis_evidence.clone().ok_or_else(|| {
+            let mut bundle = contact.contact_round_evidence.clone().ok_or_else(|| {
                 AppError::new(
                     soland_http::error::ErrorCode::FailedPrecondition,
-                    "accepted Contact has no durable basis evidence",
+                    "accepted Contact has no durable contact_round evidence",
                 )
             })?;
-            if remote_proof.basis_id != bundle.basis_id || remote_proof.terminal {
+            if remote_proof.contact_round_id != bundle.contact_round_id || remote_proof.terminal {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.scope.update proof has invalid basis or terminal state",
+                    "ak.contact.scope.update proof has invalid contact_round or terminal state",
                 ));
             }
             let local_proof = mirrored_contact_current_proof(
@@ -3194,7 +3204,7 @@ async fn project_delivered_contact_fact(
                     .as_bytes()
                     .cmp(right.issuer.as_str().as_bytes())
             });
-            contact.basis_evidence = Some(bundle);
+            contact.contact_round_evidence = Some(bundle);
             advance_contact_revision(&mut contact, expected_updated_at);
             save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
@@ -3217,7 +3227,7 @@ async fn project_delivered_contact_fact(
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned references no Contact basis",
+                    "ak.contact.tombstoned references no Contact round",
                 ));
             };
             if row.status == "tombstoned" {
@@ -3225,7 +3235,7 @@ async fn project_delivered_contact_fact(
                     return Ok("duplicate");
                 }
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned conflicts with the terminal Contact basis",
+                    "ak.contact.tombstoned conflicts with the terminal Contact round",
                 ));
             }
             let predecessor = if row.requester == issuer {
@@ -3233,7 +3243,7 @@ async fn project_delivered_contact_fact(
             } else {
                 row.response_event_ref.as_deref()
             };
-            if row.basis_id.as_deref() != Some(tombstone.basis_id.as_str())
+            if row.contact_round_id.as_deref() != Some(tombstone.contact_round_id.as_str())
                 || row.version.and_then(|value| value.checked_add(1)) != Some(tombstone.version)
                 || predecessor != Some(tombstone.predecessor_event_ref.as_str())
             {
@@ -3250,15 +3260,15 @@ async fn project_delivered_contact_fact(
                     "ak.contact.tombstoned carrier is missing its terminal proof",
                 )
             })?;
-            let mut bundle = row.basis_evidence.clone().ok_or_else(|| {
+            let mut bundle = row.contact_round_evidence.clone().ok_or_else(|| {
                 AppError::new(
                     soland_http::error::ErrorCode::FailedPrecondition,
-                    "tombstoned Contact has no durable basis evidence",
+                    "tombstoned Contact has no durable contact_round evidence",
                 )
             })?;
-            if remote_proof.basis_id != bundle.basis_id || !remote_proof.terminal {
+            if remote_proof.contact_round_id != bundle.contact_round_id || !remote_proof.terminal {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned proof has invalid basis or terminal state",
+                    "ak.contact.tombstoned proof has invalid contact_round or terminal state",
                 ));
             }
             let local_proof = mirrored_contact_current_proof(
@@ -3279,7 +3289,7 @@ async fn project_delivered_contact_fact(
                     .as_bytes()
                     .cmp(right.issuer.as_str().as_bytes())
             });
-            row.basis_evidence = Some(bundle);
+            row.contact_round_evidence = Some(bundle);
             advance_contact_revision(&mut row, expected_updated_at);
             save_contact_cas(contacts, expected_updated_at, row).await?;
             append_delivered_contact_fact_projection_event(
@@ -3503,7 +3513,7 @@ mod tests {
         let record = ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: "did:web:bob.example".to_owned(),
-            basis_id: None,
+            contact_round_id: None,
             version: None,
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
@@ -3511,8 +3521,8 @@ mod tests {
             request_event_ref: None,
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
-            basis_evidence: None,
-            basis_evidence_history: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
             control_outcomes: Vec::new(),
             response_event_ref: None,
             tombstone_event_ref: None,
@@ -3524,10 +3534,10 @@ mod tests {
         };
         state.contacts().save_contact(record.clone()).await.unwrap();
         let mut winner = record.clone();
-        winner.basis_id = Some(format!("sha256:{}", "1".repeat(64)));
+        winner.contact_round_id = Some(format!("sha256:{}", "1".repeat(64)));
         winner.updated_at += chrono::Duration::microseconds(1);
         let mut loser = record;
-        loser.basis_id = Some(format!("sha256:{}", "2".repeat(64)));
+        loser.contact_round_id = Some(format!("sha256:{}", "2".repeat(64)));
         loser.updated_at += chrono::Duration::microseconds(1);
 
         assert!(
@@ -3566,11 +3576,12 @@ mod tests {
             'b',
         );
         let ordered = [first.clone(), second.clone()];
-        let (historical_basis_id, historical_basis, _) = derive_glare_basis(&ordered).unwrap();
-        let historical_bundle = ContactBasisEvidenceBundle {
-            basis_id: historical_basis_id.clone(),
-            previous_terminal_basis_id: None,
-            basis: historical_basis,
+        let (historical_contact_round_id, historical_basis, _) =
+            derive_glare_basis(&ordered).unwrap();
+        let historical_bundle = ContactRoundEvidenceBundle {
+            contact_round_id: historical_contact_round_id.clone(),
+            previous_terminal_contact_round_id: None,
+            contact_round: historical_basis,
             request_receipts: ordered.to_vec(),
             normal_response_receipt: None,
             glare_concurrency_attestations: None,
@@ -3582,7 +3593,7 @@ mod tests {
             .save_contact(ContactRecord {
                 requester: "did:web:alice.example".to_owned(),
                 target: "did:web:bob.example".to_owned(),
-                basis_id: None,
+                contact_round_id: None,
                 version: None,
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
@@ -3590,8 +3601,8 @@ mod tests {
                 request_event_ref: Some(first.core.request_event_ref.to_string()),
                 request_receipts: vec![first.clone(), second.clone()],
                 request_mirror_receipts: Vec::new(),
-                basis_evidence: None,
-                basis_evidence_history: vec![historical_bundle],
+                contact_round_evidence: None,
+                contact_round_evidence_history: vec![historical_bundle],
                 control_outcomes: Vec::new(),
                 response_event_ref: None,
                 tombstone_event_ref: None,
@@ -3614,10 +3625,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.request_receipts.len(), 2);
-        assert_eq!(row.basis_evidence_history.len(), 1);
+        assert_eq!(row.contact_round_evidence_history.len(), 1);
         assert_eq!(
-            row.basis_evidence_history[0].basis_id, historical_basis_id,
-            "restart hydration must retain the exact historical basis chain"
+            row.contact_round_evidence_history[0].contact_round_id, historical_contact_round_id,
+            "restart hydration must retain the exact historical contact_round chain"
         );
         assert_eq!(
             serde_json::to_value(&row.request_receipts[0].core).unwrap(),
@@ -3655,7 +3666,7 @@ mod tests {
                 }
             },
             "current_proof": {
-                "basis_id": format!("sha256:{}", "9".repeat(64)),
+                "contact_round_id": format!("sha256:{}", "9".repeat(64)),
                 "issuer": "did:web:alice.example",
                 "terminal": false,
                 "head_event_ref": "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
@@ -3674,7 +3685,7 @@ mod tests {
         let record = ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: "did:web:bob.example".to_owned(),
-            basis_id: None,
+            contact_round_id: None,
             version: None,
             granted_to_target_scopes: Vec::new(),
             granted_to_requester_scopes: Vec::new(),
@@ -3682,8 +3693,8 @@ mod tests {
             request_event_ref: None,
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
-            basis_evidence: None,
-            basis_evidence_history: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
             control_outcomes: vec![outcome.clone()],
             response_event_ref: None,
             tombstone_event_ref: None,

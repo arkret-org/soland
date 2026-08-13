@@ -4,8 +4,8 @@ use super::*;
 pub(super) struct DirectConversationFoundingCommitContext {
     pub slot: soland_storage::DirectConversationFoundingSlotRecord,
     pub receipt: DirectConversationFoundingAcceptanceReceipt,
-    pub founder_basis_evidence:
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+    pub founding_authority_evidence:
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
     pub source_service_binding:
         arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
 }
@@ -291,7 +291,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             &validated,
             &envelopes,
             &context.receipt,
-            &context.founder_basis_evidence,
+            &context.founding_authority_evidence,
             &context.source_service_binding,
             &control_proposal_acks,
         )

@@ -19,7 +19,7 @@ pub trait AppletStore: Send + Sync {
 pub struct AppletTransactionReplayRecord {
     pub source_service_id: String,
     pub idempotency_key: String,
-    pub source_signature_anchor: String,
+    pub delivery_authentication_record_digest: String,
     pub request_digest: String,
     pub outcome: Option<Value>,
     pub received_at: chrono::DateTime<chrono::Utc>,
@@ -41,7 +41,7 @@ pub fn applet_registration_select_sql(suffix: &str) -> String {
 }
 #[doc(hidden)]
 pub fn applet_transaction_replay_select_sql() -> &'static str {
-    "SELECT source_service_id, idempotency_key, source_signature_anchor, request_digest, \
+    "SELECT source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
      outcome, received_at, completed_at \
      FROM applet_transactions \
      WHERE source_service_id = $1 AND idempotency_key = $2"

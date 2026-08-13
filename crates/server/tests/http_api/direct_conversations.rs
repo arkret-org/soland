@@ -83,7 +83,7 @@ async fn seed_accepted_direct_message_contact(
         .put(&soland_domain::identity::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: target.to_owned(),
-            basis_id: Some(
+            contact_round_id: Some(
                 arkret_canonical::canonical_sha256(&serde_json::json!({
                     "request_event_ref": request_event_ref,
                     "response_event_ref": response_event_ref,
@@ -97,8 +97,8 @@ async fn seed_accepted_direct_message_contact(
             request_event_ref: Some(request_event_ref),
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
-            basis_evidence: None,
-            basis_evidence_history: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
             control_outcomes: Vec::new(),
             response_event_ref: Some(response_event_ref),
             tombstone_event_ref: None,
@@ -608,7 +608,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
         .put(&soland_domain::identity::ContactRecord {
             requester: "did:web:alice.example".to_owned(),
             target: BOB_DID.to_owned(),
-            basis_id: Some(format!("sha256:{}", "4".repeat(64))),
+            contact_round_id: Some(format!("sha256:{}", "4".repeat(64))),
             version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
@@ -616,8 +616,8 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs() {
             request_event_ref: None,
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
-            basis_evidence: None,
-            basis_evidence_history: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
             control_outcomes: Vec::new(),
             response_event_ref: None,
             tombstone_event_ref: None,

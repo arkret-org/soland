@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arkret_identifiers::{BlobRef, DidFullId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::contact_operations::{
-    ContactBasisEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
+    ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
 };
 use arkret_models_collaboration::governance::agent_artifacts::PublicKey;
@@ -16,7 +16,7 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceBasis, DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId,
+    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -67,7 +67,7 @@ pub struct MimiConsentCorrelation {
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
-    pub basis_id: Option<String>,
+    pub contact_round_id: Option<String>,
     pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
@@ -75,12 +75,12 @@ pub struct ContactRecord {
     pub request_event_ref: Option<String>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
-    pub basis_evidence: Option<ContactBasisEvidenceBundle>,
+    pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
     /// Immediate terminal predecessor first, followed by its predecessors up
-    /// to the unique root basis.  Keeping the verified bundles beside the
+    /// to the unique root round. Keeping the verified bundles beside the
     /// current row lets the resolver supply the exact re-contact continuity
     /// chain without reconstructing signed evidence from Event references.
-    pub basis_evidence_history: Vec<ContactBasisEvidenceBundle>,
+    pub contact_round_evidence_history: Vec<ContactRoundEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,
@@ -1591,7 +1591,7 @@ pub struct RecoverySessionState {
     pub current_device_generation_ref: Option<NonEmptyString>,
     pub device_generation_status: Option<DeviceGenerationStatus>,
     pub registry_head: Option<Hash>,
-    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceBasis>,
+    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceSealFrontier>,
     pub policy_payload: Value,
     pub publication_authority_context: RecoveryPublicationAuthorityContext,
     pub publication_authority_context_digest: Hash,

@@ -1,10 +1,10 @@
 use arkret_models_collaboration::contact_operations::{
-    ContactAcceptedOutcome, ContactBasis, ContactBasisEvidenceBundle, ContactCommitRequestBody,
-    ContactCurrentProof, ContactFailedOutcome, ContactLineage, ContactOperationRejectReason,
-    ContactPreparedEventDraft, ContactPreparedOutcome, ContactResultKind, ContactScope,
-    ContactScopeUpdatePayload, ContactScopeUpdateSchema, NormalResponseAcceptanceReceipt,
-    PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
-    RequestAcceptanceReceiptCore,
+    ContactAcceptedOutcome, ContactCommitRequestBody, ContactCurrentProof, ContactFailedOutcome,
+    ContactLineage, ContactOperationRejectReason, ContactPreparedEventDraft,
+    ContactPreparedOutcome, ContactResultKind, ContactRound, ContactRoundEvidenceBundle,
+    ContactScope, ContactScopeUpdatePayload, ContactScopeUpdateSchema,
+    NormalResponseAcceptanceReceipt, PeerContactSubmitRequestBody, RejectAcceptanceReceipt,
+    RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -32,13 +32,13 @@ enum ContactReservationBranch {
     Request {
         peer: ContactPeer,
         granted_to_peer_scopes: Vec<ContactScope>,
-        previous_terminal_basis_id: Option<Hash>,
+        previous_terminal_contact_round_id: Option<Hash>,
         introduction_evidence: ContactIntroductionEvidence,
     },
     Response {
         request_receipt: RequestAcceptanceReceipt,
         peer: ContactPeer,
-        basis_id: Hash,
+        contact_round_id: Hash,
         granted_to_peer_scopes: Vec<ContactScope>,
     },
     Reject {
@@ -47,14 +47,14 @@ enum ContactReservationBranch {
     },
     ScopeUpdate {
         peer: ContactPeer,
-        basis_id: Hash,
+        contact_round_id: Hash,
         version: u64,
         predecessor_event_ref: EventId,
         granted_to_peer_scopes: Vec<ContactScope>,
     },
     Tombstone {
         peer: ContactPeer,
-        basis_id: Hash,
+        contact_round_id: Hash,
         version: u64,
         predecessor_event_ref: EventId,
     },
@@ -823,8 +823,8 @@ fn sorted_pair(left: &DidCoreId, right: &DidCoreId) -> [DidCoreId; 2] {
     }
 }
 
-fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactBasis, Hash), AppError> {
-    let basis = ContactBasis::Normal {
+fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactRound, Hash), AppError> {
+    let contact_round = ContactRound::Normal {
         sorted_pair_members: sorted_pair(
             &receipt.core.holder.contact_actor_id(),
             &receipt.core.peer.contact_actor_id(),
@@ -832,8 +832,8 @@ fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactBasis, Has
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: canonical_contact_digest(receipt)?,
     };
-    let basis_id = contact_hash("ak.contact.basis.v1", &basis)?;
-    Ok((basis, basis_id))
+    let contact_round_id = contact_hash("ak.contact.round.v1", &contact_round)?;
+    Ok((contact_round, contact_round_id))
 }
 
 fn sign_request_receipt(
@@ -850,14 +850,14 @@ fn sign_request_receipt(
         peer: reservation.branch.peer().clone(),
         slot_version: 1,
         slot_predecessor: None,
-        previous_terminal_basis_id: event
+        previous_terminal_contact_round_id: event
             .payload
-            .get("previous_terminal_basis_id")
+            .get("previous_terminal_contact_round_id")
             .and_then(Value::as_str)
             .map(|value| Hash::new(value.to_owned()))
             .transpose()
             .map_err(|error| {
-                AppError::invalid_param(format!("previous terminal basis: {error}"))
+                AppError::invalid_param(format!("previous terminal contact_round: {error}"))
             })?,
         request_event_ref: event.event_id.clone(),
         request_digest: request_digest.clone(),
@@ -885,7 +885,7 @@ fn signed_lineage(
     state: &AppState,
     holder: ContactPeer,
     peer: ContactPeer,
-    basis_id: Hash,
+    contact_round_id: Hash,
     version: u64,
     predecessor_event_ref: Option<EventId>,
     event_ref: EventId,
@@ -893,7 +893,7 @@ fn signed_lineage(
     terminal: bool,
 ) -> Result<ContactLineage, AppError> {
     let unsigned = json!({
-        "basis_id": basis_id,
+        "contact_round_id": contact_round_id,
         "issuer": holder,
         "peer": peer,
         "version": version,
@@ -903,7 +903,7 @@ fn signed_lineage(
         "terminal": terminal.then_some(true),
     });
     Ok(ContactLineage {
-        basis_id,
+        contact_round_id,
         issuer: holder,
         peer,
         version,
@@ -917,7 +917,7 @@ fn signed_lineage(
 
 fn signed_current_proof(
     state: &AppState,
-    basis_id: Hash,
+    contact_round_id: Hash,
     event: &Event,
 ) -> Result<ContactCurrentProof, AppError> {
     let _issuer_full_id = event
@@ -945,7 +945,7 @@ fn signed_current_proof(
     .map_err(|error| AppError::internal(format!("Contact head digest invalid: {error}")))?;
     let fresh_until = now() + chrono::Duration::minutes(10);
     let unsigned = json!({
-        "basis_id": basis_id,
+        "contact_round_id": contact_round_id,
         "issuer": issuer,
         "terminal": terminal,
         "head_event_ref": event.event_id,
@@ -955,7 +955,7 @@ fn signed_current_proof(
         "fresh_until": arkret_canonical::format_timestamp_canonical(fresh_until),
     });
     Ok(ContactCurrentProof {
-        basis_id,
+        contact_round_id,
         issuer,
         terminal,
         head_event_ref: event.event_id.clone(),
@@ -969,7 +969,7 @@ fn signed_current_proof(
 
 async fn local_requester_current_proof(
     state: &AppState,
-    basis_id: &Hash,
+    contact_round_id: &Hash,
     request_receipt: &RequestAcceptanceReceipt,
 ) -> Result<Option<ContactCurrentProof>, AppError> {
     let Some(record) = state
@@ -1013,7 +1013,7 @@ async fn local_requester_current_proof(
     {
         return Ok(None);
     }
-    signed_current_proof(state, basis_id.clone(), &request_event).map(Some)
+    signed_current_proof(state, contact_round_id.clone(), &request_event).map(Some)
 }
 
 async fn commit(
@@ -1146,7 +1146,7 @@ async fn plan_contact_commit(
     let outcome = match &reservation.branch {
         ContactReservationBranch::Request {
             granted_to_peer_scopes,
-            previous_terminal_basis_id,
+            previous_terminal_contact_round_id,
             introduction_evidence,
             ..
         } => {
@@ -1164,7 +1164,7 @@ async fn plan_contact_commit(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let (mut history, expected_updated_at, created_at) = match existing {
-                None if previous_terminal_basis_id.is_none() => {
+                None if previous_terminal_contact_round_id.is_none() => {
                     (Vec::new(), None, event.created_at)
                 }
                 None => {
@@ -1173,18 +1173,18 @@ async fn plan_contact_commit(
                     ));
                 }
                 Some(existing) if existing.status == "tombstoned" => {
-                    let terminal = existing.basis_evidence.clone().ok_or_else(|| {
+                    let terminal = existing.contact_round_evidence.clone().ok_or_else(|| {
                         AppError::new(
                             ErrorCode::FailedPrecondition,
-                            "terminal Contact basis evidence is unavailable",
+                            "terminal Contact round evidence is unavailable",
                         )
                     })?;
-                    if previous_terminal_basis_id.as_ref() != Some(&terminal.basis_id)
+                    if previous_terminal_contact_round_id.as_ref()
+                        != Some(&terminal.contact_round_id)
                         || terminal.current_proofs.len() != 2
-                        || terminal
-                            .current_proofs
-                            .iter()
-                            .any(|proof| !proof.terminal || proof.basis_id != terminal.basis_id)
+                        || terminal.current_proofs.iter().any(|proof| {
+                            !proof.terminal || proof.contact_round_id != terminal.contact_round_id
+                        })
                     {
                         return Err(AppError::conflict(
                             "Contact request terminal predecessor is not the durable terminal head",
@@ -1192,7 +1192,7 @@ async fn plan_contact_commit(
                     }
                     arkret_models_collaboration::contact_operations::validate_recontact_continuity(
                         &terminal,
-                        &existing.basis_evidence_history,
+                        &existing.contact_round_evidence_history,
                     )
                     .map_err(|error| {
                         AppError::new(
@@ -1200,30 +1200,34 @@ async fn plan_contact_commit(
                             format!("terminal Contact continuity is invalid: {error}"),
                         )
                     })?;
-                    let mut history =
-                        Vec::with_capacity(existing.basis_evidence_history.len().saturating_add(1));
+                    let mut history = Vec::with_capacity(
+                        existing
+                            .contact_round_evidence_history
+                            .len()
+                            .saturating_add(1),
+                    );
                     history.push(terminal);
-                    history.extend(existing.basis_evidence_history.iter().cloned());
+                    history.extend(existing.contact_round_evidence_history.iter().cloned());
                     if history.len() > 64 {
                         return Err(AppError::new(
                             ErrorCode::FailedPrecondition,
-                            "Contact basis continuity exceeds 64 predecessors",
+                            "Contact round continuity exceeds 64 predecessors",
                         ));
                     }
                     (history, Some(existing.updated_at), existing.created_at)
                 }
                 Some(existing) if existing.status == "rejected" => {
                     let expected = existing
-                        .basis_evidence_history
+                        .contact_round_evidence_history
                         .first()
-                        .map(|bundle| &bundle.basis_id);
-                    if previous_terminal_basis_id.as_ref() != expected {
+                        .map(|bundle| &bundle.contact_round_id);
+                    if previous_terminal_contact_round_id.as_ref() != expected {
                         return Err(AppError::conflict(
                             "Contact request does not preserve the last terminal predecessor",
                         ));
                     }
                     (
-                        existing.basis_evidence_history,
+                        existing.contact_round_evidence_history,
                         Some(existing.updated_at),
                         existing.created_at,
                     )
@@ -1234,7 +1238,7 @@ async fn plan_contact_commit(
                             outcome: ContactFailedOutcome {
                                 result_kind: ContactResultKind::Request,
                                 operation_id: reservation.operation_id.clone(),
-                                reason: ContactOperationRejectReason::ContactBasisConflict,
+                                reason: ContactOperationRejectReason::ContactRoundConflict,
                             },
                         },
                         None,
@@ -1245,7 +1249,7 @@ async fn plan_contact_commit(
                 record: ContactRecord {
                     requester: holder.clone(),
                     target: peer.clone(),
-                    basis_id: None,
+                    contact_round_id: None,
                     version: None,
                     granted_to_target_scopes: contact_scope_strings(granted_to_peer_scopes),
                     granted_to_requester_scopes: Vec::new(),
@@ -1253,8 +1257,8 @@ async fn plan_contact_commit(
                     request_event_ref: Some(event.event_id.to_string()),
                     request_receipts: vec![request_receipt.clone()],
                     request_mirror_receipts: Vec::new(),
-                    basis_evidence: None,
-                    basis_evidence_history: std::mem::take(&mut history),
+                    contact_round_evidence: None,
+                    contact_round_evidence_history: std::mem::take(&mut history),
                     control_outcomes: Vec::new(),
                     response_event_ref: None,
                     tombstone_event_ref: None,
@@ -1272,7 +1276,7 @@ async fn plan_contact_commit(
                         .unwrap_or(event.created_at),
                 },
                 expected_updated_at,
-                conflict_code: "contact_basis_conflict".to_owned(),
+                conflict_code: "contact_round_conflict".to_owned(),
             });
             ContactOperationOutcome::Accepted {
                 outcome: ContactAcceptedOutcome::Request {
@@ -1283,7 +1287,7 @@ async fn plan_contact_commit(
         }
         ContactReservationBranch::Response {
             request_receipt,
-            basis_id,
+            contact_round_id,
             granted_to_peer_scopes,
             ..
         } => {
@@ -1309,10 +1313,10 @@ async fn plan_contact_commit(
                     "Contact request slot is already consumed",
                 ));
             }
-            let (basis, expected_basis_id) = normal_basis(request_receipt)?;
-            if &expected_basis_id != basis_id {
+            let (contact_round, expected_contact_round_id) = normal_basis(request_receipt)?;
+            if &expected_contact_round_id != contact_round_id {
                 return Err(AppError::conflict(
-                    "Contact response basis does not match the accepted request receipt",
+                    "Contact response contact_round does not match the accepted request receipt",
                 ));
             }
             let expected_updated_at = record.updated_at;
@@ -1328,7 +1332,7 @@ async fn plan_contact_commit(
             let issuer = arkret_identifiers::DidCoreId::new(holder.clone())
                 .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
             let unsigned_receipt = json!({
-                "basis_id": basis_id,
+                "contact_round_id": contact_round_id,
                 "request_receipt": request_receipt,
                 "response_event_ref": event.event_id,
                 "response_digest": response_digest,
@@ -1337,7 +1341,7 @@ async fn plan_contact_commit(
                 "issuer": issuer,
             });
             let response_receipt = NormalResponseAcceptanceReceipt {
-                basis_id: basis_id.clone(),
+                contact_round_id: contact_round_id.clone(),
                 request_receipt: request_receipt.clone(),
                 response_event_ref: event.event_id.clone(),
                 response_digest,
@@ -1346,18 +1350,21 @@ async fn plan_contact_commit(
                 issuer,
                 signature: service_signature(state, &unsigned_receipt)?,
             };
-            let current_proof = signed_current_proof(state, basis_id.clone(), event)?;
+            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
             let requester_current_proof =
-                local_requester_current_proof(state, basis_id, request_receipt).await?;
+                local_requester_current_proof(state, contact_round_id, request_receipt).await?;
             record.status = "accepted".to_owned();
-            record.basis_id = Some(basis_id.to_string());
+            record.contact_round_id = Some(contact_round_id.to_string());
             record.version = Some(1);
             record.granted_to_requester_scopes = contact_scope_strings(granted_to_peer_scopes);
             record.response_event_ref = Some(event.event_id.to_string());
-            record.basis_evidence = Some(ContactBasisEvidenceBundle {
-                basis_id: basis_id.clone(),
-                previous_terminal_basis_id: request_receipt.core.previous_terminal_basis_id.clone(),
-                basis,
+            record.contact_round_evidence = Some(ContactRoundEvidenceBundle {
+                contact_round_id: contact_round_id.clone(),
+                previous_terminal_contact_round_id: request_receipt
+                    .core
+                    .previous_terminal_contact_round_id
+                    .clone(),
+                contact_round,
                 request_receipts: vec![request_receipt.clone()],
                 normal_response_receipt: Some(response_receipt.clone()),
                 glare_concurrency_attestations: None,
@@ -1381,7 +1388,7 @@ async fn plan_contact_commit(
                 state,
                 reservation.holder.clone(),
                 reservation.branch.peer().clone(),
-                basis_id.clone(),
+                contact_round_id.clone(),
                 1,
                 None,
                 event.event_id.clone(),
@@ -1458,16 +1465,22 @@ async fn plan_contact_commit(
             }
         }
         ContactReservationBranch::ScopeUpdate {
-            basis_id,
+            contact_round_id,
             version,
             predecessor_event_ref,
             granted_to_peer_scopes,
             ..
         } => {
             let Some(mut record) = contact_record_for_lineage(state, &holder, &peer).await? else {
-                return Err(AppError::not_found("accepted Contact basis not found"));
+                return Err(AppError::not_found("accepted Contact round not found"));
             };
-            validate_lineage_head(&record, &holder, basis_id, *version, predecessor_event_ref)?;
+            validate_lineage_head(
+                &record,
+                &holder,
+                contact_round_id,
+                *version,
+                predecessor_event_ref,
+            )?;
             let expected_updated_at = record.updated_at;
             set_holder_scopes(
                 &mut record,
@@ -1476,13 +1489,13 @@ async fn plan_contact_commit(
             );
             record.version = Some(*version);
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
-            // The accepted basis remains accepted even when its directional
+            // The accepted contact_round remains accepted even when its directional
             // intersection is empty. Authorization reads the exact full-set
             // heads, so an empty intersection grants nothing.
             record.status = "accepted".to_owned();
             set_holder_head(&mut record, &holder, event.event_id.to_string());
-            let current_proof = signed_current_proof(state, basis_id.clone(), event)?;
-            if let Some(bundle) = record.basis_evidence.as_mut() {
+            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
+            if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs
                     .retain(|proof| proof.issuer != current_proof.issuer);
@@ -1503,7 +1516,7 @@ async fn plan_contact_commit(
                 state,
                 reservation.holder.clone(),
                 reservation.branch.peer().clone(),
-                basis_id.clone(),
+                contact_round_id.clone(),
                 *version,
                 Some(predecessor_event_ref.clone()),
                 event.event_id.clone(),
@@ -1519,22 +1532,28 @@ async fn plan_contact_commit(
             }
         }
         ContactReservationBranch::Tombstone {
-            basis_id,
+            contact_round_id,
             version,
             predecessor_event_ref,
             ..
         } => {
             let Some(mut record) = contact_record_for_lineage(state, &holder, &peer).await? else {
-                return Err(AppError::not_found("accepted Contact basis not found"));
+                return Err(AppError::not_found("accepted Contact round not found"));
             };
-            validate_lineage_head(&record, &holder, basis_id, *version, predecessor_event_ref)?;
+            validate_lineage_head(
+                &record,
+                &holder,
+                contact_round_id,
+                *version,
+                predecessor_event_ref,
+            )?;
             let expected_updated_at = record.updated_at;
             record.version = Some(*version);
             record.status = "tombstoned".to_owned();
             record.tombstone_event_ref = Some(event.event_id.to_string());
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
-            let current_proof = signed_current_proof(state, basis_id.clone(), event)?;
-            if let Some(bundle) = record.basis_evidence.as_mut() {
+            let current_proof = signed_current_proof(state, contact_round_id.clone(), event)?;
+            if let Some(bundle) = record.contact_round_evidence.as_mut() {
                 bundle
                     .current_proofs
                     .retain(|proof| proof.issuer != current_proof.issuer);
@@ -1555,7 +1574,7 @@ async fn plan_contact_commit(
                 state,
                 reservation.holder.clone(),
                 reservation.branch.peer().clone(),
-                basis_id.clone(),
+                contact_round_id.clone(),
                 *version,
                 Some(predecessor_event_ref.clone()),
                 event.event_id.clone(),
@@ -1809,18 +1828,18 @@ fn set_holder_scopes(record: &mut ContactRecord, holder: &str, scopes: Vec<Strin
 fn validate_lineage_head(
     record: &ContactRecord,
     holder: &str,
-    basis_id: &Hash,
+    contact_round_id: &Hash,
     version: u64,
     predecessor: &EventId,
 ) -> Result<(), AppError> {
-    if record.basis_id.as_deref() != Some(basis_id.as_str())
+    if record.contact_round_id.as_deref() != Some(contact_round_id.as_str())
         || record.version.and_then(|current| current.checked_add(1)) != Some(version)
         || holder_head(record, holder) != Some(predecessor.as_str())
     {
         return Err(AppError::conflict("Contact lineage CAS mismatch"));
     }
-    let bundle = record.basis_evidence.as_ref().ok_or_else(|| {
-        AppError::conflict("Contact basis evidence is not yet authoritative")
+    let bundle = record.contact_round_evidence.as_ref().ok_or_else(|| {
+        AppError::conflict("Contact round evidence is not yet authoritative")
             .with_wire_code("contact_scope_stale")
     })?;
     let participants = [&record.requester, &record.target];
@@ -1829,23 +1848,23 @@ fn validate_lineage_head(
         .iter()
         .map(|proof| proof.issuer.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    if bundle.basis_id != *basis_id
+    if bundle.contact_round_id != *contact_round_id
         || bundle.current_proofs.len() != 2
         || proof_issuers != participants.into_iter().map(String::as_str).collect()
         || bundle.current_proofs.iter().any(|proof| {
-            proof.basis_id != bundle.basis_id
+            proof.contact_round_id != bundle.contact_round_id
                 || proof.terminal
                 || proof.complete_through == 0
                 || !proof.accepted_frontier.contains(&proof.head_event_ref)
         })
         || arkret_models_collaboration::contact_operations::validate_recontact_continuity(
             bundle,
-            &record.basis_evidence_history,
+            &record.contact_round_evidence_history,
         )
         .is_err()
     {
         return Err(
-            AppError::conflict("Contact basis evidence is not authoritative")
+            AppError::conflict("Contact round evidence is not authoritative")
                 .with_wire_code("contact_scope_stale"),
         );
     }
@@ -1873,12 +1892,17 @@ pub(super) async fn request(
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let local_terminal_basis = prior.as_ref().and_then(|record| {
                 (record.status == "tombstoned")
-                    .then_some(record.basis_id.as_deref())
+                    .then_some(record.contact_round_id.as_deref())
                     .flatten()
             });
-            if local_terminal_basis != body.previous_terminal_basis_id.as_ref().map(Hash::as_str) {
+            if local_terminal_basis
+                != body
+                    .previous_terminal_contact_round_id
+                    .as_ref()
+                    .map(Hash::as_str)
+            {
                 return Err(AppError::conflict(
-                    "recontact request does not link the immediate local terminal Contact basis",
+                    "recontact request does not link the immediate local terminal Contact round",
                 )
                 .with_wire_code("contact_lineage_conflict"));
             }
@@ -1890,7 +1914,7 @@ pub(super) async fn request(
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
-                previous_terminal_basis_id: body.previous_terminal_basis_id.clone(),
+                previous_terminal_contact_round_id: body.previous_terminal_contact_round_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
             };
             prepare::<arkret_wire::event_spec::ContactRequested>(
@@ -1901,7 +1925,7 @@ pub(super) async fn request(
                 ContactReservationBranch::Request {
                     peer: body.peer,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
-                    previous_terminal_basis_id: body.previous_terminal_basis_id,
+                    previous_terminal_contact_round_id: body.previous_terminal_contact_round_id,
                     introduction_evidence: body.introduction_evidence,
                 },
                 payload,
@@ -1929,7 +1953,7 @@ pub(super) async fn respond(
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
             validate_request_acceptance_receipt(state, &record, &holder, &body.request_receipt)
                 .await?;
-            let (_, basis_id) = normal_basis(&body.request_receipt)?;
+            let (_, contact_round_id) = normal_basis(&body.request_receipt)?;
             if state
                 .contacts()
                 .contact_any(&session.actor, peer.contact_actor_id().as_str())
@@ -1943,14 +1967,14 @@ pub(super) async fn respond(
             }
             let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
-                basis_id: basis_id.clone(),
+                contact_round_id: contact_round_id.clone(),
                 version: 1,
                 request_event_ref: body.request_receipt.core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
-                previous_terminal_basis_id: body
+                previous_terminal_contact_round_id: body
                     .request_receipt
                     .core
-                    .previous_terminal_basis_id
+                    .previous_terminal_contact_round_id
                     .clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
             };
@@ -1962,7 +1986,7 @@ pub(super) async fn respond(
                 ContactReservationBranch::Response {
                     request_receipt: body.request_receipt,
                     peer,
-                    basis_id,
+                    contact_round_id,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
                 },
                 payload,
@@ -2023,7 +2047,7 @@ pub(super) async fn scope_update(
             let payload = ContactScopeUpdatePayload {
                 schema: ContactScopeUpdateSchema::V1,
                 peer: body.peer.clone(),
-                basis_id: body.basis_id.clone(),
+                contact_round_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
@@ -2035,7 +2059,7 @@ pub(super) async fn scope_update(
                 body.idempotency_key,
                 ContactReservationBranch::ScopeUpdate {
                     peer: body.peer,
-                    basis_id: body.basis_id,
+                    contact_round_id: body.contact_round_id,
                     version: body.version,
                     predecessor_event_ref: body.predecessor_event_ref,
                     granted_to_peer_scopes: body.granted_to_peer_scopes,
@@ -2057,7 +2081,7 @@ pub(super) async fn tombstone(
         ContactTombstoneRequestBody::Prepare(body) => {
             let payload = ContactTombstonedPayload {
                 peer: body.peer.clone(),
-                basis_id: body.basis_id.clone(),
+                contact_round_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 reason: None,
@@ -2069,7 +2093,7 @@ pub(super) async fn tombstone(
                 body.idempotency_key,
                 ContactReservationBranch::Tombstone {
                     peer: body.peer,
-                    basis_id: body.basis_id,
+                    contact_round_id: body.contact_round_id,
                     version: body.version,
                     predecessor_event_ref: body.predecessor_event_ref,
                 },

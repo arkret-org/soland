@@ -26,7 +26,9 @@ pub(super) async fn process_verified_transaction(
         .begin_applet_transaction(AppletTransactionReplayState {
             source_service_id: source_service_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
-            source_signature_anchor: verified.source_signature_anchor.clone(),
+            delivery_authentication_record_digest: verified
+                .delivery_authentication_record_digest
+                .clone(),
             request_digest: verified.request_digest.clone(),
             outcome: None,
             received_at: chrono::Utc::now(),
@@ -110,7 +112,8 @@ fn replayed_transaction_outcome(
     verified: &VerifiedInboundTransactionSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
     if existing.request_digest != verified.request_digest
-        || existing.source_signature_anchor != verified.source_signature_anchor
+        || existing.delivery_authentication_record_digest
+            != verified.delivery_authentication_record_digest
     {
         return Err(AppError::conflict(
             "Idempotency-Key was already used for a different applet transaction",

@@ -1713,15 +1713,20 @@ async fn direct_conversation_resolve(
             send_blockers.push(DirectConversationSendBlocker::PolicyStale);
         }
         if let Some(contact) = contact.as_ref() {
-            let current_contact_evidence = contact.basis_evidence.as_ref().is_some_and(|bundle| {
-                bundle.current_proofs.len() == 2
-                    && bundle.current_proofs.iter().all(|proof| {
-                        proof.basis_id.as_str() == contact.basis_id.as_deref().unwrap_or_default()
-                            && !proof.terminal
-                            && proof.complete_through > 0
-                            && proof.fresh_until > now()
-                    })
-            });
+            let current_contact_evidence =
+                contact
+                    .contact_round_evidence
+                    .as_ref()
+                    .is_some_and(|bundle| {
+                        bundle.current_proofs.len() == 2
+                            && bundle.current_proofs.iter().all(|proof| {
+                                proof.contact_round_id.as_str()
+                                    == contact.contact_round_id.as_deref().unwrap_or_default()
+                                    && !proof.terminal
+                                    && proof.complete_through > 0
+                                    && proof.fresh_until > now()
+                            })
+                    });
             if !current_contact_evidence {
                 send_blockers.push(DirectConversationSendBlocker::ContactScopeStale);
             }

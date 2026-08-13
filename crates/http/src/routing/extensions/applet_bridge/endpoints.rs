@@ -161,7 +161,7 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
                 "destination-service-id",
                 "idempotency-key"
             ],
-            "source_signature_anchor": "ak.applet.source_signature_anchor.v1",
+            "delivery_authentication_record_digest": "ak.applet.delivery_authentication_record_digest.v1",
             "bearer_only": false
         }),
         package_schema: "ak.schema.applet_package.v1".to_owned(),

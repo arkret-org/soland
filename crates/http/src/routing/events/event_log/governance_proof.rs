@@ -1272,7 +1272,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             ));
         }
         let predecessor_refs = payload
-            .pre_fence_basis
+            .pre_fence_seal_frontier
             .clone()
             .map(|basis| basis.leaves)
             .unwrap_or_default()

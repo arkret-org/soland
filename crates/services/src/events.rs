@@ -715,7 +715,7 @@ pub trait MessagePort: Send + Sync {
 pub struct AppletTransactionReplayState {
     pub source_service_id: String,
     pub idempotency_key: String,
-    pub source_signature_anchor: String,
+    pub delivery_authentication_record_digest: String,
     pub request_digest: String,
     pub outcome: Option<Value>,
     pub received_at: DateTime<Utc>,

@@ -917,13 +917,13 @@ pub struct MessageExpiryProjection {
     pub state: MessageExpiryProjectionState,
     pub trigger: String,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub anchor_hlc: Option<String>,
+    pub expiry_start_hlc: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageExpiryAnchor {
     pub trigger: String,
-    pub anchor_hlc: String,
+    pub expiry_start_hlc: String,
     pub anchored_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -961,7 +961,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger: "unknown".to_owned(),
             expires_at: None,
-            anchor_hlc: None,
+            expiry_start_hlc: None,
         });
     };
     let trigger = object
@@ -978,7 +978,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
                 state: MessageExpiryProjectionState::Live,
                 trigger,
                 expires_at: None,
-                anchor_hlc: None,
+                expiry_start_hlc: None,
             });
         };
         let expires_at = ttl_ms
@@ -994,7 +994,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
                 state: MessageExpiryProjectionState::InvalidMetadata,
                 trigger,
                 expires_at: None,
-                anchor_hlc: Some(anchor.anchor_hlc.clone()),
+                expiry_start_hlc: Some(anchor.expiry_start_hlc.clone()),
             });
         };
         return Some(MessageExpiryProjection {
@@ -1005,7 +1005,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             },
             trigger,
             expires_at: Some(expires_at),
-            anchor_hlc: Some(anchor.anchor_hlc.clone()),
+            expiry_start_hlc: Some(anchor.expiry_start_hlc.clone()),
         });
     }
 
@@ -1014,7 +1014,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger,
             expires_at: None,
-            anchor_hlc: None,
+            expiry_start_hlc: None,
         });
     }
     let ttl_ms = object.get("ttl_ms").and_then(Value::as_u64);
@@ -1030,7 +1030,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
             state: MessageExpiryProjectionState::InvalidMetadata,
             trigger,
             expires_at: None,
-            anchor_hlc: None,
+            expiry_start_hlc: None,
         });
     };
     Some(MessageExpiryProjection {
@@ -1041,7 +1041,7 @@ pub fn message_expiry_projection_from_value_with_anchor(
         },
         trigger,
         expires_at: Some(expires_at),
-        anchor_hlc: None,
+        expiry_start_hlc: None,
     })
 }
 

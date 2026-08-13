@@ -65,18 +65,18 @@ async fn commit_contact_projection(
         serde_json::to_value(&record.request_mirror_receipts).map_err(|error| {
             PersistenceError::Internal(format!("cannot encode Contact mirror receipts: {error}"))
         })?;
-    let basis_evidence = record
-        .basis_evidence
+    let contact_round_evidence = record
+        .contact_round_evidence
         .as_ref()
         .map(serde_json::to_value)
         .transpose()
         .map_err(|error| {
-            PersistenceError::Internal(format!("cannot encode Contact basis evidence: {error}"))
+            PersistenceError::Internal(format!("cannot encode Contact round evidence: {error}"))
         })?;
-    let basis_evidence_history =
-        serde_json::to_value(&record.basis_evidence_history).map_err(|error| {
+    let contact_round_evidence_history =
+        serde_json::to_value(&record.contact_round_evidence_history).map_err(|error| {
             PersistenceError::Internal(format!(
-                "cannot encode Contact basis evidence history: {error}"
+                "cannot encode Contact round evidence history: {error}"
             ))
         })?;
     let control_outcomes = serde_json::to_value(&record.control_outcomes).map_err(|error| {
@@ -95,17 +95,17 @@ async fn commit_contact_projection(
         }
         sql_query(
             "UPDATE contacts SET requester_id = $1, target_id = $2, \
-                basis_id = $3, version = $4, granted_to_target_scopes = $5, \
+                contact_round_id = $3, version = $4, granted_to_target_scopes = $5, \
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
-                request_receipts = $9, request_mirror_receipts = $10, basis_evidence = $11, \
-                basis_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
+                request_receipts = $9, request_mirror_receipts = $10, contact_round_evidence = $11, \
+                contact_round_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
                 tombstone_event_ref = $15, message = $16, peer_service_id = $17, updated_at = $18 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $19",
         )
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
@@ -113,8 +113,8 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(request_event_ref)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
-        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
-        .bind::<Jsonb, _>(&basis_evidence_history)
+        .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
+        .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)
@@ -128,14 +128,14 @@ async fn commit_contact_projection(
     } else {
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (requester_id, target_id) DO NOTHING",
         )
         .bind::<Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
@@ -143,8 +143,8 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(request_event_ref)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
-        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
-        .bind::<Jsonb, _>(&basis_evidence_history)
+        .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
+        .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)

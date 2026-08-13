@@ -27,7 +27,7 @@ pub(super) fn validate_control_move_seal_basis(
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "schema_violation",
-                "ak.device.reanchor must use payload.pre_fence_basis and must not carry Event seal fields",
+                "ak.device.reanchor must use payload.pre_fence_seal_frontier and must not carry Event seal fields",
             ));
         }
         return Ok(());

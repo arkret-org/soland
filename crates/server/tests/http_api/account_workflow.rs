@@ -87,7 +87,7 @@ async fn create_contact_request(
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
         introduction_evidence:
             arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SamePrincipalServer,
-        previous_terminal_basis_id: None,
+        previous_terminal_contact_round_id: None,
         message: None,
     });
     let (status, prepared) =

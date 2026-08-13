@@ -533,7 +533,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     parsed_events: &[ValidatedEventEnvelope],
     envelopes: &[Value],
     receipt: &DirectConversationFoundingAcceptanceReceipt,
-    founder_basis_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence,
+    founding_authority_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
     source_service_binding: &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
     pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
@@ -615,7 +615,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
                 accepted_binding: source_service_binding.clone(),
                 cutovers: Vec::new(),
             },
-            founder_basis_evidence: founder_basis_evidence.clone(),
+            founding_authority_evidence: founding_authority_evidence.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
         };

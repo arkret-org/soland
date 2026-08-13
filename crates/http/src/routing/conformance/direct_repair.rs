@@ -216,9 +216,8 @@ pub async fn install(
             .save_contact(ContactRecord {
                 requester: contact.requester,
                 target: contact.target,
-                basis_id: Some(format!(
-                    "ak:contact_basis:{}",
-                    arkret_identifiers::new_prefixed_uuid7("")
+                contact_round_id: Some(arkret_canonical::sha256_digest(
+                    arkret_identifiers::new_prefixed_uuid7(""),
                 )),
                 version: Some(1),
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -227,8 +226,8 @@ pub async fn install(
                 request_event_ref: Some(contact.request_event_ref),
                 request_receipts: Vec::new(),
                 request_mirror_receipts: Vec::new(),
-                basis_evidence: None,
-                basis_evidence_history: Vec::new(),
+                contact_round_evidence: None,
+                contact_round_evidence_history: Vec::new(),
                 control_outcomes: Vec::new(),
                 response_event_ref: Some(contact.response_event_ref),
                 tombstone_event_ref: None,

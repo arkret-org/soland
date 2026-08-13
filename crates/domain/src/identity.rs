@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_collaboration::contact_operations::{
-    ContactBasisEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
+    ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
 };
 use chrono::{DateTime, Utc};
@@ -37,7 +37,7 @@ pub struct ConsentCellRecord {
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
-    pub basis_id: Option<String>,
+    pub contact_round_id: Option<String>,
     pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
@@ -45,8 +45,8 @@ pub struct ContactRecord {
     pub request_event_ref: Option<String>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
-    pub basis_evidence: Option<ContactBasisEvidenceBundle>,
-    pub basis_evidence_history: Vec<ContactBasisEvidenceBundle>,
+    pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
+    pub contact_round_evidence_history: Vec<ContactRoundEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
     pub response_event_ref: Option<String>,
     pub tombstone_event_ref: Option<String>,

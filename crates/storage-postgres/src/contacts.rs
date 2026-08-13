@@ -40,7 +40,7 @@ struct ContactRow {
     #[diesel(sql_type = Text)]
     target: String,
     #[diesel(sql_type = Nullable<Text>)]
-    basis_id: Option<String>,
+    contact_round_id: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
     version: Option<i64>,
     #[diesel(sql_type = Array<Text>)]
@@ -56,9 +56,9 @@ struct ContactRow {
     #[diesel(sql_type = Jsonb)]
     request_mirror_receipts: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
-    basis_evidence: Option<Value>,
+    contact_round_evidence: Option<Value>,
     #[diesel(sql_type = Jsonb)]
-    basis_evidence_history: Value,
+    contact_round_evidence_history: Value,
     #[diesel(sql_type = Jsonb)]
     control_outcomes: Value,
     #[diesel(sql_type = Nullable<Binary>)]
@@ -98,7 +98,7 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
     Ok(ContactRecord {
         requester: row.requester,
         target: row.target,
-        basis_id: row.basis_id,
+        contact_round_id: row.contact_round_id,
         version: row.version.map(u64::try_from).transpose().map_err(|_| {
             PersistenceError::Internal("contacts.version contains a negative value".to_owned())
         })?,
@@ -114,13 +114,13 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
             row.request_mirror_receipts,
             "request_mirror_receipts",
         )?,
-        basis_evidence: row
-            .basis_evidence
-            .map(|value| decode_contact_json(value, "basis_evidence"))
+        contact_round_evidence: row
+            .contact_round_evidence
+            .map(|value| decode_contact_json(value, "contact_round_evidence"))
             .transpose()?,
-        basis_evidence_history: decode_contact_json(
-            row.basis_evidence_history,
-            "basis_evidence_history",
+        contact_round_evidence_history: decode_contact_json(
+            row.contact_round_evidence_history,
+            "contact_round_evidence_history",
         )?,
         control_outcomes: decode_contact_json(row.control_outcomes, "control_outcomes")?,
         response_event_ref: row
@@ -138,7 +138,7 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
         updated_at: row.updated_at,
     })
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, peer_service_resolution, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, peer_service_resolution, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
@@ -166,20 +166,22 @@ impl ContactStore for PgContactStore {
         let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
         let request_mirror_receipts =
             encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
-        let basis_evidence = record
-            .basis_evidence
+        let contact_round_evidence = record
+            .contact_round_evidence
             .as_ref()
-            .map(|value| encode_contact_json(value, "basis_evidence"))
+            .map(|value| encode_contact_json(value, "contact_round_evidence"))
             .transpose()?;
-        let basis_evidence_history =
-            encode_contact_json(&record.basis_evidence_history, "basis_evidence_history")?;
+        let contact_round_evidence_history = encode_contact_json(
+            &record.contact_round_evidence_history,
+            "contact_round_evidence_history",
+        )?;
         let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, basis_evidence, basis_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, peer_service_resolution, created_at, updated_at) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_service_id, peer_service_resolution, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              ON CONFLICT (requester_id, target_id) DO UPDATE SET \
-                basis_id = EXCLUDED.basis_id, \
+                contact_round_id = EXCLUDED.contact_round_id, \
                 version = EXCLUDED.version, \
                 granted_to_target_scopes = EXCLUDED.granted_to_target_scopes, \
                 granted_to_requester_scopes = EXCLUDED.granted_to_requester_scopes, \
@@ -187,8 +189,8 @@ impl ContactStore for PgContactStore {
                 request_event_ref = EXCLUDED.request_event_ref, \
                 request_receipts = EXCLUDED.request_receipts, \
                 request_mirror_receipts = EXCLUDED.request_mirror_receipts, \
-                basis_evidence = EXCLUDED.basis_evidence, \
-                basis_evidence_history = EXCLUDED.basis_evidence_history, \
+                contact_round_evidence = EXCLUDED.contact_round_evidence, \
+                contact_round_evidence_history = EXCLUDED.contact_round_evidence_history, \
                 control_outcomes = EXCLUDED.control_outcomes, \
                 response_event_ref = EXCLUDED.response_event_ref, \
                 tombstone_event_ref = EXCLUDED.tombstone_event_ref, \
@@ -200,7 +202,7 @@ impl ContactStore for PgContactStore {
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(|_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()))?)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
@@ -208,8 +210,8 @@ impl ContactStore for PgContactStore {
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_deref())?)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
-        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
-        .bind::<Jsonb, _>(&basis_evidence_history)
+        .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
+        .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_deref())?)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
@@ -240,20 +242,22 @@ impl ContactStore for PgContactStore {
         let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
         let request_mirror_receipts =
             encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
-        let basis_evidence = record
-            .basis_evidence
+        let contact_round_evidence = record
+            .contact_round_evidence
             .as_ref()
-            .map(|value| encode_contact_json(value, "basis_evidence"))
+            .map(|value| encode_contact_json(value, "contact_round_evidence"))
             .transpose()?;
-        let basis_evidence_history =
-            encode_contact_json(&record.basis_evidence_history, "basis_evidence_history")?;
+        let contact_round_evidence_history = encode_contact_json(
+            &record.contact_round_evidence_history,
+            "contact_round_evidence_history",
+        )?;
         let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         let affected = sql_query(
             "UPDATE contacts SET requester_id = $1, target_id = $2, \
-                basis_id = $3, version = $4, granted_to_target_scopes = $5, \
+                contact_round_id = $3, version = $4, granted_to_target_scopes = $5, \
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
-                request_receipts = $9, request_mirror_receipts = $10, basis_evidence = $11, \
-                basis_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
+                request_receipts = $9, request_mirror_receipts = $10, contact_round_evidence = $11, \
+                contact_round_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
                 tombstone_event_ref = $15, message = $16, peer_service_id = $17, \
                 peer_service_resolution = $18, updated_at = $19 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
@@ -261,7 +265,7 @@ impl ContactStore for PgContactStore {
         )
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(
             |_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()),
         )?)
@@ -273,8 +277,8 @@ impl ContactStore for PgContactStore {
         )?)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
-        .bind::<Nullable<Jsonb>, _>(basis_evidence.as_ref())
-        .bind::<Jsonb, _>(&basis_evidence_history)
+        .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
+        .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
             record.response_event_ref.as_deref(),

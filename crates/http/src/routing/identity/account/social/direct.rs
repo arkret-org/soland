@@ -500,7 +500,7 @@ async fn accepted_direct_event(
 ///
 /// The binding no longer carries member/Strand/MLS refs: uniqueness comes from founder-only
 /// admission, so this checks that the endorsed coordinates really are an accepted DM founding unit,
-/// that the Realm creator is the founder derived from the pair's root Contact basis, and that the
+/// that the Realm creator is the founder derived from the pair's root Contact round, and that the
 /// referenced generation-1 activation exists in the same Realm.
 async fn validate_direct_binding_event_refs(
     state: &AppState,
@@ -534,7 +534,7 @@ async fn validate_direct_binding_event_refs(
     }
 
     // founder-only creation: the Realm creator MUST be the participant derived from the pair's root
-    // basis. Anything else is not a competing candidate, it is invalid.
+    // authority. Anything else is not a competing candidate, it is invalid.
     let peer = participants
         .iter()
         .copied()
@@ -696,7 +696,7 @@ async fn accepted_direct_realm_create(
 
 /// Enforce founder-only creation.
 ///
-/// The founder is derived from the pair's Contact basis and is the sole principal allowed to author
+/// The founder is derived from the pair's Contact round and is the sole principal allowed to author
 /// the founding unit, which is what removes the cross-server creation race. A Realm created by the
 /// other participant is not a competing candidate: it is invalid and MUST NOT be projected.
 async fn validate_direct_founder(
@@ -706,15 +706,15 @@ async fn validate_direct_founder(
     peer: &str,
 ) -> Result<(), &'static str> {
     use arkret_models_collaboration::objects::direct_conversation::{
-        DirectConversationAuthorizationKind, DirectConversationFounderBasis,
+        DirectConversationAuthorizationKind, DirectConversationFoundingAuthority,
         direct_conversation_founder,
     };
 
-    let basis = match payload.authorization_basis.kind {
-        // controller-to-own-Agent has no Contact basis: the founder is fixed to the controller so
+    let authority = match payload.authorization_basis.kind {
+        // controller-to-own-Agent has no Contact round: the founder is fixed to the controller so
         // an Agent runtime key never needs Direct Conversation founding scope.
         DirectConversationAuthorizationKind::ManagedAgentController => {
-            DirectConversationFounderBasis::ControllerOwnedAgent {
+            DirectConversationFoundingAuthority::ControllerOwnedAgent {
                 controller_id: arkret_identifiers::DidCoreId::new(creator.to_owned())
                     .map_err(|_| "direct_conversation_binding_invalid")?,
             }
@@ -723,8 +723,8 @@ async fn validate_direct_founder(
             let record = accepted_contact_for_pair(state, creator, peer, "direct_message")
                 .await
                 .map_err(|_| "direct_conversation_binding_invalid")?
-                .ok_or("direct_conversation_founder_basis_unavailable")?;
-            direct_founder_basis_from_contact(&record)?
+                .ok_or("direct_conversation_founding_authority_unavailable")?;
+            direct_founding_authority_from_contact(&record)?
         }
     };
 
@@ -733,8 +733,8 @@ async fn validate_direct_founder(
         .clone()
         .try_into()
         .map_err(|_| "direct_conversation_binding_invalid")?;
-    let founder = direct_conversation_founder([left, right], &basis)
-        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+    let founder = direct_conversation_founder([left, right], &authority)
+        .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
     if founder.as_str() != creator {
         tracing::warn!(
             target: "soland_http::error",
@@ -944,45 +944,48 @@ mod binding_digest_tests {
     }
 }
 
-/// Derive the founder basis from an accepted Contact record.
+/// Derive the founding authority from an accepted Contact record.
 ///
 /// Normal branch: the founder is the **responder**, i.e. the participant that is not the request
-/// issuer. This is normative, not a coin flip. The basis is lit up by the responder's
+/// issuer. This is normative, not a coin flip. The authority is lit up by the responder's
 /// `normal_response_acceptance_receipt`, which proves the responder was online at the moment the
-/// basis came into existence; the requester may have gone offline days earlier. Base v1 defines no
-/// fallback, so naming the possibly-absent party would leave the pair unable to ever create the
+/// authority came into existence; the requester may have gone offline days earlier. Base v1 defines
+/// no fallback, so naming the possibly-absent party would leave the pair unable to ever create the
 /// conversation.
-pub(crate) fn direct_founder_basis_from_contact(
+pub(crate) fn direct_founding_authority_from_contact(
     record: &ContactRecord,
 ) -> Result<
-    arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis,
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthority,
     &'static str,
 > {
-    if let Some(bundle) = record.basis_evidence.as_ref() {
-        if record.basis_id.as_deref() != Some(bundle.basis_id.as_str()) {
-            return Err("direct_conversation_founder_basis_unavailable");
+    if let Some(bundle) = record.contact_round_evidence.as_ref() {
+        if record.contact_round_id.as_deref() != Some(bundle.contact_round_id.as_str()) {
+            return Err("direct_conversation_founding_authority_unavailable");
         }
-        arkret_models_collaboration::direct_conversation_ops::DirectConversationFounderBasisEvidence::Human {
-            basis_evidence_bundle: bundle.clone(),
-            root_basis_continuity_chain: record.basis_evidence_history.clone(),
+        arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
+            contact_round_evidence: bundle.clone(),
+            contact_round_continuity_chain: record.contact_round_evidence_history.clone(),
         }
         .participants_and_founder()
-        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+        .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
         arkret_models_collaboration::contact_operations::validate_recontact_continuity(
             bundle,
-            &record.basis_evidence_history,
+            &record.contact_round_evidence_history,
         )
-        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
-        let root = record.basis_evidence_history.last().unwrap_or(bundle);
-        if let arkret_models_collaboration::contact_operations::ContactBasis::Glare {
+        .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
+        let root = record
+            .contact_round_evidence_history
+            .last()
+            .unwrap_or(bundle);
+        if let arkret_models_collaboration::contact_operations::ContactRound::Glare {
             requests,
             ..
-        } = &root.basis
+        } = &root.contact_round
         {
             let attestations = root
                 .glare_concurrency_attestations
                 .as_ref()
-                .ok_or("direct_conversation_founder_basis_unavailable")?;
+                .ok_or("direct_conversation_founding_authority_unavailable")?;
             if root.request_receipts.len() != 2
                 || attestations.iter().any(|attestation| {
                     attestation.complete_through == 0
@@ -993,53 +996,53 @@ pub(crate) fn direct_founder_basis_from_contact(
                         })
                 })
             {
-                return Err("direct_conversation_founder_basis_unavailable");
+                return Err("direct_conversation_founding_authority_unavailable");
             }
             let first = &requests[0];
             let receipt = root
                 .request_receipts
                 .iter()
                 .find(|receipt| receipt.core.request_event_ref == first.request_event_ref)
-                .ok_or("direct_conversation_founder_basis_unavailable")?;
+                .ok_or("direct_conversation_founding_authority_unavailable")?;
             let digest = arkret_identifiers::Hash::new(
                 arkret_canonical::canonical_sha256(receipt)
-                    .map_err(|_| "direct_conversation_founder_basis_unavailable")?,
+                    .map_err(|_| "direct_conversation_founding_authority_unavailable")?,
             )
-            .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+            .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
             if digest != first.request_acceptance_receipt_digest {
-                return Err("direct_conversation_founder_basis_unavailable");
+                return Err("direct_conversation_founding_authority_unavailable");
             }
             return Ok(
-                arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Glare {
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthority::Glare {
                     first_request_issuer: receipt.core.holder.contact_actor_id().clone(),
                 },
             );
         }
-        let arkret_models_collaboration::contact_operations::ContactBasis::Normal {
+        let arkret_models_collaboration::contact_operations::ContactRound::Normal {
             request_event_ref,
             ..
-        } = &root.basis
+        } = &root.contact_round
         else {
             unreachable!("glare returned above")
         };
         let request_issuer = root
             .request_receipts
             .iter()
-            .find(|receipt| &receipt.core.request_event_ref == request_event_ref)
+            .find(|receipt| receipt.core.request_event_ref == *request_event_ref)
             .map(|receipt| receipt.core.holder.contact_actor_id().clone())
-            .ok_or("direct_conversation_founder_basis_unavailable")?;
+            .ok_or("direct_conversation_founding_authority_unavailable")?;
         return Ok(
-            arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Normal {
+            arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthority::Normal {
                 request_issuer,
             },
         );
     }
-    Err("direct_conversation_founder_basis_unavailable")
+    Err("direct_conversation_founding_authority_unavailable")
 }
 
 /// Which participant may author the founding unit for this pair, if it can be determined now.
 ///
-/// Returns `None` when the basis cannot be verified, so the caller reports
+/// Returns `None` when the authority cannot be verified, so the caller reports
 /// `temporarily_unavailable` rather than inventing an answer.
 pub(crate) async fn direct_founder_for_pair(
     state: &AppState,
@@ -1049,11 +1052,11 @@ pub(crate) async fn direct_founder_for_pair(
     managed_agent: bool,
 ) -> Result<Option<String>, AppError> {
     use arkret_models_collaboration::objects::direct_conversation::{
-        DirectConversationFounderBasis, direct_conversation_founder,
+        DirectConversationFoundingAuthority, direct_conversation_founder,
     };
 
-    let basis = if managed_agent {
-        // controller-to-own-Agent has no Contact basis; the founder is fixed to the controller so
+    let authority = if managed_agent {
+        // controller-to-own-Agent has no Contact round; the founder is fixed to the controller so
         // an Agent runtime key never needs Direct Conversation founding scope.
         let controller = if state
             .agent_pairings()
@@ -1066,7 +1069,7 @@ pub(crate) async fn direct_founder_for_pair(
         } else {
             peer
         };
-        DirectConversationFounderBasis::ControllerOwnedAgent {
+        DirectConversationFoundingAuthority::ControllerOwnedAgent {
             controller_id: arkret_identifiers::DidCoreId::new(controller.to_owned())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
         }
@@ -1074,8 +1077,8 @@ pub(crate) async fn direct_founder_for_pair(
         let Some(record) = contact else {
             return Ok(None);
         };
-        match direct_founder_basis_from_contact(record) {
-            Ok(basis) => basis,
+        match direct_founding_authority_from_contact(record) {
+            Ok(authority) => authority,
             Err(_) => return Ok(None),
         }
     };
@@ -1084,7 +1087,7 @@ pub(crate) async fn direct_founder_for_pair(
         .map_err(|error| AppError::internal(format!("actor DID invalid: {error}")))?;
     let right = arkret_identifiers::DidCoreId::new(peer.to_owned())
         .map_err(|error| AppError::internal(format!("peer DID invalid: {error}")))?;
-    Ok(direct_conversation_founder([left, right], &basis)
+    Ok(direct_conversation_founder([left, right], &authority)
         .ok()
         .map(|founder| founder.to_string()))
 }

@@ -526,7 +526,8 @@ pub(super) async fn submit_identity_anchor_batch(
                     format!("Seal frontier unavailable: {error}"),
                 )
             })?;
-        validate_pre_fence_basis(state, &first, payload.pre_fence_basis.as_ref()).await?;
+        validate_pre_fence_seal_frontier(state, &first, payload.pre_fence_seal_frontier.as_ref())
+            .await?;
         Some(soland_services::events::IdentityAnchorFrontierState {
             realm_id: first.realm_id.clone(),
             raw_leaves: raw_leaves
@@ -1290,15 +1291,17 @@ async fn validate_unit_relationships(
             "device re-anchor previous generation does not match the last unconflicted generation",
         ));
     }
-    validate_pre_fence_basis(state, first, payload.pre_fence_basis.as_ref()).await?;
-    validate_reanchor_actor_frontier(state, first, payload.pre_fence_basis.as_ref()).await?;
+    validate_pre_fence_seal_frontier(state, first, payload.pre_fence_seal_frontier.as_ref())
+        .await?;
+    validate_reanchor_actor_frontier(state, first, payload.pre_fence_seal_frontier.as_ref())
+        .await?;
     Ok(())
 }
 
 async fn validate_reanchor_actor_frontier(
     state: &AppState,
     reanchor: &ValidatedEventEnvelope,
-    basis: Option<&arkret_wire::DeviceReanchorPreFenceBasis>,
+    basis: Option<&arkret_wire::DeviceReanchorPreFenceSealFrontier>,
 ) -> Result<(), SubmitOneError> {
     let covered_digests = if let Some(basis) = basis {
         state
@@ -1497,7 +1500,7 @@ async fn validate_reanchor_recovery_session(
             .as_ref()
             .and_then(|generation| generation.as_str().parse::<u64>().ok())
             != Some(reanchor.previous_device_generation)
-        || session.accepted_seal_frontier.as_ref() != reanchor.pre_fence_basis.as_ref()
+        || session.accepted_seal_frontier.as_ref() != reanchor.pre_fence_seal_frontier.as_ref()
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -1508,10 +1511,10 @@ async fn validate_reanchor_recovery_session(
     Ok(())
 }
 
-async fn validate_pre_fence_basis(
+async fn validate_pre_fence_seal_frontier(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-    basis: Option<&arkret_wire::DeviceReanchorPreFenceBasis>,
+    basis: Option<&arkret_wire::DeviceReanchorPreFenceSealFrontier>,
 ) -> Result<(), SubmitOneError> {
     let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
@@ -1980,7 +1983,7 @@ fn frontier_error() -> SubmitOneError {
     SubmitOneError::new(
         StatusCode::CONFLICT,
         "device_reanchor_frontier_mismatch",
-        "device re-anchor pre_fence_basis does not match the complete accepted Seal frontier",
+        "device re-anchor pre_fence_seal_frontier does not match the complete accepted Seal frontier",
     )
 }
 

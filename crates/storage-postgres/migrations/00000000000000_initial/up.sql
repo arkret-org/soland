@@ -296,7 +296,7 @@ CREATE INDEX applet_registrations_status_idx ON public.applet_registrations USIN
 CREATE TABLE public.applet_transactions (
     source_service_id text NOT NULL,
     idempotency_key text NOT NULL,
-    source_signature_anchor text NOT NULL,
+    delivery_authentication_record_digest text NOT NULL,
     request_digest text NOT NULL,
     outcome jsonb,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -623,7 +623,7 @@ CREATE TABLE public.contacts (
     id uuid PRIMARY KEY,
     requester_id text NOT NULL,
     target_id text NOT NULL,
-    basis_id text,
+    contact_round_id text,
     version bigint CHECK (version >= 1),
     granted_to_target_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     granted_to_requester_scopes text[] DEFAULT '{}'::text[] NOT NULL,
@@ -635,10 +635,10 @@ CREATE TABLE public.contacts (
     request_event_ref bytea CHECK (octet_length(request_event_ref) = 33),
     request_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
     request_mirror_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
-    basis_evidence jsonb,
+    contact_round_evidence jsonb,
     -- Append-only verified basis snapshots preserve the full glare/recontact
-    -- lineage while `basis_evidence` remains the current accepted head.
-    basis_evidence_history jsonb DEFAULT '[]'::jsonb NOT NULL,
+    -- lineage while `contact_round_evidence` remains the current accepted head.
+    contact_round_evidence_history jsonb DEFAULT '[]'::jsonb NOT NULL,
     control_outcomes jsonb DEFAULT '[]'::jsonb NOT NULL,
     response_event_ref bytea CHECK (octet_length(response_event_ref) = 33),
     tombstone_event_ref bytea CHECK (octet_length(tombstone_event_ref) = 33),

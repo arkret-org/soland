@@ -20,7 +20,7 @@ use crate::state::AppState;
 pub(super) struct VerifiedInboundTransactionSignature {
     pub(super) install: AppletRecord,
     pub(super) request_digest: String,
-    pub(super) source_signature_anchor: String,
+    pub(super) delivery_authentication_record_digest: String,
 }
 
 #[handler]
@@ -191,7 +191,7 @@ async fn verify_inbound_transaction_signature(
         .as_ref()
         .ok_or_else(|| AppError::internal("active applet install is missing its package record"))?;
     let signature_header = applet_required_header(req, "signature")?;
-    let source_signature_anchor = applet_source_signature_anchor(
+    let delivery_authentication_record_digest = applet_delivery_authentication_record_digest(
         source_service_id,
         &destination_service_id,
         idempotency_key,
@@ -207,7 +207,7 @@ async fn verify_inbound_transaction_signature(
     Ok(VerifiedInboundTransactionSignature {
         install,
         request_digest,
-        source_signature_anchor,
+        delivery_authentication_record_digest,
     })
 }
 
@@ -268,7 +268,7 @@ pub(super) fn applet_registration_verification_method(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn applet_source_signature_anchor(
+pub(super) fn applet_delivery_authentication_record_digest(
     source_service_id: &str,
     destination_service_id: &str,
     idempotency_key: &str,
@@ -282,7 +282,7 @@ pub(super) fn applet_source_signature_anchor(
     signature_header: &str,
 ) -> String {
     let anchor = serde_json::json!({
-        "profile": "ak.applet.source_signature_anchor.v1",
+        "profile": "ak.applet.delivery_authentication_record_digest.v1",
         "operation_id": "ak.edge.applet.command.transaction",
         "direction": "applet_to_arkret_inbound",
         "source_service_id": source_service_id,

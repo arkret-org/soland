@@ -117,7 +117,7 @@ fn persistence_event_commit_request(
                 record: soland_storage::ContactRecord {
                     requester: commit.record.requester,
                     target: commit.record.target,
-                    basis_id: commit.record.basis_id,
+                    contact_round_id: commit.record.contact_round_id,
                     version: commit.record.version,
                     granted_to_target_scopes: commit.record.granted_to_target_scopes,
                     granted_to_requester_scopes: commit.record.granted_to_requester_scopes,
@@ -125,8 +125,8 @@ fn persistence_event_commit_request(
                     request_event_ref: commit.record.request_event_ref,
                     request_receipts: commit.record.request_receipts,
                     request_mirror_receipts: commit.record.request_mirror_receipts,
-                    basis_evidence: commit.record.basis_evidence,
-                    basis_evidence_history: commit.record.basis_evidence_history,
+                    contact_round_evidence: commit.record.contact_round_evidence,
+                    contact_round_evidence_history: commit.record.contact_round_evidence_history,
                     control_outcomes: commit.record.control_outcomes,
                     response_event_ref: commit.record.response_event_ref,
                     tombstone_event_ref: commit.record.tombstone_event_ref,
@@ -650,7 +650,7 @@ fn application_applet_replay(
     crate::events::AppletTransactionReplayState {
         source_service_id: record.source_service_id,
         idempotency_key: record.idempotency_key,
-        source_signature_anchor: record.source_signature_anchor,
+        delivery_authentication_record_digest: record.delivery_authentication_record_digest,
         request_digest: record.request_digest,
         outcome: record.outcome,
         received_at: record.received_at,
@@ -663,7 +663,7 @@ fn persistence_applet_replay(
     soland_storage::AppletTransactionReplayRecord {
         source_service_id: record.source_service_id,
         idempotency_key: record.idempotency_key,
-        source_signature_anchor: record.source_signature_anchor,
+        delivery_authentication_record_digest: record.delivery_authentication_record_digest,
         request_digest: record.request_digest,
         outcome: record.outcome,
         received_at: record.received_at,

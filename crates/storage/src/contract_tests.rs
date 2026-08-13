@@ -1195,7 +1195,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_record = ContactRecord {
         requester: principal_id.clone(),
         target: format!("did:web:contact-peer-{namespace}.example"),
-        basis_id: None,
+        contact_round_id: None,
         version: None,
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],
         granted_to_requester_scopes: Vec::new(),
@@ -1203,8 +1203,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         request_event_ref: Some(contact_event_id.clone()),
         request_receipts: Vec::new(),
         request_mirror_receipts: Vec::new(),
-        basis_evidence: None,
-        basis_evidence_history: Vec::new(),
+        contact_round_evidence: None,
+        contact_round_evidence_history: Vec::new(),
         control_outcomes: Vec::new(),
         response_event_ref: None,
         tombstone_event_ref: None,
@@ -1219,7 +1219,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         contact_projection: Some(ContactProjectionCommit {
             record: contact_record.clone(),
             expected_updated_at: None,
-            conflict_code: "contact_basis_conflict".to_owned(),
+            conflict_code: "contact_round_conflict".to_owned(),
         }),
         control_proposal_ack: Some(contract_control_proposal_ack(
             &contact_event,

@@ -205,8 +205,11 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
         object.insert("expired_at".to_owned(), json!(expires_at));
         object.insert("expires_at".to_owned(), json!(expires_at));
     }
-    if let Some(anchor_hlc) = expiry.anchor_hlc.as_deref() {
-        object.insert("expiry_anchor_hlc".to_owned(), json!(anchor_hlc));
+    if let Some(expiry_start_hlc) = expiry.expiry_start_hlc.as_deref() {
+        object.insert(
+            "expiry_expiry_start_hlc".to_owned(),
+            json!(expiry_start_hlc),
+        );
     }
     object.insert("physical_delete".to_owned(), json!(false));
     object.insert(
@@ -521,7 +524,7 @@ mod tests {
             .get(event_id)
             .expect("last-read aggregate anchor");
         assert_eq!(anchor.trigger, "on_last_read");
-        assert_eq!(anchor.anchor_hlc, "019041000000-0001-00000003");
+        assert_eq!(anchor.expiry_start_hlc, "019041000000-0001-00000003");
     }
 
     #[test]

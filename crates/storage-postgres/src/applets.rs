@@ -56,7 +56,7 @@ struct AppletTransactionReplayRow {
     #[diesel(sql_type = Text)]
     idempotency_key: String,
     #[diesel(sql_type = Text)]
-    source_signature_anchor: String,
+    delivery_authentication_record_digest: String,
     #[diesel(sql_type = Text)]
     request_digest: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -97,7 +97,7 @@ impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
         Self {
             source_service_id: row.source_service_id,
             idempotency_key: row.idempotency_key,
-            source_signature_anchor: row.source_signature_anchor,
+            delivery_authentication_record_digest: row.delivery_authentication_record_digest,
             request_digest: row.request_digest,
             outcome: row.outcome,
             received_at: row.received_at,
@@ -234,14 +234,14 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO applet_transactions \
-             (source_service_id, idempotency_key, source_signature_anchor, request_digest, \
+             (source_service_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
               outcome, received_at, completed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (source_service_id, idempotency_key) DO NOTHING",
         )
         .bind::<Text, _>(&record.source_service_id)
         .bind::<Text, _>(&record.idempotency_key)
-        .bind::<Text, _>(&record.source_signature_anchor)
+        .bind::<Text, _>(&record.delivery_authentication_record_digest)
         .bind::<Text, _>(&record.request_digest)
         .bind::<Nullable<Jsonb>, _>(&record.outcome)
         .bind::<Timestamptz, _>(record.received_at)

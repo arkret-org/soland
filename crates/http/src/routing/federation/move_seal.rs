@@ -663,7 +663,7 @@ async fn try_apply_device_generation_event_seal(
         .unwrap_or(false);
     if recovery_first
         && let Some(requirement) = &context.generation_fence
-        && requirement.payload.pre_fence_basis.is_none()
+        && requirement.payload.pre_fence_seal_frontier.is_none()
     {
         arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
@@ -1642,7 +1642,6 @@ fn committed_seal_effect(seal: &Seal) -> SealEffect {
     SealEffect {
         seal: seal.id.clone(),
         accepted_event_digests: seal.delta.clone(),
-        rejected_events: Vec::new(),
         post_state_root: seal.state_root.clone(),
     }
 }

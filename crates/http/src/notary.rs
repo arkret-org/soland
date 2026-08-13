@@ -1378,7 +1378,7 @@ static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 ///
 /// Reading the frontier never creates an empty Seal. A Realm with no accepted
 /// Seal returns `Ok(None)`; this is required by B-model recovery because a
-/// null pre-fence basis makes the first new-generation Seal itself a root.
+/// A null pre-fence Seal frontier makes the first new-generation Seal itself a root.
 ///
 /// With multiple DAG leaves (not expected under v1 single-DID notary), the
 /// leaf with the highest `notary_seq` (id as tie-break) is served — a light
@@ -1555,7 +1555,8 @@ pub(crate) fn validate_first_generation_event_seal(
     expected.sort();
     if actual != expected {
         return Err(NotaryError::Construction(
-            "first new-generation Seal predecessors differ from pre_fence_basis leaves".to_owned(),
+            "first new-generation Seal predecessors differ from pre_fence_seal_frontier leaves"
+                .to_owned(),
         ));
     }
     if !required.is_subset(target) {
@@ -1752,7 +1753,7 @@ mod tests {
         .unwrap();
         let replacement = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         let reanchor = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
-        let pre_fence_basis = (!predecessor_refs.is_empty()).then(|| {
+        let pre_fence_seal_frontier = (!predecessor_refs.is_empty()).then(|| {
             json!({
                 "leaves": predecessor_refs.clone(),
                 "control_event_set_root": format!("sha256:{}", "c".repeat(64)),
@@ -1768,7 +1769,7 @@ mod tests {
             "recovery_session_id": "ak:recovery_session:01904100-0000-7000-8000-000000000002",
             "previous_device_generation": 1,
             "new_device_generation": 2,
-            "pre_fence_basis": pre_fence_basis,
+            "pre_fence_seal_frontier": pre_fence_seal_frontier,
             "replacement_authorize_payload_digest": format!("sha256:{}", "9".repeat(64))
         }))
         .unwrap();

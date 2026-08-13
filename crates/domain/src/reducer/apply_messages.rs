@@ -860,10 +860,10 @@ impl ProjectionState {
         &mut self,
         actor_id: &str,
         target_ref: &str,
-        anchor_hlc: &str,
+        expiry_start_hlc: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        if actor_id.is_empty() || anchor_hlc.is_empty() {
+        if actor_id.is_empty() || expiry_start_hlc.is_empty() {
             return false;
         }
         let Some(message) = self.message_by_target_ref(target_ref) else {
@@ -909,7 +909,7 @@ impl ProjectionState {
             event_id,
             MessageExpiryAnchor {
                 trigger,
-                anchor_hlc: anchor_hlc.to_owned(),
+                expiry_start_hlc: expiry_start_hlc.to_owned(),
                 anchored_at: now,
             },
         );
