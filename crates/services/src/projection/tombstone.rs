@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use soland_domain::reducer::{MessageExpiryProjection, message_expiry_projection_from_value};
 
 use crate::events::ProjectedEvent as ProjectionEventRecord;
 use crate::governance::RetentionTombstoneRecord;
@@ -10,7 +8,7 @@ use crate::governance::RetentionTombstoneRecord;
 pub const ERASED_USER_PLACEHOLDER: &str = "[user erased]";
 pub const RETENTION_EXPIRED_PLACEHOLDER: &str = "[expired]";
 
-const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
+const TOMBSTONE_DERIVED_FIELD_KEYS: &[&str] = &[
     "attachment_preview",
     "attachment_preview_key",
     "attachments",
@@ -129,30 +127,6 @@ pub fn tombstone_projection_event_for_message_redaction(
     );
 }
 
-pub fn stub_projection_event_for_message_expiry(
-    projection: &soland_domain::reducer::ProjectionState,
-    event: &mut ProjectionEventRecord,
-    now: DateTime<Utc>,
-) {
-    if event.event_kind != arkret_wire::EventKind::MessageCreate {
-        return;
-    }
-    let expiry = projection
-        .messages
-        .get(&event.event_id)
-        .and_then(|message| projection.message_expiry_projection_at(message, now))
-        .or_else(|| {
-            message_expiry_projection_from_value(event.payload.get("expiry"), event.created_at, now)
-        });
-    let Some(expiry) = expiry else {
-        return;
-    };
-    if !expiry.is_stub() {
-        return;
-    }
-    event.payload = message_expiry_payload_value(&event.payload, &expiry);
-}
-
 pub fn tombstone_projection_event_for_retention(
     event: &mut ProjectionEventRecord,
     tombstone: &RetentionTombstoneRecord,
@@ -177,53 +151,6 @@ pub fn stub_pin_projection_event_for_invisible_target(
     event.payload = pin_target_locked_stub_payload(&event.payload);
 }
 
-pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProjection) -> Value {
-    let mut value = payload.clone();
-    let Some(object) = value.as_object_mut() else {
-        return json!({
-            "content": placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
-            "expiry_stub": true,
-            "expiry_state": expiry.state_str(),
-            "expiry_trigger": expiry.trigger.as_str(),
-            "expiry_reason": expiry.reason_code(),
-            "expired_at": expiry.expires_at.map(
-                arkret_canonical::format_timestamp_canonical
-            ),
-            "physical_delete": false,
-            "cache_invalidation": message_expiry_cache_invalidation_value(),
-        });
-    };
-    strip_expiry_derived_fields(object);
-    object.insert("expiry_stub".to_owned(), json!(true));
-    object.insert("expiry_state".to_owned(), json!(expiry.state_str()));
-    object.insert("expiry_trigger".to_owned(), json!(expiry.trigger.as_str()));
-    if let Some(reason) = expiry.reason_code() {
-        object.insert("expiry_reason".to_owned(), json!(reason));
-    }
-    if let Some(expires_at) = expiry.expires_at.as_ref() {
-        let expires_at = arkret_canonical::format_timestamp_canonical(*expires_at);
-        object.insert("expired_at".to_owned(), json!(expires_at));
-        object.insert("expires_at".to_owned(), json!(expires_at));
-    }
-    if let Some(expiry_start_hlc) = expiry.expiry_start_hlc.as_deref() {
-        object.insert(
-            "expiry_expiry_start_hlc".to_owned(),
-            json!(expiry_start_hlc),
-        );
-    }
-    object.insert("physical_delete".to_owned(), json!(false));
-    object.insert(
-        "cache_invalidation".to_owned(),
-        message_expiry_cache_invalidation_value(),
-    );
-    object.insert(
-        "content".to_owned(),
-        placeholder_content(RETENTION_EXPIRED_PLACEHOLDER),
-    );
-    object.insert("encrypted".to_owned(), json!(false));
-    value
-}
-
 pub fn retention_tombstone_payload_value(
     payload: &Value,
     tombstone: &RetentionTombstoneRecord,
@@ -243,13 +170,12 @@ pub fn retention_tombstone_payload_value(
             ),
             "retention_seal_preserved": tombstone.sealed,
             "physical_delete": false,
-            "cache_invalidation": message_expiry_cache_invalidation_value(),
             "retention_risk_ui": tombstone.sealed,
             "retention_risk_audit": tombstone.sealed,
             "retention_risk_reason": retention_risk_reason(tombstone),
         });
     };
-    strip_expiry_derived_fields(object);
+    strip_tombstone_derived_fields(object);
     object.insert("retention_tombstone".to_owned(), json!(true));
     object.insert("retention_state".to_owned(), json!("tombstoned"));
     object.insert(
@@ -273,10 +199,6 @@ pub fn retention_tombstone_payload_value(
         json!(tombstone.sealed),
     );
     object.insert("physical_delete".to_owned(), json!(false));
-    object.insert(
-        "cache_invalidation".to_owned(),
-        message_expiry_cache_invalidation_value(),
-    );
     insert_retention_risk_markers(object, tombstone);
     object.insert(
         "content".to_owned(),
@@ -286,39 +208,10 @@ pub fn retention_tombstone_payload_value(
     value
 }
 
-fn strip_expiry_derived_fields(object: &mut serde_json::Map<String, Value>) {
-    for key in EXPIRY_DERIVED_FIELD_KEYS {
+fn strip_tombstone_derived_fields(object: &mut serde_json::Map<String, Value>) {
+    for key in TOMBSTONE_DERIVED_FIELD_KEYS {
         object.remove(*key);
     }
-}
-
-fn message_expiry_cache_invalidation_value() -> Value {
-    json!({
-        "kind": "ak.message.expiry.cache_invalidation.v1",
-        "drop": [
-            "plaintext_render_cache",
-            "message_preview_cache",
-            "attachment_preview_cache",
-            "blob_preview_cache",
-            "blob_preview_key_cache",
-            "blob_preview_bytes_cache",
-            "blob_presign_cache",
-            "blob_bytes_cache",
-            "message_key_cache",
-            "search_index_cache",
-            "push_snippet_cache"
-        ],
-        "shred": [
-            "per_message_content_key",
-            "short_epoch_exporter_secret",
-            "decryption_cache",
-            "attachment_preview_key",
-            "blob_preview_key",
-            "blob_preview_bytes",
-            "search_index_plaintext",
-            "push_snippet_plaintext"
-        ]
-    })
 }
 
 fn insert_retention_risk_markers(
@@ -396,9 +289,7 @@ fn pin_target_locked_stub_payload(payload: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use soland_domain::reducer::{
-        MessageState, ProjectionState, RedactionCellValue, SolandMembershipState,
-    };
+    use soland_domain::reducer::{MessageState, ProjectionState, RedactionCellValue};
 
     use super::*;
 
@@ -406,33 +297,6 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(value)
             .unwrap()
             .with_timezone(&chrono::Utc)
-    }
-
-    fn expired_message(event_id: &str, realm_id: &str) -> MessageState {
-        MessageState {
-            event_id: event_id.to_owned(),
-            message_id: soland_domain::reducer::message_id_from_event_id(event_id),
-            realm_id: realm_id.to_owned(),
-            sender: "did:web:alice.example".to_owned(),
-            thread_id: realm_id.to_owned(),
-            content: json!({
-                "kind": "ak.content.text",
-                "body": "secret",
-                "mentions": [{"actor_id": "did:web:bob.example"}],
-                "reply_to": "ak:event:AbQHDTvS4ZELwYOPkH_Rdpweaio8GKWhHTHvvDJIAgzZ"
-            }),
-            expiry: Some(json!({
-                "ttl_ms": 1,
-                "trigger": "on_send",
-                "grace_ms": 0
-            })),
-            encrypted: false,
-            operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
-            created_at: fixed_time("2020-01-01T00:00:00.000Z"),
-            history_basis_seals: Vec::new(),
-            revision_of: None,
-            redacted_at: None,
-        }
     }
 
     fn retention_tombstone(
@@ -449,148 +313,6 @@ mod tests {
             tombstoned_at: fixed_time("2020-01-01T00:02:00.000Z"),
             sealed,
         }
-    }
-
-    fn invalidation_drop_values(value: &Value) -> Vec<&str> {
-        value["cache_invalidation"]["drop"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect()
-    }
-
-    fn invalidation_shred_values(value: &Value) -> Vec<&str> {
-        value["cache_invalidation"]["shred"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn on_last_read_waits_for_active_realm_member_aggregate() {
-        let event_id = "ak:event:Ab-u0alSwVcrUhqmeFQmMzuYs83_IrjXlRSBnpm-B-JL";
-        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-        let now = fixed_time("2020-01-01T00:00:00.000Z");
-        let mut message = expired_message(event_id, realm_id);
-        message.expiry = Some(json!({
-            "ttl_ms": 1,
-            "trigger": "on_last_read",
-            "grace_ms": 0
-        }));
-        let mut projection = ProjectionState::new();
-        projection
-            .messages
-            .insert(event_id.to_owned(), message.clone());
-        for member in ["did:web:alice.example", "did:web:bob.example"] {
-            projection.members.insert(
-                (realm_id.to_owned(), member.to_owned()),
-                SolandMembershipState {
-                    member: member.to_owned(),
-                    realm_id: realm_id.to_owned(),
-                    state: "join".to_owned(),
-                    role: "member".to_owned(),
-                    delivery_status: None,
-                    recipient_service_id: None,
-                    recipient_service_resolution: None,
-                    membership_event_ref: None,
-                    delivery_binding_frontier: None,
-                    invited_at: None,
-                    joined_at: now,
-                    updated_at: now,
-                    reason: None,
-                },
-            );
-        }
-
-        assert!(!projection.observe_message_read_for_expiry(
-            "did:web:bob.example",
-            event_id,
-            "019041000000-0001-00000002",
-            now,
-        ));
-        assert!(!projection.message_expiry_anchors.contains_key(event_id));
-        assert!(projection.observe_message_read_for_expiry(
-            "did:web:alice.example",
-            event_id,
-            "019041000000-0001-00000003",
-            now,
-        ));
-
-        let anchor = projection
-            .message_expiry_anchors
-            .get(event_id)
-            .expect("last-read aggregate anchor");
-        assert_eq!(anchor.trigger, "on_last_read");
-        assert_eq!(anchor.expiry_start_hlc, "019041000000-0001-00000003");
-    }
-
-    #[test]
-    fn projection_event_for_expired_message_strips_payload_content() {
-        let event_id = "ak:event:AQSS_m6w3ODdIeq8Yzac2ghmcQVOGLXWA5PXFcSnVcgN";
-        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-        let projection = ProjectionState::new();
-        let mut event = ProjectionEventRecord {
-            event_id: event_id.to_owned(),
-            realm_id: realm_id.to_owned(),
-            event_kind: arkret_wire::EventKind::MessageCreate,
-            operation_kind: "create".to_owned(),
-            operation_id: None,
-            sender: Some("did:web:alice.example".to_owned()),
-            payload: json!({
-                "content": {"kind": "ak.content.text", "body": "secret"},
-                "mentions": [{"actor_id": "did:web:bob.example"}],
-                "reply_to": "ak:event:AbQHDTvS4ZELwYOPkH_Rdpweaio8GKWhHTHvvDJIAgzZ",
-                "redaction_ref": "ak:event:should-not-survive",
-                "search_index": {"terms": ["secret"]},
-                "search_tokens": ["secret-token"],
-                "push_snippet": "secret push",
-                "blob_preview_key": "secret-preview-key",
-                "blob_preview_bytes": "secret-preview-bytes",
-                "blob_preview": {"caption": "secret"},
-                "expiry": {
-                    "ttl_ms": 1,
-                    "trigger": "on_send",
-                    "grace_ms": 0
-                }
-            }),
-            created_at: fixed_time("2020-01-01T00:00:00.000Z"),
-            received_at: fixed_time("2020-01-01T00:00:00.000Z"),
-        };
-
-        stub_projection_event_for_message_expiry(
-            &projection,
-            &mut event,
-            fixed_time("2026-06-19T00:00:01.000Z"),
-        );
-
-        assert_eq!(event.payload["expiry_stub"], json!(true));
-        assert_eq!(
-            event.payload["content"]["body"],
-            json!(RETENTION_EXPIRED_PLACEHOLDER)
-        );
-        assert!(event.payload.get("mentions").is_none());
-        assert!(event.payload.get("reply_to").is_none());
-        assert!(event.payload.get("redaction_ref").is_none());
-        assert!(event.payload.get("search_index").is_none());
-        assert!(event.payload.get("search_tokens").is_none());
-        assert!(event.payload.get("push_snippet").is_none());
-        assert!(event.payload.get("blob_preview_key").is_none());
-        assert!(event.payload.get("blob_preview_bytes").is_none());
-        assert!(event.payload.get("blob_preview").is_none());
-        let drop = invalidation_drop_values(&event.payload);
-        assert!(drop.contains(&"search_index_cache"));
-        assert!(drop.contains(&"push_snippet_cache"));
-        assert!(drop.contains(&"blob_preview_key_cache"));
-        assert!(drop.contains(&"blob_preview_bytes_cache"));
-        assert!(drop.contains(&"message_key_cache"));
-        let shred = invalidation_shred_values(&event.payload);
-        assert!(shred.contains(&"search_index_plaintext"));
-        assert!(shred.contains(&"push_snippet_plaintext"));
-        assert!(shred.contains(&"blob_preview_key"));
-        assert!(shred.contains(&"blob_preview_bytes"));
     }
 
     #[test]
@@ -628,21 +350,7 @@ mod tests {
         assert!(payload.get("blob_preview_bytes").is_none());
         assert!(payload.get("blob_preview").is_none());
         assert!(payload.get("message_key").is_none());
-        let drop = invalidation_drop_values(&payload);
-        assert!(drop.contains(&"message_preview_cache"));
-        assert!(drop.contains(&"blob_preview_cache"));
-        assert!(drop.contains(&"blob_preview_key_cache"));
-        assert!(drop.contains(&"blob_preview_bytes_cache"));
-        assert!(drop.contains(&"message_key_cache"));
-        assert!(drop.contains(&"search_index_cache"));
-        assert!(drop.contains(&"push_snippet_cache"));
-        let shred = invalidation_shred_values(&payload);
-        assert!(shred.contains(&"per_message_content_key"));
-        assert!(shred.contains(&"attachment_preview_key"));
-        assert!(shred.contains(&"blob_preview_key"));
-        assert!(shred.contains(&"blob_preview_bytes"));
-        assert!(shred.contains(&"search_index_plaintext"));
-        assert!(shred.contains(&"push_snippet_plaintext"));
+        assert!(payload.get("cache_invalidation").is_none());
     }
 
     #[test]
@@ -660,7 +368,6 @@ mod tests {
                 sender: "did:web:alice.example".to_owned(),
                 thread_id: realm_id.to_owned(),
                 content: json!({"kind": "ak.content.text", "body": "secret"}),
-                expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-0000000000a2".to_owned(),
                 created_at: now,
@@ -680,40 +387,6 @@ mod tests {
         );
         let mut event = ProjectionEventRecord {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
-            realm_id: realm_id.to_owned(),
-            event_kind: arkret_wire::EventKind::PinAdd,
-            operation_kind: "create".to_owned(),
-            operation_id: None,
-            sender: Some("did:web:alice.example".to_owned()),
-            payload: json!({
-                "pin_scope": {"kind": "realm", "id": realm_id},
-                "target_ref": event_id,
-                "rank": "a0",
-                "note": "secret note"
-            }),
-            created_at: now,
-            received_at: now,
-        };
-
-        stub_pin_projection_event_for_invisible_target(&projection, &mut event);
-
-        assert_eq!(event.payload["target_stub"], json!(true));
-        assert_eq!(event.payload["target"]["visibility"], json!("locked"));
-        assert!(event.payload.get("target_ref").is_none());
-        assert!(event.payload.get("note").is_none());
-    }
-
-    #[test]
-    fn pin_projection_event_for_expired_target_is_stubbed() {
-        let event_id = "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx";
-        let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-        let now = fixed_time("2026-06-19T00:00:01.000Z");
-        let mut projection = ProjectionState::new();
-        projection
-            .messages
-            .insert(event_id.to_owned(), expired_message(event_id, realm_id));
-        let mut event = ProjectionEventRecord {
-            event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: arkret_wire::EventKind::PinAdd,
             operation_kind: "create".to_owned(),

@@ -271,7 +271,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     verification_method: &str,
     proof_binding_bytes: &[u8],
     jws: &str,
-) -> Result<(), EventValidationError> {
+) -> Result<arkret_wire::DidKey, EventValidationError> {
     // Delegated execution has no meaning for pairwise content authorship —
     // the author IS the leaf owner. Fail closed instead of verifying against
     // an authority DID.
@@ -350,7 +350,10 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         crate::metrics::SIGNATURE_SCHEME_MINIMAL_METADATA,
         outcome.is_ok(),
     );
-    outcome.map_err(|error| author_credential_invalid(format!("proof JWS: {error}")))
+    outcome.map_err(|error| author_credential_invalid(format!("proof JWS: {error}")))?;
+    let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&proof_public_key);
+    arkret_wire::DidKey::new(format!("did:key:{multibase}"))
+        .map_err(|error| author_credential_invalid(format!("proof key: {error}")))
 }
 
 #[cfg(test)]

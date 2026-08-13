@@ -1972,6 +1972,12 @@ mod event_seal_commit_tests {
                 )
                 .unwrap(),
             ),
+            arkret_wire::DidCoreId::from(
+                arkret_wire::project_full_id_to_core_id(
+                    &arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+                )
+                .unwrap(),
+            ),
             increment as u64,
             arkret_wire::Hlc::new(format!("0189c4d2af00-0000-aabbccd{increment}")).unwrap(),
             json!({"marker": marker.to_string()}),

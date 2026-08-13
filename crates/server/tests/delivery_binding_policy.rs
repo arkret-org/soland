@@ -109,6 +109,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         creator_actor_id,
+        soland_test_support::fixture_principal_server_id(),
         0,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),

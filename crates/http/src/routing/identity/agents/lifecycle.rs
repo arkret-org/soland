@@ -74,7 +74,7 @@ pub(super) struct AgentProvisioningAbandonmentOutcome {
 #[serde(deny_unknown_fields)]
 struct PreparedAgentProvision {
     outcome: AgentProvisionOutcome,
-    controller_authority_instance: arkret_wire::PrincipalAuthorityInstance,
+    controller_authority: arkret_wire::PrincipalAuthorityKey,
     slug: String,
     requested_scope: AgentKeyScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,7 +266,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             full_id,
-            controller_authority_instance,
+            controller_authority,
             slug,
             requested_scope,
             pairing_ttl_ms,
@@ -341,12 +341,9 @@ pub(super) async fn provision_agent(
                 .with_status(StatusCode::PRECONDITION_FAILED)
                 .with_reason_code("recovery_policy_required"));
             }
-            let controller_realm = require_controller_principal_control_realm(
-                state,
-                &session,
-                &controller_authority_instance,
-            )
-            .await?;
+            let controller_realm =
+                require_controller_principal_control_realm(state, &session, &controller_authority)
+                    .await?;
             let mut existing = state
                 .agent_pairings()
                 .agents_for_controller(&controller_id)
@@ -371,7 +368,7 @@ pub(super) async fn provision_agent(
                 .map_err(|error| {
                     AppError::invalid_param(format!("Agent full_id projection failed: {error}"))
                 })?;
-            let controller_did = controller_authority_instance.principal_id.clone();
+            let controller_did = controller_authority.principal_id.clone();
             let initial_resolution =
                 crate::routing::identity::managed_agent_pcr::accepted_managed_agent_initial_resolution(
                     state,
@@ -406,7 +403,7 @@ pub(super) async fn provision_agent(
             };
             let prepared = PreparedAgentProvision {
                 outcome: outcome.clone(),
-                controller_authority_instance,
+                controller_authority,
                 slug,
                 requested_scope,
                 pairing_ttl_ms,
@@ -497,7 +494,7 @@ pub(super) async fn provision_agent(
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
                     full_id: full_id.clone(),
-                    controller_authority_instance: prepared.controller_authority_instance.clone(),
+                    controller_authority: prepared.controller_authority.clone(),
                     slug: slug.clone(),
                     requested_scope: requested_scope.clone(),
                     pairing_ttl_ms,
@@ -521,7 +518,7 @@ pub(super) async fn provision_agent(
             let controller_realm_now = require_controller_principal_control_realm(
                 state,
                 &session,
-                &prepared.controller_authority_instance,
+                &prepared.controller_authority,
             )
             .await?;
             if controller_realm_id.as_str() != controller_realm_now {
@@ -532,7 +529,7 @@ pub(super) async fn provision_agent(
                     &provision_event.event,
                 )
                 .map_err(|error| AppError::invalid_param(error.to_string()))?;
-            let controller_core_id = &prepared.controller_authority_instance.principal_id;
+            let controller_core_id = &prepared.controller_authority.principal_id;
             if &provision_event.event.actor_id != controller_core_id
                 || provision_event.event.realm_id != controller_realm_id
                 || provision_payload.agent_id != agent_id
@@ -653,7 +650,7 @@ pub(super) async fn provision_agent(
                     "commit_request_hash": request_hash,
                     "full_id": full_id,
                     "initial_resolution": initial_resolution,
-                    "controller_authority_instance": prepared.controller_authority_instance,
+                    "controller_authority": prepared.controller_authority,
                     "pcr_genesis_accepted": false,
                     "did_binding_accepted": false,
                 }));
@@ -706,7 +703,7 @@ pub(super) async fn provision_agent(
                     "commit_request_hash": request_hash,
                     "full_id": full_id,
                     "initial_resolution": initial_resolution,
-                    "controller_authority_instance": prepared.controller_authority_instance,
+                    "controller_authority": prepared.controller_authority,
                     "pcr_genesis_accepted": true,
                     "did_binding_accepted": false,
                 }));
@@ -762,7 +759,7 @@ pub(super) async fn provision_agent(
                 "commit_request_hash": request_hash,
                 "full_id": full_id,
                 "initial_resolution": initial_resolution,
-                "controller_authority_instance": prepared.controller_authority_instance,
+                "controller_authority": prepared.controller_authority,
                 "pcr_genesis_accepted": true,
                 "did_binding_accepted": true,
             }));
@@ -1376,7 +1373,7 @@ pub(super) async fn get_agent(
     // disappear from the controller's revocation surface.
     let effective_grants = state
         .authorization()
-        .grants_for_subject_all_realms(&agent_id)
+        .grants_for_subject_all_realms(&agent_id, Some(state.service_id()))
         .into_iter()
         .map(|grant| {
             (
@@ -1388,7 +1385,7 @@ pub(super) async fn get_agent(
     view.grants = state
         .projections()
         .snapshot()
-        .unrevoked_grant_locations_for_subject(&agent_id)
+        .unrevoked_grant_locations_for_subject(&agent_id, state.service_id())
         .into_iter()
         .filter_map(|(grant_id, realm_id)| {
             let display = effective_grants.get(&(grant_id.clone(), realm_id.clone()));
@@ -1776,7 +1773,7 @@ pub(super) async fn detach_agent_grant(
     let locations = {
         let projection = state.projections().snapshot();
         projection
-            .grant_locations_for_subject(&agent_id)
+            .grant_locations_for_subject(&agent_id, state.service_id())
             .into_iter()
             .filter(|(candidate, _)| candidate == typed_grant_id.as_str())
             .collect::<Vec<_>>()

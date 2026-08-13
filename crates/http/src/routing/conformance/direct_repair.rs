@@ -5,7 +5,6 @@
 //! It never manufactures a repair outcome and the E2E still enters through the
 //! production self-dispatch and peer-relay handlers.
 
-use arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding;
 use arkret_models_identity::ServiceResolutionCarrier;
 use arkret_wire::{Event, EventKind, Hash, OperationId, OperationKind};
 use salvo::oapi::extract::JsonBody;
@@ -50,8 +49,6 @@ pub struct DirectRepairFixtureInstallRequest {
     events: Vec<Event>,
     binding: DirectRepairFixtureBinding,
     contacts: Vec<DirectRepairFixtureContact>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    local_principal_service_binding: Option<AcceptedAtServiceBinding>,
 }
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -241,12 +238,6 @@ pub async fn install(
             })
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
-    }
-    if let Some(binding) = body.local_principal_service_binding {
-        crate::routing::identity::account::install_conformance_principal_service_binding(
-            state, binding,
-        )
-        .await?;
     }
     json_ok(DirectRepairFixtureInstallOutcome {
         accepted_event_count: body.events.len(),

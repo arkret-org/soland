@@ -1227,6 +1227,7 @@ async fn continue_issue_terminal_receipt(
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
         || recovery_session.principal_id != transaction.resource.principal_id.as_str()
+        || recovery_session.principal_server_id.as_str() != state.service_id()
         || recovery_session.requesting_device_id != expected_device_id.as_str()
         || recovery_session.policy_id != receipt.policy_id.as_str()
         || u64::from(recovery_session.policy_version) != receipt.policy_version
@@ -1409,8 +1410,7 @@ async fn continue_issue_terminal_receipt(
                 || !authorize_follows_reanchor
                 || reanchor_payload.replacement_authorize_payload_digest
                     != replacement_payload_digest
-                || reanchor_payload.authority_instance.principal_id
-                    != transaction.resource.principal_id
+                || reanchor_payload.authority.principal_id != transaction.resource.principal_id
             {
                 return Err(AppError::conflict(
                     "device re-anchor Event changed the accepted recovery unit binding",

@@ -113,7 +113,6 @@ pub async fn projected_event_page_for_realms_through(
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
             tombstone_projection_event_for_message_redaction(&projection, event);
-            stub_projection_event_for_message_expiry(&projection, event, now());
             stub_pin_projection_event_for_invisible_target(&projection, event);
         }
     }

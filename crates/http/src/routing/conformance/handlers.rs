@@ -412,6 +412,7 @@ pub async fn realm_basis(
     let basis = soland_services::conformance_basis::build_conformance_realm_basis(
         &body.realm_id,
         subject_actor_id.as_str(),
+        state.service_id(),
         (!has_existing_notary).then_some(requested_notary_authority),
         &body.data_plane_actions,
     )

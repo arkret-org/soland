@@ -59,7 +59,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .unwrap();
     assert_eq!(
         organizations["organizations"][0]["organization_principal_id"],
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+        soland_test_support::fixture_principal_server_id().as_str()
     );
     assert_eq!(
         organizations["organizations"][0]["display_name"],
@@ -103,7 +103,8 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .await
         .unwrap();
     assert_eq!(
-        actors["actors"][0]["actor_id"], "did:web:alice.example",
+        actors["actors"][0]["actor_id"],
+        fixture_actor_core_id("did:web:alice.example").as_str(),
         "search actors response: {actors}"
     );
     assert!(actors["actors"][0].get("preview").is_none());
@@ -118,7 +119,10 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
     // DIR-1 (R3.1, arkret-spec @ 7157ee8) — search_users rows surface the
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
-    assert_eq!(users["users"][0]["did"], "did:web:alice.example");
+    assert_eq!(
+        users["users"][0]["principal_id"],
+        fixture_actor_core_id("did:web:alice.example").as_str()
+    );
     assert_eq!(users["users"][0]["handle"], "alice:soland.local");
     assert!(users["users"][0].get("handle_uri").is_none());
     assert!(users["users"][0].get("presence").is_none());
@@ -155,10 +159,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .any(|operation| operation == "ak.find.directory.read.private_contact_discovery")
     );
 
+    let alice_core = fixture_actor_core_id("did:web:alice.example");
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject": "did:web:alice.example",
+                "subject": alice_core,
                 "intent": "display",
                 "limit": 10
             }))
@@ -167,12 +172,12 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(subject_handles["subject"], "did:web:alice.example");
+    assert_eq!(subject_handles["subject"], alice_core.as_str());
     assert_eq!(subject_handles["primary_handle"], "alice:soland.local");
     assert_eq!(subject_handles["has_more"], false);
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject"], "did:web:alice.example");
+    assert_eq!(claims[0]["subject"], alice_core.as_str());
     assert_eq!(claims[0]["handle"], "alice:soland.local");
 
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
@@ -189,7 +194,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
-    let service_id = "did:webvh:zqmsolandlocal".to_owned();
+    let service_id = soland_test_support::fixture_principal_server_id().to_string();
     config.trust_domain =
         arkret_identifiers::TrustDomainId::new(trust_domain_from_service_id(&service_id)).unwrap();
     let mut state = soland_test_support::app_state(config);
@@ -215,7 +220,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
         .await
         .unwrap();
     assert_eq!(registered["handle"], "@registered-handle");
-    assert_eq!(registered["did"], did);
+    assert_eq!(registered["did"], fixture_actor_core_id(did).as_str());
 
     let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
@@ -229,12 +234,15 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
         viewer["primary_handle_claim"]["handle"],
         "registered-handle:local.host"
     );
-    assert_eq!(viewer["primary_handle_claim"]["subject"], did);
+    assert_eq!(
+        viewer["primary_handle_claim"]["subject"],
+        fixture_actor_core_id(did).as_str()
+    );
 
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject": did,
+                "subject": fixture_actor_core_id(did),
                 "intent": "display",
                 "limit": 10
             }))
@@ -243,20 +251,24 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(subject_handles["subject"], did);
+    assert_eq!(
+        subject_handles["subject"],
+        fixture_actor_core_id(did).as_str()
+    );
     assert_eq!(
         subject_handles["primary_handle"],
         "registered-handle:local.host"
     );
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject"], did);
+    assert_eq!(claims[0]["subject"], fixture_actor_core_id(did).as_str());
     assert_eq!(claims[0]["handle"], "registered-handle:local.host");
 }
 
 #[tokio::test]
 async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
-    let state = test_state_with_service_id("did:web:local.host");
+    let state =
+        test_state_with_service_id(soland_test_support::fixture_principal_server_id().as_str());
     let alice = dev_token(state.clone()).await;
     // resolve_handle only discloses handles with an account_localparts binding
     // (discovery-directory.md §9 resolve_handle); register bob with the canonical
@@ -274,6 +286,28 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         &["acct:bob-example@local.host"],
     )
     .await;
+    let allow_handle_policy = serde_json::json!({
+        "schema": "ak.schema.invite_receive_policy.v1",
+        "subject_id": fixture_actor_core_id("did:web:bob.example"),
+        "holder_allowed_introduction_kinds": [
+            "locator_ref",
+            "consent_grant",
+            "shared_realm",
+            "handle_claim"
+        ],
+        "explicit_address_behavior": "quarantine",
+        "handle_claim_behavior": "notify",
+        "unknown_invites": "drop"
+    });
+    let saved_policy: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
+        .add_header("authorization", format!("Bearer {bob}"), true)
+        .json(&allow_handle_policy)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(saved_policy["handle_claim_behavior"], "notify");
 
     let hidden_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -291,7 +325,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         "Invite Handle Realm",
         None,
         "invite_only",
-        &["did:web:local.host"],
+        &[soland_test_support::fixture_principal_server_id().as_str()],
         &[],
     )
     .await;
@@ -302,26 +336,30 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         .json(&serde_json::json!({
             "handle": "bob-example:local.host",
             "intent": "invite",
-            "requester": "did:web:alice.example",
+            "requester": fixture_actor_core_id("did:web:alice.example"),
             "realm_id": realm_id,
             "audience": realm_id,
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(resolved.status_code.unwrap(), StatusCode::OK);
+    let resolved_status = resolved.status_code.unwrap();
     let body: Value = resolved.take_json().await.unwrap();
-    assert_eq!(body["did"], "did:web:bob.example");
+    assert_eq!(resolved_status, StatusCode::OK, "resolve response: {body}");
+    assert_eq!(
+        body["did"],
+        fixture_actor_core_id("did:web:bob.example").as_str()
+    );
     assert_eq!(body["handle"], "bob-example:local.host");
     assert_eq!(body["audience"], realm_id);
     assert_eq!(
         body["member_delivery_binding"]["recipient_service_id"],
-        "did:web:local.host"
+        soland_test_support::fixture_principal_server_id().as_str()
     );
 
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",
-        "subject_id": "did:web:bob.example",
-        "holder_allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm"],
+        "subject_id": fixture_actor_core_id("did:web:bob.example"),
+        "holder_allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm", "handle_claim"],
         "explicit_address_behavior": "quarantine",
         "handle_claim_behavior": "drop",
         "unknown_invites": "drop"
@@ -342,7 +380,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
             .json(&serde_json::json!({
                 "handle": "bob-example:local.host",
                 "intent": "invite",
-                "requester": "did:web:alice.example",
+                "requester": fixture_actor_core_id("did:web:alice.example"),
                 "realm_id": realm_id,
                 "audience": realm_id,
             }))
@@ -395,7 +433,7 @@ async fn directory_demo_projection_rejects_outside_development_mode() {
         ("resolve-handle", serde_json::json!({"handle": "alice"})),
         (
             "list-handles-for-subject",
-            serde_json::json!({"subject": "did:web:alice.example"}),
+            serde_json::json!({"subject": fixture_actor_core_id("did:web:alice.example")}),
         ),
         (
             "private-contact-discovery",
@@ -659,7 +697,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
             .unwrap();
     assert_eq!(
         directory_describe["service_id"],
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+        soland_test_support::fixture_principal_server_id().as_str()
     );
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
@@ -694,7 +732,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "action": "ak.strand.read",
             "resource": {"kind": "realm", "realm_id": DEMO_REALM_ID}
         }))
@@ -707,7 +745,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
     assert!(authz["matched_grants"].is_array());
     assert_eq!(
         authz["policy_results"][0]["actor_id"],
-        "did:web:alice.example"
+        fixture_actor_core_id("did:web:alice.example").as_str()
     );
     assert_eq!(authz["policy_results"][0]["action"], "ak.strand.read");
     assert_eq!(authz["policy_results"][0]["realm_id"], DEMO_REALM_ID);
@@ -718,7 +756,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: mode is required.
             "mode": "turn"
@@ -728,7 +766,10 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(ice["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        ice["actor_id"],
+        fixture_actor_core_id("did:web:alice.example").as_str()
+    );
     assert!(ice["ice_servers"].is_array());
     assert!(ice["signature"].is_object());
 }
@@ -809,8 +850,8 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
             // AdminActor's typed DTO identifies the row with `id` + `did`;
             // it does not invent a collection-only `kind` discriminator.
             .any(|actor| {
-                actor["id"] == "did:web:alice.example"
-                    && actor["did"] == "did:web:alice.example"
+                actor["id"] == fixture_actor_core_id("did:web:alice.example").as_str()
+                    && actor["did"] == fixture_actor_core_id("did:web:alice.example").as_str()
             }));
 
     let devices: Value = TestClient::get("http://server/_soland/admin/devices")
@@ -822,7 +863,7 @@ async fn admin_collection_surfaces_return_sodmin_shapes() {
         .unwrap();
     assert!(devices["devices"].as_array().unwrap().iter().any(|device| {
         // AdminDevice uses canonical `id` and optional `actor_id`.
-        device["actor_id"] == "did:web:alice.example"
+        device["actor_id"] == fixture_actor_core_id("did:web:alice.example").as_str()
             && device["id"] == "ak:device:01904100-0000-7000-8000-a11ce0000001"
     }));
 

@@ -9,17 +9,21 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
 
-    let actor: Value = TestClient::get("http://server/_soland/admin/actors/did:web:alice.example")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let alice = fixture_actor_core_id("did:web:alice.example");
+    let actor: Value = TestClient::get(format!(
+        "http://server/_soland/admin/actors/{}",
+        alice.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await
+    .take_json()
+    .await
+    .unwrap();
 
     // D14 — detail row is the typed production `AdminActor` projection.
-    assert_eq!(actor["id"], "did:web:alice.example");
-    assert_eq!(actor["did"], "did:web:alice.example");
+    assert_eq!(actor["id"], alice.as_str());
+    assert_eq!(actor["did"], alice.as_str());
     assert!(
         actor["account_id"]
             .as_str()
@@ -47,26 +51,26 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
         "ak:device:01904100-0000-7000-8000-b0b0b0000002",
     )
     .await;
+    let bob = fixture_actor_core_id("did:web:bob.example");
 
-    let recovery_locked: Value =
-        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/status")
-            .add_header("authorization", format!("Bearer {admin}"), true)
-            .json(&serde_json::json!({"status": "recovery_locked"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let recovery_locked: Value = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/status",
+        bob.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"status": "recovery_locked"}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
 
     assert_eq!(recovery_locked["state"], "locked");
     assert_eq!(recovery_locked["protocol_state"], "locked");
     assert_eq!(recovery_locked["status"], "recovery_locked");
     assert_eq!(recovery_locked["management_status"], "recovery_locked");
     assert_eq!(recovery_locked["reason"], "recovery_locked");
-    assert_eq!(
-        state.account_lifecycle_state("did:web:bob.example"),
-        "locked"
-    );
+    assert_eq!(state.account_lifecycle_state(bob.as_str()), "locked");
 
     let _carol = register_account(
         state.clone(),
@@ -75,32 +79,34 @@ async fn admin_account_status_aliases_keep_protocol_state_closed() {
         "ak:device:01904100-0000-7000-8000-ca2010000003",
     )
     .await;
-    let disabled: Value =
-        TestClient::post("http://server/_soland/admin/accounts/did:web:carol.example/status")
-            .add_header("authorization", format!("Bearer {admin}"), true)
-            .json(&serde_json::json!({"status": "disabled"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let carol = fixture_actor_core_id("did:web:carol.example");
+    let disabled: Value = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/status",
+        carol.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"status": "disabled"}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
 
     assert_eq!(disabled["state"], "deactivated");
     assert_eq!(disabled["protocol_state"], "deactivated");
     assert_eq!(disabled["status"], "disabled");
     assert_eq!(disabled["management_status"], "disabled");
     assert_eq!(disabled["reason"], "disabled");
-    assert_eq!(
-        state.account_lifecycle_state("did:web:carol.example"),
-        "deactivated"
-    );
+    assert_eq!(state.account_lifecycle_state(carol.as_str()), "deactivated");
 
-    let pending =
-        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/status")
-            .add_header("authorization", format!("Bearer {admin}"), true)
-            .json(&serde_json::json!({"status": "pending_deletion"}))
-            .send(&app_from_state(state.clone()))
-            .await;
+    let pending = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/status",
+        bob.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"status": "pending_deletion"}))
+    .send(&app_from_state(state.clone()))
+    .await;
     assert_eq!(pending.status_code.unwrap().as_u16(), 400);
 }
 

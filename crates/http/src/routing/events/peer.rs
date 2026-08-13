@@ -786,27 +786,10 @@ impl PeerEventsQueryParts {
 struct PeerReadAuthz {
     source_service_id: String,
     realm_meta: BTreeMap<String, RealmMetaRecord>,
-    realm_endpoints: BTreeMap<String, Vec<PeerRealmEndpoint>>,
     realm_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
     pending_realm_invites: BTreeMap<(String, String), PendingPeerInvite>,
     circles: BTreeMap<String, PeerCircleState>,
     circle_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
-}
-
-#[derive(Clone, Debug)]
-struct PeerRealmEndpoint {
-    role: String,
-    visibility_scope: PeerEndpointVisibility,
-    plaintext_visible: bool,
-    authorized_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PeerEndpointVisibility {
-    MetadataOnly,
-    EncryptedEvents,
-    PlaintextEvents,
 }
 
 #[derive(Clone, Debug)]
@@ -860,7 +843,6 @@ impl PeerReadAuthz {
         let mut authz = Self {
             source_service_id: source_service_id.to_owned(),
             realm_meta,
-            realm_endpoints: BTreeMap::new(),
             realm_members: BTreeMap::new(),
             pending_realm_invites: BTreeMap::new(),
             circles,
@@ -879,7 +861,6 @@ impl PeerReadAuthz {
     }
 
     fn apply_record(&mut self, record: &CanonicalEventRecord) {
-        self.apply_realm_endpoint_record(record);
         self.apply_invite_record(record);
         self.apply_member_record(record);
         self.apply_circle_member_record(record);
@@ -974,26 +955,21 @@ impl PeerReadAuthz {
             .get(realm_id)
             .is_some_and(|meta| !meta.deleted)
             && self
-                .realm_endpoints
+                .realm_members
                 .get(realm_id)
-                .is_some_and(|endpoints| endpoints.iter().any(PeerRealmEndpoint::allows_frontier))
+                .is_some_and(|members| !members.is_empty())
     }
 
     fn source_has_realm_scope(&self, realm_id: &str) -> bool {
         self.realm_members
             .get(realm_id)
             .is_some_and(|members| !members.is_empty())
-            || self
-                .realm_endpoints
-                .get(realm_id)
-                .is_some_and(|endpoints| !endpoints.is_empty())
     }
 
     fn source_scoped_realms(&self) -> Vec<String> {
         let realms = self
             .realm_members
             .keys()
-            .chain(self.realm_endpoints.keys())
             .filter(|realm_id| {
                 self.realm_meta
                     .get(realm_id.as_str())
@@ -1015,13 +991,6 @@ impl PeerReadAuthz {
         event_time: DateTime<Utc>,
         needs_plaintext: bool,
     ) -> bool {
-        if self.realm_endpoints.get(realm_id).is_some_and(|endpoints| {
-            endpoints
-                .iter()
-                .any(|endpoint| endpoint.allows_event(event_time, meta, needs_plaintext))
-        }) {
-            return true;
-        }
         self.realm_members.get(realm_id).is_some_and(|members| {
             members.values().any(|member| {
                 history_visibility_allows(meta.history_visibility.as_str(), member, event_time)
@@ -1074,12 +1043,6 @@ impl PeerReadAuthz {
         self.realm_members
             .get(realm_id)
             .is_some_and(|members| !members.is_empty())
-            || self.realm_endpoints.get(realm_id).is_some_and(|endpoints| {
-                endpoints.iter().any(|endpoint| {
-                    endpoint.plaintext_visible
-                        || endpoint.visibility_scope == PeerEndpointVisibility::PlaintextEvents
-                })
-            })
     }
 
     fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
@@ -1229,128 +1192,6 @@ impl PeerReadAuthz {
             _ => {}
         }
     }
-
-    fn apply_realm_endpoint_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_wire::EventKind::RealmPolicyBundle.as_str() {
-            return;
-        }
-        let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
-            return;
-        };
-        // The policy bundle is a complete CAS-register restatement. Omission
-        // in a newer revision clears the preceding endpoint set.
-        self.realm_endpoints.remove(&realm_id);
-        let Some(sync_endpoints) =
-            record_payload_field(record, "sync_endpoints").and_then(Value::as_array)
-        else {
-            return;
-        };
-        let mut endpoints = Vec::new();
-        for endpoint in sync_endpoints {
-            let Some(object) = endpoint.as_object() else {
-                continue;
-            };
-            if object.get("did").and_then(Value::as_str) != Some(self.source_service_id.as_str()) {
-                continue;
-            }
-            let Some(role) = object.get("role").and_then(Value::as_str) else {
-                continue;
-            };
-            let expires_at = object
-                .get("expires_at")
-                .and_then(Value::as_str)
-                .and_then(parse_rfc3339);
-            if expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
-                continue;
-            }
-            endpoints.push(PeerRealmEndpoint {
-                role: role.to_owned(),
-                visibility_scope: object
-                    .get("visibility_scope")
-                    .and_then(Value::as_str)
-                    .map(PeerEndpointVisibility::from_wire)
-                    .unwrap_or_else(|| {
-                        if object
-                            .get("plaintext_visible")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                        {
-                            PeerEndpointVisibility::PlaintextEvents
-                        } else {
-                            PeerEndpointVisibility::EncryptedEvents
-                        }
-                    }),
-                plaintext_visible: object
-                    .get("plaintext_visible")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                authorized_at: record_event_time(record),
-                expires_at,
-            });
-        }
-        if !endpoints.is_empty() {
-            self.realm_endpoints.insert(realm_id, endpoints);
-        }
-    }
-}
-
-impl PeerRealmEndpoint {
-    fn allows_event(
-        &self,
-        event_time: DateTime<Utc>,
-        meta: &RealmMetaRecord,
-        needs_plaintext: bool,
-    ) -> bool {
-        if self
-            .expires_at
-            .is_some_and(|expires_at| expires_at <= Utc::now())
-        {
-            return false;
-        }
-        if !matches!(
-            self.role.as_str(),
-            "primary" | "mirror" | "sync" | "federation_peer" | "notary"
-        ) {
-            return false;
-        }
-        if self.visibility_scope == PeerEndpointVisibility::MetadataOnly {
-            return false;
-        }
-        if needs_plaintext
-            && !(self.plaintext_visible
-                && self.visibility_scope == PeerEndpointVisibility::PlaintextEvents)
-        {
-            return false;
-        }
-        match meta.history_visibility.as_str() {
-            "world_readable" | "shared" => true,
-            "joined" | "invited" => event_time >= self.authorized_at,
-            _ => false,
-        }
-    }
-
-    fn allows_frontier(&self) -> bool {
-        if self
-            .expires_at
-            .is_some_and(|expires_at| expires_at <= Utc::now())
-        {
-            return false;
-        }
-        matches!(
-            self.role.as_str(),
-            "primary" | "mirror" | "sync" | "federation_peer" | "notary"
-        ) && self.visibility_scope != PeerEndpointVisibility::MetadataOnly
-    }
-}
-
-impl PeerEndpointVisibility {
-    fn from_wire(value: &str) -> Self {
-        match value {
-            "plaintext_events" => Self::PlaintextEvents,
-            "encrypted_events" => Self::EncryptedEvents,
-            _ => Self::MetadataOnly,
-        }
-    }
 }
 
 fn history_visibility_allows(
@@ -1394,24 +1235,6 @@ fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
 
 fn record_payload(record: &CanonicalEventRecord) -> Option<&serde_json::Map<String, Value>> {
     record.envelope.get("payload").and_then(Value::as_object)
-}
-
-fn record_payload_field<'a>(record: &'a CanonicalEventRecord, field: &str) -> Option<&'a Value> {
-    let payload = record_payload(record)?;
-    payload
-        .get(field)
-        .or_else(|| {
-            payload
-                .get("object")
-                .and_then(Value::as_object)
-                .and_then(|object| object.get(field))
-        })
-        .or_else(|| {
-            payload
-                .get("patch")
-                .and_then(Value::as_object)
-                .and_then(|patch| patch.get(field))
-        })
 }
 
 fn record_event_time(record: &CanonicalEventRecord) -> DateTime<Utc> {

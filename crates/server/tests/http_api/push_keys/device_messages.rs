@@ -20,7 +20,7 @@ async fn server_preserves_e2ee_payloads_as_opaque_data() {
         .add_header("Idempotency-Key", "e2ee-txn", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         target
                 }
@@ -57,7 +57,10 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
     let mut target_record = state
         .test_persistence()
         .devices()
-        .get("did:web:alice.example", sender_device)
+        .get(
+            fixture_actor_core_id("did:web:alice.example").as_str(),
+            sender_device,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -81,7 +84,7 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
     );
     let body = serde_json::json!({
         "messages": {
-            "did:web:alice.example": {
+            (fixture_actor_core_id("did:web:alice.example").to_string()): {
                 (target_device): target.clone()
             }
         }
@@ -108,8 +111,8 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
     assert_eq!(request_replay, first);
 
     let mut changed_request_body = body.clone();
-    changed_request_body["messages"]["did:web:alice.example"][target_device]["content"]["ciphertext"] =
-        serde_json::json!("different-request-body");
+    changed_request_body["messages"][fixture_actor_core_id("did:web:alice.example").as_str()]
+        [target_device]["content"]["ciphertext"] = serde_json::json!("different-request-body");
     let mut request_conflict = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", "logical-message-request-1", true)
@@ -168,7 +171,10 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
     let mut revoked_target = state
         .test_persistence()
         .devices()
-        .get("did:web:alice.example", target_device)
+        .get(
+            fixture_actor_core_id("did:web:alice.example").as_str(),
+            target_device,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -201,7 +207,7 @@ async fn message_id_idempotency_survives_ack_and_rejects_canonical_target_confli
         .add_header("Idempotency-Key", "logical-message-request-4", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     (target_device): conflicting_target
                 }
             }
@@ -227,7 +233,7 @@ async fn to_device_messages_survive_duplicate_sync_until_ack_token_consumed() {
         .add_header("Idempotency-Key", "ack-txn", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         device_message_target("ak.mls.application", encrypted_envelope("ak.mls.application", "ack-ciphertext"))
                 }
@@ -319,7 +325,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         .add_header("Idempotency-Key", "expired-lost-get", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": expired_target
                 }
             }
@@ -367,7 +373,7 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor() {
         .add_header("Idempotency-Key", "expired-lost-subscribe", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": expired_for_subscribe
                 }
             }
@@ -398,7 +404,7 @@ async fn device_messages_evicted_after_session_logout() {
         .add_header("Idempotency-Key", "logout-txn", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
                         device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "logout-ciphertext"))
                 }

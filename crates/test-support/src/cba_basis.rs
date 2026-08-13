@@ -117,6 +117,7 @@ pub fn realm_basis(
                 realm_id,
                 subject,
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
+                    principal_server_id: notary,
                     notary_authority: Some(notary),
                     data_plane_actions: &actions,
                     fixture_id_domain: basis.id_domain,
@@ -246,6 +247,7 @@ pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
             principal_full_id: principal_full_id.clone(),
+            principal_server_id: crate::fixture_principal_server_id(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
@@ -464,6 +466,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             )
             .expect("fixture genesis actor projection"),
         ),
+        crate::fixture_principal_server_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -576,6 +579,7 @@ pub async fn seed_event_derived_realm_genesis_event(
             )
             .expect("fixture genesis actor projection"),
         ),
+        crate::fixture_principal_server_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -650,6 +654,7 @@ async fn persist_and_project_realm_genesis_event(
                 realm_id: realm.clone(),
             },
             actor_id.clone(),
+            event.principal_server_id.clone(),
             actor_seq,
             Hlc::new(format!("0196419b0000-{actor_seq:04x}-51c0a1ed"))
                 .expect("fixture bootstrap HLC"),

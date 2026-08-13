@@ -269,14 +269,14 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn principal_resolution_by_authority_instance(
+    pub async fn principal_resolution_by_authority_key(
         &self,
-        authority_instance_digest: &arkret_wire::Hash,
+        authority_key: &arkret_wire::PrincipalAuthorityKey,
     ) -> crate::ServiceResult<Option<soland_storage::PrincipalResolutionRecord>> {
         Ok(self
             .persistence
             .principal_resolutions()
-            .by_authority_instance_digest(authority_instance_digest)
+            .by_authority_key(authority_key)
             .await?)
     }
 
@@ -305,14 +305,14 @@ impl PersistenceHandle {
 
     pub async fn principal_resolution_history(
         &self,
-        authority_instance_digest: &arkret_wire::Hash,
+        authority_key: &arkret_wire::PrincipalAuthorityKey,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> crate::ServiceResult<Vec<arkret_wire::Event>> {
         Ok(self
             .persistence
             .principal_resolutions()
-            .history_newest_first(authority_instance_digest, after_event_ref, limit)
+            .history_newest_first(authority_key, after_event_ref, limit)
             .await?)
     }
 
@@ -409,7 +409,7 @@ impl PersistenceHandle {
         self.persistence
             .realm_meta()
             .put(
-                "ak:realm:AehgGDMLc7-ZyfS74e4jHU84lk8I1GrpNU5GJWkxMGV4",
+                "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e",
                 &soland_storage::RealmMetaRecord {
                     owner: account.did,
                     deleted: false,

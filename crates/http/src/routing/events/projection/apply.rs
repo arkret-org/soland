@@ -1167,7 +1167,7 @@ mod tests {
         payload: serde_json::Value,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> arkret_event_draft::ProjectedEventOperation {
-        let event = arkret_wire::test_support::raw_event_at(
+        let event = crate::test_event::raw_event_at(
             kind.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             arkret_identifiers::DidCoreId::new(actor.to_owned()).unwrap(),
@@ -1201,7 +1201,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-08-09T02:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let mut event = arkret_wire::test_support::raw_event_at(
+        let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::ContactRequested.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),

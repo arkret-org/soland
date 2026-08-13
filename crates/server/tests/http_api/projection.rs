@@ -31,7 +31,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Hydration target",
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -157,7 +157,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
                         "rank": "r007",
                     },
                 },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -230,7 +230,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
                 "realm_id": realm_id,
                 "morph_kind": "task",
                 "metadata": { "title": "Hydration morph" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -456,7 +456,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
                 "fields": {
                     "document": initial_body
                 },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -483,7 +483,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
             "object": {
                 "realm_id": realm_id,
                 "metadata": { "title": "Incident target" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![create_event_id.as_str()],
@@ -861,7 +861,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Doomed Space",
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -942,7 +942,7 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
             "object": {
                 "realm_id": realm_id,
                 "metadata": { "title": "Doomed Strand" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![tombstone_space_event_id.as_str()],
@@ -1034,7 +1034,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
                 "realm_id": DEMO_REALM_ID,
                 "kind": "list",
                 "title": "Persistent Space",
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -1113,7 +1113,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Persistent Strand" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![archive_space_event_id.as_str()],
@@ -1180,7 +1180,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
                 "realm_id": DEMO_REALM_ID,
                 "morph_kind": "task",
                 "metadata": { "title": "Persistent Morph" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![redact_strand_event_id.as_str()],

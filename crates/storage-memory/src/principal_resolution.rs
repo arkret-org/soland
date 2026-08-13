@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_wire::{Event, Hash, RealmId};
+use arkret_wire::{Event, PrincipalAuthorityKey, RealmId};
 use soland_storage::{
     PersistenceError, PersistenceResult, PrincipalResolutionCasResult, PrincipalResolutionRecord,
     PrincipalResolutionStore, validate_principal_resolution_record,
@@ -26,16 +26,23 @@ impl MemoryPrincipalResolutionStore {
     }
 }
 
+fn authority_map_key(authority: &PrincipalAuthorityKey) -> String {
+    format!(
+        "{}\0{}",
+        authority.principal_id, authority.principal_server_id
+    )
+}
+
 #[async_trait]
 impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
-    async fn by_authority_instance_digest(
+    async fn by_authority_key(
         &self,
-        authority_instance_digest: &Hash,
+        authority_key: &PrincipalAuthorityKey,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
         Ok(self
             .rows
             .lock()
-            .get(authority_instance_digest.as_str())
+            .get(&authority_map_key(authority_key))
             .map(|state| state.current.clone()))
     }
 
@@ -47,7 +54,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
             .rows
             .lock()
             .values()
-            .find(|state| state.current.authority_instance.pcr_realm_id == *pcr_realm_id)
+            .find(|state| state.current.pcr_realm_id == *pcr_realm_id)
             .map(|state| state.current.clone()))
     }
 
@@ -57,26 +64,17 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
         next: PrincipalResolutionRecord,
     ) -> PersistenceResult<PrincipalResolutionCasResult> {
         validate_principal_resolution_record(&next)?;
-        let authority_key = next
-            .authority_instance
-            .authority_instance_digest
-            .as_str()
-            .to_owned();
+        let authority_map_key = authority_map_key(&next.authority_key);
         let mut rows = self.rows.lock();
         if rows.values().any(|state| {
-            state.current.authority_instance.pcr_realm_id == next.authority_instance.pcr_realm_id
-                && state
-                    .current
-                    .authority_instance
-                    .authority_instance_digest
-                    .as_str()
-                    != authority_key.as_str()
+            state.current.pcr_realm_id == next.pcr_realm_id
+                && state.current.authority_key != next.authority_key
         }) {
             return Err(PersistenceError::SchemaViolation(
-                "a PCR Realm cannot be rebound to another authority instance".to_owned(),
+                "a PCR Realm cannot be rebound to another account authority key".to_owned(),
             ));
         }
-        let current = rows.get(&authority_key);
+        let current = rows.get(&authority_map_key);
         let observed_ref = current.map(|state| state.current.current_event.event_id.as_str());
         if observed_ref != expected_current_event_ref {
             return Ok(PrincipalResolutionCasResult::Conflict(
@@ -90,11 +88,12 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
         }
 
         if let Some(current) = current {
-            if current.current.authority_instance != next.authority_instance
+            if current.current.authority_key != next.authority_key
+                || current.current.pcr_realm_id != next.pcr_realm_id
                 || current.current.genesis_event.event_id != next.genesis_event.event_id
             {
                 return Err(PersistenceError::SchemaViolation(
-                    "principal resolution CAS cannot change the authority instance or genesis Event"
+                    "principal resolution CAS cannot change the account authority key, PCR Realm or genesis Event"
                         .to_owned(),
                 ));
             }
@@ -110,7 +109,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
             history.push(next.current_event.clone());
         }
         rows.insert(
-            authority_key,
+            authority_map_key,
             MemoryPrincipalResolutionState {
                 current: next.clone(),
                 history,
@@ -121,12 +120,12 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
 
     async fn history_newest_first(
         &self,
-        authority_instance_digest: &Hash,
+        authority_key: &PrincipalAuthorityKey,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> PersistenceResult<Vec<Event>> {
         let rows = self.rows.lock();
-        let Some(state) = rows.get(authority_instance_digest.as_str()) else {
+        let Some(state) = rows.get(&authority_map_key(authority_key)) else {
             return Ok(Vec::new());
         };
         let mut newest_first = state.history.iter().rev();
@@ -150,7 +149,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::PrincipalResolutionProjection;
-    use arkret_wire::{DidCoreId, DidFullId, Hash, Hlc, PrincipalAuthorityInstance, ScopeRef};
+    use arkret_wire::{DidCoreId, DidFullId, Hlc, PrincipalAuthorityKey, ScopeRef};
     use chrono::{TimeZone, Utc};
     use soland_storage::{PrincipalResolutionCasResult, PrincipalResolutionRecord};
 
@@ -164,6 +163,7 @@ mod tests {
         arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
+            DidCoreId::from(principal()),
             DidCoreId::from(principal()),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),
@@ -180,6 +180,7 @@ mod tests {
                 realm_id: genesis.realm_id.clone(),
             },
             DidCoreId::from(principal()),
+            DidCoreId::from(principal()),
             1,
             Hlc::new("019f00000000-0001-00000001").unwrap(),
             serde_json::json!({"sequence": 1}),
@@ -190,13 +191,11 @@ mod tests {
 
     fn record(genesis: &Event, current: Event) -> PrincipalResolutionRecord {
         PrincipalResolutionRecord {
-            authority_instance: PrincipalAuthorityInstance::new(
+            authority_key: PrincipalAuthorityKey::new(
                 principal(),
                 DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-                genesis.realm_id.clone(),
-                Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
-            )
-            .unwrap(),
+            ),
+            pcr_realm_id: genesis.realm_id.clone(),
             genesis_event: genesis.clone(),
             projection: PrincipalResolutionProjection {
                 full_id: DidFullId::new("did:web:alice.example").unwrap(),
@@ -241,24 +240,21 @@ mod tests {
                 .unwrap(),
             PrincipalResolutionCasResult::Applied(_)
         ));
-        let authority_digest = next.authority_instance.authority_instance_digest.clone();
+        let authority_key = next.authority_key.clone();
         assert_eq!(
-            store
-                .by_authority_instance_digest(&authority_digest)
-                .await
-                .unwrap(),
+            store.by_authority_key(&authority_key).await.unwrap(),
             Some(next)
         );
         assert_eq!(
             store
-                .history_newest_first(&authority_digest, Some(update.event_id.as_str()), 8)
+                .history_newest_first(&authority_key, Some(update.event_id.as_str()), 8)
                 .await
                 .unwrap(),
             vec![genesis]
         );
         assert!(matches!(
             store
-                .history_newest_first(&authority_digest, Some("ak:event:missing"), 8)
+                .history_newest_first(&authority_key, Some("ak:event:missing"), 8)
                 .await,
             Err(PersistenceError::NotFound(_))
         ));
@@ -272,13 +268,10 @@ mod tests {
         store.compare_and_set(None, accepted.clone()).await.unwrap();
 
         let mut substituted = accepted;
-        substituted.authority_instance = PrincipalAuthorityInstance::new(
+        substituted.authority_key = PrincipalAuthorityKey::new(
             principal(),
             DidCoreId::new("ak:did_core:web:other-principal-server.example").unwrap(),
-            genesis.realm_id.clone(),
-            Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
-        )
-        .unwrap();
+        );
 
         assert!(matches!(
             store.compare_and_set(None, substituted).await,

@@ -123,7 +123,7 @@ async fn preflight_controller_gate(
     _selector: &AgentSignerEvidenceQuerySelector,
 ) -> Result<ControllerAccountGateAttestation, AgentSignerEvidenceQueryFailureReason> {
     // The selector currently lacks the controller's exact
-    // PrincipalAuthorityInstance. A core-id lookup would allow a same-core
+    // account authority pair. A core-id lookup would allow a same-core
     // PCR substitution, so the gate cannot be issued from this contract.
     Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
@@ -818,6 +818,7 @@ pub(crate) async fn signer_evidence_bundle_for_events(
         if event
             .proofs
             .iter()
+            .filter_map(arkret_wire::EventProof::as_producer)
             .all(|proof| proof.verification_method != runtime.verification_method)
         {
             return None;
@@ -861,6 +862,7 @@ pub(crate) async fn verify_federated_signer_evidence(
         || event
             .proofs
             .iter()
+            .filter_map(arkret_wire::EventProof::as_producer)
             .all(|proof| proof.verification_method != binding.verification_method)
     {
         return Err(agent_evidence_missing());

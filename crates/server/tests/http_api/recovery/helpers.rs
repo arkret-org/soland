@@ -112,6 +112,7 @@ pub(crate) async fn seed_recovery_policy(
     version: u32,
     supersedes: Option<&str>,
 ) -> String {
+    let principal_core = fixture_actor_core_id(principal_id);
     let policy_id = new_prefixed_uuid7("ak:policy:");
     let issued_at = chrono::DateTime::parse_from_rfc3339("2026-05-30T00:00:00.000Z")
         .unwrap()
@@ -122,7 +123,7 @@ pub(crate) async fn seed_recovery_policy(
     let raw_payload = serde_json::json!({
         "schema": "ak.schema.recovery_policy.v1",
         "policy_id": policy_id,
-        "principal_id": principal_id,
+        "principal_id": principal_core,
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
@@ -149,7 +150,7 @@ pub(crate) async fn seed_recovery_policy(
         .recovery_policies()
         .insert(RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: principal_id.to_owned(),
+            principal_id: principal_core.to_string(),
             version,
             acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
@@ -206,12 +207,13 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
 ) {
     let now = chrono::Utc::now();
     let device_id = RECOVERY_TEST_DEVICE;
+    let actor_core = fixture_actor_core_id(actor).to_string();
     state
         .test_persistence()
         .sessions()
         .put(&SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
-            actor: actor.to_owned(),
+            actor: actor_core.clone(),
             device_id: device_id.to_owned(),
             audience: state.service_id().clone(),
             session_public_key: None,
@@ -226,7 +228,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
         .test_persistence()
         .devices()
         .put(&DeviceInventoryRecord {
-            actor: actor.to_owned(),
+            actor: actor_core,
             device_id: device_id.to_owned(),
             display_name: Some("Production Test Device".to_owned()),
             verification_state: verification_state.to_owned(),
@@ -250,16 +252,18 @@ pub(crate) fn test_session_credential_hash(token: &str, audience: &str) -> Strin
 pub(crate) fn did_key_principal(signing: &SigningKey) -> (String, String) {
     let multibase = test_ed25519_multibase_public(signing);
     let principal_id = format!("did:key:{multibase}");
-    let verification_method = arkret_wire::DidUrl::new(format!("{principal_id}#{multibase}"))
-        .expect("fixture verification method is a DID URL");
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{principal_id}#{RECOVERY_TEST_DEVICE}"))
+            .expect("fixture verification method is a DID URL");
     (principal_id, verification_method.as_str().to_owned())
 }
 
 pub(crate) fn did_webvh_principal(signing: &SigningKey) -> (String, String) {
     let multibase = test_ed25519_multibase_public(signing);
     let principal_id = format!("did:webvh:{multibase}:recovery.example");
-    let verification_method = arkret_wire::DidUrl::new(format!("{principal_id}#recovery"))
-        .expect("fixture verification method is a DID URL");
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{principal_id}#{RECOVERY_TEST_DEVICE}"))
+            .expect("fixture verification method is a DID URL");
     (principal_id, verification_method.as_str().to_owned())
 }
 
@@ -317,10 +321,11 @@ pub(crate) fn signed_recovery_policy(
     supersedes: Option<&str>,
     signed_fields: &[&str],
 ) -> Value {
+    let principal_core = fixture_actor_core_id(principal_id);
     let mut policy = serde_json::json!({
         "schema": "ak.schema.recovery_policy.v1",
         "policy_id": new_prefixed_uuid7("ak:policy:"),
-        "principal_id": principal_id,
+        "principal_id": principal_core,
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
@@ -391,41 +396,45 @@ pub(crate) async fn post_recovery_policy(
             .expect("recovery policy verification method"),
     )
     .expect("fixture verification method is a DID URL");
+    let principal_full_id = verification_method
+        .as_str()
+        .split_once('#')
+        .map(|(did, _)| did)
+        .expect("recovery verification method has a DID fragment");
     // did-usage-and-verification.md §2.2 — the Event proof method MUST be a
     // `#fragment` DID URL under the principal. The non-`did:key:` fallback
     // reuses the policy's own method, so pin the invariant here instead of
     // letting a bare DID reach the Event.
-    let event_verification_method = arkret_wire::DidUrl::new(principal_id.strip_prefix("did:key:").map_or_else(
-        || {
-            assert!(
-                verification_method.starts_with(&format!("{principal_id}#")),
-                "fixture verification_method `{verification_method}` must be a DID URL rooted in {principal_id}"
-            );
-            verification_method.as_str().to_owned()
-        },
-        |key| format!("{principal_id}#{key}"),
-    ))
-    .expect("fixture Event verification method is a DID URL");
+    let event_verification_method =
+        arkret_wire::DidUrl::new(format!("{principal_full_id}#{RECOVERY_TEST_DEVICE}"))
+            .expect("fixture Event verification method is a DID URL");
+    project_test_authorized_device(
+        &state,
+        principal_full_id,
+        RECOVERY_TEST_DEVICE,
+        event_signing_key,
+    )
+    .await;
     ingest_pinned_recovery_did_document(
         &state,
-        principal_id,
+        principal_full_id,
         event_verification_method.as_str(),
         event_signing_key,
     )
     .await;
 
-    let realm_id = soland_test_support::fixture_principal_control_realm(principal_id);
+    let realm_id = soland_test_support::fixture_principal_control_realm(principal_full_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
     let fixture_basis = soland_test_support::cba_basis::FixtureBasis::shared(&[]);
     soland_test_support::cba_basis::seed_realm_basis(
         &state,
         &realm_id,
-        principal_id,
+        principal_full_id,
         fixture_basis,
     )
     .await;
     let principal_core = arkret_wire::project_full_id_to_core_id(
-        &arkret_identifiers::DidFullId::new(principal_id.to_owned())
+        &arkret_identifiers::DidFullId::new(principal_full_id.to_owned())
             .expect("fixture recovery principal full DID"),
     )
     .expect("fixture recovery principal projection");
@@ -440,13 +449,15 @@ pub(crate) async fn post_recovery_policy(
         .expect("recovery policy Realm events");
     let actor_seq = prior
         .iter()
-        .filter(|record| record.actor_id == principal_id)
+        .filter(|record| record.actor_id == principal_core.as_str())
         .map(|record| record.actor_seq)
         .max()
         .map_or(0, |seq| seq + 1);
     let prev_refs = prior
         .iter()
-        .filter(|record| record.actor_id == principal_id && record.actor_seq + 1 == actor_seq)
+        .filter(|record| {
+            record.actor_id == principal_core.as_str() && record.actor_seq + 1 == actor_seq
+        })
         .map(|record| arkret_wire::EventId::new(record.event_id.clone()).unwrap())
         .collect();
     let logical = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed) & 0xffff;
@@ -455,7 +466,8 @@ pub(crate) async fn post_recovery_policy(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).unwrap(),
+        principal_core,
+        arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-{logical:04x}-a11ce101",

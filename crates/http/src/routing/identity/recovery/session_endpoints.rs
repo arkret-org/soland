@@ -3,6 +3,12 @@ use soland_services::identity::RecoverySessionState as RecoverySessionServiceSta
 
 use super::*;
 
+const RECOVERY_SESSION_TTL_SECS: i64 = 900;
+
+fn generate_recovery_challenge() -> String {
+    URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>())
+}
+
 /// SOL-SEC-05 — constant-time string equality for recovery
 /// challenge/commitment comparisons, so a timing side channel cannot leak how
 /// many leading bytes of a security-relevant value matched.
@@ -36,7 +42,10 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> 
     let mut out = json!({
         "schema": "ak.schema.recovery_session.v1",
         "recovery_session_id": record.recovery_session_id,
-        "principal_id": record.principal_id,
+        "principal_authority": {
+            "principal_id": record.principal_id,
+            "principal_server_id": record.principal_server_id,
+        },
         "requesting_device_id": record.requesting_device_id,
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,
@@ -165,6 +174,173 @@ fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value 
     }
 }
 
+fn recovery_policy_basis_leaves(
+    basis: &LeaseBasisRef,
+) -> Result<Vec<arkret_identifiers::SealId>, AppError> {
+    match basis {
+        LeaseBasisRef::Seal(seal_id) => Ok(vec![seal_id.clone()]),
+        LeaseBasisRef::Joined(basis) => Ok(basis.leaves.clone()),
+        LeaseBasisRef::AnchorUnit(_) => Err(AppError::conflict(
+            "recovery policy authority cannot use a bootstrap anchor-unit basis",
+        )
+        .with_wire_code("recovery_publication_authority_invalid")),
+    }
+}
+
+async fn verify_device_quorum_rule_at_policy_basis(
+    state: &AppState,
+    active: &RecoveryPolicyState,
+    policy: &RecoveryPolicy,
+) -> Result<(), AppError> {
+    let Some(quorum) = policy.device_quorum.as_ref() else {
+        return Ok(());
+    };
+    let rule = policy
+        .publication_authorization_rules
+        .iter()
+        .find(|rule| rule.proof_kind == RecoveryProofKind::DeviceQuorum)
+        .ok_or_else(|| {
+            AppError::conflict("device quorum policy has no publication authorization rule")
+                .with_wire_code("recovery_publication_authority_invalid")
+        })?;
+    let expected_methods = quorum
+        .members
+        .iter()
+        .map(|device_id| format!("{}#{}", active.principal_id, device_id))
+        .collect::<BTreeSet<_>>();
+    let declared_methods = rule
+        .issuers
+        .iter()
+        .map(|issuer| issuer.verification_method.to_string())
+        .collect::<BTreeSet<_>>();
+    if expected_methods != declared_methods {
+        return Err(AppError::conflict(
+            "device quorum publication issuers do not match the policy member devices",
+        )
+        .with_wire_code("recovery_publication_authority_invalid"));
+    }
+
+    let leaves = recovery_policy_basis_leaves(&active.acceptance_basis)?;
+    let covered = state
+        .projections()
+        .seal_leaf_union_proof(&leaves)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "recovery policy acceptance basis cannot be resolved: {error}"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid")
+        })?
+        .into_iter()
+        .flat_map(|proof| proof.covered_event_digests)
+        .map(|digest| digest.to_string())
+        .collect::<BTreeSet<_>>();
+    let events = state
+        .event_queries()
+        .accepted_events_for_actor(&active.principal_id)
+        .await
+        .map_err(recovery_service_error)?;
+    for member in &quorum.members {
+        let member = member.as_str();
+        let latest_authorize = events
+            .iter()
+            .filter(|event| {
+                covered.contains(&event.canonical_digest)
+                    && event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
+            })
+            .map(|event| event.actor_seq)
+            .max();
+        let latest_revoke = events
+            .iter()
+            .filter(|event| {
+                covered.contains(&event.canonical_digest)
+                    && event.kind == arkret_wire::EventKind::DeviceRevoke.as_str()
+                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
+            })
+            .map(|event| event.actor_seq)
+            .max();
+        if latest_authorize.is_none()
+            || latest_revoke.is_some_and(|revoke| Some(revoke) >= latest_authorize)
+        {
+            return Err(AppError::conflict(format!(
+                "device quorum member `{member}` was not active at policy acceptance basis"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid"));
+        }
+    }
+    Ok(())
+}
+
+async fn root_anchored_recovery_publication_authority_context(
+    state: &AppState,
+    active: &RecoveryPolicyState,
+    realm_id: &RealmId,
+) -> Result<RecoveryPublicationAuthorityContext, AppError> {
+    let policy: RecoveryPolicy =
+        serde_json::from_value(active.raw_payload.clone()).map_err(|error| {
+            AppError::internal(format!("stored recovery policy is invalid: {error}"))
+        })?;
+    policy.validate().map_err(|error| {
+        AppError::conflict(format!(
+            "stored recovery policy cannot define publication authority: {error}"
+        ))
+        .with_wire_code("recovery_publication_authority_invalid")
+    })?;
+    verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
+
+    let authority_set_policy = AuthoritySetPolicy {
+        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
+        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
+        policy_kind: AuthoritySetPolicyKind::PrincipalControl,
+        scope_ref: arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        source: AuthoritySetPolicySource {
+            source_kind: AuthoritySetSourceKind::RecoveryPolicy,
+            source_ref: active.policy_id.clone(),
+            source_digest: Hash::new(arkret_canonical::canonical_sha256(&policy).map_err(
+                |error| AppError::internal(format!("recovery policy digest failed: {error}")),
+            )?)
+            .map_err(|error| AppError::internal(format!("recovery policy digest: {error}")))?,
+            generation_ref: active.version.to_string(),
+        },
+        authorization_rules: policy
+            .publication_authorization_rules
+            .iter()
+            .map(|rule| AuthoritySetAuthorizationRule {
+                rule_id: rule.rule_id.clone(),
+                issuer_role: rule.issuer_role,
+                allowed_actions: rule.allowed_actions.clone(),
+                issuers: rule.issuers.clone(),
+                threshold: rule.threshold,
+            })
+            .collect(),
+    };
+    let authority_set_ref = AuthoritySetRef {
+        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
+        authority_set_digest: authority_set_policy.digest().map_err(|error| {
+            AppError::internal(format!("recovery authority policy digest failed: {error}"))
+        })?,
+    };
+    let context = RecoveryPublicationAuthorityContext {
+        identity_model: RecoveryIdentityModel::RootAnchored,
+        basis_ref: active.acceptance_basis.clone(),
+        scope_ref: authority_set_policy.scope_ref.clone(),
+        authority_set_ref,
+        authority_set_policy,
+        allowed_actions: vec![RecoveryPublicationAction::DeviceReanchor],
+    };
+    context
+        .validate_for(RecoveryIdentityModel::RootAnchored)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "recovery publication authority context is invalid: {error}"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid")
+        })?;
+    Ok(context)
+}
+
 /// Load a session and enforce principal isolation: only the authenticated
 /// principal (== `session.actor`) may read or act on its own recovery sessions.
 pub(super) async fn load_owned_recovery_session(
@@ -208,6 +384,7 @@ pub(super) async fn recovery_session_create(
     aa: AuthArgs,
     body: JsonBody<RecoverySessionCreateRequestBody>,
     depot: &mut Depot,
+    res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<RecoverySessionState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -215,17 +392,36 @@ pub(super) async fn recovery_session_create(
     let principal = session.actor.clone();
     let payload = body.into_inner();
 
-    // `principal_id` is part of the wire contract (recovery-session.schema.json
-    // create_request) and MUST equal the authenticated principal — a caller may
-    // only open a recovery session for itself.
-    if payload.principal_id.as_str() != principal {
+    let principal_authority = payload.principal_authority;
+    if principal_authority.principal_id.as_str() != principal {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "principal_id does not match the authenticated principal",
+            "principal_authority.principal_id does not match the authenticated principal",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
+    if principal_authority.principal_server_id.as_str() != state.service_id() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "principal_authority does not bind this Principal Server",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("principal_authority_mismatch"));
+    }
+    let authority_record = state
+        .persistence()
+        .principal_resolution_by_authority_key(&principal_authority)
+        .await
+        .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "principal authority is not accepted by this Principal Server",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_reason_code("principal_authority_mismatch")
+        })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {
         return Err(AppError::invalid_param(format!(
@@ -282,18 +478,137 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("recovery_policy_mismatch"));
     }
 
-    // AUTH-RELAY-004: a recovery session MUST freeze the exact five-field
-    // `PrincipalAuthorityInstance` it was created under, and that instance must
-    // then flow into the challenge, the recovery proof and the transaction
-    // snapshot commitment. `RecoverySessionCreateRequestBody` does not carry it
-    // yet, and deriving it from the principal core or the current DID would let
-    // another PCR of the same core drive this principal's recovery, so creation
-    // fails closed.
-    Err(AppError::new(
-        ErrorCode::FailedPrecondition,
-        "recovery session creation requires an exact authority_instance selector",
+    let device_generation =
+        crate::routing::identity::device_generation::current_device_generation(state, &principal)
+            .await
+            .map_err(recovery_store_error)?;
+    let realm_id = authority_record.pcr_realm_id;
+    let (
+        identity_model,
+        current_device_generation_ref,
+        device_generation_status,
+        registry_head,
+        accepted_seal_frontier,
+    ) =
+        if let Some(generation) = device_generation {
+            let mut entries = state
+                .dids()
+                .log_events(&principal)
+                .await
+                .map_err(recovery_service_error)?;
+            entries.sort_by_key(|entry| entry.seq);
+            let registry_head = entries
+                .last()
+                .map(|entry| entry.event_digest.clone())
+                .ok_or_else(|| {
+                    AppError::conflict("recovery requires an accepted DID registry head")
+                        .with_wire_code("device_reanchor_entry_not_head")
+                })?;
+            let leaves =
+            crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
+                state, &principal, &realm_id,
+            )
+            .await
+            .map_err(recovery_store_error)?;
+            let accepted_seal_frontier = if leaves.is_empty() {
+                None
+            } else {
+                let view = state
+                    .projections()
+                    .effective_seal_view(&leaves, &realm_id)
+                    .map_err(|error| {
+                        AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
+                            .with_wire_code("device_reanchor_frontier_mismatch")
+                    })?;
+                Some(arkret_wire::DeviceReanchorPreFenceSealFrontier {
+                    leaves,
+                    control_event_set_root: view.control_event_set_root,
+                    state_root: view.state_root,
+                })
+            };
+            (
+            RecoveryIdentityModel::RootAnchored,
+            Some(NonEmptyString::new(generation.current_ref).map_err(|error| {
+                AppError::internal(format!("invalid accepted device generation ref: {error}"))
+            })?),
+            Some(match generation.status {
+                crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
+                    DeviceGenerationStatus::Active
+                }
+                crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
+                    DeviceGenerationStatus::Conflicted
+                }
+            }),
+            Some(Hash::new(registry_head).map_err(|error| {
+                AppError::internal(format!("invalid accepted DID registry head: {error}"))
+            })?),
+            accepted_seal_frontier,
+        )
+        } else {
+            return Err(
+                AppError::conflict("recovery requires an accepted device generation")
+                    .with_wire_code("device_generation_missing"),
+            );
+        };
+
+    let publication_authority_context =
+        root_anchored_recovery_publication_authority_context(state, &active, &realm_id).await?;
+    let publication_authority_context_digest =
+        publication_authority_context.digest().map_err(|error| {
+            AppError::internal(format!(
+                "recovery publication authority context digest failed: {error}"
+            ))
+        })?;
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let record = RecoverySessionServiceState {
+        recovery_session_id: crate::ids::generate("recovery_session"),
+        principal_id: principal.clone(),
+        principal_server_id: principal_authority.principal_server_id.to_string(),
+        requesting_device_id,
+        trust_domain,
+        policy_id: active.policy_id.clone(),
+        policy_version: active.version,
+        identity_model,
+        current_device_generation_ref,
+        device_generation_status,
+        registry_head,
+        accepted_seal_frontier,
+        policy_payload: active.raw_payload.clone(),
+        publication_authority_context,
+        publication_authority_context_digest,
+        challenge: generate_recovery_challenge(),
+        state: "pending".to_owned(),
+        proof_payload: None,
+        transaction_id: None,
+        created_at: now,
+        updated_at: now,
+        expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
+    };
+    state
+        .recovery_sessions()
+        .create_session(record.clone())
+        .await
+        .map_err(recovery_session_store_error)?;
+
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "ak.root.identity.recovery_session.command.create",
+        json!({
+            "recovery_session_id": record.recovery_session_id.clone(),
+            "principal_authority": {
+                "principal_id": record.principal_id.clone(),
+                "principal_server_id": record.principal_server_id.clone(),
+            },
+            "policy_id": record.policy_id.clone(),
+            "trust_domain": record.trust_domain.clone(),
+        }),
+        "created",
     )
-    .with_status(StatusCode::PRECONDITION_FAILED))
+    .await;
+
+    res.status_code(StatusCode::CREATED);
+    json_ok(typed_recovery_session_state(&record)?)
 }
 
 #[salvo::oapi::endpoint(
@@ -473,13 +788,138 @@ pub(super) async fn recovery_session_proof_submit(
 /// principal/domain, different session) fails verification — this gives the
 /// `recovery_evidence_unbound` guarantee for free.
 pub(super) async fn verify_principal_signing_proof(
-    _state: &AppState,
-    _record: &RecoverySessionServiceState,
-    _proof: &Map<String, Value>,
+    state: &AppState,
+    record: &RecoverySessionServiceState,
+    proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    Err(recovery_signature_error(
-        "principal-signing recovery proof requires an exact principal authority instance",
-    ))
+    if record.principal_server_id.as_str() != state.service_id() {
+        return Err(recovery_signature_error(
+            "recovery session principal authority pair does not bind this Principal Server",
+        ));
+    }
+    let verification_method = required_proof_string(proof, "verification_method")?;
+    let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
+        recovery_signature_error("principal-signing verification_method has no device fragment")
+    })?;
+    let method_did =
+        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
+            recovery_signature_error(format!("principal-signing method DID is invalid: {error}"))
+        })?;
+    let method_principal =
+        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
+            recovery_signature_error(format!(
+                "principal-signing method DID cannot be projected: {error}"
+            ))
+        })?;
+    if method_principal.as_str() != record.principal_id {
+        return Err(recovery_signature_error(
+            "principal-signing method does not belong to the recovery session authority pair",
+        ));
+    }
+    let device_id =
+        arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
+            recovery_signature_error(format!(
+                "principal-signing device fragment is invalid: {error}"
+            ))
+        })?;
+    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+        arkret_identifiers::DidCoreId::new(record.principal_id.clone()).map_err(|error| {
+            AppError::internal(format!("stored recovery principal id is invalid: {error}"))
+        })?,
+        arkret_identifiers::DidCoreId::new(record.principal_server_id.clone()).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "stored recovery Principal Server id is invalid: {error}"
+                ))
+            },
+        )?,
+    );
+    let authority = state
+        .persistence()
+        .principal_resolution_by_authority_key(&authority_key)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "recovery principal authority lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            recovery_signature_error("recovery principal authority pair is not durably accepted")
+        })?;
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: record.principal_id.clone(),
+            device_id: device_id.to_string(),
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("recovery signing device lookup failed: {error}"))
+        })?
+        .ok_or_else(|| recovery_signature_error("recovery signing device is unavailable"))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(recovery_signature_error(
+            "recovery signing device is not active",
+        ));
+    }
+    let payload = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| {
+        AppError::internal(format!(
+            "recovery signing device evidence is invalid: {error}"
+        ))
+    })?;
+    let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
+        recovery_signature_error("recovery signing device has no accepted authorization Event")
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "recovery device authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            recovery_signature_error("recovery device authorization Event is unavailable")
+        })?;
+    if authorize_event.actor_id != record.principal_id
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
+    {
+        return Err(recovery_signature_error(
+            "recovery signing device authorization is outside the selected account lineage",
+        ));
+    }
+    let signing_key = payload
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| recovery_signature_error("recovery signing device key is unavailable"))?;
+    let key =
+        crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
+            .map_err(|error| {
+                recovery_signature_error(format!("recovery signing device key is invalid: {error}"))
+            })?;
+    let transcript = recovery_proof_transcript(record, "principal_signing");
+    let transcript_bytes =
+        arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
+            AppError::internal(format!("recovery proof transcript failed: {error}"))
+        })?;
+    let signature_b64 = required_proof_string(proof, "signature")?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("proof.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("proof.signature must be 64 Ed25519 bytes"))?;
+    key.verify(&transcript_bytes, &signature).map_err(|_| {
+        crate::metrics::record_digest_mismatch("recovery_proof_digest");
+        recovery_signature_error("principal-signing recovery proof signature verification failed")
+    })
 }
 
 pub(super) async fn verify_trusted_recovery_service_proof(
@@ -860,7 +1300,10 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, ki
     json!({
         "schema": "ak.identity.recovery_proof.v1",
         "kind": kind,
-        "principal_id": record.principal_id,
+        "principal_authority": {
+            "principal_id": record.principal_id,
+            "principal_server_id": record.principal_server_id,
+        },
         "requesting_device_id": record.requesting_device_id,
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,
@@ -885,7 +1328,10 @@ pub(super) fn generic_recovery_proof_transcript(
     json!({
         "schema": "ak.identity.recovery_proof.v1",
         "kind": kind,
-        "principal_id": record.principal_id,
+        "principal_authority": {
+            "principal_id": record.principal_id,
+            "principal_server_id": record.principal_server_id,
+        },
         "requesting_device_id": record.requesting_device_id,
         "trust_domain": record.trust_domain,
         "policy_id": record.policy_id,

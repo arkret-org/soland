@@ -113,7 +113,11 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         .unwrap_or(&event.actor_id)
         .as_str()
         .to_owned();
-    for proof in &event.proofs {
+    for proof in event
+        .proofs
+        .iter()
+        .filter_map(arkret_wire::EventProof::as_producer)
+    {
         // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
         // under the signer, never the bare signer DID. Event actor identities
         // are stable CoreIds while verification methods are rooted in FullIds,
@@ -1924,7 +1928,7 @@ mod seal_delta_tests {
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();
         let issued_at = chrono::Utc::now();
-        let mut event = arkret_wire::test_support::raw_event_at(
+        let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id(&actor_id),
@@ -1956,7 +1960,7 @@ mod seal_delta_tests {
             "a bare signer DID must not be constructible as a verification method"
         );
 
-        event.proofs = vec![proof(&format!("{}.evil#device-1", actor_id.as_str()))];
+        event.proofs = vec![proof(&format!("{}.evil#device-1", actor_id.as_str())).into()];
         assert!(
             verify_control_move_proofs(&state, &event).is_err(),
             "a sibling DID sharing the signer prefix must not be accepted"
@@ -1964,7 +1968,7 @@ mod seal_delta_tests {
 
         // The `#fragment` form still gets past the rooting gate and fails
         // later, in the signature check.
-        event.proofs = vec![proof(&format!("{}#device-1", actor_id.as_str()))];
+        event.proofs = vec![proof(&format!("{}#device-1", actor_id.as_str())).into()];
         let error = verify_control_move_proofs(&state, &event)
             .expect_err("the placeholder JWS cannot verify");
         assert!(!error.contains("is not rooted in the signer"), "{error}");

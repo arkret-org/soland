@@ -629,6 +629,10 @@ mod tests {
                 &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"seed": event_seed}),
@@ -680,6 +684,10 @@ mod tests {
                 &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
             )
             .unwrap(),
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_wire::DidFullId::new(actor_id.to_owned()).unwrap(),
+            )
+            .unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"contact_id": "ak:contact:test"}),
@@ -693,7 +701,7 @@ mod tests {
         });
         event.event_id = event.derive_event_id().unwrap();
         let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
-        event.proofs = vec![arkret_wire::Proof {
+        let producer = arkret_wire::Proof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             proof_purpose: None,
             verification_method: arkret_wire::DidUrl::new(format!(
@@ -705,7 +713,26 @@ mod tests {
             domain: None,
             audience: None,
             jws: "fixture.signature".to_owned(),
-        }];
+        };
+        let admission = arkret_wire::PrincipalServerAdmissionProof {
+            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{actor_id}#principal-server-admission-key"
+            ))
+            .unwrap(),
+            event_digest: event_digest.clone(),
+            producer_proof_digest:
+                arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
+                    .unwrap(),
+            producer_verification_method: producer.verification_method.clone(),
+            producer_signing_key: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
+            accepted_at: created_at,
+            jws: "fixture.admission.signature".to_owned(),
+        };
+        event.proofs = vec![producer.into(), admission.into()];
+        event
+            .validate_principal_server_admission_binding()
+            .expect("fixture accepted Event proof set");
         let event_id = event.event_id.to_string();
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();

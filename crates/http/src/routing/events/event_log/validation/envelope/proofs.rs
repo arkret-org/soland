@@ -21,6 +21,24 @@ fn root_anchor_event_public_key(
     })
 }
 
+fn did_key_from_ed25519_bytes(bytes: &[u8]) -> Result<arkret_wire::DidKey, EventValidationError> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "verified Event producer key is not Ed25519",
+        )
+    })?;
+    let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&bytes);
+    arkret_wire::DidKey::new(format!("did:key:{multibase}")).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            format!("verified Event producer key is invalid: {error}"),
+        )
+    })
+}
+
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
@@ -36,7 +54,7 @@ pub(crate) async fn validate_event_proofs(
     envelope_bytes: &[u8],
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
-) -> Result<(), EventValidationError> {
+) -> Result<arkret_wire::DidKey, EventValidationError> {
     let proofs = object
         .get("proofs")
         .and_then(Value::as_array)
@@ -52,6 +70,19 @@ pub(crate) async fn validate_event_proofs(
             StatusCode::BAD_REQUEST,
             "missing_param",
             "proofs must contain at least one proof",
+        ));
+    }
+    let producer_proofs = proofs
+        .iter()
+        .filter(|proof| proof.get("kind").and_then(Value::as_str) == Some("detached_jws"))
+        .collect::<Vec<_>>();
+    if producer_proofs.len() != 1
+        || (proofs.len() != 1 && !(internal_admission.is_some() && proofs.len() == 2))
+    {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "Event must carry one producer proof and only federated accepted Events may carry one admission proof",
         ));
     }
     // Durable Events always carry the SDK Event proof shape. Development mode
@@ -130,7 +161,7 @@ pub(crate) async fn validate_event_proofs(
     // minimal-metadata profile AND the payload carries an encrypted-content
     // envelope.
     let minimal_metadata_context = minimal_metadata_author_context(object, state).await;
-    for proof in proofs {
+    for proof in producer_proofs {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -352,7 +383,13 @@ pub(crate) async fn validate_event_proofs(
                         "candidate device Event proof verification failed",
                     )
                 })?;
-                continue;
+                return did_key_from_ed25519_bytes(&material.ed25519_bytes().map_err(|error| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        format!("candidate device Event key is invalid: {error}"),
+                    )
+                })?);
             }
             // account-lifecycle.md §2.1.2: PCR genesis is admitted before a
             // principal grant or device-directory projection exists. Its
@@ -380,14 +417,20 @@ pub(crate) async fn validate_event_proofs(
                         "root-anchor Event proof verification failed",
                     )
                 })?;
-                continue;
+                return did_key_from_ed25519_bytes(&material.ed25519_bytes().map_err(|error| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        format!("root-anchor Event key is invalid: {error}"),
+                    )
+                })?);
             }
             // §2.10.3 minimal-metadata branch: LeafNode trust anchor, pure
             // did:key fragment key material, zero DID-freshness / resolver /
             // principal-directory calls. Mutually exclusive with the
             // DID-document path below.
             if let Some(context) = &minimal_metadata_context {
-                validate_minimal_metadata_author_proof(
+                return validate_minimal_metadata_author_proof(
                     state,
                     context,
                     object,
@@ -396,10 +439,23 @@ pub(crate) async fn validate_event_proofs(
                     &proof_binding_bytes,
                     &jws,
                 )
-                .await?;
-                continue;
+                .await;
             }
-            if verify_with_active_agent_session(
+            if let Some(signing_key) = verify_with_installed_applet_registration_epoch(
+                state,
+                object,
+                &typed_proof,
+                envelope_bytes,
+                &actor_did,
+                &signer_controller,
+                &verification_method,
+                digest_suite,
+            )
+            .await?
+            {
+                return Ok(signing_key);
+            }
+            if let Some(signing_key) = verify_with_active_agent_session(
                 state,
                 session,
                 &signer_controller,
@@ -409,17 +465,7 @@ pub(crate) async fn validate_event_proofs(
             )
             .await?
             {
-                continue;
-            }
-            if verify_with_federated_agent_signer_evidence(
-                internal_admission,
-                session,
-                object,
-                &verification_method,
-                &proof_binding_bytes,
-                &jws,
-            )? {
-                continue;
+                return Ok(signing_key);
             }
             if object
                 .get("unsigned")
@@ -475,7 +521,7 @@ pub(crate) async fn validate_event_proofs(
                     development_verification.is_ok(),
                 );
                 if development_verification.is_ok() {
-                    continue;
+                    return did_key_from_ed25519_bytes(signing_key.verifying_key().as_bytes());
                 }
                 tracing::debug!(
                     "deterministic development Event key did not match; trying registered device authority"
@@ -490,7 +536,7 @@ pub(crate) async fn validate_event_proofs(
             // algorithm to be Ed25519. Handing hand-built
             // binding bytes to the generic verifier — as this call site used to
             // do — silently dropped both checks.
-            if !verify_with_federated_signer_evidence(
+            if let Some(signing_key) = verify_with_federated_signer_evidence(
                 internal_admission,
                 session,
                 object,
@@ -498,6 +544,8 @@ pub(crate) async fn validate_event_proofs(
                 &proof_binding_bytes,
                 &jws,
             )? {
+                return Ok(signing_key);
+            } else {
                 let verification = if object.get("kind").and_then(Value::as_str)
                     == Some(arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
                 {
@@ -538,7 +586,7 @@ pub(crate) async fn validate_event_proofs(
                     )
                     .await
                 };
-                verification.map_err(|error| {
+                let signing_key = verification.map_err(|error| {
                     use crate::jws_verify::PrincipalAuthorizedJwsError;
 
                     match error {
@@ -560,48 +608,140 @@ pub(crate) async fn validate_event_proofs(
                         }
                     }
                 })?;
+                return Ok(signing_key);
             }
         }
     }
-    Ok(())
+    Err(event_validation_error(
+        StatusCode::BAD_REQUEST,
+        "invalid_proof",
+        "Event has no verified producer key",
+    ))
 }
 
-fn verify_with_federated_agent_signer_evidence(
-    internal_admission: Option<&InternalEventAdmission>,
-    session: &SessionRecord,
+#[allow(clippy::too_many_arguments)]
+async fn verify_with_installed_applet_registration_epoch(
+    state: &AppState,
     object: &serde_json::Map<String, Value>,
+    proof: &arkret_wire::Proof,
+    envelope_bytes: &[u8],
+    actor_id: &arkret_wire::DidCoreId,
+    signer_controller: &str,
     verification_method: &str,
-    canonical_bytes: &[u8],
-    jws: &str,
-) -> Result<bool, EventValidationError> {
-    let Some(evidence) = internal_admission.and_then(|admission| {
-        admission.agent_signer_evidence(session, object, verification_method)
-    }) else {
-        return Ok(false);
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
+    let Some(applet_id) = object.get("applet_id").and_then(Value::as_str) else {
+        return Ok(None);
     };
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-        bytes: evidence.public_key().to_vec(),
+    let fail = |code: &'static str, message: &'static str| {
+        event_validation_error(StatusCode::BAD_REQUEST, code, message)
     };
-    // §3 — key material rides in the independently verified federation
-    // evidence; zero resolver calls.
-    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
-        jws,
-        canonical_bytes,
-        &material,
-    );
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_FEDERATED_AGENT_EVIDENCE,
-        outcome.is_ok(),
-    );
-    outcome.map_err(|error| {
-        tracing::debug!(%error, "federated Agent Event proof JWS verification failed");
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "federated Agent Event proof JWS verification failed",
+    let record = state
+        .event_queries()
+        .applet(applet_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %applet_id, "failed to read installed Applet proof authority");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Applet proof authority store is unavailable",
+            )
+        })?
+        .ok_or_else(|| {
+            fail(
+                "applet_registration_unauthorized",
+                "Applet Event proof has no installed registration",
+            )
+        })?;
+    let record: crate::routing::extensions::applet_bridge::AppletRecord =
+        serde_json::from_value(record).map_err(|error| {
+            tracing::error!(%error, %applet_id, "stored Applet proof authority is invalid");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "stored Applet proof authority is invalid",
+            )
+        })?;
+    if record.revoked_at.is_some()
+        || !matches!(record.status.as_str(), "installed" | "partially_installed")
+    {
+        return Err(fail(
+            "applet_revoked",
+            "Applet Event proof registration is not active",
+        ));
+    }
+    let package = record.package.as_ref().ok_or_else(|| {
+        fail(
+            "applet_install_required",
+            "Applet Event proof requires a package install",
         )
     })?;
-    Ok(true)
+    if package.service_id.as_str() != signer_controller
+        || package.webhook_auth.key_ref.as_str() != verification_method
+    {
+        return Err(fail(
+            "applet_registration_epoch_signing_key_mismatch",
+            "Applet Event proof does not use the installed service signing key",
+        ));
+    }
+    let evidence = record
+        .registration_epoch_evidence
+        .as_ref()
+        .or(package.registration_epoch_evidence.as_ref())
+        .ok_or_else(|| {
+            fail(
+                "applet_registration_epoch_evidence_missing",
+                "Applet Event proof has no registration-epoch evidence",
+            )
+        })?;
+    if !evidence.contains_signing_key(verification_method) {
+        return Err(fail(
+            "applet_registration_epoch_signing_key_mismatch",
+            "Applet Event proof key is outside the installed registration epoch",
+        ));
+    }
+    let document =
+        crate::jws_verify::resolve_did_document(state, &evidence.full_id).map_err(|reason| {
+            tracing::debug!(%reason, %applet_id, "Applet Event proof DID resolution failed");
+            fail(
+                "applet_registration_epoch_evidence_mismatch",
+                "Applet Event proof DID document could not be resolved",
+            )
+        })?;
+    evidence
+        .validate_against_did_document(&document)
+        .map_err(|reason| {
+            tracing::debug!(%reason, %applet_id, "Applet Event proof epoch evidence mismatch");
+            fail(
+                "applet_registration_epoch_evidence_mismatch",
+                "Applet Event proof registration-epoch evidence is stale or mismatched",
+            )
+        })?;
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|reason| {
+                tracing::debug!(%reason, %applet_id, "Applet Event proof key resolution failed");
+                fail(
+                    "applet_registration_epoch_signing_key_mismatch",
+                    "Applet Event proof signing key is unavailable",
+                )
+            })?;
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: public_key.to_bytes().to_vec(),
+    };
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        envelope_bytes,
+        actor_id,
+        &material,
+        digest_suite,
+    )
+    .map_err(|error| {
+        tracing::debug!(%error, %applet_id, "Applet Event proof signature failed");
+        fail("invalid_proof", "Applet Event proof signature is invalid")
+    })?;
+    did_key_from_ed25519_bytes(public_key.as_bytes()).map(Some)
 }
 
 async fn verify_with_active_agent_session(
@@ -611,9 +751,9 @@ async fn verify_with_active_agent_session(
     verification_method: &str,
     canonical_bytes: &[u8],
     jws: &str,
-) -> Result<bool, EventValidationError> {
+) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
     let Some(agent_session) = session.agent_session.as_ref() else {
-        return Ok(false);
+        return Ok(None);
     };
     if session.actor != signer_id
         || agent_session.freshness_state != arkret_wire::FreshnessState::Fresh
@@ -735,6 +875,7 @@ async fn verify_with_active_agent_session(
             "Agent session public key is not valid base64url",
         )
     })?;
+    let signing_key = did_key_from_ed25519_bytes(&key_bytes)?;
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes: key_bytes };
     // §3 — key material comes from the active Agent session grant; zero
     // resolver calls.
@@ -754,7 +895,7 @@ async fn verify_with_active_agent_session(
             "Agent Event proof JWS verification failed",
         )
     })?;
-    Ok(true)
+    Ok(Some(signing_key))
 }
 
 pub(super) fn verify_with_federated_signer_evidence(
@@ -764,14 +905,13 @@ pub(super) fn verify_with_federated_signer_evidence(
     verification_method: &str,
     canonical_bytes: &[u8],
     jws: &str,
-) -> Result<bool, EventValidationError> {
-    let Some(evidence) = internal_admission
-        .and_then(|admission| admission.signer_key_evidence(session, object, verification_method))
-    else {
-        return Ok(false);
+) -> Result<Option<arkret_wire::DidKey>, EventValidationError> {
+    let Some(signing_key) = internal_admission.and_then(|admission| {
+        admission.federated_producer_signing_key(session, object, verification_method)
+    }) else {
+        return Ok(None);
     };
-    let multibase = evidence
-        .device_signing_key
+    let multibase = signing_key
         .as_str()
         .strip_prefix("did:key:")
         .ok_or_else(|| {
@@ -784,8 +924,8 @@ pub(super) fn verify_with_federated_signer_evidence(
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
         value: multibase.to_owned(),
     };
-    // §3 — key material rides in the independently verified federated
-    // device-signing evidence; zero resolver calls.
+    // The producer key is bound into the independently verified origin
+    // Principal Server admission proof; no device-history sidecar is needed.
     let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
         jws,
         canonical_bytes,
@@ -803,7 +943,7 @@ pub(super) fn verify_with_federated_signer_evidence(
             "federated Event proof JWS verification failed",
         )
     })?;
-    Ok(true)
+    Ok(Some(signing_key.clone()))
 }
 
 /// Parse the wire proof into the SDK [`arkret_wire::Proof`] and reproduce the

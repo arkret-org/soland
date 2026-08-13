@@ -56,12 +56,30 @@ pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event
             .seal_basis
             .as_ref()
             .is_none_or(|basis| basis.leaves.is_empty())
-        || event.proofs.len() != 1
     {
         return false;
     }
-    let Some((controller, fragment)) = event.proofs[0].verification_method.as_str().split_once('#')
-    else {
+    let mut producers = event.proofs.iter().filter_map(|proof| proof.as_producer());
+    let Some(producer) = producers.next() else {
+        return false;
+    };
+    if producers.next().is_some() {
+        return false;
+    }
+    let mut admissions = event
+        .proofs
+        .iter()
+        .filter_map(|proof| proof.as_principal_server_admission());
+    let Some(_) = admissions.next() else {
+        return false;
+    };
+    if admissions.next().is_some() || event.proofs.len() != 2 {
+        return false;
+    }
+    if event.validate_principal_server_admission_binding().is_err() {
+        return false;
+    }
+    let Some((controller, fragment)) = producer.verification_method.as_str().split_once('#') else {
         return false;
     };
     let Ok(controller) = arkret_wire::DidFullId::new(controller.to_owned()) else {
@@ -73,6 +91,97 @@ pub fn has_self_principal_pcr_device_authorized_shape(event: &arkret_wire::Event
                 .strip_prefix("ak:device:")
                 .is_some_and(|device| !device.is_empty())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_self_principal_pcr_device_authorized_shape;
+
+    fn accepted_pcr_device_event() -> arkret_wire::Event {
+        let mut event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(format!("ak:realm:A{}", "a".repeat(43)))
+                    .unwrap(),
+            },
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:soland.example".to_owned()).unwrap(),
+            1,
+            arkret_wire::Hlc::new("019041000000-0000-00000001").unwrap(),
+            serde_json::json!({}),
+            "2026-08-14T00:00:00.000Z".parse().unwrap(),
+        )
+        .unwrap();
+        event.seal_basis = Some(arkret_wire::SealBasis {
+            leaves: vec![
+                arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap(),
+            ],
+        });
+        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        let producer = arkret_wire::Proof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
+            )
+            .unwrap(),
+            event_digest: event_digest.clone(),
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "producer..signature".to_owned(),
+        };
+        let admission = arkret_wire::PrincipalServerAdmissionProof {
+            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+            verification_method: arkret_wire::DidUrl::new("did:web:soland.example#service-key")
+                .unwrap(),
+            event_digest: event_digest.clone(),
+            producer_proof_digest:
+                arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
+                    .unwrap(),
+            producer_verification_method: producer.verification_method.clone(),
+            producer_signing_key: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
+            accepted_at: event.created_at,
+            jws: "admission..signature".to_owned(),
+        };
+        event.proofs = vec![producer.into(), admission.into()];
+        event
+    }
+
+    #[test]
+    fn pcr_device_authorized_shape_requires_exact_bound_producer_and_admission() {
+        let event = accepted_pcr_device_event();
+        assert!(has_self_principal_pcr_device_authorized_shape(&event));
+
+        let mut missing_admission = event.clone();
+        missing_admission.proofs.pop();
+        assert!(!has_self_principal_pcr_device_authorized_shape(
+            &missing_admission
+        ));
+
+        let mut duplicate_producer = event.clone();
+        duplicate_producer.proofs.push(event.proofs[0].clone());
+        assert!(!has_self_principal_pcr_device_authorized_shape(
+            &duplicate_producer
+        ));
+
+        let mut reversed_proofs = event.clone();
+        reversed_proofs.proofs.reverse();
+        assert!(!has_self_principal_pcr_device_authorized_shape(
+            &reversed_proofs
+        ));
+
+        let mut wrong_binding = event;
+        if let arkret_wire::EventProof::PrincipalServerAdmission(admission) =
+            &mut wrong_binding.proofs[1]
+        {
+            admission.producer_proof_digest =
+                arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
+        }
+        assert!(!has_self_principal_pcr_device_authorized_shape(
+            &wrong_binding
+        ));
+    }
 }
 
 /// Applet projection mutation committed with a closed Event aggregate.

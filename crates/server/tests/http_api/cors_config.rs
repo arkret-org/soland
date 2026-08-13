@@ -205,9 +205,17 @@ async fn invite_create_event_surfaces_via_authz_invites() {
     // Submit Alice's canonical directed invite.
     let event_id = "ak:event:ARdpHJI61pXl2eDxXq5o-JwwZDx5_mx7XTPBZMba03_p";
     let payload = serde_json::json!({
-        "invitee": bob_did,
+        "invitee": fixture_actor_core_id(bob_did),
         "invite_delivery_target": {
             "recipient_service_id": state.service_id(),
+            "service_resolution": {
+                "current_record_url": format!(
+                    "https://soland.local{}",
+                    arkret_models_identity::canonical_service_current_record_path(
+                        &arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap()
+                    )
+                )
+            },
             "recipient_service_kind": "principal_server"
         },
         "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
@@ -255,7 +263,7 @@ async fn invite_create_event_surfaces_via_authz_invites() {
             // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
                 && invite["id"].as_str() == Some(invite_id.as_str())
-                && invite["invitee"].as_str() == Some(bob_did)
+                && invite["invitee"].as_str() == Some(fixture_actor_core_id(bob_did).as_str())
                 && invite["state"].as_str() == Some("pending")
         }),
         "expected pending invite for bob in {realm_id} (got: {invites:?})"
@@ -431,7 +439,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .json(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: `mode` is a required enum
             // (p2p|sfu|turn) on the ice-config request body.

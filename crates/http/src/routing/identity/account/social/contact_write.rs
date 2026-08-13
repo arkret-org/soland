@@ -375,6 +375,7 @@ fn contact_scope_strings(scopes: &[ContactScope]) -> Vec<String> {
 
 fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     holder: &ContactPeer,
+    principal_server_id: arkret_wire::DidCoreId,
     realm_id: RealmId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
@@ -386,6 +387,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
         holder.contact_actor_id(),
+        principal_server_id,
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
@@ -574,8 +576,8 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         return json_ok(outcome);
     }
     // The authenticated device (or managed-Agent allocation) selects one exact
-    // PCR lineage. Never resolve a PCR from the principal core alone: the same
-    // core may have another independent authority instance.
+    // `(principal_id, principal_server_id)` pair and its local lifetime PCR
+    // lineage. Never resolve account state from the principal core alone.
     let realm_id = contact_authority_realm(state, session, &holder).await?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
@@ -608,8 +610,11 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         leaves: vec![accepted_seal.id],
     };
     let created_at = now();
+    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
     let event = new_unsigned_contact_event::<K>(
         &holder,
+        principal_server_id,
         realm_id,
         frontier.next_actor_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
@@ -737,17 +742,16 @@ async fn contact_authority_realm(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "Contact authority instance is unavailable",
+                "Contact account authority pair is unavailable",
             )
-        })?
-        .authority_instance;
-    if authority.principal_id != holder.contact_actor_id()
+        })?;
+    if authority.authority_key.principal_id != holder.contact_actor_id()
         || authority.pcr_realm_id != realm_id
-        || authority.principal_server_id.as_str() != state.service_id()
+        || authority.authority_key.principal_server_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "Contact authority instance does not match the authenticated holder",
+            "Contact account authority pair does not match the authenticated holder",
         ));
     }
     Ok(realm_id)
@@ -777,6 +781,7 @@ fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Re
         || event
             .proofs
             .iter()
+            .filter_map(arkret_wire::EventProof::as_producer)
             .any(|proof| proof.event_digest != draft.event_digest)
     {
         return Err(AppError::conflict(
@@ -924,6 +929,7 @@ fn signed_current_proof(
         .proofs
         .iter()
         .find_map(|proof| {
+            let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
             (arkret_wire::project_full_id_to_core_id(&full_id)
@@ -1007,9 +1013,9 @@ async fn local_requester_current_proof(
     else {
         return Ok(None);
     };
-    if resolution.authority_instance.principal_id != request_event.actor_id
-        || resolution.authority_instance.pcr_realm_id != request_event.realm_id
-        || resolution.authority_instance.principal_server_id.as_str() != state.service_id()
+    if resolution.authority_key.principal_id != request_event.actor_id
+        || resolution.pcr_realm_id != request_event.realm_id
+        || resolution.authority_key.principal_server_id.as_str() != state.service_id()
     {
         return Ok(None);
     }
@@ -1369,7 +1375,7 @@ async fn plan_contact_commit(
                 normal_response_receipt: Some(response_receipt.clone()),
                 glare_concurrency_attestations: None,
                 // A same-service pair already has the requester's accepted
-                // PCR Event and exact local authority instance, so its source
+                // PCR Event and exact local principal authority pair, so its source
                 // can issue both holder checkpoints without a transport
                 // round-trip. Cross-service pairs still merge the requester
                 // proof returned by the peer carrier.
@@ -1725,7 +1731,7 @@ async fn contact_request_delivery_address(
     _evidence: &ContactIntroductionEvidence,
 ) -> Result<Option<PeerContactAddress>, AppError> {
     // The current Contact introduction DTOs do not carry the exact five-field
-    // PrincipalAuthorityInstance required to authorize a human PCR delivery
+    // account authority pair required to authorize a human PCR delivery
     // target. Routing from a core id, a Realm membership, or a locator alone
     // would permit same-core PCR substitution, so this producer fails closed.
     Ok(None)
@@ -1914,7 +1920,7 @@ pub(super) async fn request(
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
-                previous_terminal_contact_round_id: body.previous_terminal_contact_round_id.clone(),
+                previous_terminal_basis_id: body.previous_terminal_contact_round_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
             };
             prepare::<arkret_wire::event_spec::ContactRequested>(
@@ -1967,11 +1973,11 @@ pub(super) async fn respond(
             }
             let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
-                contact_round_id: contact_round_id.clone(),
+                basis_id: contact_round_id.clone(),
                 version: 1,
                 request_event_ref: body.request_receipt.core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
-                previous_terminal_contact_round_id: body
+                previous_terminal_basis_id: body
                     .request_receipt
                     .core
                     .previous_terminal_contact_round_id
@@ -2047,7 +2053,7 @@ pub(super) async fn scope_update(
             let payload = ContactScopeUpdatePayload {
                 schema: ContactScopeUpdateSchema::V1,
                 peer: body.peer.clone(),
-                contact_round_id: body.contact_round_id.clone(),
+                basis_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
@@ -2081,7 +2087,7 @@ pub(super) async fn tombstone(
         ContactTombstoneRequestBody::Prepare(body) => {
             let payload = ContactTombstonedPayload {
                 peer: body.peer.clone(),
-                contact_round_id: body.contact_round_id.clone(),
+                basis_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 reason: None,

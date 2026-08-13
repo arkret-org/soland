@@ -135,6 +135,7 @@ pub(super) fn projected_cell_writes_for_actor(
         arkret_wire::event_envelope::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id).unwrap(),
         },
+        actor_id.clone(),
         actor_id,
         actor_seq,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),

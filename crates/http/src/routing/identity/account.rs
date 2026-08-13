@@ -203,28 +203,7 @@ pub(crate) use social::{
     verify_contact_service_signature_bytes,
 };
 mod lifecycle;
-mod principal_service_binding;
 pub(in crate::routing) mod repair;
-
-/// See [`principal_service_binding::binding_for_authority`] for why this
-/// exact-authority read path exists without a caller yet.
-#[allow(dead_code)]
-pub(crate) async fn principal_service_binding_for_authority(
-    state: &AppState,
-    authority: &arkret_wire::PrincipalAuthorityInstance,
-) -> Result<
-    Option<arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding>,
-    AppError,
-> {
-    principal_service_binding::binding_for_authority(state, authority).await
-}
-
-pub(crate) async fn install_conformance_principal_service_binding(
-    state: &AppState,
-    binding: arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
-) -> Result<(), AppError> {
-    principal_service_binding::install_conformance_binding(state, binding).await
-}
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
     AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
@@ -250,11 +229,6 @@ pub(super) fn protocol_router() -> Router {
         )
         .push(contact_routes())
         .push(direct_conversation_routes())
-        .push(
-            Router::with_path("principal-service-bindings")
-                .push(Router::with_path("prepare").post(principal_service_binding::prepare))
-                .push(Router::with_path("commit").post(principal_service_binding::commit)),
-        )
         .push(
             Router::with_path("invite-receive-policy")
                 .get(get_invite_receive_policy)
@@ -798,11 +772,15 @@ async fn local_account_register(
 ) -> JsonResult<SolandAccountRegisterOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let did = validate_did(&body.did)
-        .map_err(|_| AppError::invalid_param("invalid account DID"))?
-        .as_str()
-        .to_owned();
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(state, &did)?;
+    let full_id =
+        validate_did(&body.did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+    crate::routing::extensions::sovereign::validate_sovereign_did_registration(
+        state,
+        full_id.as_str(),
+    )?;
+    let did = arkret_wire::project_full_id_to_core_id(&full_id)
+        .map_err(|error| AppError::invalid_param(format!("invalid account DID: {error}")))?
+        .to_string();
 
     let localpart = normalize_account_localpart_for_request(&body.handle)?;
     let account_exists = state
@@ -1398,14 +1376,14 @@ async fn require_current_profile_authority(
         .persistence()
         .principal_resolution_for_realm(pcr_realm_id)
         .await
-        .map_err(|error| AppError::internal(format!("load principal authority instance: {error}")))?
+        .map_err(|error| AppError::internal(format!("load principal authority state: {error}")))?
         .ok_or_else(|| {
             profile_projection_precondition(
-                "account profile Event requires an accepted exact PCR authority instance",
+                "account profile Event requires an accepted account-local PCR lineage",
             )
         })?;
-    if resolution.authority_instance.principal_id != *principal_id
-        || resolution.authority_instance.pcr_realm_id != *pcr_realm_id
+    if resolution.authority_key.principal_id != *principal_id
+        || resolution.pcr_realm_id != *pcr_realm_id
     {
         return Err(profile_projection_precondition(
             "account profile Event PCR does not belong to the authenticated principal",
@@ -1421,40 +1399,22 @@ pub(crate) async fn accepted_account_profile(
     let principal_id = DidCoreId::new(principal.to_owned()).map_err(|error| {
         AppError::internal(format!("stored account principal id is invalid: {error}"))
     })?;
-    let projected = state
-        .event_queries()
-        .projected_events_for_actor(principal)
+    let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
+        AppError::internal(format!("local Principal Server id is invalid: {error}"))
+    })?;
+    let authority_key =
+        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let Some(authority) = state
+        .persistence()
+        .principal_resolution_by_authority_key(&authority_key)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let realms = projected
-        .iter()
-        .filter(|event| {
-            event.event_kind == arkret_wire::EventKind::ProfileCreate
-                && event.sender.as_deref() == Some(principal)
-        })
-        .map(|event| event.realm_id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut profiles = Vec::new();
-    for realm in realms {
-        let realm_id = RealmId::new(realm).map_err(|error| {
-            profile_projection_precondition(format!(
-                "accepted profile create has an invalid PCR realm: {error}"
-            ))
-        })?;
-        if let Some(accepted) =
-            accepted_account_profile_in_realm(state, &principal_id, &realm_id).await?
-        {
-            profiles.push(accepted.profile);
-        }
-    }
-    match profiles.len() {
-        0 => Ok(None),
-        1 => Ok(profiles.pop()),
-        // This read has no authority-instance selector. More than one accepted
-        // PCR lineage is therefore intentionally represented as an absent
-        // profile instead of selecting one by timestamp or iteration order.
-        _ => Ok(None),
-    }
+        .map_err(|error| AppError::internal(format!("load account authority pair: {error}")))?
+    else {
+        return Ok(None);
+    };
+    accepted_account_profile_in_realm(state, &principal_id, &authority.pcr_realm_id)
+        .await
+        .map(|accepted| accepted.map(|accepted| accepted.profile))
 }
 
 async fn accepted_account_profile_in_realm(

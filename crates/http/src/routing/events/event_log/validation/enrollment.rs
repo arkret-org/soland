@@ -74,6 +74,7 @@ pub(crate) async fn validate_device_authorization_binding(
             let proof_methods = event
                 .proofs
                 .iter()
+                .filter_map(arkret_wire::EventProof::as_producer)
                 .map(|proof| proof.verification_method.as_str())
                 .collect::<Vec<_>>();
             if proof_methods.is_empty()
@@ -147,181 +148,11 @@ fn device_authorization_invalid(message: impl Into<String>) -> EventValidationEr
 /// current device projection. Soland additionally verifies the service-owned
 /// genesis receipt, accepted Seal, and full-range attestation against its
 /// configured federation trust before accepting that replay.
-pub(crate) async fn validate_federated_device_signing_key_evidence(
-    state: &AppState,
-    evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
-) -> Result<String, String> {
-    evidence
-        .validate_shape()
-        .map_err(|error| error.to_string())?;
-    if evidence.authorization_accepted_at > crate::wire::now() + chrono::Duration::minutes(5) {
-        return Err("device authorization accepted_at is in the future".to_owned());
-    }
-
-    verify_federated_genesis_receipt(state, &evidence.principal_genesis_receipt)
-        .await
-        .map_err(|error| format!("PCR genesis receipt is invalid: {error}"))?;
-    verify_federated_accepted_seal(evidence)
-        .map_err(|error| format!("PCR accepted Seal is invalid: {error}"))?;
-
-    let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
-        .map_err(|error| format!("PCR device authorization replay failed: {error}"))?;
-    if replayed != evidence.current_device_projection {
-        return Err("PCR replay changed the current device projection".to_owned());
-    }
-
-    for attestation in &evidence.range_completeness_evidence {
-        verify_federated_range_attestation(
-            state,
-            attestation,
-            &evidence.principal_genesis_receipt.issuer,
-        )
-        .await
-        .map_err(|error| format!("PCR range attestation is invalid: {error}"))?;
-    }
-
-    Ok(replayed
-        .generation_state
-        .current_device_generation_ref
-        .to_string())
-}
-
 /// Persist a replay-verified remote device as a derived directory projection.
 ///
 /// Local authoritative rows always win. The portable PCR Event remains the
 /// source of key material; Soland stores only the replay result needed by
 /// normal device-signature lookup.
-pub(crate) async fn project_federated_device_signing_key_evidence(
-    state: &AppState,
-    evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
-    authorized_generation_ref: &str,
-    source_service_id: &str,
-) -> Result<(), String> {
-    use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
-
-    let authorize_event_id = evidence
-        .current_device_projection
-        .device_record
-        .device_authorize_event_id
-        .as_ref()
-        .ok_or_else(|| "portable device projection omits authorization Event".to_owned())?;
-    let authorize_event = evidence
-        .authorization_chain
-        .iter()
-        .find(|event| &event.event_id == authorize_event_id)
-        .ok_or_else(|| "portable device authorization Event is unavailable".to_owned())?;
-    let typed: arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload =
-        authorize_event
-            .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
-            .map_err(|error| format!("portable device authorization payload: {error}"))?;
-    let principal_id = evidence.actor_id.as_str();
-    let device_id = evidence.device_id.as_str();
-    let existing = state
-        .identities()
-        .find_device(FindDeviceQuery {
-            actor_id: principal_id.to_owned(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-
-    if let Some(existing) = &existing
-        && existing.payload.get("federated_authorization").is_none()
-    {
-        let local_key = existing
-            .payload
-            .get("device_public_key")
-            .and_then(Value::as_str);
-        return if local_key == Some(typed.device_public_key.as_str()) {
-            Ok(())
-        } else {
-            Err("portable device authorization conflicts with local device projection".to_owned())
-        };
-    }
-    if let Some(existing_accepted_at) = existing
-        .as_ref()
-        .and_then(|record| {
-            record
-                .payload
-                .pointer("/federated_authorization/accepted_at")
-        })
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<chrono::DateTime<chrono::Utc>>().ok())
-        && existing_accepted_at > evidence.authorization_accepted_at
-    {
-        return Ok(());
-    }
-
-    let now = crate::wire::now();
-    let created_at = existing.as_ref().map_or(now, |record| record.created_at);
-    let display_name = existing
-        .as_ref()
-        .and_then(|record| record.display_name.clone());
-    let mut payload = existing
-        .as_ref()
-        .map(|record| record.payload.clone())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    let object = payload
-        .as_object_mut()
-        .expect("federated device projection payload is an object");
-    object.insert("device_id".to_owned(), Value::String(device_id.to_owned()));
-    object.insert(
-        "device_public_key".to_owned(),
-        Value::String(typed.device_public_key.to_string()),
-    );
-    object.insert(
-        "hpke_key".to_owned(),
-        Value::String(typed.hpke_key.to_string()),
-    );
-    object.insert(
-        "algorithms".to_owned(),
-        Value::Array(
-            typed
-                .algorithms
-                .iter()
-                .map(|algorithm| Value::String(algorithm.to_string()))
-                .collect(),
-        ),
-    );
-    object.insert(
-        "device_authorize_event_id".to_owned(),
-        Value::String(authorize_event_id.to_string()),
-    );
-    object.insert(
-        "authorized_generation_ref".to_owned(),
-        Value::String(authorized_generation_ref.to_owned()),
-    );
-    object.insert(
-        "federated_authorization".to_owned(),
-        json!({
-            "accepted_at": evidence.authorization_accepted_at,
-            "source_service_id": source_service_id,
-            "verification_method": evidence.verification_method,
-        }),
-    );
-
-    state
-        .identities()
-        .save_device(SaveDeviceCommand {
-            actor_id: principal_id.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: display_name.clone(),
-            device: DeviceIdentity {
-                actor_id: principal_id.to_owned(),
-                device_id: device_id.to_owned(),
-                display_name,
-                verification_state: "verified".to_owned(),
-                payload,
-                created_at,
-                updated_at: now,
-                revoked_at: None,
-            },
-        })
-        .await
-        .map_err(|error| error.to_string())
-}
-
 async fn verify_federated_genesis_receipt(
     state: &AppState,
     receipt: &arkret_wire::EventBatchReceipt,
@@ -361,47 +192,6 @@ async fn verify_federated_genesis_receipt(
     Ok(())
 }
 
-fn verify_federated_accepted_seal(
-    evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
-) -> Result<(), String> {
-    let seal = &evidence.accepted_seal;
-    seal.validate_structural()
-        .map_err(|error| format!("PCR accepted Seal is invalid: {error}"))?;
-    seal.validate_id()
-        .map_err(|error| format!("PCR accepted Seal id is invalid: {error}"))?;
-    let canonical = seal
-        .canonical_bytes_for_id()
-        .map_err(|error| format!("PCR accepted Seal transcript failed: {error}"))?;
-    let digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
-        .map_err(|error| format!("PCR accepted Seal digest failed: {error}"))?;
-    let arkret_wire::NotarySig::Single(signature) = &seal.notary_signature else {
-        return Err("PCR accepted Seal must have one device signature".to_owned());
-    };
-    let multibase = evidence
-        .device_signing_key
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or_else(|| "PCR device signing key is not did:key".to_owned())?;
-    let expected_principal_id_key_method = format!("{}#{multibase}", evidence.device_signing_key);
-    if signature.payload_digest != digest
-        || (signature.verification_method != evidence.verification_method
-            && signature.verification_method.as_str() != expected_principal_id_key_method)
-    {
-        return Err("PCR accepted Seal is not signed by the evidenced device".to_owned());
-    }
-    let key = arkret_canonical::decode_ed25519_multibase(multibase)
-        .map_err(|error| format!("PCR device signing key is invalid: {error}"))?;
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            &signature.jws,
-            &canonical,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: key.to_vec(),
-            },
-        )
-        .map_err(|error| format!("PCR accepted Seal signature is invalid: {error}"))
-}
-
 async fn verify_federated_range_attestation(
     state: &AppState,
     event: &arkret_wire::Event,
@@ -418,7 +208,11 @@ async fn verify_federated_range_attestation(
         .map_err(|error| format!("PCR range Event digest payload failed: {error}"))?;
     let event_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
         .map_err(|error| format!("PCR range Event transcript failed: {error}"))?;
-    for proof in &event.proofs {
+    for proof in event
+        .proofs
+        .iter()
+        .filter_map(arkret_wire::EventProof::as_producer)
+    {
         let binding = proof
             .canonical_binding_bytes(&event.actor_id)
             .map_err(|error| format!("PCR range Event proof transcript failed: {error}"))?;

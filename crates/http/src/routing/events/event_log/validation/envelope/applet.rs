@@ -100,9 +100,11 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
 
-    let grants = state
-        .authorization()
-        .grants_for_subject(&executed_by, realm_id);
+    let grants = state.authorization().grants_for_subject(
+        &executed_by,
+        Some(package.service_id.as_str()),
+        realm_id,
+    );
     let grant = grants
         .iter()
         .find(|grant| grant.grant_id.as_str() == authorization_ref.as_str())

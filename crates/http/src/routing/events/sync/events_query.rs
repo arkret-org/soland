@@ -1188,6 +1188,7 @@ async fn range_completeness_for_query(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
+        issuer_actor.clone(),
         issuer_actor,
         payload,
     )
@@ -1373,7 +1374,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let sidecar_id = "ak:sidecar:AQYqC06461HNyfIIzUY8eXmafXvmC9i29nNObXCIbj0-";
-        let event = arkret_wire::test_support::raw_event_at(
+        let event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::SidecarContextAttach.as_str(),
             arkret_wire::ScopeRef::Sidecar {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
@@ -1441,7 +1442,7 @@ mod tests {
         let created_at = DateTime::parse_from_rfc3339("2026-08-09T01:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
-        let mut event = arkret_wire::test_support::raw_event_at(
+        let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::ContactRequested.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
@@ -1554,7 +1555,7 @@ mod tests {
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
         let actor_id = arkret_identifiers::DidFullId::new(TEST_ACTOR.to_owned()).unwrap();
-        let message_event = arkret_wire::test_support::raw_event_at(
+        let message_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1572,7 +1573,7 @@ mod tests {
         .unwrap();
         let message_event_id = message_event.event_id.to_string();
         let message_id = arkret_identifiers::MessageId::from_event_id(&message_event.event_id);
-        let revise_event = arkret_wire::test_support::raw_event_at(
+        let revise_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageRevise.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1590,7 +1591,7 @@ mod tests {
         )
         .unwrap();
         let revise_event_id = revise_event.event_id.to_string();
-        let redaction_event = arkret_wire::test_support::raw_event_at(
+        let redaction_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageRedact.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id(&actor_id),

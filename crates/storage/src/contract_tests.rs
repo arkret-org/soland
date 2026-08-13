@@ -919,6 +919,7 @@ fn canonical_wire_event_record(
                 .expect("contract realm id"),
         },
         actor_id.clone(),
+        actor_id.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

@@ -17,6 +17,10 @@ impl MemoryServiceIdentityStore {
     pub(crate) fn new() -> Self {
         Self::default()
     }
+
+    pub(crate) fn seed(&self, identity: StoredDidCoreIdentity) {
+        self.row.lock().identity = Some(identity);
+    }
 }
 #[async_trait]
 impl ServiceIdentityStore for MemoryServiceIdentityStore {

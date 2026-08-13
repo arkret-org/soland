@@ -384,7 +384,7 @@ async fn require_policy_manage(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, chrono::Utc::now())
+        .actor_holds_effective_realm_owner(realm_id, actor, state.service_id(), chrono::Utc::now())
     {
         return Ok(());
     }
@@ -394,6 +394,7 @@ async fn require_policy_manage(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(state.service_id()),
             action: arkret_wire::CapabilityActionId::POLICY_MANAGE,
             resource: realm_id,
             realm_id,

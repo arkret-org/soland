@@ -224,6 +224,7 @@ pub(crate) fn projection_operation_from_canonical_record(
         prev_refs,
         canonical_digest: record.canonical_digest.clone(),
         canonical_bytes: record.canonical_bytes.clone(),
+        producer_signing_key: None,
     };
     projection_operation_from_event(&parsed, &record.envelope)
 }
@@ -371,6 +372,14 @@ fn sdk_event_from_record(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let actor_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let principal_server_id = object
+        .get("principal_server_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("stored event missing principal_server_id"))
+        .and_then(|value| {
+            arkret_wire::DidCoreId::new(value.to_owned())
+                .map_err(|error| AppError::internal(error.to_string()))
+        })?;
     let created_at = object
         .get("created_at")
         .and_then(Value::as_str)
@@ -434,6 +443,7 @@ fn sdk_event_from_record(
         kind: record.kind.clone().into(),
         realm_id: realm_id.clone(),
         actor_id,
+        principal_server_id,
         actor_seq: record.actor_seq,
         created_at,
         // `hlc` is a producer-signed optional field. A read path must preserve
@@ -611,11 +621,11 @@ fn sdk_event_proofs(
     record: &CanonicalEventRecord,
     object: &serde_json::Map<String, Value>,
     created_at: DateTime<Utc>,
-) -> Result<Vec<Proof>, AppError> {
+) -> Result<Vec<arkret_wire::EventProof>, AppError> {
     if let Some(proofs) = object
         .get("proofs")
         .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<Proof>>(value).ok())
+        .and_then(|value| serde_json::from_value::<Vec<arkret_wire::EventProof>>(value).ok())
         .filter(|proofs| !proofs.is_empty())
     {
         return Ok(proofs);
@@ -646,7 +656,7 @@ fn sdk_event_proofs(
         .and_then(sdk_audience);
     let event_digest = Hash::new(record.canonical_digest.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(vec![Proof {
+    Ok(vec![arkret_wire::EventProof::Producer(Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         proof_purpose: None,
         verification_method,
@@ -659,7 +669,7 @@ fn sdk_event_proofs(
             .and_then(Value::as_str)
             .unwrap_or("ZGV2..c2ln")
             .to_owned(),
-    }])
+    })])
 }
 
 fn sdk_audience(value: &Value) -> Option<Audience> {

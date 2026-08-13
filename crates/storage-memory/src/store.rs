@@ -283,6 +283,13 @@ impl SolandMemoryPersistenceStore {
         store
     }
 
+    pub fn seed_service_identity(
+        &self,
+        identity: arkret_identity::service_identity::StoredDidCoreIdentity,
+    ) {
+        self.service_identity.seed(identity);
+    }
+
     #[cfg(feature = "fault-injection")]
     pub fn fault_injector(&self) -> Arc<FaultInjector> {
         self.fault_injector.clone()

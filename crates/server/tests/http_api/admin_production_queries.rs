@@ -81,7 +81,7 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
     sorted.dedup();
     assert_eq!(ids, sorted, "cursor walk must be sorted and duplicate-free");
     assert!(
-        ids.contains(&"did:web:bob.example".to_owned()),
+        ids.contains(&fixture_actor_core_id("did:web:bob.example").to_string()),
         "registered account missing from actors: {ids:?}"
     );
 }
@@ -99,7 +99,7 @@ async fn admin_actors_query_applies_and_echoes_filters() {
     .await;
 
     let page: Value =
-        TestClient::get("http://server/_soland/admin/actors?filter[search]=bob.example")
+        TestClient::get("http://server/_soland/admin/actors?filter[search]=web:bob.example")
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -112,10 +112,10 @@ async fn admin_actors_query_applies_and_echoes_filters() {
         actors.iter().all(|actor| actor["id"]
             .as_str()
             .unwrap_or_default()
-            .contains("bob.example")),
+            .contains("web:bob.example")),
         "server-side search must filter rows: {page}"
     );
-    assert_eq!(page["filters"]["search"], "bob.example", "filter echo");
+    assert_eq!(page["filters"]["search"], "web:bob.example", "filter echo");
 
     // Unknown status filter value is a hard 400, not an ignored parameter.
     let response = TestClient::get("http://server/_soland/admin/actors?filter[status]=bogus")

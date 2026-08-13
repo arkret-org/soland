@@ -1618,6 +1618,7 @@ fn application_recovery_session(
     crate::identity::RecoverySessionState {
         recovery_session_id: record.recovery_session_id,
         principal_id: record.principal_id,
+        principal_server_id: record.principal_server_id,
         requesting_device_id: record.requesting_device_id,
         trust_domain: record.trust_domain,
         policy_id: record.policy_id,
@@ -1646,6 +1647,7 @@ fn persistence_recovery_session(
     soland_storage::RecoverySessionRecord {
         recovery_session_id: session.recovery_session_id,
         principal_id: session.principal_id,
+        principal_server_id: session.principal_server_id,
         requesting_device_id: session.requesting_device_id,
         trust_domain: session.trust_domain,
         policy_id: session.policy_id,

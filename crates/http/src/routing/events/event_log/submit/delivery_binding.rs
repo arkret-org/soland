@@ -12,9 +12,6 @@ pub(super) async fn federation_service_binding_current_for_destination(
     if !crate::routing::events::event_log::realm_is_indexed(state, binding.realm_id.as_str()) {
         return FederationServiceBindingCheck::Current;
     }
-    if realm_sync_endpoint_binding_is_current(state, binding).await {
-        return FederationServiceBindingCheck::Current;
-    }
     let members = {
         let projection = state.projections().snapshot();
         projection
@@ -85,58 +82,6 @@ pub(super) async fn federation_service_binding_current_for_destination(
         }
         FederationServiceBindingCheck::Current => FederationServiceBindingCheck::Current,
     }
-}
-
-async fn realm_sync_endpoint_binding_is_current(
-    state: &AppState,
-    binding: &FederationServiceBindingRef,
-) -> bool {
-    let Ok(records) = state
-        .event_queries()
-        .realm_events_newest_first(binding.realm_id.as_str())
-        .await
-    else {
-        return false;
-    };
-    let Some(policy_bundle) = records
-        .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
-    else {
-        return false;
-    };
-    realm_sync_endpoint_authorizes_destination(
-        state.service_id().as_str(),
-        binding,
-        &policy_bundle.event_id,
-        &policy_bundle.envelope,
-    )
-}
-
-pub(super) fn realm_sync_endpoint_authorizes_destination(
-    destination_service_id: &str,
-    binding: &FederationServiceBindingRef,
-    policy_bundle_event_id: &str,
-    policy_bundle_envelope: &Value,
-) -> bool {
-    let binding_covers_policy_bundle = binding
-        .membership_frontier
-        .iter()
-        .any(|event_id| event_id.as_str() == policy_bundle_event_id)
-        && binding
-            .delivery_binding_frontier
-            .iter()
-            .any(|event_id| event_id.as_str() == policy_bundle_event_id);
-    if !binding_covers_policy_bundle {
-        return false;
-    }
-    policy_bundle_envelope
-        .pointer("/payload/sync_endpoints")
-        .and_then(Value::as_array)
-        .is_some_and(|endpoints| {
-            endpoints.iter().any(|endpoint| {
-                endpoint.get("did").and_then(Value::as_str) == Some(destination_service_id)
-            })
-        })
 }
 
 pub(super) fn delivery_binding_member_view(

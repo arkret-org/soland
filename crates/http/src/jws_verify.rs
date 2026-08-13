@@ -368,9 +368,9 @@ pub fn verify_jws_with_pinned_document(
 /// Principal-authorization verification error.
 ///
 /// Generic principal authorization is fail-closed until the caller supplies
-/// an exact authority instance and PCR-scoped device evidence. The sole
-/// current-DID path below is restricted to registered identity-resolution
-/// updates.
+/// an exact `(principal_id, principal_server_id)` account authority context
+/// and accepted local device evidence. The sole current-DID path below is
+/// restricted to registered identity-resolution updates.
 #[derive(Debug)]
 pub enum PrincipalAuthorizedJwsError {
     HighRiskDidFreshness(String),
@@ -444,8 +444,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     _state: &AppState,
 ) -> Result<(), PrincipalAuthorizedJwsError> {
     Err(PrincipalAuthorizedJwsError::Verification(
-        "principal authorization requires an exact authority_instance and PCR-scoped device evidence"
-            .to_owned(),
+        "principal authorization requires an explicit account authority context".to_owned(),
     ))
 }
 
@@ -492,15 +491,14 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
                 ))
             })?;
 
-        let authority_instance = if &event.actor_id == principal_id {
-            state
-                .persistence()
-                .principal_resolution_for_realm(&event.realm_id)
-                .await
-                .map_err(|error| fail(format!("principal Ack PCR lookup failed: {error}")))?
-                .ok_or_else(|| fail("principal Ack PCR authority is unavailable".to_owned()))?
-                .authority_instance
-        } else {
+        if event.executed_by.as_ref().unwrap_or(&event.actor_id) != principal_id
+            || event.principal_server_id.as_str() != state.service_id()
+        {
+            return Err(fail(
+                "principal Ack does not bind the actual author to this Principal Server".to_owned(),
+            ));
+        }
+        if event.actor_id != *principal_id {
             let agent = state
                 .agent_pairings()
                 .agent(event.actor_id.as_str())
@@ -520,49 +518,19 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
                     "managed Agent Ack does not bind its delegated controller".to_owned(),
                 ));
             }
-            let refs = agent.provision_event_refs.as_ref().ok_or_else(|| {
-                fail("managed Agent provisioning authority evidence is unavailable".to_owned())
-            })?;
-            serde_json::from_value::<arkret_wire::PrincipalAuthorityInstance>(
-                refs.get("controller_authority_instance")
-                    .cloned()
-                    .ok_or_else(|| {
-                        fail(
-                            "managed Agent controller authority instance is unavailable".to_owned(),
-                        )
-                    })?,
-            )
-            .map_err(|error| {
-                fail(format!(
-                    "managed Agent controller authority is invalid: {error}"
-                ))
-            })?
-        };
-        authority_instance.validate().map_err(|error| {
-            fail(format!(
-                "principal Ack authority instance is invalid: {error}"
-            ))
-        })?;
-        if authority_instance.principal_id != *principal_id
-            || authority_instance.principal_server_id.as_str() != state.service_id()
-        {
-            return Err(fail(
-                "principal Ack authority does not bind this signer and Principal Server".to_owned(),
-            ));
         }
+        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+            principal_id.clone(),
+            event.principal_server_id.clone(),
+        );
         let durable = state
             .persistence()
-            .principal_resolution_by_authority_instance(
-                &authority_instance.authority_instance_digest,
-            )
+            .principal_resolution_by_authority_key(&authority_key)
             .await
             .map_err(|error| fail(format!("principal Ack authority lookup failed: {error}")))?
-            .ok_or_else(|| fail("principal Ack authority is not durably accepted".to_owned()))?;
-        if durable.authority_instance != authority_instance {
-            return Err(fail(
-                "principal Ack authority does not match the durable PCR record".to_owned(),
-            ));
-        }
+            .ok_or_else(|| {
+                fail("principal Ack account authority is not durably accepted".to_owned())
+            })?;
 
         let device = state
             .identities()
@@ -625,7 +593,7 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
             .ok_or_else(|| fail("principal Ack authorization Event is unavailable".to_owned()))?;
         if authorize_event.actor_id != principal_id.as_str()
             || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-            || authorize_event.realm_id.as_deref() != Some(authority_instance.pcr_realm_id.as_str())
+            || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
         {
             return Err(fail(
                 "principal Ack device authorization is outside the selected PCR authority"
@@ -669,7 +637,8 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
 }
 
 /// Generic compact Ed25519 principal authorization remains fail-closed without
-/// an exact authority instance and PCR-scoped device evidence.
+/// an exact `(principal_id, principal_server_id)` account authority context and
+/// accepted local device evidence.
 pub async fn verify_principal_authorized_ed25519_signature_async(
     _payload: &[u8],
     _signature_b64url: &str,
@@ -678,8 +647,7 @@ pub async fn verify_principal_authorized_ed25519_signature_async(
     _state: &AppState,
 ) -> Result<(), PrincipalAuthorizedJwsError> {
     Err(PrincipalAuthorizedJwsError::Verification(
-        "principal authorization requires an exact authority_instance and PCR-scoped device evidence"
-            .to_owned(),
+        "principal authorization requires an explicit account authority context".to_owned(),
     ))
 }
 
@@ -718,7 +686,11 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
     principal_id: &'a str,
     state: &'a AppState,
 ) -> std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<(), PrincipalAuthorizedJwsError>> + Send + 'a>,
+    Box<
+        dyn std::future::Future<Output = Result<arkret_wire::DidKey, PrincipalAuthorizedJwsError>>
+            + Send
+            + 'a,
+    >,
 > {
     Box::pin(async move {
         let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
@@ -765,61 +737,18 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         let envelope: Value = serde_json::from_slice(envelope_bytes)
             .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
 
-        // Ordinary principal Events select their exact authority through the
-        // accepted authorization of the device that signed them. The Event's own
-        // realm may be any collaboration Realm and is not a PCR selector. A
-        // controller-authored managed-Agent Event instead uses the immutable
-        // authority instance persisted with the provisioning allocation. The
-        // signed authorization_ref binds that record to this Event.
-        let authority_instance = if actor_id == &expected_principal_id {
-            let signing_device = state
-                .identities()
-                .find_device(soland_services::identity::FindDeviceQuery {
-                    actor_id: expected_principal_id.to_string(),
-                    device_id: device_id.to_string(),
-                })
-                .await
-                .map_err(|error| {
-                    fail(format!(
-                        "principal device signing state unavailable: {error}"
-                    ))
-                })?
-                .ok_or_else(|| fail("principal Event signer device is unavailable".to_owned()))?;
-            let authorize_event_id = signing_device
-                .payload
-                .get("device_authorize_event_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    fail("principal Event signer has no accepted authorization Event".to_owned())
-                })?;
-            let authorize_event = state
-                .event_queries()
-                .canonical_event(authorize_event_id)
-                .await
-                .map_err(|error| {
-                    fail(format!(
-                        "principal device authorization lookup failed: {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    fail("principal device authorization Event is unavailable".to_owned())
-                })?;
-            let realm_id = authorize_event.realm_id.as_deref().ok_or_else(|| {
-                fail("principal device authorization has no PCR realm".to_owned())
-            })?;
-            let realm_id = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|error| {
-                fail(format!(
-                    "principal device authorization PCR is invalid: {error}"
-                ))
-            })?;
-            state
-                .persistence()
-                .principal_resolution_for_realm(&realm_id)
-                .await
-                .map_err(|error| fail(format!("principal Event PCR lookup failed: {error}")))?
-                .ok_or_else(|| fail("principal Event PCR authority is unavailable".to_owned()))?
-                .authority_instance
-        } else {
+        let principal_server_id = envelope
+            .get("principal_server_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| fail("principal Event has no principal_server_id".to_owned()))?;
+        let principal_server_id = arkret_wire::DidCoreId::new(principal_server_id.to_owned())
+            .map_err(|error| fail(format!("principal Event server is invalid: {error}")))?;
+        if principal_server_id.as_str() != state.service_id() {
+            return Err(fail(
+                "principal Event is not addressed to this Principal Server".to_owned(),
+            ));
+        }
+        if actor_id != &expected_principal_id {
             let agent = state
                 .agent_pairings()
                 .agent(actor_id.as_str())
@@ -851,54 +780,23 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                     "delegated Event does not use the managed Agent authorization_ref".to_owned(),
                 ));
             }
-            let refs = agent.provision_event_refs.as_ref().ok_or_else(|| {
-                fail("managed Agent provisioning authority evidence is unavailable".to_owned())
-            })?;
-            serde_json::from_value::<arkret_wire::PrincipalAuthorityInstance>(
-                refs.get("controller_authority_instance")
-                    .cloned()
-                    .ok_or_else(|| {
-                        fail(
-                            "managed Agent controller authority instance is unavailable".to_owned(),
-                        )
-                    })?,
-            )
-            .map_err(|error| {
-                fail(format!(
-                    "managed Agent controller authority is invalid: {error}"
-                ))
-            })?
-        };
-        authority_instance
-            .validate()
-            .map_err(|error| fail(format!("principal authority instance is invalid: {error}")))?;
-        if authority_instance.principal_id != expected_principal_id
-            || authority_instance.principal_server_id.as_str() != state.service_id()
-        {
-            return Err(fail(
-                "principal authority instance does not bind this signer and Principal Server"
-                    .to_owned(),
-            ));
         }
+        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+            expected_principal_id.clone(),
+            principal_server_id,
+        );
         let durable = state
             .persistence()
-            .principal_resolution_by_authority_instance(
-                &authority_instance.authority_instance_digest,
-            )
+            .principal_resolution_by_authority_key(&authority_key)
             .await
             .map_err(|error| {
                 fail(format!(
-                    "principal authority instance lookup failed: {error}"
+                    "principal account authority lookup failed: {error}"
                 ))
             })?
             .ok_or_else(|| {
-                fail("principal authority instance is not durably accepted".to_owned())
+                fail("principal account authority is not durably accepted".to_owned())
             })?;
-        if durable.authority_instance != authority_instance {
-            return Err(fail(
-                "principal authority instance does not match the durable PCR record".to_owned(),
-            ));
-        }
 
         let device = state
             .identities()
@@ -975,7 +873,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             })?;
         if authorize_event.actor_id != expected_principal_id.as_str()
             || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-            || authorize_event.realm_id.as_deref() != Some(authority_instance.pcr_realm_id.as_str())
+            || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
         {
             return Err(fail(
                 "principal device authorization Event is outside the selected PCR authority"
@@ -985,7 +883,10 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
 
         let document = DidDocument {
             id: method_full_id.clone(),
-            verification_methods: BTreeMap::from([(verification_method.to_owned(), signing_key)]),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                signing_key.clone(),
+            )]),
             also_known_as: Vec::new(),
             updated_at: None,
             raw_properties: BTreeMap::new(),
@@ -1006,7 +907,9 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
             outcome.is_ok(),
         );
-        outcome
+        outcome?;
+        arkret_wire::DidKey::new(format!("did:key:{signing_key}"))
+            .map_err(|error| fail(format!("principal Event signer key is invalid: {error}")))
     })
 }
 
@@ -1017,7 +920,7 @@ pub async fn verify_registered_identity_resolution_event_proof_async(
     verification_method: &str,
     principal_id: &str,
     state: &AppState,
-) -> Result<(), PrincipalAuthorizedJwsError> {
+) -> Result<arkret_wire::DidKey, PrincipalAuthorizedJwsError> {
     let (method_did, source) =
         principal_verification_source(verification_method, principal_id, state).await?;
     let PrincipalVerificationSource::AuthorityDocument(document) = source;
@@ -1042,7 +945,13 @@ pub async fn verify_registered_identity_resolution_event_proof_async(
         crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
         outcome.is_ok(),
     );
-    outcome
+    outcome?;
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+    let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(public_key.as_bytes());
+    arkret_wire::DidKey::new(format!("did:key:{multibase}"))
+        .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_owned()))
 }
 
 /// Build the §5 binding key this deployment uses for principal-control
@@ -1117,577 +1026,6 @@ fn principal_binding_acceptance(
     arkret_identity::AcceptedDidBinding::new(binding, document.clone(), receipt).ok()
 }
 
-/// Resolve the active local device-directory evidence needed to verify an
-/// original participant-signed Event on a remote Principal Server. The
-/// returned evidence is carried only in the service-authenticated federation
-/// wrapper; it never mutates the Event or its canonical digest.
-pub async fn federated_event_signer_evidence(
-    state: &AppState,
-    event: &arkret_wire::Event,
-) -> Result<Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>, String> {
-    let mut evidence = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for proof in &event.proofs {
-        let Some((method_full_id, device_id)) = proof.verification_method.rsplit_once('#') else {
-            continue;
-        };
-        let Ok(method_full_id) = arkret_wire::DidFullId::new(method_full_id.to_owned()) else {
-            continue;
-        };
-        let Ok(method_actor_id) = arkret_wire::project_full_id_to_core_id(&method_full_id)
-            .map(arkret_wire::DidCoreId::from)
-        else {
-            continue;
-        };
-        if method_actor_id != event.actor_id {
-            continue;
-        }
-        let Ok(device_id) = arkret_identifiers::DeviceId::new(device_id.to_owned()) else {
-            // DID-control methods remain independently resolvable and do not
-            // use principal device-directory evidence.
-            continue;
-        };
-        if !seen.insert(proof.verification_method.clone()) {
-            continue;
-        }
-        evidence.push(
-            federated_device_signing_key_evidence(
-                state,
-                &event.actor_id,
-                &device_id,
-                &proof.verification_method,
-            )
-            .await?,
-        );
-    }
-    Ok(evidence)
-}
-
-pub async fn federated_device_signing_key_evidence(
-    state: &AppState,
-    actor_id: &arkret_wire::DidCoreId,
-    device_id: &arkret_identifiers::DeviceId,
-    verification_method: &str,
-) -> Result<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence, String> {
-    use std::collections::BTreeMap;
-
-    use arkret_wire::event_envelope::{
-        FederatedCurrentDeviceProjection, FederatedDeviceGenerationState,
-        FederatedDeviceGenerationStatus, FederatedDeviceRecord, FederatedDeviceStatus,
-    };
-
-    let (method_full_id, method_fragment) = verification_method
-        .rsplit_once('#')
-        .ok_or_else(|| "device signing verification method has no fragment".to_owned())?;
-    let method_full_id =
-        arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
-            format!("device signing verification method controller is invalid: {error}")
-        })?;
-    let method_actor_id = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
-            format!("device signing verification method controller cannot be projected: {error}")
-        })?,
-    );
-    if &method_actor_id != actor_id || method_fragment != device_id.as_str() {
-        return Err(
-            "device signing verification method controller/fragment does not bind actor and device"
-                .to_owned(),
-        );
-    }
-    let facet =
-        crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
-            state,
-            actor_id.as_str(),
-            device_id.as_str(),
-        )
-        .await
-        .map_err(|error| format!("device signing directory unavailable: {error}"))?;
-    if facet.status != arkret_models_crypto::keys::DeviceStatus::Active {
-        return Err("device signer is not active".to_owned());
-    }
-    let device_signing_key = arkret_wire::DidKey::new(
-        facet
-            .signing_key_did
-            .ok_or_else(|| "device signer key is unavailable".to_owned())?,
-    )
-    .map_err(|error| format!("device signer key is invalid: {error}"))?;
-    let authorize_event_id = facet
-        .device_authorize_event_id
-        .ok_or_else(|| "device signer has no accepted authorization Event".to_owned())?;
-    let generation_ref = facet
-        .authorized_generation_ref
-        .ok_or_else(|| "device signer has no active generation binding".to_owned())?;
-    let generation = crate::routing::identity::device_generation::current_device_generation(
-        state,
-        actor_id.as_str(),
-    )
-    .await
-    .map_err(|error| format!("device generation unavailable: {error}"))?
-    .ok_or_else(|| "device generation is unavailable".to_owned())?;
-    if generation.status
-        != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-        || generation.current_ref != generation_ref.as_str()
-    {
-        return Err("device signer is outside the active device generation".to_owned());
-    }
-
-    let authorize_record = state
-        .event_queries()
-        .canonical_event(authorize_event_id.as_str())
-        .await
-        .map_err(|error| format!("device authorization Event lookup failed: {error}"))?
-        .ok_or_else(|| "device authorization Event is unavailable".to_owned())?;
-    if authorize_record.actor_id != actor_id.as_str()
-        || authorize_record.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-    {
-        return Err("device authorization Event does not bind the requested actor".to_owned());
-    }
-    let control_realm = authorize_record
-        .realm_id
-        .as_deref()
-        .ok_or_else(|| "device authorization Event has no PCR Realm".to_owned())?;
-    let control_realm = arkret_wire::RealmId::new(control_realm.to_owned())
-        .map_err(|error| format!("device authorization PCR Realm is invalid: {error}"))?;
-    let mut realm_records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| format!("PCR Realm history lookup failed: {error}"))?;
-    realm_records.retain(|record| record.realm_id.as_deref() == Some(control_realm.as_str()));
-    let mut records = state
-        .event_queries()
-        .canonical_events_for_realm_actor(control_realm.as_str(), actor_id.as_str())
-        .await
-        .map_err(|error| format!("PCR history lookup failed: {error}"))?;
-    records.sort_by(|a, b| {
-        a.actor_seq
-            .cmp(&b.actor_seq)
-            .then_with(|| a.event_id.cmp(&b.event_id))
-    });
-    let create = records
-        .iter()
-        .find(|record| {
-            record.kind == arkret_wire::event_kind_str::REALM_CREATE
-                && record
-                    .envelope
-                    .pointer("/payload/object/purpose")
-                    .and_then(Value::as_str)
-                    .is_some_and(|purpose| {
-                        matches!(purpose, "principal_control" | "managed_agent_control")
-                    })
-        })
-        .ok_or_else(|| "PCR genesis Event is unavailable".to_owned())?;
-    let create_event_id = create.event_id.clone();
-    let create_actor_seq = create.actor_seq;
-    let mut authorization_chain = records
-        .iter()
-        .filter(|record| {
-            record.actor_seq >= create_actor_seq
-                && matches!(
-                    record.kind.as_str(),
-                    arkret_wire::event_kind_str::REALM_CREATE
-                        | arkret_wire::event_kind_str::DEVICE_AUTHORIZE
-                        | arkret_wire::event_kind_str::DEVICE_REVOKE
-                        | arkret_wire::event_kind_str::DEVICE_REANCHOR
-                        | arkret_wire::event_kind_str::DEVICE_LIST_UPDATE
-                )
-        })
-        .map(|record| {
-            crate::routing::events::event_log::sdk_event_for_state(state, record)
-                .map_err(|error| format!("PCR authorization Event is invalid: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    authorization_chain.sort_by(|a, b| {
-        a.actor_seq
-            .cmp(&b.actor_seq)
-            .then_with(|| a.event_id.as_str().cmp(b.event_id.as_str()))
-    });
-    if authorization_chain.len() < 2
-        || authorization_chain[0].event_id.as_str() != create_event_id
-        || !authorization_chain
-            .iter()
-            .any(|event| event.event_id == authorize_event_id)
-    {
-        return Err("PCR authorization chain is incomplete".to_owned());
-    }
-    let genesis_receipt = state
-        .event_queries()
-        .canonical_batch_receipts_for_event(&create_event_id)
-        .await
-        .map_err(|error| format!("PCR genesis receipt lookup failed: {error}"))?
-        .into_iter()
-        .find(|receipt| {
-            receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                scope.principal_id == *actor_id && scope.realm_id == control_realm
-            })
-        })
-        .ok_or_else(|| "PCR genesis receipt is unavailable".to_owned())?;
-    let realm_id = control_realm;
-    let chain_digests = authorization_chain
-        .iter()
-        .map(|event| event.event_digest().map_err(|error| error.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let device_key_fragment = device_signing_key
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or_else(|| "device signer key is not did:key".to_owned())?;
-    let did_key_method = format!("{}#{device_key_fragment}", device_signing_key);
-    let accepted_seal = state
-        .projections()
-        .realm_seal_leaves(&realm_id)
-        .map_err(|error| format!("PCR Seal lookup failed: {error}"))?
-        .into_iter()
-        .filter_map(|id| state.projections().seal_by_id(&id).ok().flatten())
-        .find(|seal| {
-            let signer_matches = matches!(
-                &seal.notary_signature,
-                arkret_wire::NotarySig::Single(signature)
-                    if signature.verification_method.as_str() == verification_method
-                        || signature.verification_method.as_str() == did_key_method.as_str()
-            );
-            signer_matches
-                && chain_digests.iter().all(|digest| {
-                    seal.covered_event_digests
-                        .iter()
-                        .any(|covered| covered.as_str() == digest)
-                })
-        })
-        .ok_or_else(|| {
-            "no target-device Seal covers the complete PCR authorization chain".to_owned()
-        })?;
-
-    let projection = FederatedCurrentDeviceProjection {
-        principal_id: actor_id.clone(),
-        device_id: device_id.clone(),
-        device_record: FederatedDeviceRecord {
-            algorithms: BTreeMap::new(),
-            device_signing_key: Some(device_signing_key.clone()),
-            hpke_key: facet
-                .hpke_key
-                .map(arkret_wire::NonEmptyString::new)
-                .transpose()
-                .map_err(|error| format!("device HPKE key is invalid: {error}"))?,
-            trust_algorithms: facet
-                .trust_algorithms
-                .map(|items| {
-                    items
-                        .into_iter()
-                        .map(arkret_wire::NonEmptyString::new)
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()
-                .map_err(|error| format!("trust algorithm is invalid: {error}"))?,
-            device_status: Some(FederatedDeviceStatus::Active),
-            device_authorize_event_id: Some(authorize_event_id.clone()),
-            authorized_generation_ref: Some(generation_ref.clone()),
-        },
-        generation_state: FederatedDeviceGenerationState {
-            current_device_generation_ref: generation_ref,
-            device_generation_status: FederatedDeviceGenerationStatus::Active,
-        },
-    };
-    let accepted_at = records
-        .iter()
-        .find(|record| record.event_id == authorize_event_id.as_str())
-        .map(|record| record.received_at)
-        .ok_or_else(|| "device authorization acceptance timestamp is unavailable".to_owned())?;
-    let authority_instance = state
-        .persistence()
-        .principal_resolution_for_realm(&realm_id)
-        .await
-        .map_err(|error| format!("PCR authority lookup failed: {error}"))?
-        .ok_or_else(|| "PCR authority instance is unavailable".to_owned())?
-        .authority_instance;
-    let registration_did_evidence = load_registration_did_evidence(
-        state,
-        actor_id,
-        &authority_instance.authority_instance_digest,
-    )
-    .await?
-    .ok_or_else(|| "PCR registration accepted-at DID evidence is unavailable".to_owned())?;
-    let evidence = arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence {
-        actor_id: actor_id.clone(),
-        device_id: device_id.clone(),
-        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
-            .map_err(|error| format!("device verification method is invalid: {error}"))?,
-        device_signing_key,
-        authorization_accepted_at: accepted_at,
-        authority_instance,
-        registration_did_evidence,
-        principal_genesis_receipt: genesis_receipt,
-        authorization_chain,
-        accepted_seal,
-        current_device_projection: projection,
-        range_completeness_evidence: federated_range_completeness_evidence(
-            state,
-            &realm_id,
-            &realm_records,
-        )?,
-    };
-    evidence
-        .validate_shape()
-        .map_err(|error| format!("constructed federated device evidence is invalid: {error}"))?;
-    Ok(evidence)
-}
-
-fn registration_did_evidence_key(authority_instance_digest: &arkret_wire::Hash) -> String {
-    format!(
-        "ak.internal.registration_did_evidence.v1:{}",
-        authority_instance_digest.as_str()
-    )
-}
-
-async fn load_registration_did_evidence(
-    state: &AppState,
-    actor_id: &arkret_wire::DidCoreId,
-    authority_instance_digest: &arkret_wire::Hash,
-) -> Result<Option<arkret_wire::RegistrationDidEvidence>, String> {
-    state
-        .account_data()
-        .entry(
-            actor_id.as_str(),
-            &registration_did_evidence_key(authority_instance_digest),
-        )
-        .await
-        .map_err(|error| format!("registration DID evidence lookup failed: {error}"))?
-        .map(|entry| {
-            serde_json::from_value::<arkret_wire::RegistrationDidEvidence>(entry.payload)
-                .map_err(|error| format!("stored registration DID evidence is invalid: {error}"))
-        })
-        .transpose()
-}
-
-pub(crate) async fn persist_registration_did_evidence(
-    state: &AppState,
-    authority_instance: &arkret_wire::PrincipalAuthorityInstance,
-    evidence: &arkret_wire::RegistrationDidEvidence,
-) -> Result<(), String> {
-    evidence
-        .validate_shape()
-        .map_err(|error| format!("registration DID evidence is invalid: {error}"))?;
-    if evidence.principal_id != authority_instance.principal_id {
-        return Err(
-            "registration DID evidence principal does not match authority instance".to_owned(),
-        );
-    }
-    let key = registration_did_evidence_key(&authority_instance.authority_instance_digest);
-    let payload = serde_json::to_value(evidence)
-        .map_err(|error| format!("registration DID evidence encode failed: {error}"))?;
-    for _ in 0..8 {
-        let current = state
-            .account_data()
-            .entry(authority_instance.principal_id.as_str(), &key)
-            .await
-            .map_err(|error| format!("registration DID evidence lookup failed: {error}"))?;
-        if let Some(current) = &current {
-            if current.payload == payload {
-                return Ok(());
-            }
-            return Err(
-                "registration DID evidence conflicts for the same authority instance".to_owned(),
-            );
-        }
-        let record = soland_services::identity::AccountDataState {
-            actor_id: authority_instance.principal_id.to_string(),
-            account_data_key: key.clone(),
-            revision: 1,
-            payload: payload.clone(),
-            tombstone: false,
-            updated_at: chrono::Utc::now(),
-        };
-        if matches!(
-            state
-                .account_data()
-                .compare_and_set(record, 0)
-                .await
-                .map_err(|error| format!("registration DID evidence persist failed: {error}"))?,
-            soland_services::identity::AccountDataCasOutcome::Applied(_)
-        ) {
-            return Ok(());
-        }
-    }
-    Err("registration DID evidence changed concurrently".to_owned())
-}
-
-fn federated_range_completeness_evidence(
-    state: &AppState,
-    realm_id: &arkret_identifiers::RealmId,
-    records: &[soland_services::events::CanonicalEventRecord],
-) -> Result<Vec<arkret_wire::Event>, String> {
-    use std::collections::BTreeMap;
-
-    use arkret_models_collaboration::sync_frames::snapshot::{
-        RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
-        RangeCompletenessAttestationEventRangeFromFrontier,
-        RangeCompletenessAttestationEventRangeToFrontier,
-        RangeCompletenessAttestationWitnessAttestation,
-        RangeCompletenessAttestationWitnessAttestationWitnessesItem,
-    };
-    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
-    use arkret_wire::{
-        Event, EventId, EventKind, EventRequirements, PayloadProofPurpose, PayloadSigner, ScopeRef,
-        proof_kind,
-    };
-
-    let mut accepted_events = records
-        .iter()
-        .map(|record| {
-            crate::routing::events::event_log::canonical_event_from_record(record)
-                .map_err(|error| format!("PCR range Event is invalid: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    accepted_events.sort_by(|a, b| {
-        a.created_at
-            .cmp(&b.created_at)
-            .then_with(|| a.event_id.as_str().cmp(b.event_id.as_str()))
-    });
-    let (from_frontier, to_frontier) =
-        arkret_state::full_realm_range_frontiers(&accepted_events)
-            .map_err(|error| format!("PCR range frontier failed: {error}"))?;
-    let range_events = arkret_state::full_realm_range_events(&accepted_events)
-        .map_err(|error| format!("PCR range selection failed: {error}"))?;
-    let actor_seq_ranges = arkret_state::range_completeness_actor_seq_ranges(&range_events)
-        .map_err(|error| format!("PCR actor range failed: {error}"))?;
-    if actor_seq_ranges.is_empty() {
-        return Err("PCR range completeness has no actor sequence range".to_owned());
-    }
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
-    let (root, covered_event_ids) =
-        arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
-            .map_err(|error| format!("PCR range root failed: {error}"))?;
-    let issuer = state.service_resolution_commitment().full_id.clone();
-    let issuer_actor = arkret_wire::DidCoreId::from(
-        arkret_wire::project_full_id_to_core_id(&issuer)
-            .map_err(|error| format!("service issuer projection is invalid: {error}"))?,
-    );
-    let verification_method = arkret_wire::DidUrl::new(format!("{issuer}#notary-key"))
-        .map_err(|error| format!("service notary method is invalid: {error}"))?;
-    let observed_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let signer = Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        issuer.clone(),
-        verification_method.clone(),
-    );
-    let mut payload = RangeCompletenessAttestation {
-        attestation_id: crate::ids::generate("attestation"),
-        schema: "ak.schema.range_completeness_attestation.v1".to_owned(),
-        issuer: issuer_actor.clone(),
-        issuer_role: "federation_device_evidence".to_owned(),
-        realm_id: realm_id.clone(),
-        event_range: RangeCompletenessAttestationEventRange {
-            from_frontier: RangeCompletenessAttestationEventRangeFromFrontier {
-                realm_frontier: from_frontier,
-                extra: BTreeMap::new(),
-            },
-            to_frontier: RangeCompletenessAttestationEventRangeToFrontier {
-                realm_frontier: to_frontier.clone(),
-                extra: BTreeMap::new(),
-            },
-            actor_seq_ranges,
-        },
-        root,
-        count: covered_event_ids.len() as u64,
-        observed_at,
-        witness_attestation: RangeCompletenessAttestationWitnessAttestation {
-            kind: "single_source".to_owned(),
-            witnesses: vec![
-                RangeCompletenessAttestationWitnessAttestationWitnessesItem {
-                    issuer: issuer_actor.clone(),
-                    verification_method: verification_method.clone(),
-                    controlling_organization: issuer_actor.clone(),
-                    attested_at: Some(observed_at),
-                    extra: BTreeMap::new(),
-                },
-            ],
-        },
-        proofs: Vec::new(),
-    };
-    let mut unsigned = serde_json::to_value(&payload).map_err(|error| error.to_string())?;
-    unsigned
-        .as_object_mut()
-        .ok_or_else(|| "range payload is not an object".to_owned())?
-        .remove("proofs");
-    let canonical =
-        arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| error.to_string())?;
-    let unsigned_proof = arkret_wire::UnsignedPayloadProof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: verification_method.clone(),
-        payload_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(&canonical))
-            .map_err(|error| error.to_string())?,
-        created_at: observed_at,
-        domain: None,
-        audience: None,
-        proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
-    };
-    let binding = payload
-        .proof_signing_bytes(&unsigned_proof)
-        .map_err(|error| error.to_string())?;
-    let jws = signer
-        .sign_payload(&binding)
-        .map_err(|error| error.to_string())?
-        .jws;
-    let proof = unsigned_proof
-        .finalize(jws)
-        .map_err(|error| error.to_string())?;
-    payload.proofs.push(proof);
-    let Value::Object(payload) =
-        serde_json::to_value(payload).map_err(|error| error.to_string())?
-    else {
-        return Err("range payload is not an object".to_owned());
-    };
-    let actor_seq = accepted_events
-        .iter()
-        .filter(|event| event.actor_id == issuer_actor)
-        .map(|event| event.actor_seq)
-        .max()
-        .map_or(0, |seq| seq.saturating_add(1));
-    let mut event = Event {
-        event_id: EventId::new("ak:event:ASyOHakrqmsRPkLKvhTD20V-YWCl-X7zYrlca5tdQLaR")
-            .map_err(|error| error.to_string())?,
-        kind: EventKind::AttestationRangeCompleteness,
-        realm_id: realm_id.clone(),
-        scope_ref: ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        actor_id: issuer_actor,
-        executed_by: None,
-        authorization_ref: None,
-        applet_id: None,
-        external_ref: None,
-        actor_kind: None,
-        actor_seq,
-        created_at: observed_at,
-        hlc: None,
-        prev_refs: to_frontier,
-        refs: Vec::new(),
-        causal_refs: Vec::new(),
-        preconditions: Vec::new(),
-        seal_ref: None,
-        auth_context: None,
-        seal_basis: None,
-        payload: payload.into_iter().collect(),
-        redacts: None,
-        unsigned: BTreeMap::new(),
-        proofs: Vec::new(),
-        requirements: EventRequirements::default(),
-    };
-    event.event_id = event
-        .derive_event_id_with_digest_suite(digest_suite)
-        .map_err(|error| error.to_string())?;
-    sign_event_with_digest_suite(
-        &mut event,
-        &signer,
-        &verification_method,
-        digest_suite,
-        SignEventOptions::new().with_created_at(observed_at),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(vec![event])
-}
-
-/// The local service notary is anchored by the configured service identity
-/// and the exact runtime notary key. It therefore does not depend on a cached
-/// remote DID document in order to verify service-authored Events.
 pub fn is_local_service_notary_method(
     state: &AppState,
     did: &DidFullId,

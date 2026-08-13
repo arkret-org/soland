@@ -39,45 +39,25 @@ pub(super) async fn persist_principal_resolution_projection(
     } else {
         None
     };
-    let (authority_instance, genesis_event) = if let Some(existing) = existing.as_ref() {
+    let (authority_key, pcr_realm_id, genesis_event) = if let Some(existing) = existing.as_ref() {
         (
-            existing.authority_instance.clone(),
+            existing.authority_key.clone(),
+            existing.pcr_realm_id.clone(),
             existing.genesis_event.clone(),
         )
     } else {
         if kind != arkret_wire::EventKind::RealmCreate.as_str() {
-            return Err(
-                "principal resolution update has no exact PCR authority instance".to_owned(),
-            );
+            return Err("principal resolution update has no account-local PCR lineage".to_owned());
         }
-        let receipt = state
-            .event_queries()
-            .canonical_batch_receipts_for_event(event.event_id.as_str())
-            .await
-            .map_err(|error| format!("load PCR genesis receipt: {error}"))?
-            .into_iter()
-            .find(|receipt| {
-                receipt.pcr_genesis_scope().is_ok_and(|scope| {
-                    scope.principal_id == event.actor_id && scope.realm_id == event.realm_id
-                })
-            })
-            .ok_or_else(|| "accepted PCR genesis receipt is unavailable".to_owned())?;
-        let receipt_digest = arkret_wire::Hash::new(
-            arkret_canonical::canonical_sha256(&receipt)
-                .map_err(|error| format!("digest PCR genesis receipt: {error}"))?,
-        )
-        .map_err(|error| format!("PCR genesis receipt digest is invalid: {error}"))?;
-        let authority_instance = arkret_wire::PrincipalAuthorityInstance::new(
+        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
             event.actor_id.clone(),
-            receipt.issuer,
-            event.realm_id.clone(),
-            receipt_digest,
-        )
-        .map_err(|error| format!("build PCR authority instance: {error}"))?;
-        (authority_instance, event.clone())
+            event.principal_server_id.clone(),
+        );
+        (authority_key, event.realm_id.clone(), event.clone())
     };
     let record = soland_storage::PrincipalResolutionRecord {
-        authority_instance,
+        authority_key,
+        pcr_realm_id,
         genesis_event,
         current_event: event.clone(),
         projection,
@@ -428,7 +408,6 @@ pub(super) async fn peer_event_batch_fanout_records(
             service_id: service_id.to_owned(),
             membership_frontier: vec![parsed.event_id.clone()],
             delivery_binding_frontier: vec![parsed.event_id.clone()],
-            realm_sync_endpoint: false,
         });
     }
     if peers.is_empty() {
@@ -440,28 +419,6 @@ pub(super) async fn peer_event_batch_fanout_records(
         .map(serde_json::from_value::<Event>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("failed to type check peer Event batch: {error}"))?;
-    let mut signer_key_evidence = Vec::new();
-    let mut evidence_methods = std::collections::BTreeSet::new();
-    for event in &events {
-        let evidence = crate::jws_verify::federated_event_signer_evidence(state, event)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to resolve peer Event batch signer evidence for {}: {error}",
-                    event.event_id
-                )
-            })?;
-        for entry in evidence {
-            if evidence_methods.insert(entry.verification_method.clone()) {
-                signer_key_evidence.push(entry);
-            }
-        }
-    }
-    let agent_signer_evidence_bundle =
-        crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
-            state, &events,
-        )
-        .await;
     let cba_proof_bundles = federation_cba_proof_bundles(state, &events).map_err(|error| {
         format!("failed to resolve peer Event batch CBA proof bundles: {error}")
     })?;
@@ -502,8 +459,6 @@ pub(super) async fn peer_event_batch_fanout_records(
             service_binding_ref,
             events: submissions.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
-            signer_key_evidence: signer_key_evidence.clone(),
-            agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
         };
         body.validate_federation_transport().map_err(|error| {
             format!(
@@ -534,7 +489,6 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     envelopes: &[Value],
     receipt: &DirectConversationFoundingAcceptanceReceipt,
     founding_authority_evidence: &arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
-    source_service_binding: &arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
     pending_control_proposal_acks: &[arkret_wire::ControlProposalAck],
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     if parsed_events.len() != 3 || envelopes.len() != 3 {
@@ -569,7 +523,6 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             service_id: service_id.to_owned(),
             membership_frontier: Vec::new(),
             delivery_binding_frontier: Vec::new(),
-            realm_sync_endpoint: false,
         });
     }
     let events = envelopes
@@ -578,18 +531,6 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         .map(serde_json::from_value::<Event>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("failed to type Direct Conversation founding Events: {error}"))?;
-    let mut signer_key_evidence = Vec::new();
-    let mut methods = std::collections::BTreeSet::new();
-    for event in &events {
-        for evidence in crate::jws_verify::federated_event_signer_evidence(state, event)
-            .await
-            .map_err(|error| format!("failed to resolve founding signer evidence: {error}"))?
-        {
-            if methods.insert(evidence.verification_method.clone()) {
-                signer_key_evidence.push(evidence);
-            }
-        }
-    }
     let cba_proof_bundles = federation_cba_proof_bundles(state, &events)
         .map_err(|error| format!("failed to resolve founding CBA proof bundles: {error}"))?;
     let submissions = federation_submissions(
@@ -611,13 +552,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
             events: submissions.clone(),
             source_acceptance_receipt: receipt.clone(),
-            source_service_continuity: arkret_models_collaboration::direct_conversation_ops::PrincipalServiceBindingContinuity {
-                accepted_binding: source_service_binding.clone(),
-                cutovers: Vec::new(),
-            },
             founding_authority_evidence: founding_authority_evidence.clone(),
             cba_proof_bundles: cba_proof_bundles.clone(),
-            signer_key_evidence: signer_key_evidence.clone(),
         };
         let payload_json = canonical::canonical_json_bytes(&body)
             .ok()
@@ -688,17 +624,6 @@ pub(super) async fn peer_event_fanout_records(
     });
     let event = serde_json::from_value::<Event>(envelope.clone())
         .map_err(|error| format!("failed to type check peer fanout Event {event_id}: {error}"))?;
-    let signer_key_evidence = crate::jws_verify::federated_event_signer_evidence(state, &event)
-        .await
-        .map_err(|error| {
-            format!("failed to resolve peer Event {event_id} signer evidence: {error}")
-        })?;
-    let agent_signer_evidence_bundle =
-        crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
-            state,
-            std::slice::from_ref(&event),
-        )
-        .await;
     let now = chrono::Utc::now().timestamp();
     let mut records = Vec::new();
     for peer in peers {
@@ -711,9 +636,8 @@ pub(super) async fn peer_event_fanout_records(
         // dependency admission by delivering the original atomic Realm
         // genesis unit immediately before that Event. The deterministic
         // idempotency key collapses this prerequisite for later fanout.
-        if !peer.realm_sync_endpoint
-            && let Some(bootstrap) =
-                realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await?
+        if let Some(bootstrap) =
+            realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await?
         {
             records.push(bootstrap);
         }
@@ -765,33 +689,6 @@ pub(super) async fn peer_event_fanout_records(
                 _ => 1_u8,
             }
         });
-        let mut peer_signer_key_evidence = signer_key_evidence.clone();
-        let mut evidence_methods = peer_signer_key_evidence
-            .iter()
-            .map(|evidence| evidence.verification_method.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        for dependency in &peer_events {
-            let evidence = crate::jws_verify::federated_event_signer_evidence(state, dependency)
-                .await
-                .map_err(|error| {
-                    format!(
-                        "failed to resolve causal prerequisite {} signer evidence: {error}",
-                        dependency.event_id
-                    )
-                })?;
-            for entry in evidence {
-                if evidence_methods.insert(entry.verification_method.clone()) {
-                    peer_signer_key_evidence.push(entry);
-                }
-            }
-        }
-        let peer_agent_signer_evidence_bundle =
-            crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
-                state,
-                &peer_events,
-            )
-            .await
-            .or_else(|| agent_signer_evidence_bundle.clone());
         let cba_proof_bundles =
             federation_cba_proof_bundles(state, &peer_events).map_err(|error| {
                 format!(
@@ -811,8 +708,6 @@ pub(super) async fn peer_event_fanout_records(
             service_binding_ref,
             events: submissions,
             cba_proof_bundles,
-            signer_key_evidence: peer_signer_key_evidence,
-            agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
         };
         body.validate_federation_transport().map_err(|error| {
             format!(
@@ -993,28 +888,6 @@ async fn realm_bootstrap_fanout_record(
         return Ok(None);
     }
 
-    let mut signer_key_evidence = Vec::new();
-    let mut evidence_methods = std::collections::BTreeSet::new();
-    for event in &events {
-        let evidence = crate::jws_verify::federated_event_signer_evidence(state, event)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to resolve Realm bootstrap prerequisite {} signer evidence: {error}",
-                    event.event_id
-                )
-            })?;
-        for entry in evidence {
-            if evidence_methods.insert(entry.verification_method.clone()) {
-                signer_key_evidence.push(entry);
-            }
-        }
-    }
-    let agent_signer_evidence_bundle =
-        crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
-            state, &events,
-        )
-        .await;
     let event_ids = bootstrap_records
         .iter()
         .map(|record| record.event_id.as_str())
@@ -1066,8 +939,6 @@ async fn realm_bootstrap_fanout_record(
         // Realm bootstrap prerequisites precede any Seal, so the batch closes
         // no CBA basis of its own.
         cba_proof_bundles: Vec::new(),
-        signer_key_evidence,
-        agent_signer_evidence_bundle,
     };
     body.validate_federation_transport().map_err(|error| {
         format!(
@@ -1102,7 +973,6 @@ struct DynamicPeerEventTarget {
     service_id: String,
     membership_frontier: Vec<String>,
     delivery_binding_frontier: Vec<String>,
-    realm_sync_endpoint: bool,
 }
 
 async fn dynamic_peer_event_targets(
@@ -1165,112 +1035,25 @@ async fn dynamic_peer_event_targets(
         service_frontiers
     };
 
-    // Realm-level `sync_endpoints` are the canonical replication binding for
-    // mirrors and shared sync services. They are independent of member-level
-    // delivery bindings and are carried by the current accepted policy bundle.
-    let mut sync_endpoint_routes = BTreeMap::new();
-    let mut realm_sync_endpoint_service_ids = BTreeSet::new();
-    if let Ok(records) = state
-        .event_queries()
-        .realm_events_newest_first(&parsed.realm_id)
-        .await
-        && let Some(policy_bundle) = records
-            .iter()
-            .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
-        && let Some(endpoints) = policy_bundle
-            .envelope
-            .pointer("/payload/sync_endpoints")
-            .and_then(Value::as_array)
-    {
-        for endpoint in endpoints {
-            let Some(service_id) = endpoint
-                .get("service_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                continue;
-            };
-            let Ok(service_id_typed) = arkret_wire::DidCoreId::new(service_id.to_owned()) else {
-                continue;
-            };
-            if service_id == state.service_id() {
-                continue;
-            }
-            let Some(service_kind) = endpoint.get("service_kind").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(carrier) = endpoint
-                .get("service_resolution")
-                .cloned()
-                .and_then(|value| {
-                    serde_json::from_value::<
-                        arkret_models_identity::identity_resolution::ServiceResolutionCarrier,
-                    >(value)
-                    .ok()
-                })
-            else {
-                continue;
-            };
-            let entry = service_frontiers.entry(service_id.to_owned()).or_default();
-            entry.0.insert(policy_bundle.event_id.clone());
-            entry.1.insert(policy_bundle.event_id.clone());
-            sync_endpoint_routes.insert(
-                service_id.to_owned(),
-                (service_id_typed, service_kind.to_owned(), carrier),
-            );
-            realm_sync_endpoint_service_ids.insert(service_id.to_owned());
-        }
-    }
-
     let mut targets = Vec::new();
     for (service_id, (membership_frontier, delivery_binding_frontier)) in service_frontiers {
-        let url = if let Some((typed_service_id, service_kind, carrier)) =
-            sync_endpoint_routes.remove(&service_id)
-        {
-            let resolver = state.service_route_resolver().map_err(|error| {
-                format!(
-                    "dynamic peer Event fanout target {service_id} has no service route resolver: {error}"
-                )
-            })?;
-            resolver
-                .resolve_carrier_route(
-                    &carrier,
-                    &typed_service_id,
-                    &service_kind,
-                    chrono::Utc::now(),
-                )
-                .await
-                .map_err(|error| {
-                    format!(
-                        "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
-                    )
-                })?
-                .cache_entry
-                .base_url
-                .trim_end_matches('/')
-                .to_owned()
-        } else {
-            crate::routing::federation::federation::resolved_peer_base_url(
-                state,
-                &service_id,
-                "principal_server",
-                false,
+        let url = crate::routing::federation::federation::resolved_peer_base_url(
+            state,
+            &service_id,
+            "principal_server",
+            false,
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
             )
-            .await
-            .map_err(|error| {
-                format!(
-                    "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
-                )
-            })?
-        };
-        let realm_sync_endpoint = realm_sync_endpoint_service_ids.contains(&service_id);
+        })?;
         targets.push(DynamicPeerEventTarget {
             url,
             service_id,
             membership_frontier: membership_frontier.into_iter().collect(),
             delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
-            realm_sync_endpoint,
         });
     }
     Ok(targets)

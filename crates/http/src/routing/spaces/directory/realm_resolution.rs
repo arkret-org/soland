@@ -804,68 +804,6 @@ pub(super) async fn join_candidates_for_resolved_realm(
     }
 
     let mut candidates = Vec::new();
-    let records = state
-        .event_queries()
-        .realm_events_newest_first(realm_id)
-        .await
-        .unwrap_or_default();
-    if let Some(policy_bundle) = records
-        .iter()
-        .find(|record| record.kind == arkret_wire::EventKind::RealmPolicyBundle.as_str())
-    {
-        let source_ref = EventId::new(policy_bundle.event_id.clone()).ok();
-        if let Some(endpoints) = policy_bundle
-            .envelope
-            .pointer("/payload/sync_endpoints")
-            .and_then(Value::as_array)
-        {
-            for endpoint in endpoints {
-                let Some(service_id) = endpoint
-                    .get("service_id")
-                    .and_then(Value::as_str)
-                    .and_then(normalize_join_candidate_service_id)
-                    .filter(|service_id| authority_service_ids.contains(service_id.as_str()))
-                else {
-                    continue;
-                };
-                let Some((service_kind, role)) = join_candidate_endpoint_kind_role(endpoint) else {
-                    continue;
-                };
-                let Some(service_resolution) = accepted_join_candidate_carrier(
-                    state,
-                    realm_id,
-                    endpoint,
-                    &service_id,
-                    own_resolution.as_ref(),
-                ) else {
-                    // The legacy endpoint is only a transport hint. Without
-                    // an accepted carrier it cannot become a join route.
-                    continue;
-                };
-                candidates.push(RealmJoinCandidate {
-                    realm_id: realm_id_typed.clone(),
-                    service_id,
-                    service_resolution,
-                    service_kind,
-                    role,
-                    endpoint: None,
-                    operations: vec!["ak.self.events.command.submit".to_owned()],
-                    join_methods: join_methods.clone(),
-                    priority: Some(match role {
-                        RealmJoinCandidateRole::Primary | RealmJoinCandidateRole::Notary => 0,
-                        _ => 10,
-                    }),
-                    source: RealmJoinCandidateSource::RealmSyncEndpoint,
-                    source_refs: source_ref.clone().into_iter().collect(),
-                    frontier_ref: None,
-                    seal_basis: seal_basis.clone(),
-                    as_of: observed_at,
-                    expires_at: observed_at + chrono::Duration::minutes(10),
-                    proofs: Vec::new(),
-                });
-            }
-        }
-    }
 
     if candidates.is_empty()
         && authority_service_ids.contains(state.service_id())
@@ -909,67 +847,6 @@ fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::DidCo
                 .ok()
                 .map(arkret_wire::DidCoreId::from)
         })
-}
-
-fn accepted_join_candidate_carrier(
-    state: &AppState,
-    realm_id: &str,
-    endpoint: &Value,
-    service_id: &arkret_wire::DidCoreId,
-    own_resolution: Option<&arkret_models_identity::ServiceResolutionRecord>,
-) -> Option<ServiceResolutionCarrier> {
-    if own_resolution.is_some_and(|record| &record.record.service_id == service_id) {
-        return own_resolution
-            .cloned()
-            .map(|inline| ServiceResolutionCarrier::Inline { inline });
-    }
-    if let Some(carrier) = endpoint
-        .get("service_resolution")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-    {
-        return Some(carrier);
-    }
-    state
-        .projections()
-        .snapshot()
-        .members
-        .values()
-        .filter(|member| {
-            member.realm_id == realm_id
-                && member.state == "join"
-                && member.delivery_status.as_deref() == Some("routable")
-        })
-        .find(|member| {
-            member
-                .recipient_service_id
-                .as_deref()
-                .and_then(normalize_join_candidate_service_id)
-                .as_ref()
-                == Some(service_id)
-        })
-        .and_then(|member| member.recipient_service_resolution.clone())
-        .and_then(|value| serde_json::from_value(value).ok())
-}
-
-fn join_candidate_endpoint_kind_role(
-    endpoint: &Value,
-) -> Option<(RealmJoinCandidateServiceKind, RealmJoinCandidateRole)> {
-    let service_kind = match endpoint.get("service_kind").and_then(Value::as_str)? {
-        "principal_server" => RealmJoinCandidateServiceKind::PrincipalServer,
-        "sync_node" => RealmJoinCandidateServiceKind::SyncNode,
-        "notary" => RealmJoinCandidateServiceKind::Notary,
-        _ => return None,
-    };
-    let role = match endpoint.get("role").and_then(Value::as_str)? {
-        "primary" => RealmJoinCandidateRole::Primary,
-        "mirror" => RealmJoinCandidateRole::Mirror,
-        "notary" => RealmJoinCandidateRole::Notary,
-        "sync" => RealmJoinCandidateRole::Sync,
-        "federation_peer" => RealmJoinCandidateRole::FederationPeer,
-        _ => return None,
-    };
-    Some((service_kind, role))
 }
 
 #[cfg(test)]

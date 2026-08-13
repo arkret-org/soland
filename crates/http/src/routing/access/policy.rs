@@ -881,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_check_delegation_requires_source_service_binding() {
+    fn policy_check_delegation_requires_service_authority() {
         let request = policy_request(
             "ak:did_core:web:alice.example",
             "ak:did_core:web:other-service.example",

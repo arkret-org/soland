@@ -216,7 +216,6 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
             .and_then(Value::as_str)
             .ok_or("message create requires track_name")?;
         validate_read_scope_track(track_name)?;
-        validate_message_expiry_payload(operation)?;
     }
     let encrypted = operation
         .payload
@@ -240,38 +239,6 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         validate_content_blocks(content)?;
         validate_mentions(content)?;
         validate_audience_mentions(content)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_message_expiry_payload(operation: &Operation) -> Result<(), &'static str> {
-    let Some(expiry) = operation.payload.get("expiry") else {
-        return Ok(());
-    };
-    let Some(object) = expiry.as_object() else {
-        return Err("ak.message.create.payload.expiry must be an object");
-    };
-    for key in object.keys() {
-        if !["ttl_ms", "trigger", "grace_ms"].contains(&key.as_str()) {
-            return Err("ak.message.create.payload.expiry has unknown field");
-        }
-    }
-    if object
-        .get("ttl_ms")
-        .and_then(Value::as_u64)
-        .is_none_or(|value| value == 0)
-    {
-        return Err("ak.message.create.payload.expiry requires positive ttl_ms");
-    }
-    match object.get("trigger").and_then(Value::as_str) {
-        Some("on_send" | "on_first_read" | "on_last_read") => {}
-        _ => return Err("ak.message.create.payload.expiry trigger is invalid"),
-    }
-    if object
-        .get("grace_ms")
-        .is_some_and(|value| value.as_u64().is_none())
-    {
-        return Err("ak.message.create.payload.expiry grace_ms must be an integer");
     }
     Ok(())
 }
@@ -827,51 +794,7 @@ mod tests {
     use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;
 
-    use super::{validate_encrypted_payload_envelope, validate_message_expiry_payload};
-
-    fn message_operation(expiry: serde_json::Value) -> Operation {
-        arkret_event_draft::test_support::raw_projected_operation(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-0000000000e1".to_owned(),
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(
-                "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            )
-            .unwrap(),
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            json!({
-                "content": {"kind": "ak.content.text", "body": "secret"},
-                "expiry": expiry
-            }),
-        )
-    }
-
-    #[test]
-    fn message_expiry_accepts_current_wire_shape() {
-        let operation = message_operation(json!({
-            "ttl_ms": 60_000,
-            "trigger": "on_send",
-            "grace_ms": 1_000
-        }));
-
-        assert_eq!(validate_message_expiry_payload(&operation), Ok(()));
-    }
-
-    #[test]
-    fn message_expiry_rejects_removed_seal_hlc() {
-        let operation = message_operation(json!({
-            "ttl_ms": 60_000,
-            "trigger": "on_send",
-            "grace_ms": 1_000,
-            "seal_hlc": "019041000000-0001-00000001"
-        }));
-
-        assert_eq!(
-            validate_message_expiry_payload(&operation),
-            Err("ak.message.create.payload.expiry has unknown field")
-        );
-    }
+    use super::validate_encrypted_payload_envelope;
 
     #[test]
     fn encrypted_payload_envelope_accepts_exporter_aead_scheme_binding() {

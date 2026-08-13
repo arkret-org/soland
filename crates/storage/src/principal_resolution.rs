@@ -1,11 +1,12 @@
 use arkret_models_identity::PrincipalResolutionProjection;
-use arkret_wire::{Event, Hash, PrincipalAuthorityInstance, RealmId};
+use arkret_wire::{Event, PrincipalAuthorityKey, RealmId};
 
 use super::{PersistenceResult, async_trait};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrincipalResolutionRecord {
-    pub authority_instance: PrincipalAuthorityInstance,
+    pub authority_key: PrincipalAuthorityKey,
+    pub pcr_realm_id: RealmId,
     pub genesis_event: Event,
     pub current_event: Event,
     pub projection: PrincipalResolutionProjection,
@@ -17,25 +18,23 @@ pub fn validate_principal_resolution_record(
     let projected = arkret_wire::project_full_id_to_core_id(&record.projection.full_id)
         .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
     let current_is_genesis = record.current_event.event_id == record.genesis_event.event_id;
-    record
-        .authority_instance
-        .validate()
-        .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))?;
-    if projected != record.authority_instance.principal_id
+    if projected != record.authority_key.principal_id
         || record.projection.resolution_event_ref != record.current_event.event_id.as_str()
         || record.projection.method_history_head.is_empty()
         || record.projection.version_id.is_empty()
         || record.genesis_event.kind != arkret_wire::EventKind::RealmCreate
-        || record.genesis_event.realm_id != record.authority_instance.pcr_realm_id
-        || record.current_event.realm_id != record.authority_instance.pcr_realm_id
-        || record.genesis_event.actor_id != record.authority_instance.principal_id
-        || record.current_event.actor_id != record.authority_instance.principal_id
+        || record.genesis_event.realm_id != record.pcr_realm_id
+        || record.current_event.realm_id != record.pcr_realm_id
+        || record.genesis_event.actor_id != record.authority_key.principal_id
+        || record.current_event.actor_id != record.authority_key.principal_id
+        || record.genesis_event.principal_server_id != record.authority_key.principal_server_id
+        || record.current_event.principal_server_id != record.authority_key.principal_server_id
         || (current_is_genesis && record.current_event.kind != arkret_wire::EventKind::RealmCreate)
         || (!current_is_genesis
             && record.current_event.kind != arkret_wire::EventKind::IdentityResolutionUpdate)
     {
         return Err(super::PersistenceError::SchemaViolation(
-            "principal resolution record does not bind its exact authority instance, Event head and full-id projection"
+            "principal resolution record does not bind its account authority key, PCR Realm, Event head and full-id projection"
                 .to_owned(),
         ));
     }
@@ -53,9 +52,9 @@ pub enum PrincipalResolutionCasResult {
 /// current/history reads an atomic head and bounded ordered history.
 #[async_trait]
 pub trait PrincipalResolutionStore: Send + Sync {
-    async fn by_authority_instance_digest(
+    async fn by_authority_key(
         &self,
-        authority_instance_digest: &Hash,
+        authority_key: &PrincipalAuthorityKey,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>>;
 
     async fn for_realm(
@@ -71,7 +70,7 @@ pub trait PrincipalResolutionStore: Send + Sync {
 
     async fn history_newest_first(
         &self,
-        authority_instance_digest: &Hash,
+        authority_key: &PrincipalAuthorityKey,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> PersistenceResult<Vec<Event>>;

@@ -75,7 +75,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
-        || message.starts_with("disappearing_")
         || message.starts_with("direct_conversation_")
         || message == arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH
         || message == arkret_wire::ReasonCode::HISTORY_VISIBILITY_REQUIRES_HISTORY_CAPABLE_SCHEME
@@ -261,7 +260,6 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_reaction_scope_policy(state, operation)?;
         validate_minimal_metadata_aad_policy(state, operation).await?;
         validate_aad_visibility_policy(state, operation).await?;
-        validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())
 }

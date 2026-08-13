@@ -22,7 +22,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
                 "realm_id": DEMO_REALM_ID,
                 "kind": "list",
                 "title": "Roadmap",
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -183,7 +183,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Launch strand" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -303,7 +303,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
                 "realm_id": DEMO_REALM_ID,
                 "morph_kind": "task",
                 "metadata": { "title": "Backfill" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![restored_strand_event_id.as_str()],
@@ -447,7 +447,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Encrypted realm metadata title" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -516,7 +516,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -602,7 +602,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![done_event_id.as_str()],
@@ -707,7 +707,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Sensitive strand" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -788,7 +788,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
                 "realm_id": DEMO_REALM_ID,
                 "morph_kind": "task",
                 "metadata": { "title": "Sensitive task" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         vec![redact1_event_id.as_str()],
@@ -866,7 +866,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
             "object": {
                 "realm_id": DEMO_REALM_ID,
                 "metadata": { "title": "Launch strand" },
-                "created_by": "did:web:alice.example",
+                "created_by": fixture_actor_core_id("did:web:alice.example"),
             }
         }),
         Vec::new(),

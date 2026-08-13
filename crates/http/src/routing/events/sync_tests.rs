@@ -1,7 +1,7 @@
 use super::*;
 
 fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
-    arkret_wire::test_support::raw_event(
+    crate::test_event::raw_event(
         arkret_wire::EventKind::MessageCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -587,7 +587,7 @@ fn accepted_sync_test_operation_at(
     payload: Value,
     created_at: DateTime<Utc>,
 ) -> arkret_event_draft::ProjectedEventOperation {
-    let mut event = arkret_wire::test_support::raw_event_at(
+    let mut event = crate::test_event::raw_event_at(
         kind.as_ref(),
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
@@ -831,7 +831,7 @@ fn canonical_event_record_received_at(
     received_at: DateTime<Utc>,
 ) -> soland_services::events::CanonicalEventRecord {
     let kind = kind.as_ref();
-    let event = arkret_wire::test_support::raw_event_at(
+    let event = crate::test_event::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),

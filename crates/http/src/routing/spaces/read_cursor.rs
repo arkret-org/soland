@@ -277,7 +277,7 @@ mod tests {
 
     fn signed_shape() -> Event {
         let created_at = "2026-08-08T00:00:00.000Z".parse().expect("timestamp");
-        arkret_wire::test_support::raw_event_at(
+        crate::test_event::raw_event_at(
             arkret_wire::EventKind::ReadCursorAdvance.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(REALM_ID).expect("realm"),

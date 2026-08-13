@@ -645,14 +645,6 @@ fn apply_realm_policy_bundle_dispatch(
     s.apply_realm_policy_bundle(op)
 }
 
-fn apply_realm_disappearing_policy_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_realm_disappearing_policy(op)
-}
-
 fn apply_realm_search_policy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1214,10 +1206,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmPolicyBundle,
         apply_realm_policy_bundle_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmDisappearingPolicy,
-        apply_realm_disappearing_policy_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::RealmSearchPolicy,

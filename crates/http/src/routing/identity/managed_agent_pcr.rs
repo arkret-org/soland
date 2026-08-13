@@ -450,7 +450,7 @@ pub(crate) async fn project_agent_pcr_recovery(
 /// Whether `pointer` is the controller's current accepted active-series head.
 ///
 /// The `ak.key_backup.active_series` record does not carry a
-/// `PrincipalAuthorityInstance`, so neither the controller Seal frontier nor
+/// account authority pair, so neither the controller Seal frontier nor
 /// the signing device can be selected without a core-only lookup that another
 /// PCR of the same principal core would satisfy just as well. The pointer
 /// therefore cannot be proven current and every caller fails closed here.
@@ -1333,7 +1333,7 @@ mod tests {
     /// cannot project at all.
     #[test]
     fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
-        let mut event = arkret_wire::test_support::raw_event(
+        let mut event = crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
             crate::test_actor_id_str(AGENT),

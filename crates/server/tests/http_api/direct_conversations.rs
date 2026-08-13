@@ -128,6 +128,7 @@ async fn project_authorized_device(
             realm_id: realm_id.clone(),
         },
         actor_core.clone(),
+        soland_test_support::fixture_principal_server_id(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({

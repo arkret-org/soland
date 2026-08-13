@@ -579,7 +579,6 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 sender: member.to_owned(),
                 thread_id: strand_id.to_owned(),
                 content: json!({}),
-                expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-c2c2e0000005".to_owned(),
                 created_at: now,
@@ -790,7 +789,9 @@ async fn applet_registration_requires_realm_admin() {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
             issuer: owner.to_owned(),
+            issuer_principal_server_id: owner.to_owned(),
             subject: owner.to_owned(),
+            subject_principal_server_id: None,
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             capability_action_registry_digest: Some(
@@ -987,7 +988,7 @@ fn production_requires_requirements_schema() {
 async fn top_level_effective_scope_is_reducer_managed() {
     let state = make_state(true);
     let session = session();
-    let event = arkret_wire::test_support::raw_event(
+    let event = crate::test_event::raw_event(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -1016,7 +1017,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
 
 #[test]
 fn event_canonical_bytes_use_sdk_canonical_json() {
-    let mut event = arkret_wire::test_support::raw_event(
+    let mut event = crate::test_event::raw_event(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -1045,7 +1046,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
 
 #[test]
 fn event_canonical_bytes_reject_fractional_numbers() {
-    let event = arkret_wire::test_support::raw_event(
+    let event = crate::test_event::raw_event(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -1528,6 +1529,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 
 const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
+const DATA_EVENT_PRINCIPAL_SERVER: &str = "did:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
 const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
@@ -1599,7 +1601,9 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
         issuer: "did:web:owner.example".to_owned(),
+        issuer_principal_server_id: DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
         subject: DATA_EVENT_ACTOR.to_owned(),
+        subject_principal_server_id: Some(DATA_EVENT_PRINCIPAL_SERVER.to_owned()),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
         capability_action_registry_digest: None,
@@ -1626,6 +1630,7 @@ fn historical_data_event_grant_value(
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": DATA_EVENT_REALM,
         "issuer": issuer,
+        "issuer_principal_server_id": DATA_EVENT_PRINCIPAL_SERVER,
         "issuer_authority_refs": [{
             "kind": "realm_root",
             "realm_id": DATA_EVENT_REALM,
@@ -1634,6 +1639,7 @@ fn historical_data_event_grant_value(
             "authority_generation": 0
         }],
         "subject": subject,
+        "subject_principal_server_id": DATA_EVENT_PRINCIPAL_SERVER,
         "actions": [action],
         "resources": [DATA_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
@@ -2026,6 +2032,7 @@ fn data_event_capability_ref_must_resolve() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2050,6 +2057,7 @@ fn data_event_capability_must_cover_derived_cell() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2067,6 +2075,7 @@ fn data_event_capability_must_cover_derived_cell() {
     let err = validate_data_event_capability_refs(
         &wrong_state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &wrong_action_object,
@@ -2094,6 +2103,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &with_capability_refs,
@@ -2115,6 +2125,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &with_effects,
@@ -2139,6 +2150,7 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2171,6 +2183,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2186,6 +2199,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2207,6 +2221,7 @@ fn data_event_capability_ref_must_not_be_revoked() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2235,6 +2250,7 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2260,6 +2276,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2280,6 +2297,7 @@ fn data_event_revocation_successor_within_window_is_accepted() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2300,6 +2318,7 @@ fn data_event_revocation_successor_at_window_boundary_is_accepted() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2320,6 +2339,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2342,6 +2362,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2362,6 +2383,7 @@ fn relaxed_e2ee_data_event_keeps_independent_capability_gate() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,

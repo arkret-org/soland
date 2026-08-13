@@ -40,50 +40,36 @@ fn agent_fanout_submit_error(
 pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
-    authority_instance: &arkret_wire::PrincipalAuthorityInstance,
+    authority: &arkret_wire::PrincipalAuthorityKey,
 ) -> Result<String, AppError> {
-    authority_instance.validate().map_err(|error| {
-        AppError::invalid_param(format!("controller authority_instance is invalid: {error}"))
-            .with_reason_code("principal_authority_instance_mismatch")
-    })?;
     let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    if authority_instance.principal_id != controller_id
-        || authority_instance.principal_server_id.as_str() != state.service_id()
+    if authority.principal_id != controller_id
+        || authority.principal_server_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "controller authority_instance does not bind this session and Principal Server",
+            "controller authority does not bind this session and Principal Server",
         )
         .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("principal_authority_instance_mismatch"));
+        .with_reason_code("principal_authority_mismatch"));
     }
     let record = state
         .persistence()
-        .principal_resolution_by_authority_instance(&authority_instance.authority_instance_digest)
+        .principal_resolution_by_authority_key(authority)
         .await
         .map_err(|error| {
-            AppError::internal(format!(
-                "controller authority-instance lookup failed: {error}"
-            ))
+            AppError::internal(format!("controller authority lookup failed: {error}"))
         })?
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "controller authority_instance is not accepted by this Principal Server",
+                "controller authority is not accepted by this Principal Server",
             )
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-            .with_reason_code("principal_authority_instance_mismatch")
+            .with_reason_code("principal_authority_mismatch")
         })?;
-    if record.authority_instance != *authority_instance {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "controller authority_instance differs from the durable PCR record",
-        )
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("principal_authority_instance_mismatch"));
-    }
-    let realm_id = authority_instance.pcr_realm_id.to_string();
+    let realm_id = record.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -416,6 +402,7 @@ mod tests {
             Some(controller_id.as_str())
         );
         assert!(!projection.issuer_has_projected_capability(
+            controller_id.as_str(),
             controller_id.as_str(),
             realm_id,
             CapabilityActionId::MESSAGE_CREATE,

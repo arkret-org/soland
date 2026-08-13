@@ -64,6 +64,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
                     |error| AppError::internal(format!("MIMI realm id invalid: {error}")),
                 )?,
             },
+            service_actor_id.clone(),
             service_actor_id,
             typed_payload,
         )

@@ -467,7 +467,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        let authorize_event = arkret_wire::test_support::raw_event(
+        let authorize_event = crate::test_event::raw_event(
             "ak.agent.key.authorize",
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(
@@ -552,7 +552,7 @@ mod tests {
         proof.verification_method =
             arkret_wire::DidUrl::new(format!("{controller_id}#{device_id}")).unwrap();
         body.authorize_event.event.executed_by = Some(crate::test_actor_id_str(controller_id));
-        body.authorize_event.event.proofs = vec![proof];
+        body.authorize_event.event.proofs = vec![proof.into()];
     }
 
     #[test]
@@ -588,9 +588,13 @@ mod tests {
             "did:web:soland.example",
         );
         bind_pairing_request_to_controller_device(&mut body, controller_id);
-        body.authorize_event.event.proofs[0].verification_method = arkret_wire::DidUrl::new(
-            format!("{controller_id}#ak:device:01904100-0000-7000-8000-000000000099"),
-        )
+        let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0]
+        else {
+            panic!("fixture must carry a producer proof")
+        };
+        proof.verification_method = arkret_wire::DidUrl::new(format!(
+            "{controller_id}#ak:device:01904100-0000-7000-8000-000000000099"
+        ))
         .unwrap();
 
         assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
@@ -605,7 +609,11 @@ mod tests {
             "did:web:soland.example",
         );
         bind_pairing_request_to_controller_device(&mut body, controller_id);
-        body.authorize_event.event.proofs[0].verification_method =
+        let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0]
+        else {
+            panic!("fixture must carry a producer proof")
+        };
+        proof.verification_method =
             arkret_wire::DidUrl::new(format!("{controller_id}#key-1")).unwrap();
 
         assert!(service_pairing_controller_device_id(&body, controller_id).is_err());

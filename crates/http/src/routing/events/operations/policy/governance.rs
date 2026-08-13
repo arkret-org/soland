@@ -121,6 +121,7 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
+            Some(operation.context.principal_server_id.as_str()),
             REALM_JOIN_REVIEW_ACTIONS,
             operation.created_at,
         )
@@ -143,6 +144,7 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
+            Some(operation.context.principal_server_id.as_str()),
             REALM_JOIN_REVIEW_ACTIONS,
             operation.created_at,
         )
@@ -165,6 +167,7 @@ pub(super) async fn validate_member_state_policy(
         state,
         realm_id,
         actor,
+        Some(operation.context.principal_server_id.as_str()),
         &["ak.realm.admin"],
         operation.created_at,
     )
@@ -349,7 +352,12 @@ pub(super) async fn validate_set_default_strand_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -362,6 +370,7 @@ pub(super) async fn validate_set_default_strand_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
+                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -483,7 +492,12 @@ pub(super) async fn validate_realm_organization_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -492,6 +506,7 @@ pub(super) async fn validate_realm_organization_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: "ak.realm.admin",
             resource: realm_id,
             realm_id,
@@ -567,7 +582,12 @@ pub(super) async fn validate_moderation_event_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -582,6 +602,7 @@ pub(super) async fn validate_moderation_event_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
+                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -610,7 +631,12 @@ pub(super) async fn validate_realm_policy_server_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor.as_str(), operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor.as_str(),
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -619,6 +645,7 @@ pub(super) async fn validate_realm_policy_server_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor: actor.as_str(),
+            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: arkret_wire::CapabilityActionId::POLICY_MANAGE,
             resource: realm_id,
             realm_id,
@@ -648,7 +675,12 @@ pub(super) async fn validate_call_recording_start_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -657,6 +689,7 @@ pub(super) async fn validate_call_recording_start_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action,
             resource: realm_id,
             realm_id,

@@ -85,6 +85,7 @@ impl DidResolver for SharedDidResolver {
 fn local_capability_action_for(
     state: &AppState,
     actor_id: &str,
+    actor_principal_server_id: &str,
     realm_id: &str,
     event_kind: &str,
 ) -> String {
@@ -102,6 +103,7 @@ fn local_capability_action_for(
                 .authorization()
                 .check(soland_services::authorization::AuthorizationCheck {
                     actor: actor_id,
+                    actor_principal_server_id: Some(actor_principal_server_id),
                     action,
                     resource: realm_id,
                     realm_id,
@@ -162,7 +164,13 @@ pub(crate) async fn enforce_operation_policy_server(
     // `ak.policy.manage`), so resolve the kind through the registry instead of
     // handing an Event kind to a capability check that would answer
     // `capability_action_unknown`.
-    let capability_action = local_capability_action_for(state, actor_id, realm_id, &action);
+    let capability_action = local_capability_action_for(
+        state,
+        actor_id,
+        operation.context.principal_server_id.as_str(),
+        realm_id,
+        &action,
+    );
     let resource = operation
         .object_id
         .as_deref()
@@ -181,6 +189,7 @@ pub(crate) async fn enforce_operation_policy_server(
     let decision = check_with_policy_server(
         state.authorization(),
         actor_id,
+        Some(operation.context.principal_server_id.as_str()),
         &capability_action,
         &resource,
         realm_id,

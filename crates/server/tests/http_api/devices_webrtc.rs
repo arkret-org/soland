@@ -172,7 +172,10 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
         state
             .test_persistence()
             .devices()
-            .get("did:web:alice.example", sibling)
+            .get(
+                fixture_actor_core_id("did:web:alice.example").as_str(),
+                sibling,
+            )
             .await
             .unwrap()
             .is_none(),
@@ -522,7 +525,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
         })))
@@ -633,7 +636,10 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     assert_eq!(backend_payload["provider"], "mediasoup");
     assert_eq!(backend_payload["realm_id"], DEMO_REALM_ID);
     assert_eq!(backend_payload["call_id"], session_id);
-    assert_eq!(backend_payload["actor_id"], "did:web:alice.example");
+    assert_eq!(
+        backend_payload["actor_id"],
+        fixture_actor_core_id("did:web:alice.example").as_str()
+    );
     assert_eq!(
         backend_payload["device_id"],
         "ak:device:01904100-0000-7000-8000-a11ce0000001"
@@ -645,7 +651,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
         })))
@@ -687,7 +693,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
-            "actor_id": actor,
+            "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
         })))
@@ -713,7 +719,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": call_id,
-            "actor_id": actor,
+            "actor_id": fixture_actor_core_id(actor),
             "device_id": device_id,
             "focus_id": "ak:focus:livekit:green"
         })))
@@ -766,7 +772,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:livekit:green"
         })))
@@ -794,7 +800,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:mediasoup:blue"
         })))
@@ -827,7 +833,7 @@ async fn rtc_media_token_rejects_non_member_actor() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:bob.example",
+            "actor_id": fixture_actor_core_id("did:web:bob.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
             "focus_id": "ak:focus:livekit:green"
         })))
@@ -859,7 +865,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     let exchange_body = serde_json::json!({
         "realm_id": DEMO_REALM_ID,
         "call_id": session_id,
-        "actor_id": bob,
+        "actor_id": fixture_actor_core_id(bob),
         "device_id": bob_device,
         "focus_id": "ak:focus:livekit:green"
     });
@@ -971,7 +977,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "ak:focus:livekit:green",
             "desired_media": {"audio": true, "video": true, "screen": false}
@@ -1148,15 +1154,18 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
 /// authz engine, mirroring what the capability-grant projection would fold in.
 fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
-    soland_http::authz::install_projected_grant(
+    let mut grant = soland_http::authz::install_projected_grant(
         state.test_authz(),
         realm_id.to_owned(),
-        "did:web:alice.example".to_owned(),
-        subject.to_owned(),
+        fixture_actor_core_id("did:web:alice.example").to_string(),
+        fixture_actor_core_id(subject).to_string(),
         realm_id.to_owned(),
         vec![action.to_owned()],
         vec![],
     );
+    grant.issuer_principal_server_id = state.service_id().clone();
+    grant.subject_principal_server_id = Some(state.service_id().clone());
+    state.test_authz().upsert_projected_grant(grant);
 }
 
 /// Register `bob` as a realm member and return a fresh `ak:call:<44-char-event-token>` id.

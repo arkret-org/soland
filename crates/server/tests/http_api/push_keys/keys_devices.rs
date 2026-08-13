@@ -26,6 +26,7 @@ fn accepted_device_authorize_operation(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm { realm_id },
         actor,
+        soland_test_support::fixture_principal_server_id(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         payload,
@@ -1152,7 +1153,10 @@ async fn keys_query_hides_revoked_device() {
     let mut revoked = state
         .test_persistence()
         .devices()
-        .get("did:web:alice.example", mobile_device)
+        .get(
+            fixture_actor_core_id("did:web:alice.example").as_str(),
+            mobile_device,
+        )
         .await
         .unwrap()
         .unwrap();

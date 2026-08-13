@@ -124,6 +124,7 @@ pub async fn seed_sealed_capability_grant(
             )
             .expect("fixture grant issuer projection"),
         ),
+        crate::fixture_principal_server_id(),
         0,
         fixture_hlc(fixture.grant_id),
         json!({ "object": body.clone() }),
@@ -224,9 +225,20 @@ pub async fn seal_accepted_capability_grant(
     ))
     .expect("capability grant cell ref");
     assert_eq!(direct.cell, expected_cell);
+    let projected_op = direct.op.clone();
+    assert_eq!(
+        projected_op
+            .value
+            .as_ref()
+            .and_then(|value| value.get("grant"))
+            .and_then(|grant| grant.get("issuer_principal_server_id"))
+            .and_then(Value::as_str),
+        Some(event.principal_server_id.as_str()),
+        "canonical registry projection materializes the accepted issuer Principal Server"
+    );
     let op = IssuedOp {
         issuer: event.actor_id.clone(),
-        op: arkret_state::lattice::SealedOp::new(move_id.clone(), direct.op.clone()),
+        op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),
     };
     let state_root = state_root_for(&realm, &expected_cell, &op);
 

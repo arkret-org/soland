@@ -542,6 +542,7 @@ async fn verify_mimi_consent_update_authority(
             .event
             .proofs
             .first()
+            .and_then(arkret_wire::EventProof::as_producer)
             .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
             .map(|(_, fragment)| fragment.to_owned())
             .ok_or_else(|| {
@@ -1110,7 +1111,7 @@ mod consent_proof_tests {
         let realm_id =
             RealmId::new("ak:realm:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq".to_owned())
                 .unwrap();
-        let consent_event = arkret_wire::test_support::raw_event_at(
+        let consent_event = crate::test_event::raw_event_at(
             EventKind::ConsentGrant.as_str(),
             ScopeRef::Realm { realm_id },
             crate::test_actor_id(&actor_full_id),

@@ -17,14 +17,18 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId};
 use arkret_models_crypto::{
-    ProofSummary, RecoveryIdentityModel, RecoveryPolicy, RecoveryPolicyActiveOutcome,
-    RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest, RecoveryPolicyRef,
-    RecoveryPolicySummary, RecoverySessionCreateRequestBody, RecoverySessionProofSubmitOutcome,
-    RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState,
-    TypedSecurityTransactionContinueRequest,
+    DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
+    RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,
+    RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind, RecoveryPublicationAction,
+    RecoveryPublicationAuthorityContext, RecoverySessionCreateRequestBody,
+    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
+    SessionState, TypedSecurityTransactionContinueRequest,
 };
 use arkret_wire::{
-    LeaseBasisRef, SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
+    AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
+    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, LeaseBasisRef,
+    NonEmptyString, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, SchemaId, SecurityTransaction,
+    SecurityTransactionCreateRequest, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

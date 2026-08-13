@@ -29,7 +29,7 @@ pub(super) fn validate_recovery_policy(
     require_const_string(payload, "schema", "ak.schema.recovery_policy.v1")?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
-    let principal_id = require_did(payload, "principal_id")?;
+    let principal_id = typed.principal_id.to_string();
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = typed.trust_domain.clone();
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
@@ -266,16 +266,6 @@ pub(super) fn require_u32_min(payload: &Value, key: &str, min: u64) -> Result<u3
         )));
     }
     Ok(value as u32)
-}
-
-pub(super) fn require_did(payload: &Value, key: &str) -> Result<String, AppError> {
-    let value = require_string(payload, key)?;
-    if !value.starts_with("did:") {
-        return Err(AppError::invalid_param(format!(
-            "{key} must be a DID (got `{value}`)",
-        )));
-    }
-    Ok(value)
 }
 
 pub(super) fn require_rfc3339(

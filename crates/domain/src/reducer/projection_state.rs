@@ -42,14 +42,6 @@ pub struct ProjectionState {
     /// Read markers keyed by (realm_id, actor, scope_id). Causal-first merge;
     /// HLC/device ordering applies only to causally concurrent positions.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
-    /// Disappearing-message read-trigger anchors keyed by message event_id.
-    /// The projection stores only the accepted aggregate anchor, never the
-    /// reader identities exposed on wire.
-    pub message_expiry_anchors: BTreeMap<String, MessageExpiryAnchor>,
-    /// Private reducer-side contribution set for read-trigger aggregation.
-    /// This is used to make duplicate read delivery idempotent and to decide
-    /// when `on_last_read` has reached the active Realm member set.
-    pub message_expiry_readers: BTreeMap<String, BTreeSet<String>>,
     /// Relations keyed by relation_id. LWW by HLC.
     pub relations: BTreeMap<String, SolandRelationState>,
     /// Per-(Strand, Actor) notification watch preferences.
@@ -1546,9 +1538,9 @@ impl ProjectionState {
     /// Whether this explicitly selected Realm is a principal-control Realm
     /// owned by `principal_id`.
     ///
-    /// This is intentionally a two-coordinate lookup. A principal core may
-    /// own multiple independent PCR authority instances, so authorization
-    /// must never discover a globally unique PCR from the principal alone.
+    /// This is intentionally scoped to one Realm and principal. The complete
+    /// account identity is the `(principal_id, principal_server_id)` pair; on
+    /// its Principal Server that pair owns one lifetime-local PCR lineage.
     pub fn realm_is_principal_control_for_actor(&self, realm_id: &str, principal_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
             realm.owner.as_deref() == Some(principal_id)

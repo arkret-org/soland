@@ -364,25 +364,126 @@ fn check_proof_envelope(
 }
 
 /// `principal_signing`: the proof MUST be made by a principal control key that
-/// was accepted in the caller's exact PCR authority instance at
-/// `proof.created_at`.
+/// was accepted for the caller's exact `(principal_id, principal_server_id)`
+/// account authority pair at `proof.created_at`.
 ///
-/// The request does not carry that authority instance today, and selecting a
-/// key by principal core alone would let another PCR of the same core delete
-/// this principal's backups, so the branch fails closed. Re-resolving the
-/// current did:webvh history head is not an alternative: key-backup deletion is
-/// not a registered `did-freshness-profile-registry.json` call site, so a DID
-/// host outage MUST NOT decide this authorization.
+/// The authenticated self endpoint supplies `principal_id`, and the local
+/// service identity supplies `principal_server_id`; verification must resolve
+/// only that pair's unique local PCR lineage. Re-resolving a current did:webvh
+/// history head is not an alternative: a DID host outage MUST NOT decide this
+/// account-local authorization.
 async fn verify_principal_signing_delete(
-    _state: &AppState,
-    _challenge: &KeysBackupsDeleteChallenge,
-    _proof: &PayloadProof,
-    _expected_digest: &arkret_identifiers::Hash,
-    _canonical: &[u8],
+    state: &AppState,
+    challenge: &KeysBackupsDeleteChallenge,
+    proof: &PayloadProof,
+    expected_digest: &arkret_identifiers::Hash,
+    canonical: &[u8],
 ) -> Result<(), AppError> {
-    Err(AppError::capability_denied(
-        "principal-signing key-backup deletion requires an exact principal authority instance",
-    ))
+    check_proof_envelope(challenge, proof, expected_digest)?;
+    let (method_did, device_fragment) = proof
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .ok_or_else(|| {
+            AppError::capability_denied("principal proof method has no device fragment")
+        })?;
+    let method_did =
+        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
+            AppError::capability_denied(format!("principal proof DID is invalid: {error}"))
+        })?;
+    let method_principal =
+        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
+            AppError::capability_denied(format!("principal proof DID cannot be projected: {error}"))
+        })?;
+    if method_principal != challenge.principal_id {
+        return Err(AppError::capability_denied(
+            "principal proof method does not belong to the challenge authority pair",
+        ));
+    }
+    let device_id =
+        arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
+            AppError::capability_denied(format!(
+                "principal proof device fragment is invalid: {error}"
+            ))
+        })?;
+    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| {
+            AppError::internal(format!("local Principal Server id is invalid: {error}"))
+        })?;
+    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+        challenge.principal_id.clone(),
+        principal_server_id,
+    );
+    let authority = state
+        .persistence()
+        .principal_resolution_by_authority_key(&authority_key)
+        .await
+        .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::capability_denied("principal authority pair is not durably accepted")
+        })?;
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: challenge.principal_id.to_string(),
+            device_id: device_id.to_string(),
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("principal proof device lookup failed: {error}"))
+        })?
+        .ok_or_else(|| AppError::capability_denied("principal proof device is unavailable"))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(AppError::capability_denied(
+            "principal proof device is not active",
+        ));
+    }
+    let payload = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| {
+        AppError::internal(format!(
+            "principal proof device evidence is invalid: {error}"
+        ))
+    })?;
+    let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
+        AppError::capability_denied("principal proof device has no accepted authorization Event")
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "principal proof authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::capability_denied("principal proof authorization Event is unavailable")
+        })?;
+    if authorize_event.actor_id != challenge.principal_id.as_str()
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
+    {
+        return Err(AppError::capability_denied(
+            "principal proof device authorization is outside the selected account lineage",
+        ));
+    }
+    let signing_key = payload
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::capability_denied("principal proof device key is unavailable"))?;
+    let key = decode_ed25519_key(signing_key, "multibase").map_err(|error| {
+        AppError::capability_denied(format!("principal proof device key is invalid: {error}"))
+    })?;
+    if !verify_detached_jws(&key, canonical, &proof.jws) {
+        return Err(AppError::capability_denied(
+            "principal-signing key-backup deletion proof is invalid",
+        ));
+    }
+    Ok(())
 }
 
 /// `device_quorum`: deduplicate by `device_id`, verify every signature over the

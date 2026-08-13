@@ -126,7 +126,7 @@ fn apply_with_registered_cell_writes(
     actor_seq: u64,
     server_hlc: &soland_domain::hlc::ServerHlc,
 ) {
-    let mut event = arkret_wire::test_support::raw_event_at(
+    let mut event = crate::test_event::raw_event_at(
         operation.event_kind.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: operation.realm_id.clone(),
@@ -1005,7 +1005,7 @@ async fn register_native_agent_membership_context(
         "issued_at": "2026-01-01T00:00:00.000Z",
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
-    let authorize_event = arkret_wire::test_support::raw_event(
+    let authorize_event = crate::test_event::raw_event(
         arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),

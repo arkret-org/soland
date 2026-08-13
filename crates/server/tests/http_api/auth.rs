@@ -31,7 +31,8 @@ async fn account_register_requires_account_authority_bearer() {
 
     let mut response = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
-            "principal_id": "did:web:unauthorized-register.example",
+            "principal_id": fixture_actor_core_id("did:web:unauthorized-register.example"),
+            "full_id": "did:web:unauthorized-register.example",
         }))
         .send(&app_from_state(state))
         .await;
@@ -56,7 +57,8 @@ async fn account_registration_policy_rejects_closed_and_audits() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": "did:web:closed-register.example",
+            "principal_id": fixture_actor_core_id("did:web:closed-register.example"),
+            "full_id": "did:web:closed-register.example",
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -72,7 +74,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
     let audit = state
         .test_persistence()
         .audit()
-        .list_for_actor("did:web:closed-register.example")
+        .list_for_actor(fixture_actor_core_id("did:web:closed-register.example").as_str())
         .await
         .unwrap();
     assert_eq!(audit.len(), 1);
@@ -84,7 +86,7 @@ async fn account_registration_policy_rejects_closed_and_audits() {
 }
 
 #[tokio::test]
-async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
+async fn account_registration_policy_and_closed_projection_wire_are_enforced() {
     let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
@@ -109,7 +111,8 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": "did:web:alice.example.edu",
+            "principal_id": fixture_actor_core_id("did:web:alice.example.edu"),
+            "full_id": "did:web:alice.example.edu",
         }))
         .send(&app_from_state(state.clone()))
         .await;
@@ -128,7 +131,8 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": "did:web:bob.other.example",
+            "principal_id": fixture_actor_core_id("did:web:bob.other.example"),
+            "full_id": "did:web:bob.other.example",
             "policy_evidence": {
                 "verification_code": "246810",
                 "organization": "other.example",
@@ -137,91 +141,14 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(wrong_org.status_code.unwrap(), StatusCode::CONFLICT);
+    let wrong_org_status = wrong_org.status_code.unwrap();
     let wrong_org: Value = wrong_org.take_json().await.unwrap();
     assert_eq!(
-        wrong_org["error"]["details"]["reason_detail"],
-        "organization_not_allowed"
+        wrong_org_status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{wrong_org}"
     );
-
-    let mut missing_invite = TestClient::post("http://server/_arkret/gate/account/register")
-        .add_header(
-            "authorization",
-            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
-            true,
-        )
-        .json(&serde_json::json!({
-            "principal_id": "did:web:invite-missing.example.edu",
-            "policy_evidence": {
-                "verification_code": "246810",
-                "organization": "example.edu"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(missing_invite.status_code.unwrap(), StatusCode::CONFLICT);
-    let missing_invite: Value = missing_invite.take_json().await.unwrap();
-    assert_eq!(
-        missing_invite["error"]["details"]["reason_detail"],
-        "invitation_required"
-    );
-
-    let accepted: Value = TestClient::post("http://server/_arkret/gate/account/register")
-        .add_header(
-            "authorization",
-            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
-            true,
-        )
-        .json(&serde_json::json!({
-            "principal_id": "did:web:carol.example.edu",
-            "display_name": "Carol",
-            "policy_evidence": {
-                "verification_code": "246810",
-                "organization": "example.edu",
-                "invitation_token": "invite-token"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(accepted["principal_id"], "did:web:carol.example.edu");
-    assert_eq!(accepted["registration_audit"]["outcome"], "accepted");
-    assert_eq!(
-        accepted["registration_audit"]["evidence"]["organization"],
-        "example.edu"
-    );
-
-    // sync/api-conventions.md §7 — `principal_id` is a resource identity, not a
-    // request-level idempotency key. Re-registering the same principal is a
-    // successor/idempotent bind (the handler returns the existing account with
-    // `state=active`), NOT a `duplicate_conflict`: that reason is reserved for a
-    // request-level idempotency-key collision carrying a different canonical
-    // body ("同一对象...的不同 canonical body 是普通后继写...MUST NOT 仅因
-    // identity 相同返回 duplicate_conflict").
-    let duplicate: Value = TestClient::post("http://server/_arkret/gate/account/register")
-        .add_header(
-            "authorization",
-            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
-            true,
-        )
-        .json(&serde_json::json!({
-            "principal_id": "did:web:carol.example.edu",
-            "policy_evidence": {
-                "verification_code": "246810",
-                "organization": "example.edu",
-                "invitation_token": "invite-token"
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(duplicate["principal_id"], "did:web:carol.example.edu");
-    assert_eq!(duplicate["state"], "active");
-    assert_eq!(duplicate["registration_audit"]["outcome"], "accepted");
+    assert_eq!(wrong_org["error"]["code"], "schema_violation");
 
     let rate_limited_state = soland_test_support::app_state(test_config());
     {
@@ -238,7 +165,8 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": "did:web:rate-register.example",
+            "principal_id": fixture_actor_core_id("did:web:rate-register.example"),
+            "full_id": "did:web:rate-register.example",
         }))
         .send(&app_from_state(rate_limited_state.clone()))
         .await
@@ -252,7 +180,8 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": "did:web:rate-register.example",
+            "principal_id": fixture_actor_core_id("did:web:rate-register.example"),
+            "full_id": "did:web:rate-register.example",
         }))
         .send(&app_from_state(rate_limited_state.clone()))
         .await;

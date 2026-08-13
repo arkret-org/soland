@@ -879,6 +879,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
             resource,
             realm_id,
@@ -999,12 +1000,17 @@ pub(crate) async fn actor_governs_realm(
     state: &AppState,
     realm_id: &str,
     actor: &str,
+    actor_principal_server_id: Option<&str>,
     actions: &[&str],
     evaluation_basis: chrono::DateTime<chrono::Utc>,
 ) -> bool {
+    let Some(actor_principal_server_id) = actor_principal_server_id else {
+        return false;
+    };
     if state.projections().snapshot().actor_governs_realm(
         realm_id,
         actor,
+        actor_principal_server_id,
         actions,
         evaluation_basis,
     ) {
@@ -1019,6 +1025,7 @@ pub(crate) async fn actor_governs_realm(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
+                actor_principal_server_id: Some(actor_principal_server_id),
                 action,
                 resource: realm_id,
                 realm_id,

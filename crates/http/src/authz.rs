@@ -101,11 +101,18 @@ impl SolandAuthzEngine {
         }
     }
 
-    pub fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
+    pub fn mark_projected_grants_revoked_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> usize {
         let mut count = 0usize;
         let mut grants = self.grants.lock();
         for grant in grants.values_mut() {
-            if grant.subject == subject && !grant.revoked {
+            if grant.subject == subject
+                && grant.subject_principal_server_id.as_deref() == subject_principal_server_id
+                && !grant.revoked
+            {
                 grant.revoked = true;
                 count += 1;
             }
@@ -121,13 +128,19 @@ impl SolandAuthzEngine {
     /// Get all grants for a subject in a space. Filters out invalid,
     /// revoked, expired, and cascade-broken grants so callers see only the
     /// *effective* set (capabilities.md §11).
-    pub fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant> {
+    pub fn grants_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+    ) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
         snapshot
             .iter()
             .filter(|g| {
                 g.subject == subject
+                    && g.subject_principal_server_id.as_deref() == subject_principal_server_id
                     && g.realm_id == realm_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
@@ -142,13 +155,18 @@ impl SolandAuthzEngine {
     /// Same filtering as [`Self::grants_for_subject`] minus the realm pin —
     /// read model for the controller-facing agent settings surface
     /// (`GET /_arkret/self/agents/{id}` `agent_view.grants[]`).
-    pub fn grants_for_subject_all_realms(&self, subject: &str) -> Vec<Grant> {
+    pub fn grants_for_subject_all_realms(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
         snapshot
             .iter()
             .filter(|g| {
                 g.subject == subject
+                    && g.subject_principal_server_id.as_deref() == subject_principal_server_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
@@ -176,6 +194,30 @@ impl SolandAuthzEngine {
         _members: &[String],
         resource_facets: &[String],
     ) -> AuthzResult {
+        self.check_for_authority(
+            actor,
+            None,
+            action,
+            resource,
+            realm_id,
+            _owner,
+            _members,
+            resource_facets,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_for_authority(
+        &self,
+        actor: &str,
+        actor_principal_server_id: Option<&str>,
+        action: &str,
+        resource: &str,
+        realm_id: &str,
+        _owner: Option<&str>,
+        _members: &[String],
+        resource_facets: &[String],
+    ) -> AuthzResult {
         if let Err(reason) = validate_runtime_capability_action(action) {
             return AuthzResult {
                 allowed: false,
@@ -196,6 +238,7 @@ impl SolandAuthzEngine {
                 !g.revoked
                     && g.realm_id == realm_id
                     && g.subject == actor
+                    && g.subject_principal_server_id.as_deref() == actor_principal_server_id
                     && grant_scope_valid(g).is_ok()
                     && g.actions.iter().any(|a| a == action)
                     && resource_matches(&g.resource, resource)
@@ -270,7 +313,13 @@ impl SolandAuthzEngine {
             };
         }
         let has_revoked_upstream_grant = matching_request_has_revoked_upstream_grant(
-            &snapshot, actor, action, resource, realm_id, now,
+            &snapshot,
+            actor,
+            actor_principal_server_id,
+            action,
+            resource,
+            realm_id,
+            now,
         );
 
         if has_revoked_upstream_grant {
@@ -329,8 +378,10 @@ pub fn projected_grant_fixture(
             arkret_identifiers::GrantId::from_event_id(&event_id).into_string()
         },
         realm_id,
+        issuer_principal_server_id: issuer.clone(),
         issuer,
         subject,
+        subject_principal_server_id: None,
         resource,
         actions,
         capability_action_registry_digest: None,
@@ -417,6 +468,7 @@ pub(crate) fn grant_revoked_upstream(
 fn matching_request_has_revoked_upstream_grant(
     snapshot: &[Grant],
     actor: &str,
+    actor_principal_server_id: Option<&str>,
     action: &str,
     resource: &str,
     realm_id: &str,
@@ -425,6 +477,7 @@ fn matching_request_has_revoked_upstream_grant(
     snapshot.iter().any(|grant| {
         grant.realm_id == realm_id
             && grant.subject == actor
+            && grant.subject_principal_server_id.as_deref() == actor_principal_server_id
             && grant_scope_valid(grant).is_ok()
             && grant.actions.iter().any(|candidate| candidate == action)
             && resource_matches(&grant.resource, resource)
@@ -770,6 +823,7 @@ fn capability_action_risk_tier(action: &str) -> Option<arkret_schema::Capability
 pub async fn check_with_policy_server(
     engine: &AuthorizationService,
     actor: &str,
+    actor_principal_server_id: Option<&str>,
     action: &str,
     resource: &str,
     realm_id: &str,
@@ -784,6 +838,7 @@ pub async fn check_with_policy_server(
     // Step 1 — local capability check (existing behaviour).
     let local = engine.check(soland_services::authorization::AuthorizationCheck {
         actor,
+        actor_principal_server_id,
         action,
         resource,
         realm_id,

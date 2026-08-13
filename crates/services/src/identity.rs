@@ -1583,6 +1583,7 @@ impl RecoveryPolicyService {
 pub struct RecoverySessionState {
     pub recovery_session_id: String,
     pub principal_id: String,
+    pub principal_server_id: String,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,

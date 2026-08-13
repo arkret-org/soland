@@ -121,8 +121,7 @@ use submit::{
 mod validation;
 use validation::*;
 pub(in crate::routing) use validation::{
-    validate_event_envelope_with_context, validate_federated_device_signing_key_evidence,
-    validate_private_invite_envelope,
+    validate_event_envelope_with_context, validate_private_invite_envelope,
 };
 mod sdk_projection;
 pub(crate) use sdk_projection::*;

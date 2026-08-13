@@ -134,11 +134,147 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
 }
 
 pub(super) async fn verify_recovery_auth_signature(
-    _state: &AppState,
-    _payload: &Value,
-    _principal_id: &str,
+    state: &AppState,
+    payload: &Value,
+    principal_id: &str,
 ) -> Result<(), AppError> {
-    Err(recovery_signature_error(
-        "recovery authority requires an exact principal authority instance",
-    ))
+    let auth_data = payload
+        .get("auth_data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
+    let verification_method = auth_data
+        .get("verification_method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
+    let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
+        recovery_signature_error("recovery authority method has no device fragment")
+    })?;
+    let method_did =
+        arkret_identifiers::DidFullId::new(method_did.to_owned()).map_err(|error| {
+            recovery_signature_error(format!("recovery authority method DID is invalid: {error}"))
+        })?;
+    let method_principal =
+        arkret_wire::project_full_id_to_core_id(&method_did).map_err(|error| {
+            recovery_signature_error(format!(
+                "recovery authority method DID cannot be projected: {error}"
+            ))
+        })?;
+    if method_principal.as_str() != principal_id {
+        return Err(recovery_signature_error(
+            "recovery authority method does not belong to the policy principal",
+        ));
+    }
+    let device_id =
+        arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
+            recovery_signature_error(format!(
+                "recovery authority device fragment is invalid: {error}"
+            ))
+        })?;
+    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("recovery policy principal id is invalid: {error}"))
+        })?,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("local Principal Server id is invalid: {error}"))
+        })?,
+    );
+    let authority = state
+        .persistence()
+        .principal_resolution_by_authority_key(&authority_key)
+        .await
+        .map_err(|error| AppError::internal(format!("recovery authority lookup failed: {error}")))?
+        .ok_or_else(|| {
+            recovery_signature_error("recovery account authority pair is not durably accepted")
+        })?;
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: principal_id.to_owned(),
+            device_id: device_id.to_string(),
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("recovery authority device lookup failed: {error}"))
+        })?
+        .ok_or_else(|| recovery_signature_error("recovery authority device is unavailable"))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(recovery_signature_error(
+            "recovery authority device is not active",
+        ));
+    }
+    let projected = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| {
+        AppError::internal(format!(
+            "recovery authority device evidence is invalid: {error}"
+        ))
+    })?;
+    let authorize_event_id = projected.device_authorize_event_id.ok_or_else(|| {
+        recovery_signature_error("recovery authority device has no accepted authorization Event")
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "recovery authority authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            recovery_signature_error("recovery authority authorization Event is unavailable")
+        })?;
+    if authorize_event.actor_id != principal_id
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
+    {
+        return Err(recovery_signature_error(
+            "recovery authority device authorization is outside the selected account lineage",
+        ));
+    }
+    let material = projected
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| recovery_signature_error("recovery authority device key is unavailable"))?;
+    let device_key =
+        crate::routing::identity::device_signing::decode_ed25519_key(material, "multibase")
+            .map_err(|error| {
+                recovery_signature_error(format!(
+                    "recovery authority device key is invalid: {error}"
+                ))
+            })?;
+    parse_signed_fields(
+        auth_data,
+        POLICY_ALLOWED_SIGNED_FIELDS,
+        POLICY_REQUIRED_SIGNED_FIELDS,
+        payload,
+    )?;
+    let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
+        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    let transcript_bytes = typed
+        .signature_transcript_bytes()
+        .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
+    let signature_b64 = auth_data
+        .get("signature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+    let raw = URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
+        .map_err(|_| recovery_signature_error("auth_data.signature is not base64/base64url"))?;
+    let signature = Signature::from_slice(&raw)
+        .map_err(|_| recovery_signature_error("auth_data.signature must be 64 Ed25519 bytes"))?;
+    device_key
+        .verify(&transcript_bytes, &signature)
+        .map_err(|_| {
+            crate::metrics::record_digest_mismatch("recovery_policy_device_digest");
+            recovery_signature_error("recovery policy authority signature verification failed")
+        })
 }

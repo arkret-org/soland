@@ -20,7 +20,7 @@ pub use arkret_lattice_registry::{
     DeviceAuthorized, DeviceListUpdate, DirectConversationBinding, KeyBackupActiveSeries,
     MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
     NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
-    RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,
+    RealmDeliveryBindingPolicy, RealmDestroy, RealmDiscovery, RealmFreeze,
     RealmHistorySharingPolicy, RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule,
     RealmLink, RealmMediaService, RealmModerationPolicy, RealmOrganization,
     RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyBundle, RealmPolicyServer,

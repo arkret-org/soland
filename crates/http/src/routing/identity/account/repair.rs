@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use arkret_models_collaboration::direct_conversation_repair::{
     DirectConversationRepairEnqueueStatus, DirectConversationRepairRecipientTarget,
-    DirectConversationRepairRelayRequest, DirectConversationRepairRequesterEvidence,
+    DirectConversationRepairRelayRequest,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -95,8 +95,6 @@ pub(super) async fn dispatch(
             )
             .await?;
             let destination_trust_domain = resolved_route.trust_domain.to_string();
-            let requester_evidence =
-                requester_evidence(state, &body, &destination_service_id).await?;
             let frozen = FrozenSourceIntent {
                 state: "relay_pending".to_owned(),
                 destination_service_id,
@@ -106,7 +104,6 @@ pub(super) async fn dispatch(
                     request_id: body.request_id.clone(),
                     content: body.content.clone(),
                     requester_authorization: body.requester_authorization.clone(),
-                    requester_evidence,
                 },
             };
             frozen
@@ -291,44 +288,6 @@ async fn validate_exact_requester_keypackage(
         ));
     }
     Ok(())
-}
-
-async fn requester_evidence(
-    state: &AppState,
-    request: &DirectConversationRepairDispatchRequest,
-    destination_service_id: &arkret_wire::DidCoreId,
-) -> Result<DirectConversationRepairRequesterEvidence, AppError> {
-    match &request.requester_authorization {
-        DirectConversationRepairAuthorization::Device {
-            requester_device_id,
-            verification_method,
-            ..
-        } => Ok(DirectConversationRepairRequesterEvidence::Device {
-            device_authorization_evidence:
-                crate::jws_verify::federated_device_signing_key_evidence(
-                    state,
-                    &arkret_wire::DidCoreId::from(request.content.requester_principal_id.clone()),
-                    requester_device_id,
-                    verification_method.as_str(),
-                )
-                .await
-                .map_err(|error| {
-                    AppError::new(soland_http::error::ErrorCode::FailedPrecondition, error)
-                        .with_wire_code("requester_device_evidence_unavailable")
-                })?,
-        }),
-        DirectConversationRepairAuthorization::NativeAgent { .. } => {
-            let selector = repair_agent_evidence_selector(request, destination_service_id)?;
-            let evidence = crate::routing::identity::agents::evidence::produce_current_agent_signer_evidence_for_request(
-                state,
-                &selector,
-            )
-            .await?;
-            Ok(DirectConversationRepairRequesterEvidence::NativeAgent {
-                agent_signer_evidence: evidence,
-            })
-        }
-    }
 }
 
 async fn source_outcome(
@@ -667,7 +626,7 @@ async fn validate_peer_service_bindings(
     _recipient: &str,
 ) -> Result<(), AppError> {
     Err(direct_repair_precondition(
-        "repair relay requires exact requester and recipient authority instances",
+        "repair relay requires exact requester and recipient principal authority pairs",
     ))
 }
 
@@ -679,29 +638,41 @@ async fn verify_peer_requester(
         .dispatch_request()
         .signing_input()
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    match (
-        &request.requester_authorization,
-        &request.requester_evidence,
-    ) {
-        (
-            DirectConversationRepairAuthorization::Device { signature, .. },
-            DirectConversationRepairRequesterEvidence::Device {
-                device_authorization_evidence: evidence,
-            },
-        ) => {
-            crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
-                state, evidence,
+    match &request.requester_authorization {
+        DirectConversationRepairAuthorization::Device {
+            requester_device_id,
+            verification_method,
+            device_authorize_event_id,
+            signature,
+            ..
+        } => {
+            let facet = crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
+                state,
+                request.content.requester_principal_id.as_str(),
+                requester_device_id.as_str(),
             )
             .await
-            .map_err(|error| {
-                AppError::new(soland_http::error::ErrorCode::FailedPrecondition, error)
-                    .with_status(StatusCode::PRECONDITION_FAILED)
-            })?;
-            let key = crate::routing::identity::device_signing::decode_ed25519_key(
-                evidence.device_signing_key.as_str(),
-                "multibase",
-            )
-            .map_err(|_| direct_repair_precondition("repair requester key is invalid"))?;
+            .map_err(|error| AppError::internal(format!("repair requester directory lookup failed: {error}")))?;
+            if !matches!(
+                facet.status,
+                arkret_models_crypto::keys::DeviceStatus::Active
+            ) || facet.device_authorize_event_id.as_ref() != Some(device_authorize_event_id)
+                || !verification_method
+                    .as_str()
+                    .ends_with(&format!("#{}", requester_device_id))
+            {
+                return Err(direct_repair_precondition(
+                    "repair requester device authorization is not current",
+                ));
+            }
+            let key = facet
+                .signing_key_did
+                .as_deref()
+                .and_then(|key| key.strip_prefix("did:key:"))
+                .ok_or_else(|| direct_repair_precondition("repair requester key is invalid"))?;
+            let key =
+                crate::routing::identity::device_signing::decode_ed25519_key(key, "multibase")
+                    .map_err(|_| direct_repair_precondition("repair requester key is invalid"))?;
             if !crate::routing::identity::device_signing::ed25519_verify(
                 &key,
                 &signing_input,
@@ -713,50 +684,29 @@ async fn verify_peer_requester(
             }
             Ok(())
         }
-        (
-            DirectConversationRepairAuthorization::NativeAgent {
-                requester_agent_id,
-                verification_method,
-                agent_key_authorize_event_id,
-                signature,
-                ..
-            },
-            DirectConversationRepairRequesterEvidence::NativeAgent {
-                agent_signer_evidence,
-            },
-        ) => {
-            let local = arkret_wire::DidCoreId::from(local_service_core(state)?);
-            let selector = repair_agent_evidence_selector(&request.dispatch_request(), &local)?;
-            let arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                operation_id,
-                request_digest,
-                verifier_id,
-                audience,
-                challenge,
-                ..
-            } = selector
-            else {
-                unreachable!("repair selector is always current admission")
-            };
-            let portable = arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::from(
-                agent_signer_evidence,
-            );
-            let key = crate::routing::identity::agents::evidence::verify_current_agent_signer_evidence_for_request(
+        DirectConversationRepairAuthorization::NativeAgent {
+            requester_agent_id,
+            verification_method,
+            signature,
+            ..
+        } => {
+            let controller = arkret_identity::verification_method_did(verification_method)
+                .map_err(|_| {
+                    direct_repair_precondition("repair requester Agent method is invalid")
+                })?;
+            if arkret_wire::project_full_id_to_core_id(&controller)
+                .map_or(true, |id| id.as_str() != requester_agent_id.as_str())
+            {
+                return Err(direct_repair_precondition(
+                    "repair requester Agent method does not match the requester",
+                ));
+            }
+            let key = crate::jws_verify::resolve_ed25519_pubkey_async(
                 state,
-                &portable,
-                &arkret_wire::DidCoreId::from(requester_agent_id.clone()),
-                verification_method,
-                agent_key_authorize_event_id,
-                &operation_id,
-                &request_digest,
-                &verifier_id,
-                &audience,
-                &challenge,
-                now(),
+                verification_method.as_str(),
             )
-            .await?;
-            let key = ed25519_dalek::VerifyingKey::from_bytes(&key)
-                .map_err(|_| direct_repair_precondition("repair requester Agent key is invalid"))?;
+            .await
+            .map_err(|_| direct_repair_precondition("repair requester Agent key is unavailable"))?;
             if !crate::routing::identity::device_signing::ed25519_verify(
                 &key,
                 &signing_input,
@@ -768,9 +718,6 @@ async fn verify_peer_requester(
             }
             Ok(())
         }
-        _ => Err(AppError::invalid_param(
-            "repair requester evidence branch is inconsistent",
-        )),
     }
 }
 

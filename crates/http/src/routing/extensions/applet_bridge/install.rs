@@ -1256,6 +1256,7 @@ pub(super) async fn require_realm_admin(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(state.service_id()),
             action: "ak.realm.admin",
             resource: &realm_id,
             realm_id: &realm_id,
@@ -1645,7 +1646,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let registration_event = arkret_wire::test_support::raw_event_at(
+        let registration_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::AppletRegistration.as_str(),
             scope_ref.clone(),
             crate::test_actor_id(&actor_id),
@@ -1660,7 +1661,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(offset, grant_id)| {
-                arkret_wire::test_support::raw_event_at(
+                crate::test_event::raw_event_at(
                     arkret_wire::EventKind::CapabilityGrant.as_str(),
                     scope_ref.clone(),
                     crate::test_actor_id(&actor_id),

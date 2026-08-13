@@ -842,7 +842,7 @@ pub struct IdentityAnchorFrontierState {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorState {
     pub actor_id: String,
-    pub authority_instance_digest: String,
+    pub principal_server_id: String,
     pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,

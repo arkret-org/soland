@@ -205,7 +205,7 @@ async fn run_account_deactivation_fanout(
     let identity_link_cache_invalidated = state.invalidate_cached_handle_claims_for_subject(did);
     let capability_cache_invalidated = state
         .authorization()
-        .mark_projected_grants_revoked_for_subject(did);
+        .mark_projected_grants_revoked_for_subject(did, Some(state.service_id()));
     Ok(AccountDeactivationFanout {
         sessions_revoked,
         devices_revoked,
@@ -878,6 +878,11 @@ fn build_erasure_receipt_value(
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let retained_stub = erasure_retained_stub(&receipt_id, &subject, &scope, completed_at)?;
+    // Canonical timestamp decoding normalizes the stub to millisecond precision.
+    // Bind the receipt to that exact decoded timestamp so the inline-stub
+    // self-check compares the same wire value instead of the pre-serialization
+    // nanoseconds carried by `Utc::now()`.
+    let completed_at = retained_stub.completed_at;
     let retained_stub_value = serde_json::to_value(&retained_stub)
         .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?;
     let retained_stub_digest = arkret_identifiers::Hash::new(
@@ -909,7 +914,7 @@ fn build_erasure_receipt_value(
         .canonical_proof_input()
         .map_err(|error| AppError::internal(format!("erasure receipt proof input: {error}")))?;
     let verification_method =
-        arkret_wire::DidUrl::new(format!("{}#notary-key", receipt.issuer.as_str())).map_err(
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_full_id())).map_err(
             |error| {
                 AppError::internal(format!(
                     "erasure receipt verification method is invalid: {error}"

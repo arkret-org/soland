@@ -75,6 +75,61 @@ pub(crate) fn test_actor_id_str(full_id: &str) -> arkret_identifiers::DidCoreId 
     test_actor_id(&full_id)
 }
 
+#[cfg(test)]
+pub(crate) mod test_event {
+    use arkret_identifiers::{DidCoreId, Hlc};
+    use arkret_wire::{Event, Result, ScopeRef};
+    use chrono::{DateTime, Utc};
+    use serde_json::Value;
+
+    pub(crate) fn principal_server_id() -> DidCoreId {
+        super::test_actor_id_str(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+    }
+
+    pub fn raw_event(
+        kind: impl Into<String>,
+        scope_ref: ScopeRef,
+        actor_id: DidCoreId,
+        actor_seq: u64,
+        hlc: Hlc,
+        payload: Value,
+    ) -> Result<Event> {
+        arkret_wire::test_support::raw_event(
+            kind,
+            scope_ref,
+            actor_id,
+            principal_server_id(),
+            actor_seq,
+            hlc,
+            payload,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn raw_event_at(
+        kind: impl Into<String>,
+        scope_ref: ScopeRef,
+        actor_id: DidCoreId,
+        actor_seq: u64,
+        hlc: Hlc,
+        payload: Value,
+        created_at: DateTime<Utc>,
+    ) -> Result<Event> {
+        arkret_wire::test_support::raw_event_at(
+            kind,
+            scope_ref,
+            actor_id,
+            principal_server_id(),
+            actor_seq,
+            hlc,
+            payload,
+            created_at,
+        )
+    }
+}
+
 use salvo::catcher::Catcher;
 use salvo::prelude::{CatchPanic, Service};
 

@@ -458,7 +458,6 @@ CREATE INDEX canonical_events_kind_idx ON public.canonical_events USING btree (k
 
 CREATE INDEX canonical_events_kind_received_idx ON public.canonical_events USING btree (kind, received_at, id);
 
-CREATE INDEX canonical_events_peer_sync_endpoints_idx ON public.canonical_events USING btree (received_at, id) WHERE (((envelope #> '{payload,sync_endpoints}'::text[]) IS NOT NULL) OR ((envelope #> '{payload,object,sync_endpoints}'::text[]) IS NOT NULL) OR ((envelope #> '{payload,patch,sync_endpoints}'::text[]) IS NOT NULL));
 
 CREATE INDEX canonical_events_received_idx ON public.canonical_events USING btree (received_at, id);
 
@@ -1748,6 +1747,7 @@ ALTER TABLE ONLY public.recovery_policies
 CREATE TABLE public.recovery_sessions (
     id uuid PRIMARY KEY,
     principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
     requesting_device_id text NOT NULL,
     trust_domain text NOT NULL,
     policy_id uuid NOT NULL,
@@ -2015,31 +2015,34 @@ CREATE TABLE public.service_identity (
 );
 
 -- Rebuildable owner-side PCR resolution projection. Canonical Events and
--- Seals remain protocol truth; these rows provide a crash-safe current/history
--- read index for the public resolution evidence surface.
+-- Seals remain protocol truth; these rows provide a crash-safe account-local
+-- current/history read index keyed by the public account authority pair.
 CREATE TABLE public.principal_resolutions (
-    authority_instance_digest text PRIMARY KEY CHECK (authority_instance_digest ~ '^sha256:[0-9a-f]{64}$'),
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL CHECK (principal_server_id LIKE 'ak:did_core:%'),
     pcr_realm_id text UNIQUE NOT NULL CHECK (pcr_realm_id LIKE 'ak:realm:%'),
-    principal_genesis_receipt_digest text NOT NULL CHECK (principal_genesis_receipt_digest ~ '^sha256:[0-9a-f]{64}$'),
     genesis_event_id text NOT NULL,
     current_event_id text NOT NULL,
     projection jsonb NOT NULL,
-    updated_at timestamptz NOT NULL
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (principal_id, principal_server_id)
 );
 
 CREATE TABLE public.principal_resolution_events (
-    authority_instance_digest text NOT NULL REFERENCES public.principal_resolutions(authority_instance_digest) ON DELETE CASCADE,
+    principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
     event_id text NOT NULL,
     previous_event_id text,
     method_history_head text NOT NULL,
     event_json jsonb NOT NULL,
     created_at timestamptz NOT NULL,
-    PRIMARY KEY (authority_instance_digest, event_id)
+    PRIMARY KEY (principal_id, principal_server_id, event_id),
+    FOREIGN KEY (principal_id, principal_server_id)
+        REFERENCES public.principal_resolutions(principal_id, principal_server_id)
+        ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX principal_resolution_events_predecessor_idx
-    ON public.principal_resolution_events (authority_instance_digest, previous_event_id)
+    ON public.principal_resolution_events (principal_id, principal_server_id, previous_event_id)
     WHERE previous_event_id IS NOT NULL;
 
 -- Durable remote-route safety state is deliberately split from the

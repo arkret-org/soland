@@ -152,9 +152,6 @@ pub enum ProjectionEffect {
         realm_id: String,
         kind: String,
     },
-    RealmDisappearingPolicyProjected {
-        realm_id: String,
-    },
     RealmSearchPolicyProjected {
         realm_id: String,
     },

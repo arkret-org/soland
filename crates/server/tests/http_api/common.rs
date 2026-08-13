@@ -519,40 +519,17 @@ pub(crate) fn trust_domain_from_service_id(service_id: &str) -> String {
 }
 
 pub(crate) async fn dev_token(state: AppState) -> String {
-    let token = dev_token_for_device(
-        state.clone(),
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "Alice Desktop",
-    )
-    .await;
-    authorize_test_event_device(
+    let actor = "did:web:alice.example";
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let token = dev_token_for_device(state.clone(), actor, device_id, "Alice Desktop").await;
+    project_test_authorized_device(
         &state,
-        "did:web:alice.example",
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        actor,
+        device_id,
+        &SigningKey::from_bytes(&[21_u8; 32]),
     )
     .await;
     token
-}
-
-async fn authorize_test_event_device(state: &AppState, actor: &str, device_id: &str) {
-    let actor_core = arkret_wire::project_full_id_to_core_id(
-        &DidFullId::new(actor.to_owned()).expect("fixture actor full DID"),
-    )
-    .expect("fixture actor core id");
-    let persistence = state.test_persistence();
-    let devices = persistence.devices();
-    let mut record = devices
-        .get(actor_core.as_str(), device_id)
-        .await
-        .unwrap()
-        .expect("dev-login persists its device inventory record");
-    let signing_key = SigningKey::from_bytes(&[21_u8; 32]);
-    record.payload["device_public_key"] =
-        Value::String(test_ed25519_multibase_public(&signing_key));
-    record.payload["verification"] = Value::String("verified".to_owned());
-    record.verification_state = "verified".to_owned();
-    devices.put(&record).await.unwrap();
 }
 
 pub(crate) async fn dev_token_for_device(
@@ -586,7 +563,13 @@ pub(crate) async fn verified_dev_token_for_device(
     display_name: &str,
 ) -> String {
     let token = dev_token_for_device(state.clone(), actor, device_id, display_name).await;
-    authorize_test_event_device(&state, actor, device_id).await;
+    project_test_authorized_device(
+        &state,
+        actor,
+        device_id,
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
+    .await;
     token
 }
 
@@ -726,9 +709,39 @@ pub(crate) async fn seed_test_realm(
     .unwrap();
     state.test_put_seal(&bootstrap_seal).unwrap();
     let seal_basis = bootstrap_seal.seal_basis();
+    let owner_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(owner.to_owned()).expect("fixture realm owner full DID"),
+    )
+    .expect("fixture realm owner core DID");
+    let recipient_service_id =
+        DidCoreId::new(state.service_id().clone()).expect("fixture recipient service core DID");
+    let current_record_url = format!(
+        "https://soland.local{}",
+        arkret_models_identity::canonical_service_current_record_path(&recipient_service_id)
+    );
 
     for invitee in invitees {
-        let invite_id = new_prefixed_uuid7("ak:invite:");
+        let invitee_core = arkret_wire::project_full_id_to_core_id(
+            &DidFullId::new((*invitee).to_owned()).expect("fixture invitee full DID"),
+        )
+        .expect("fixture invitee core DID");
+        let invite_event_id = arkret_identifiers::EventId::new(
+            signed_canonical_event(
+                "seed-test-realm-invite",
+                arkret_wire::EventKind::InviteCreate.as_str(),
+                owner,
+                "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                &realm_id,
+                TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+                Vec::new(),
+                serde_json::json!({}),
+            )["event_id"]
+                .as_str()
+                .expect("fixture invite Event id")
+                .to_owned(),
+        )
+        .expect("fixture invite EventId");
+        let invite_id = arkret_identifiers::InviteId::from_event_id(&invite_event_id).to_string();
         let invite_token = new_prefixed_uuid7("ak:invite-token:");
         state
             .test_persistence()
@@ -736,10 +749,13 @@ pub(crate) async fn seed_test_realm(
             .put(RealmInviteRecord {
                 invite_id,
                 realm_id: realm_id.clone(),
-                inviter: owner.to_owned(),
-                invitee: Some((*invitee).to_owned()),
+                inviter: owner_core.to_string(),
+                invitee: Some(invitee_core.to_string()),
                 invite_delivery_target: Some(serde_json::json!({
-                    "recipient_service_id": state.service_id().clone(),
+                    "recipient_service_id": recipient_service_id,
+                    "service_resolution": {
+                        "current_record_url": current_record_url
+                    },
                     "recipient_service_kind": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
@@ -770,6 +786,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = DidFullId::new(member.to_owned()).unwrap();
     let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    let member_core_string = member_core.to_string();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
@@ -781,9 +798,9 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
         realms.upsert(entry);
         drop(realms);
         state.test_projection().lock().members.insert(
-            (realm_id.to_owned(), member.to_owned()),
+            (realm_id.to_owned(), member_core_string.clone()),
             soland_domain::reducer::SolandMembershipState {
-                member: member.to_owned(),
+                member: member_core_string,
                 realm_id: realm_id.to_owned(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
@@ -813,6 +830,7 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = DidFullId::new(member.to_owned()).unwrap();
     let member_core = arkret_wire::project_full_id_to_core_id(&member_did).unwrap();
+    let member_core_string = member_core.to_string();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_core);
@@ -823,7 +841,7 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
             .test_projection()
             .lock()
             .members
-            .remove(&(realm_id.to_owned(), member.to_owned()));
+            .remove(&(realm_id.to_owned(), member_core_string));
         serde_json::json!({
             "ok": true,
             "realm_id": realm_id,
@@ -1133,6 +1151,15 @@ pub(crate) fn signed_message_event_envelope(
         if let Some(object) = encrypted_payload.as_object_mut()
             && object.get("scheme").and_then(Value::as_str) == Some("mls_rfc9420")
         {
+            let typed_realm_id =
+                RealmId::new(realm_id.to_owned()).expect("fixture message Realm id");
+            let scope_digest = arkret_models_crypto::encrypted_envelope_scope_digest(
+                &arkret_wire::ScopeRef::Realm {
+                    realm_id: typed_realm_id.clone(),
+                },
+                &typed_realm_id,
+            )
+            .expect("fixture encrypted envelope scope digest");
             object.insert("version".to_owned(), Value::String("1.0".to_owned()));
             object.insert(
                 "content_type".to_owned(),
@@ -1146,7 +1173,8 @@ pub(crate) fn signed_message_event_envelope(
                 "aad".to_owned(),
                 serde_json::json!({
                     "realm_id": realm_id,
-                    "event_kind": "ak.message.create"
+                    "event_kind": "ak.message.create",
+                    "scope_digest": scope_digest
                 }),
             );
             object.insert(
@@ -1230,8 +1258,19 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
     // the envelope builder named has to be accepted before the Event is sent.
     seed_test_realm_basis_seal(state, realm_id, actor).await;
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(actor.to_owned()).expect("fixture frontier actor full DID"),
+    )
+    .expect("fixture frontier actor core DID");
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+        .json(
+            &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
+                actor_id: Some(actor_core),
+                realm_id: Some(
+                    RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
+                ),
+            },
+        )
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1464,11 +1503,15 @@ pub(crate) async fn register_account_with_handle(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["did"], did, "register response: {registered}");
+    assert_eq!(
+        registered["did"],
+        fixture_actor_core_id(did).as_str(),
+        "register response: {registered}"
+    );
 
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": did,
+            "actor": fixture_actor_core_id(did),
             "device_id": device_id,
             "display_name": handle
         }))
@@ -1535,6 +1578,155 @@ pub(crate) async fn seed_verified_device_with_public_key(
         })
         .await
         .unwrap();
+}
+
+/// Project an accepted `ak.device.authorize` fixture so strict principal-device
+/// proof consumers can resolve both the device key and its PCR authority realm.
+pub(crate) async fn project_test_authorized_device(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    signing_key: &SigningKey,
+) -> String {
+    let actor_full = DidFullId::new(actor.to_owned()).expect("fixture actor full DID");
+    let actor_core =
+        arkret_wire::project_full_id_to_core_id(&actor_full).expect("fixture actor core DID");
+    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+        .expect("fixture local principal server core DID");
+    let realm_id = arkret_identifiers::RealmId::new(
+        soland_test_support::fixture_principal_control_realm(actor),
+    )
+    .expect("fixture PCR realm");
+    soland_test_support::cba_basis::seed_realm_genesis_event(state, realm_id.as_str(), actor).await;
+    soland_test_support::cba_basis::seed_realm_basis(
+        state,
+        realm_id.as_str(),
+        actor,
+        soland_test_support::cba_basis::FixtureBasis::shared(&[]),
+    )
+    .await;
+    let snapshot = state.test_projections().snapshot();
+    let genesis_value = snapshot
+        .realm_genesis_cell_value(realm_id.as_str())
+        .cloned()
+        .expect("fixture PCR genesis cell");
+    let reducer_profile = snapshot
+        .realm_reducer_profile(realm_id.as_str())
+        .map(|profile| Value::String(profile.to_owned()))
+        .expect("fixture PCR reducer profile cell");
+    state
+        .test_projections()
+        .conformance_install_realm_bootstrap_facets(&realm_id, genesis_value, reducer_profile);
+    let genesis_record = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .expect("fixture PCR event lookup")
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .expect("fixture PCR genesis Event");
+    let genesis: arkret_wire::Event =
+        serde_json::from_value(genesis_record.envelope).expect("typed PCR genesis Event");
+    let mut event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_core.clone(),
+        principal_server_id.clone(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
+        serde_json::json!({
+            "principal_id": actor_core,
+            "device_id": device_id,
+            "device_public_key": test_ed25519_multibase_public(signing_key),
+            "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": actor_core,
+            "not_before": "2026-05-25T00:00:00.000Z",
+            "authorization_binding_kind": "registration_anchor",
+            "device_signature": "c2ln"
+        }),
+        chrono::Utc::now(),
+    )
+    .expect("device authorize fixture Event");
+    event.prev_refs = vec![genesis.event_id.clone()];
+    event
+        .refresh_content_bound_identity()
+        .expect("device authorize fixture identity");
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:operation:",
+        ))
+        .unwrap(),
+        arkret_wire::OperationKind::Create,
+        None,
+        &event,
+    )
+    .expect("projected device authorization");
+    let event_id = operation.context.event_id.to_string();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &event,
+            Some(realm_id.as_str()),
+            chrono::Utc::now(),
+        ))
+        .await
+        .expect("persist accepted device authorization Event");
+    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+        genesis.actor_id.clone(),
+        genesis.principal_server_id.clone(),
+    );
+    let persistence = state.test_persistence();
+    let resolutions = persistence.principal_resolutions();
+    if resolutions
+        .by_authority_key(&authority_key)
+        .await
+        .expect("read principal authority pair")
+        .is_none()
+    {
+        let resolution = resolutions
+            .compare_and_set(
+                None,
+                soland_storage::PrincipalResolutionRecord {
+                    authority_key,
+                    pcr_realm_id: realm_id.clone(),
+                    genesis_event: genesis.clone(),
+                    current_event: genesis.clone(),
+                    projection: arkret_models_identity::PrincipalResolutionProjection {
+                        full_id: actor_full,
+                        method_history_head: format!("sha256:{}", "1".repeat(64)),
+                        version_id: "1-QmTestAuthority".to_owned(),
+                        resolution_event_ref: genesis.event_id.to_string(),
+                        updated_at: genesis.created_at,
+                    },
+                },
+            )
+            .await
+            .expect("persist principal authority pair");
+        assert!(matches!(
+            resolution,
+            soland_storage::PrincipalResolutionCasResult::Applied(_)
+        ));
+    }
+    soland_test_support::project_accepted_operations(state, actor_core.as_str(), &[operation])
+        .await;
+    let projected_device = state
+        .test_persistence()
+        .devices()
+        .get(actor_core.as_str(), device_id)
+        .await
+        .expect("read projected authorized device")
+        .expect("projected authorized device");
+    assert_eq!(
+        projected_device.payload["device_public_key"],
+        test_ed25519_multibase_public(signing_key),
+        "projected authorized device must retain its signing key"
+    );
+    event_id
 }
 
 // ── Signal Extension rail (`sync/signal.md`) test fixtures ──────────────────
@@ -1715,6 +1907,10 @@ pub(crate) async fn seed_test_realm_basis_seal(
     let historical_state = state
         .test_effective_state_at(std::slice::from_ref(&basis.seal.id), &realm)
         .expect("fixture basis historical state");
+    let subject_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(subject.to_owned()).expect("fixture basis subject full DID"),
+    )
+    .expect("fixture basis subject core DID");
     for expected in &basis.grants {
         let cell = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.capability.grant.v1:{}",
@@ -1734,7 +1930,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
         .unwrap_or_else(|| {
             panic!("fixture grant must be reconstructible at the head Seal: {cell_state:?}")
         });
-        assert_eq!(projected.subject, subject);
+        assert_eq!(projected.subject, subject_core.as_str());
         assert_eq!(projected.realm_id, realm_id);
         assert!(
             !projected.actions.is_empty(),
@@ -1782,7 +1978,7 @@ pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::Seal
         .await
         .expect("demo Realm bootstrap frontier")
         .into_iter()
-        .filter(|record| record.actor_id == "did:web:alice.example")
+        .filter(|record| record.actor_id == fixture_actor_core_id("did:web:alice.example").as_str())
         .max_by_key(|record| record.actor_seq)
         .expect("demo Realm bootstrap has an Alice frontier Event")
         .event_id;
@@ -1819,13 +2015,7 @@ pub(crate) async fn seed_signal_sender_device(
 ) -> (String, SigningKey) {
     let token = dev_token_for_device(state.clone(), actor, device_id, display_name).await;
     let signing_key = test_ephemeral_device_signing_key(actor, device_id);
-    seed_verified_device_with_public_key(
-        state,
-        actor,
-        device_id,
-        &test_ed25519_multibase_public(&signing_key),
-    )
-    .await;
+    project_test_authorized_device(state, actor, device_id, &signing_key).await;
     (token, signing_key)
 }
 
@@ -1858,7 +2048,7 @@ pub(crate) fn signed_signal_envelope(
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
         scope_ref,
-        sender_actor_id: arkret_identifiers::DidCoreId::new(sender_actor.to_owned()).unwrap(),
+        sender_actor_id: fixture_actor_core_id(sender_actor),
         sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         seal_ref: seal_ref.clone(),
         signal_class,
@@ -1908,7 +2098,11 @@ pub(crate) async fn post_signal(
 ) -> salvo::http::Response {
     TestClient::post("http://server/_arkret/self/signal")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(envelope)
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(envelope)
+                .expect("fixture signal envelope is canonicalizable"),
+        )
         .send(&app_from_state(state))
         .await
 }
@@ -1948,19 +2142,26 @@ pub(crate) fn seed_test_circle(
             mls_group_ref: None,
             state: soland_domain::reducer::CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: members.first().copied().unwrap_or_default().to_owned(),
+            created_by: members
+                .first()
+                .map(|member| fixture_actor_core_id(member).to_string())
+                .unwrap_or_default(),
             created_at: now,
             updated_by: None,
             updated_at: None,
-            members: members.iter().map(|member| (*member).to_owned()).collect(),
+            members: members
+                .iter()
+                .map(|member| fixture_actor_core_id(member).to_string())
+                .collect(),
         },
     );
     for member in members {
+        let member = fixture_actor_core_id(member).to_string();
         projection.circle_memberships.insert(
-            (circle_id.to_owned(), (*member).to_owned()),
+            (circle_id.to_owned(), member.clone()),
             soland_domain::reducer::CircleMembershipState {
                 circle_id: circle_id.to_owned(),
-                member: (*member).to_owned(),
+                member,
                 state: "join".to_owned(),
                 invited_at: None,
                 joined_at: now,

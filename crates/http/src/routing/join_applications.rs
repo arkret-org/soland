@@ -274,6 +274,7 @@ async fn submit_join_application(
                 || !snapshot.actor_governs_realm(
                     realm_id.as_str(),
                     recipient.reviewer_actor_id.as_str(),
+                    state.service_id(),
                     &[action.as_str()],
                     body.receipt.submitted_at,
                 )
@@ -368,7 +369,7 @@ async fn review_join_application(
     let accept_threshold = state
         .projections()
         .snapshot()
-        .check_private_join_application_review(&body.receipt)
+        .check_private_join_application_review(&body.receipt, state.service_id())
         .map_err(projection_error)?;
     let existing = state
         .join_applications()
@@ -488,11 +489,13 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
     let reviewer = snapshot.actor_governs_realm(
         realm_id.as_str(),
         actor,
+        state.service_id(),
         &[review_action.as_str()],
         evaluated_at,
     );
     let audit_reader = snapshot.issuer_has_projected_capability(
         actor,
+        state.service_id(),
         realm_id.as_str(),
         CapabilityActionId::AUDIT_QUERY,
         realm_id.as_str(),

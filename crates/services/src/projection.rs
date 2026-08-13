@@ -2242,21 +2242,6 @@ impl ProjectionService {
         }
     }
 
-    pub fn observe_message_read_for_expiry(
-        &self,
-        actor_id: &str,
-        event_id: &str,
-        canonical_read_at: &str,
-        read_at: DateTime<Utc>,
-    ) {
-        self.state.lock().observe_message_read_for_expiry(
-            actor_id,
-            event_id,
-            canonical_read_at,
-            read_at,
-        );
-    }
-
     pub fn reconcile_realm_owner(
         &self,
         realm_id: &str,
@@ -2637,6 +2622,12 @@ mod control_governance_health_tests {
             DidCoreId::from(
                 project_full_id_to_core_id(
                     &DidFullId::new("did:web:alice.example".to_owned()).unwrap(),
+                )
+                .unwrap(),
+            ),
+            DidCoreId::from(
+                project_full_id_to_core_id(
+                    &DidFullId::new("did:web:service.example".to_owned()).unwrap(),
                 )
                 .unwrap(),
             ),

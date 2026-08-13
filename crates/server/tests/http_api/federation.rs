@@ -63,7 +63,7 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
         .await
         .expect("demo Realm actor frontier")
         .into_iter()
-        .filter(|record| record.actor_id == "did:web:alice.example")
+        .filter(|record| record.actor_id == fixture_actor_core_id("did:web:alice.example").as_str())
         .collect::<Vec<_>>();
     let actor_seq = actor_records
         .iter()
@@ -926,8 +926,6 @@ fn peer_submit_body(event: &Value) -> Value {
             inclusion_proofs: Vec::new(),
             availability_proofs: Vec::new(),
         }],
-        signer_key_evidence: Vec::new(),
-        agent_signer_evidence_bundle: None,
     };
     serde_json::to_value(body).expect("federation submit body serializes")
 }
@@ -995,45 +993,15 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
         .unwrap();
     put_event_record(
         state,
-        realm_sync_endpoint_event(
-            "ak:event:ARY661GA-MIijYRTEqaKMAI77sJCFWfNyf4xOEDSxe2g",
-            source_service_id,
-            21,
-        ),
-        now,
-    )
-    .await;
-    put_event_record(
-        state,
         member_binding_event(
             "ak:event:AWOy3SEshibYHuXWgX09nbOW8yvqtRV769ZsokfmH7Ao",
             member_did,
             source_service_id,
-            22,
+            21,
         ),
         now + ChronoDuration::seconds(1),
     )
     .await;
-}
-
-fn realm_sync_endpoint_event(event_id: &str, source_service_id: &str, seq: u64) -> Value {
-    let payload = serde_json::json!({
-        "sync_endpoints": [{
-            "did": source_service_id,
-            "endpoint": "https://remote.example",
-            "role": "federation_peer",
-            "service_kind": "principal_server",
-            "plaintext_visible": true,
-            "visibility_scope": "plaintext_events"
-        }]
-    });
-    event_envelope(
-        event_id,
-        arkret_wire::EventKind::RealmPolicyBundle.as_str(),
-        "did:web:admin.example",
-        seq,
-        payload,
-    )
 }
 
 fn member_binding_event(

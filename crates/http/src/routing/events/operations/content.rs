@@ -269,7 +269,8 @@ pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str
             continue;
         }
         if let Some(subject_id) = mention.get("subject_id").and_then(|value| value.as_str()) {
-            validate_did(subject_id).map_err(|_| "mention subject_id is invalid")?;
+            arkret_identifiers::DidCoreId::new(subject_id.to_owned())
+                .map_err(|_| "mention subject_id is invalid")?;
             continue;
         }
         match mention.get("type").and_then(|value| value.as_str()) {

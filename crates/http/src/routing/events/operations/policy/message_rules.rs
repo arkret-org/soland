@@ -207,7 +207,12 @@ pub(super) async fn validate_applet_registration_authz(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+        .actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            operation.context.principal_server_id.as_str(),
+            operation.created_at,
+        )
     {
         return Ok(());
     }
@@ -216,6 +221,7 @@ pub(super) async fn validate_applet_registration_authz(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
+            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: "ak.realm.admin",
             resource: realm_id,
             realm_id,
@@ -439,7 +445,11 @@ pub(super) async fn validate_message_edit_redact_window_policy(
         ("ak.message.revise.own", "ak.message.revise")
     };
 
-    let grants = state.authorization().grants_for_subject(actor, realm_id);
+    let grants = state.authorization().grants_for_subject(
+        actor,
+        Some(operation.context.principal_server_id.as_str()),
+        realm_id,
+    );
 
     // Admin override: a broader (non-`.own`) capability is not time-boxed.
     let holds_broad = grants

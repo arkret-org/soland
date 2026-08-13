@@ -275,11 +275,8 @@ fn signed_actor_private_event_envelope(
     let kind = kind.as_ref();
     let now = chrono::Utc::now();
     let actor_id = arkret_identifiers::DidFullId::new(actor.to_owned()).expect("fixture actor DID");
-    let verification_method = arkret_wire::DidUrl::new(actor.strip_prefix("did:key:").map_or_else(
-        || format!("{actor}#{device_id}"),
-        |key| format!("{actor}#{key}"),
-    ))
-    .expect("fixture verification method is a DID URL");
+    let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}"))
+        .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::test_support::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
@@ -287,6 +284,7 @@ fn signed_actor_private_event_envelope(
                 .expect("fixture Realm id"),
         },
         arkret_wire::project_full_id_to_core_id(&actor_id).unwrap(),
+        soland_test_support::fixture_principal_server_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -299,7 +297,7 @@ fn signed_actor_private_event_envelope(
     .expect("SDK Event builder accepts actor-private fixture");
     event.prev_refs = prev_refs;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        [21_u8; 32],
+        arkret_signatures::development_signing_key_seed(verification_method.as_str()),
         actor_id,
         verification_method.clone(),
     );

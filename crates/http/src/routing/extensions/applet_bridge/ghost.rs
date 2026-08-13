@@ -277,7 +277,11 @@ pub(super) async fn validate_signed_ghost_provision_events(
         .proofs
         .iter()
         .chain(profile.proofs.iter())
-        .any(|proof| proof.verification_method != registration_verification_method)
+        .any(|proof| {
+            proof
+                .as_producer()
+                .is_none_or(|proof| proof.verification_method != registration_verification_method)
+        })
     {
         return Err(AppError::capability_denied(
             "Ghost provisioning Event proofs must use the installed registration-epoch key",
@@ -328,14 +332,13 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability payload proof binding is invalid: {error}"
         ))
     })?;
-    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+    verify_registration_epoch_payload_jws(
+        state,
+        record,
         &proof_binding,
         &grant.proof.jws,
-        &grant.proof.verification_method,
-        provision.service_id.as_str(),
-        state,
+        grant.proof.verification_method.as_str(),
     )
-    .await
     .map_err(|error| {
         AppError::invalid_param(format!(
             "accountability payload proof JWS verification failed: {error}"
@@ -384,6 +387,36 @@ pub(super) async fn validate_signed_ghost_provision_events(
         ));
     }
     Ok(authorization_ref)
+}
+
+fn verify_registration_epoch_payload_jws(
+    state: &AppState,
+    record: &AppletRecord,
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+) -> Result<(), String> {
+    let evidence = record
+        .registration_epoch_evidence
+        .as_ref()
+        .ok_or_else(|| "installed Applet has no registration-epoch evidence".to_owned())?;
+    if !evidence.contains_signing_key(verification_method) {
+        return Err("payload proof key is outside the installed registration epoch".to_owned());
+    }
+    let document = crate::jws_verify::resolve_did_document(state, &evidence.full_id)?;
+    evidence
+        .validate_against_did_document(&document)
+        .map_err(|error| format!("registration-epoch DID evidence mismatch: {error}"))?;
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| format!("payload proof verification method is invalid: {error}"))?;
+    arkret_identity::verify_jws_with_document(
+        canonical_bytes,
+        jws,
+        &verification_method,
+        &evidence.full_id,
+        &document,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(super) async fn provision_ghost(

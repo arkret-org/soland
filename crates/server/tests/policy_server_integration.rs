@@ -264,6 +264,7 @@ async fn policy_server_integration_hits_mock() {
     let decision = check_with_policy_server(
         &engine,
         "did:web:alice.example",
+        None,
         "ak.event.read",
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
         REALM_ID,
@@ -324,6 +325,7 @@ async fn policy_server_integration_timeout_fails_closed() {
     let decision = check_with_policy_server(
         &engine,
         "did:web:alice.example",
+        None,
         "ak.event.read",
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
         REALM_ID,

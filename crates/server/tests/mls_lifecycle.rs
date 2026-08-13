@@ -201,6 +201,7 @@ fn signed_event(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         },
         arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap(),
+        soland_test_support::fixture_principal_server_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

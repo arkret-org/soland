@@ -56,6 +56,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
             realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
         },
         arkret_identifiers::DidCoreId::new("ak:did_core:web:join-policy-test.example").unwrap(),
+        soland_test_support::fixture_principal_server_id(),
         0,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),

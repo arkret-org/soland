@@ -599,6 +599,7 @@ mod tests {
             kind.as_ref(),
             authorization_lease.scope_ref.clone(),
             authorization_lease.actor_id.clone(),
+            authorization_lease.actor_id.clone(),
             1,
             Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({"fixture": seed}),

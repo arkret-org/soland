@@ -182,17 +182,13 @@ impl ProjectionState {
     ) -> Option<ProjectedMessageView> {
         let msg = self.messages.get(event_id)?;
         let redaction = self.redaction_cell_for_message(msg).cloned();
-        let expired = self.message_requires_expiry_stub_at(msg, chrono::Utc::now());
-        let content = match (&redaction, viewer_is_author, expired) {
-            // Expiry applies to authors too; it is projection state, not a
-            // redaction audit view.
-            (_, _, true) => None,
+        let content = match (&redaction, viewer_is_author) {
             // No redaction in effect — full payload visible.
-            (None, _, false) => Some(msg.content.clone()),
+            (None, _) => Some(msg.content.clone()),
             // Author keeps the audit-view of the original payload.
-            (Some(_), true, false) => Some(msg.content.clone()),
+            (Some(_), true) => Some(msg.content.clone()),
             // Other members see the tombstone.
-            (Some(_), false, false) => None,
+            (Some(_), false) => None,
         };
         Some(ProjectedMessageView {
             event_id: msg.event_id.clone(),
@@ -483,10 +479,10 @@ impl ProjectionState {
             match gate.get("kind").and_then(Value::as_str) {
                 Some("principal_admission") => {
                     // DID-method admission must be evaluated from the frozen
-                    // registration/accepted-at authority evidence selected by
-                    // the caller. A projection's current full_id is neither
-                    // that evidence nor a substitute for an exact PCR
-                    // authority instance.
+                    // registration and origin-service admission evidence
+                    // selected by the exact principal authority pair. A
+                    // projection's current full_id is not a substitute for
+                    // that accepted pair binding.
                     if !principal_admission_gate_allows(gate, member, None) {
                         return Err("gate_check_failed");
                     }
@@ -617,13 +613,6 @@ impl ProjectionState {
                         })
                     })
             })
-    }
-
-    pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_DISAPPEARING_POLICY_V1,
-        )
     }
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {

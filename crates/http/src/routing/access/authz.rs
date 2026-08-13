@@ -103,6 +103,7 @@ async fn authz_check(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor: body.actor_id.as_str(),
+            actor_principal_server_id: Some(state.service_id()),
             action: &body.action,
             resource: &resource_expr,
             realm_id: &realm_id,
@@ -123,6 +124,7 @@ async fn authz_check(
         .realm_owner_operationally_covers_action(
             &realm_id,
             body.actor_id.as_str(),
+            state.service_id(),
             &body.action,
             now(),
         );
@@ -382,7 +384,11 @@ async fn effective_grants(
             .await
             .unwrap_or_default()
             .into_iter()
-            .flat_map(|(sid, _)| state.authorization().grants_for_subject(&subject, &sid))
+            .flat_map(|(sid, _)| {
+                state
+                    .authorization()
+                    .grants_for_subject(&subject, Some(state.service_id()), &sid)
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .map(capability_grant_from_authz_grant)
@@ -390,7 +396,7 @@ async fn effective_grants(
     } else {
         state
             .authorization()
-            .grants_for_subject(&subject, &realm_id)
+            .grants_for_subject(&subject, Some(state.service_id()), &realm_id)
             .into_iter()
             .map(capability_grant_from_authz_grant)
             .collect::<Result<Vec<_>, _>>()?
@@ -431,8 +437,16 @@ fn capability_grant_from_authz_grant(
         schema: "ak.schema.capability.v1".to_owned(),
         realm_id: Some(realm_id),
         issuer,
+        issuer_principal_server_id: arkret_wire::DidCoreId::new(
+            grant.issuer_principal_server_id,
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
         subject,
-        subject_authority_instance: None,
+        subject_principal_server_id: grant
+            .subject_principal_server_id
+            .map(arkret_wire::DidCoreId::new)
+            .transpose()
+            .map_err(|error| AppError::internal(error.to_string()))?,
         actions: grant.actions,
         resources: vec![resource_selector],
         capability_action_registry_digest: grant.capability_action_registry_digest,

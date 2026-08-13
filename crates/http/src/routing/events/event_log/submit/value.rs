@@ -726,7 +726,10 @@ fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static 
 }
 
 fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
-    let (controller, fragment) = event.proofs[0]
+    let (controller, fragment) = event
+        .proofs
+        .first()?
+        .as_producer()?
         .verification_method
         .as_str()
         .rsplit_once('#')?;
@@ -755,7 +758,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     {
         return Ok(Some("event Realm is not the actor's accepted PCR"));
     }
-    debug_assert!(soland_storage::has_self_principal_pcr_device_authorized_shape(event));
+    debug_assert!(self_principal_pcr_control_shape_rejection(event).is_none());
     let principal_control_profile_declared = snapshot
         .realm_schema_refs(event.realm_id.as_str())
         .iter()
@@ -856,6 +859,180 @@ pub(in crate::routing::events::event_log) async fn is_authority_authored_self_pr
     Ok(self_principal_pcr_control_authority_rejection(state, event)
         .await?
         .is_none())
+}
+
+pub(super) async fn accepted_event_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    parsed: &ValidatedEventEnvelope,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(Value, Vec<u8>), SubmitOneError> {
+    if session.token_hash.starts_with("federation:") {
+        return Ok((envelope, parsed.canonical_bytes.clone()));
+    }
+    let mut event = serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            error.to_string(),
+        )
+    })?;
+    if event.principal_server_id.as_str() != state.service_id() {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "caller Event must be submitted to its declared Principal Server",
+        ));
+    }
+    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "caller submission must carry exactly one producer proof",
+        ));
+    };
+    let producer = producer.clone();
+    let producer_signing_key = parsed.producer_signing_key.clone().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "verified producer key was not retained for admission proof",
+        )
+    })?;
+    let (_, verification_method) =
+        state
+            .current_service_receipt_binding()
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Principal Server signing method is unavailable: {error}"),
+                )
+            })?;
+    let event_digest =
+        arkret_wire::Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
+        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        verification_method,
+        event_digest,
+        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
+            &producer,
+        )
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?,
+        producer_verification_method: producer.verification_method.clone(),
+        producer_signing_key,
+        accepted_at,
+        jws: String::new(),
+    };
+    let signing_input = admission.canonical_binding_bytes().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            error.to_string(),
+        )
+    })?;
+    admission.jws =
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes());
+    event.proofs.push(admission.into());
+    event
+        .validate_principal_server_admission_binding()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+    let canonical_bytes =
+        canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            )
+        })?;
+    let envelope = typed_event_to_canonical_value(event)?;
+    Ok((envelope, canonical_bytes))
+}
+
+pub(super) fn validate_origin_submission_shape(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+) -> Result<(), SubmitOneError> {
+    if session.token_hash.starts_with("federation:") {
+        return Ok(());
+    }
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                error.to_string(),
+            )
+        })?;
+    if event.principal_server_id.as_str() != state.service_id() {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "caller Event must be submitted to its declared Principal Server",
+        ));
+    }
+    if !matches!(
+        event.proofs.as_slice(),
+        [arkret_wire::EventProof::Producer(_)]
+    ) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "caller submission must carry exactly one producer proof",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Value) -> bool {
+    let Ok(mut existing) = serde_json::from_slice::<arkret_wire::Event>(existing_bytes) else {
+        return false;
+    };
+    let Ok(submitted) = serde_json::from_value::<arkret_wire::Event>(submitted.clone()) else {
+        return false;
+    };
+    if !matches!(
+        existing.proofs.as_slice(),
+        [
+            arkret_wire::EventProof::Producer(_),
+            arkret_wire::EventProof::PrincipalServerAdmission(_)
+        ]
+    ) || !matches!(
+        submitted.proofs.as_slice(),
+        [arkret_wire::EventProof::Producer(_)]
+    ) {
+        return false;
+    }
+    existing.proofs.truncate(1);
+    existing == submitted
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -961,6 +1138,7 @@ pub(super) async fn submit_event_value_with_context(
         internal_admission,
     )
     .await?;
+    validate_origin_submission_shape(state, session, &envelope)?;
     // Ordinary Events never declare a reducer profile. The receiver resolves
     // it from the Realm's authoritative singleton. The current registry has
     // one profile and no upgrade edges, so the projected singleton is also the
@@ -1035,7 +1213,7 @@ pub(super) async fn submit_event_value_with_context(
             None => None,
         };
     let received_at = now();
-    let envelope_for_bootstrap = envelope.clone();
+    let mut envelope_for_bootstrap = envelope.clone();
     let control_event_for_proposal =
         serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
             .ok()
@@ -1089,7 +1267,9 @@ pub(super) async fn submit_event_value_with_context(
             )
         })?;
     if let Some(existing) = existing {
-        if existing.canonical_bytes == parsed.canonical_bytes {
+        if existing.canonical_bytes == parsed.canonical_bytes
+            || exact_producer_retry(&existing.canonical_bytes, &envelope)
+        {
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
                 RealmId::new(parsed.realm_id.clone()).map_err(|_| {
@@ -1992,6 +2172,9 @@ pub(super) async fn submit_event_value_with_context(
     } else {
         None
     };
+    let (envelope, accepted_canonical_bytes) =
+        accepted_event_envelope(state, session, envelope, &parsed, received_at).await?;
+    envelope_for_bootstrap = envelope.clone();
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
@@ -2114,7 +2297,7 @@ pub(super) async fn submit_event_value_with_context(
             kind: parsed.kind.clone(),
             schema_id: parsed.schema_id.clone(),
             canonical_digest: parsed.canonical_digest.clone(),
-            canonical_bytes: parsed.canonical_bytes.clone(),
+            canonical_bytes: accepted_canonical_bytes.clone(),
             envelope,
             received_at,
         },
@@ -2228,7 +2411,8 @@ pub(super) async fn submit_event_value_with_context(
             }
             if conflict == Some(ConflictCode::DuplicateConflict) {
                 if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await
-                    && existing.canonical_bytes == parsed.canonical_bytes
+                    && (existing.canonical_bytes == parsed.canonical_bytes
+                        || existing.canonical_bytes == accepted_canonical_bytes)
                 {
                     let frontier = super::super::endpoints::load_realm_actor_frontier(
                         state,

@@ -188,11 +188,19 @@ pub fn engine_grant_from_cell_body(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let issuer_principal_server_id = body
+        .get("issuer_principal_server_id")
+        .and_then(Value::as_str)?
+        .to_owned();
     let subject = body
         .get("subject")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    let subject_principal_server_id = body
+        .get("subject_principal_server_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let actions: Vec<String> = string_set_field(body, "actions").into_iter().collect();
     if actions.is_empty() {
         return None;
@@ -226,7 +234,9 @@ pub fn engine_grant_from_cell_body(
         grant_id: grant_id.to_owned(),
         realm_id,
         issuer,
+        issuer_principal_server_id,
         subject,
+        subject_principal_server_id,
         resource,
         actions,
         capability_action_registry_digest,
@@ -797,6 +807,10 @@ fn grant_item_value(
         map.insert("id".to_owned(), Value::String(grant_id.to_owned()));
         map.entry("realm_id".to_owned())
             .or_insert_with(|| Value::String(operation.realm_id.to_string()));
+        map.insert(
+            "issuer_principal_server_id".to_owned(),
+            Value::String(operation.context.principal_server_id.to_string()),
+        );
         if revoked {
             map.insert("revoked".to_owned(), Value::Bool(true));
             map.entry("revoked_at".to_owned()).or_insert_with(|| {
@@ -846,6 +860,7 @@ impl ProjectionState {
     pub fn issuer_holds_literal_capability(
         &self,
         issuer: &str,
+        issuer_principal_server_id: &str,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -854,6 +869,7 @@ impl ProjectionState {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
             grant.subject == issuer
+                && grant.subject_principal_server_id.as_deref() == Some(issuer_principal_server_id)
                 && projected_grant_is_active_for(
                     &grant,
                     realm_id,
@@ -884,6 +900,7 @@ impl ProjectionState {
     pub fn issuer_has_projected_capability(
         &self,
         issuer: &str,
+        issuer_principal_server_id: &str,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -892,6 +909,7 @@ impl ProjectionState {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
             grant.subject == issuer
+                && grant.subject_principal_server_id.as_deref() == Some(issuer_principal_server_id)
                 && projected_grant_covers_action(
                     &grant,
                     realm_id,
@@ -915,6 +933,7 @@ impl ProjectionState {
         &self,
         grant_id: &str,
         subject: &str,
+        subject_principal_server_id: &str,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -925,6 +944,7 @@ impl ProjectionState {
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         grant.subject == subject
+            && grant.subject_principal_server_id.as_deref() == Some(subject_principal_server_id)
             && projected_grant_covers_action(
                 &grant,
                 realm_id,
@@ -980,6 +1000,7 @@ impl ProjectionState {
         &self,
         realm_id: &str,
         actor: &str,
+        actor_principal_server_id: &str,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         if self
@@ -990,6 +1011,7 @@ impl ProjectionState {
         }
         self.issuer_holds_literal_capability(
             actor,
+            actor_principal_server_id,
             realm_id,
             CapabilityActionId::REALM_OWNER,
             realm_id,
@@ -1009,15 +1031,20 @@ impl ProjectionState {
         &self,
         realm_id: &str,
         actor: &str,
+        actor_principal_server_id: &str,
         action: &str,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
-            && arkret_policy::owner_may_author_action(
-                action,
-                self.realm_authority_registry_basis(realm_id).as_ref(),
-            )
-            .unwrap_or(false)
+        self.actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            actor_principal_server_id,
+            evaluation_basis,
+        ) && arkret_policy::owner_may_author_action(
+            action,
+            self.realm_authority_registry_basis(realm_id).as_ref(),
+        )
+        .unwrap_or(false)
     }
 
     /// The shared Realm-governance predicate over projected capability state.
@@ -1032,19 +1059,25 @@ impl ProjectionState {
         &self,
         realm_id: &str,
         actor: &str,
+        actor_principal_server_id: &str,
         actions: &[&str],
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
-            || actions.iter().any(|action| {
-                self.issuer_holds_literal_capability(
-                    actor,
-                    realm_id,
-                    action,
-                    realm_id,
-                    evaluation_basis,
-                )
-            })
+        self.actor_holds_effective_realm_owner(
+            realm_id,
+            actor,
+            actor_principal_server_id,
+            evaluation_basis,
+        ) || actions.iter().any(|action| {
+            self.issuer_holds_literal_capability(
+                actor,
+                actor_principal_server_id,
+                realm_id,
+                action,
+                realm_id,
+                evaluation_basis,
+            )
+        })
     }
 
     /// Owner-aggregate leg of the section 3.2 issuer upper bound.
@@ -1058,11 +1091,17 @@ impl ProjectionState {
     fn owner_may_issue_grant_for(
         &self,
         issuer: &str,
+        issuer_principal_server_id: &str,
         realm_id: &str,
         action: &str,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        if !self.actor_holds_effective_realm_owner(realm_id, issuer, evaluation_basis) {
+        if !self.actor_holds_effective_realm_owner(
+            realm_id,
+            issuer,
+            issuer_principal_server_id,
+            evaluation_basis,
+        ) {
             return false;
         }
         let basis = self.realm_authority_registry_basis(realm_id);
@@ -1100,6 +1139,7 @@ impl ProjectionState {
     fn applet_non_event_grant_authority_matches(
         &self,
         issuer: &str,
+        issuer_principal_server_id: &str,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -1159,11 +1199,17 @@ impl ProjectionState {
                 // registration, scope, epoch, evidence - is unchanged.
                 || !(self.issuer_holds_literal_capability(
                     issuer,
+                    issuer_principal_server_id,
                     realm_id,
                     rule.issuer_action,
                     resource,
                     evaluation_basis,
-                ) || self.actor_holds_effective_realm_owner(realm_id, issuer, evaluation_basis))
+                ) || self.actor_holds_effective_realm_owner(
+                    realm_id,
+                    issuer,
+                    issuer_principal_server_id,
+                    evaluation_basis,
+                ))
             {
                 return false;
             }
@@ -1269,12 +1315,18 @@ impl ProjectionState {
         for action in &actions {
             // The owner aggregate is Realm-wide, so it is resolved once per
             // action rather than per resource selector.
-            let owner_authorized =
-                self.owner_may_issue_grant_for(&issuer, realm_id, action, operation.created_at);
+            let owner_authorized = self.owner_may_issue_grant_for(
+                &issuer,
+                operation.context.principal_server_id.as_str(),
+                realm_id,
+                action,
+                operation.created_at,
+            );
             for resource in &resources {
                 if !owner_authorized
                     && !self.issuer_has_projected_capability(
                         &issuer,
+                        operation.context.principal_server_id.as_str(),
                         realm_id,
                         action,
                         resource,
@@ -1282,6 +1334,7 @@ impl ProjectionState {
                     )
                     && !self.applet_non_event_grant_authority_matches(
                         &issuer,
+                        operation.context.principal_server_id.as_str(),
                         realm_id,
                         action,
                         resource,
@@ -1307,7 +1360,10 @@ impl ProjectionState {
         if parent.revoked || crate::capability::is_grant_expired(parent, operation.created_at) {
             return Err("grant_revoked_upstream");
         }
-        if issuer != parent.subject {
+        if issuer != parent.subject
+            || parent.subject_principal_server_id.as_deref()
+                != Some(operation.context.principal_server_id.as_str())
+        {
             return Err("grant_exceeds_issuer_authority");
         }
         if realm_id != parent.realm_id {
@@ -1436,6 +1492,8 @@ impl ProjectionState {
                         return false;
                     };
                     parent.subject == grant.issuer
+                        && parent.subject_principal_server_id.as_deref()
+                            == Some(grant.issuer_principal_server_id.as_str())
                         && !parent.revoked
                         && !crate::capability::is_grant_expired(&parent, evaluation_basis)
                         && parent.actions.iter().any(|holder_action| {
@@ -1900,7 +1958,11 @@ impl ProjectionState {
     /// Every persisted capability grant for `subject_did`, paired with the
     /// Realm that governs its grant cell. Revocation must be submitted in
     /// this Realm; a controller PCR is not a cross-Realm revocation surface.
-    pub fn grant_locations_for_subject(&self, subject_did: &str) -> Vec<(String, String)> {
+    pub fn grant_locations_for_subject(
+        &self,
+        subject_did: &str,
+        subject_principal_server_id: &str,
+    ) -> Vec<(String, String)> {
         let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let mut locations = std::collections::BTreeSet::new();
         for (cell_ref, cell_state) in &self.cells {
@@ -1916,7 +1978,11 @@ impl ProjectionState {
                     .get("subject")
                     .and_then(Value::as_str)
                     .map(|subject| subject == subject_did)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    && body
+                        .get("subject_principal_server_id")
+                        .and_then(Value::as_str)
+                        == Some(subject_principal_server_id);
                 if subject_matches
                     && let Some(grant_id) = body
                         .get("grant_id")
@@ -1936,8 +2002,9 @@ impl ProjectionState {
     pub fn unrevoked_grant_locations_for_subject(
         &self,
         subject_did: &str,
+        subject_principal_server_id: &str,
     ) -> Vec<(String, String)> {
-        self.grant_locations_for_subject(subject_did)
+        self.grant_locations_for_subject(subject_did, subject_principal_server_id)
             .into_iter()
             .filter(|(grant_id, _)| {
                 let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
@@ -2124,6 +2191,7 @@ mod agent_key_tests {
                     "authority_generation": 0
                 }],
                 "subject": subject,
+                "subject_principal_server_id": subject,
                 "actions": actions,
                 "resources": resources,
             }
@@ -2644,6 +2712,7 @@ mod agent_key_tests {
         ));
         assert!(state.issuer_has_projected_capability(
             AGENT,
+            AGENT,
             REALM,
             "ak.message.create",
             REALM,
@@ -2660,6 +2729,7 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityRevokeProjected { .. }
         ));
         assert!(!state.issuer_has_projected_capability(
+            AGENT,
             AGENT,
             REALM,
             "ak.message.create",
@@ -2699,6 +2769,7 @@ mod agent_key_tests {
         );
         assert!(state.issuer_has_projected_capability(
             AGENT,
+            AGENT,
             REALM,
             "ak.message.create",
             REALM,
@@ -2714,6 +2785,7 @@ mod agent_key_tests {
             arkret_state::lattice::CellState::Value(serde_json::to_value(root).unwrap()),
         );
         assert!(!state.issuer_has_projected_capability(
+            AGENT,
             AGENT,
             REALM,
             "ak.message.create",
@@ -3277,6 +3349,7 @@ mod realm_owner_authority_tests {
                         "authority_generation": 0
                     }],
                     "subject": subject,
+                    "subject_principal_server_id": subject,
                     "actions": actions,
                     "capability_action_registry_digest":
                         arkret_policy::current_capability_action_registry_digest().unwrap(),
@@ -3373,12 +3446,23 @@ mod realm_owner_authority_tests {
         // A forged `realm_states[..].owner` is a discardable presentation
         // mirror. It never authorizes anything; only the registered cell does.
         let forged = realm(None, Some(OWNER));
-        assert!(!forged.actor_holds_effective_realm_owner(REALM, OWNER, chrono::Utc::now()));
-        assert!(!forged.actor_governs_realm(REALM, OWNER, &["ak.realm.admin"], chrono::Utc::now()));
+        assert!(!forged.actor_holds_effective_realm_owner(REALM, OWNER, OWNER, chrono::Utc::now()));
+        assert!(!forged.actor_governs_realm(
+            REALM,
+            OWNER,
+            OWNER,
+            &["ak.realm.admin"],
+            chrono::Utc::now()
+        ));
 
         let rooted = realm(Some(OWNER), Some(STRANGER));
-        assert!(rooted.actor_holds_effective_realm_owner(REALM, OWNER, chrono::Utc::now()));
-        assert!(!rooted.actor_holds_effective_realm_owner(REALM, STRANGER, chrono::Utc::now()));
+        assert!(rooted.actor_holds_effective_realm_owner(REALM, OWNER, OWNER, chrono::Utc::now()));
+        assert!(!rooted.actor_holds_effective_realm_owner(
+            REALM,
+            STRANGER,
+            STRANGER,
+            chrono::Utc::now()
+        ));
     }
 
     #[test]
@@ -3388,11 +3472,13 @@ mod realm_owner_authority_tests {
         assert!(rooted.realm_owner_operationally_covers_action(
             REALM,
             OWNER,
+            OWNER,
             "ak.invite.create",
             now
         ));
         assert!(rooted.realm_owner_operationally_covers_action(
             REALM,
+            OWNER,
             OWNER,
             "ak.realm.profile",
             now
@@ -3400,17 +3486,20 @@ mod realm_owner_authority_tests {
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
             OWNER,
+            OWNER,
             "ak.audit.export",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
             OWNER,
+            OWNER,
             "ak.realm.destroy",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
+            STRANGER,
             STRANGER,
             "ak.invite.create",
             now
@@ -3438,6 +3527,7 @@ mod realm_owner_authority_tests {
             assert!(
                 state.issuer_holds_literal_capability(
                     OWNER,
+                    OWNER,
                     REALM,
                     action,
                     REALM,
@@ -3458,6 +3548,7 @@ mod realm_owner_authority_tests {
         );
         assert!(calendar.owner_may_issue_grant_for(
             OWNER,
+            OWNER,
             REALM,
             CapabilityActionId::RSVP_SET,
             now,
@@ -3470,15 +3561,20 @@ mod realm_owner_authority_tests {
         );
         assert!(!unrelated.owner_may_issue_grant_for(
             OWNER,
+            OWNER,
             REALM,
             CapabilityActionId::RSVP_SET,
             now,
         ));
 
         let absent = realm(Some(OWNER), None);
-        assert!(
-            !absent.owner_may_issue_grant_for(OWNER, REALM, CapabilityActionId::RSVP_SET, now,)
-        );
+        assert!(!absent.owner_may_issue_grant_for(
+            OWNER,
+            OWNER,
+            REALM,
+            CapabilityActionId::RSVP_SET,
+            now,
+        ));
     }
 
     #[test]
@@ -3493,7 +3589,12 @@ mod realm_owner_authority_tests {
             projected(&effect),
             "owner may appoint a co-owner: {effect:?}"
         );
-        assert!(state.actor_holds_effective_realm_owner(REALM, CO_OWNER, chrono::Utc::now()));
+        assert!(state.actor_holds_effective_realm_owner(
+            REALM,
+            CO_OWNER,
+            CO_OWNER,
+            chrono::Utc::now()
+        ));
 
         // The co-owner's authority is the same aggregate, so it can sign on.
         let regranted = grant_id("b2");
@@ -3613,12 +3714,14 @@ mod realm_owner_authority_tests {
         // does not cover.
         assert!(!state.issuer_has_projected_capability(
             CO_OWNER,
+            CO_OWNER,
             REALM,
             "ak.audit.export",
             REALM,
             chrono::Utc::now()
         ));
         assert!(state.issuer_has_projected_capability(
+            CO_OWNER,
             CO_OWNER,
             REALM,
             "ak.strand.create",
@@ -3679,6 +3782,11 @@ mod realm_owner_authority_tests {
             rejected_reason(&issue(&mut state, &unanchored)),
             Some("capability_registry_basis_unavailable")
         );
-        assert!(!state.actor_holds_effective_realm_owner(REALM, CO_OWNER, chrono::Utc::now()));
+        assert!(!state.actor_holds_effective_realm_owner(
+            REALM,
+            CO_OWNER,
+            CO_OWNER,
+            chrono::Utc::now()
+        ));
     }
 }

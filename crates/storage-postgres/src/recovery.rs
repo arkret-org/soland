@@ -250,6 +250,8 @@ struct RecoverySessionRow {
     #[diesel(sql_type = Text)]
     principal_id: String,
     #[diesel(sql_type = Text)]
+    principal_server_id: String,
+    #[diesel(sql_type = Text)]
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
     trust_domain: String,
@@ -368,6 +370,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 &row.recovery_session_id,
             ),
             principal_id: row.principal_id,
+            principal_server_id: row.principal_server_id,
             requesting_device_id: row.requesting_device_id,
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
@@ -392,7 +395,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
         })
     }
 }
-const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
+const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, principal_server_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
@@ -429,17 +432,18 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         });
         sql_query(
             "INSERT INTO recovery_sessions \
-             (id, principal_id, requesting_device_id, trust_domain, policy_id, \
+             (id, principal_id, principal_server_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
         ))
         .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.principal_server_id)
         .bind::<Text, _>(&record.requesting_device_id)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))

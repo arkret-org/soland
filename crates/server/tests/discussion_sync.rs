@@ -138,11 +138,11 @@ async fn seed_realm(
                 asset_privacy_policy: None,
                 asset_privacy_policy_digest: None,
                 encryption_profile: None,
-                plaintext_visible_services: std::collections::BTreeSet::from([
-                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
-                ]),
+                plaintext_visible_services: std::collections::BTreeSet::from([state
+                    .service_id()
+                    .clone()]),
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
-                    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
+                    state.service_id().clone(),
                     std::collections::BTreeSet::from([PlaintextDataClassKind::MessageContent]),
                 )]),
                 minimal_metadata_realm: false,
@@ -634,17 +634,14 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     let actor_seq = frontier.next_actor_seq;
     let prev_refs = frontier.frontier_event_ids;
     let now = chrono::Utc::now();
-    let verification_method =
-        arkret_wire::DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
-            || format!("{actor_id}#{device_id}"),
-            |key| format!("{actor_id}#{key}"),
-        ))
+    let verification_method = arkret_wire::DidUrl::new(format!("{actor_id}#{device_id}"))
         .expect("fixture verification method is a DID URL");
     let scope_ref = derived_scope_ref(state, realm_id, kind, &payload);
     let mut event = arkret_wire::test_support::raw_event_at(
         kind,
         scope_ref,
         actor.clone(),
+        soland_test_support::fixture_principal_server_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -672,17 +669,8 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         &verification_method,
         fixture_basis,
     );
-    let seed = if actor_id == BOB_DID.as_str() {
-        [22_u8; 32]
-    } else if actor_id == CAROL_DID.as_str() {
-        [23_u8; 32]
-    } else if actor_id == MALLORY_DID.as_str() {
-        [24_u8; 32]
-    } else {
-        [21_u8; 32]
-    };
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        seed,
+        arkret_signatures::development_signing_key_seed(verification_method.as_str()),
         actor_full,
         verification_method.clone(),
     );

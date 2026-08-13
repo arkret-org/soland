@@ -13,6 +13,7 @@ pub struct AuthorizationDecision {
 
 pub struct AuthorizationCheck<'a> {
     pub actor: &'a str,
+    pub actor_principal_server_id: Option<&'a str>,
     pub action: &'a str,
     pub resource: &'a str,
     pub realm_id: &'a str,
@@ -42,10 +43,23 @@ pub trait AuthorizationPort: Send + Sync {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision;
     fn upsert_projected_grant(&self, grant: Grant);
     fn mark_projected_grant_revoked(&self, grant_id: &str);
-    fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize;
+    fn mark_projected_grants_revoked_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> usize;
     fn get_grant(&self, grant_id: &str) -> Option<Grant>;
-    fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant>;
-    fn grants_for_subject_all_realms(&self, subject: &str) -> Vec<Grant>;
+    fn grants_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+    ) -> Vec<Grant>;
+    fn grants_for_subject_all_realms(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> Vec<Grant>;
     fn grants_snapshot(&self) -> Vec<Grant>;
 }
 
@@ -71,20 +85,36 @@ impl AuthorizationService {
         self.port.mark_projected_grant_revoked(grant_id);
     }
 
-    pub fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
-        self.port.mark_projected_grants_revoked_for_subject(subject)
+    pub fn mark_projected_grants_revoked_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> usize {
+        self.port
+            .mark_projected_grants_revoked_for_subject(subject, subject_principal_server_id)
     }
 
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.port.get_grant(grant_id)
     }
 
-    pub fn grants_for_subject(&self, subject: &str, realm_id: &str) -> Vec<Grant> {
-        self.port.grants_for_subject(subject, realm_id)
+    pub fn grants_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+    ) -> Vec<Grant> {
+        self.port
+            .grants_for_subject(subject, subject_principal_server_id, realm_id)
     }
 
-    pub fn grants_for_subject_all_realms(&self, subject: &str) -> Vec<Grant> {
-        self.port.grants_for_subject_all_realms(subject)
+    pub fn grants_for_subject_all_realms(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> Vec<Grant> {
+        self.port
+            .grants_for_subject_all_realms(subject, subject_principal_server_id)
     }
 
     pub fn grants_snapshot(&self) -> Vec<Grant> {

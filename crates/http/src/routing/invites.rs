@@ -832,8 +832,9 @@ pub(crate) struct ReceiveDecision {
 }
 
 /// Read the subject's private `invite_receive_policy`. There is no default
-/// fallback here: a policy that is not bound to an exact principal authority
-/// instance cannot gate an inbound invite, so the caller fails closed.
+/// fallback here: a policy that is not bound to the local exact
+/// `(principal_id, principal_server_id)` account authority pair cannot gate an
+/// inbound invite, so the caller fails closed.
 fn resolve_core_invite_receive_policy(
     state: &AppState,
     subject: &DidCoreId,
@@ -843,7 +844,7 @@ fn resolve_core_invite_receive_policy(
     }
     Err(AppError::new(
         ErrorCode::FailedPrecondition,
-        "recipient invite policy is not bound to an exact principal authority instance",
+        "recipient invite policy is not bound to the local principal authority pair",
     ))
 }
 
@@ -1733,6 +1734,7 @@ mod invite_locator_security_tests {
             prev_refs: Vec::new(),
             canonical_digest: format!("sha256:{}", "b".repeat(64)),
             canonical_bytes: Vec::new(),
+            producer_signing_key: None,
         };
 
         assert!(

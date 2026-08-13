@@ -14,7 +14,7 @@ pub(super) async fn verify_federation_actor_signature(
     _body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
 ) -> Result<VerifiedFederationActor, AppError> {
     Err(actor_signature_error(
-        "federation actor verification requires an exact principal authority instance",
+        "federation actor verification requires an exact (principal_id, principal_server_id) authority pair",
     ))
 }
 

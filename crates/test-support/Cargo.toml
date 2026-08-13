@@ -26,6 +26,7 @@ arkret-wire = { workspace = true, features = ["test-support"] }
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 parking_lot.workspace = true

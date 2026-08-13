@@ -396,68 +396,6 @@ fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
 /// envelope to the SDK [`arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility`]
 /// enum. Returns `None` when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
-pub(super) fn validate_disappearing_message_policy(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if !kinds::operation_is_message_create(operation) || operation.payload.get("expiry").is_none() {
-        return Ok(());
-    }
-    validate_message_expiry_payload(operation)?;
-    let expiry = operation
-        .payload
-        .get("expiry")
-        .and_then(Value::as_object)
-        .ok_or("disappearing_expiry_invalid")?;
-    let ttl_ms = expiry
-        .get("ttl_ms")
-        .and_then(Value::as_u64)
-        .ok_or("disappearing_expiry_ttl_missing")?;
-    let trigger = expiry
-        .get("trigger")
-        .and_then(Value::as_str)
-        .ok_or("disappearing_expiry_trigger_missing")?;
-    let policy = {
-        let projection = state.projections().snapshot();
-        {
-            projection
-                .realm_disappearing_policy_cell_value(operation.realm_id.as_str())
-                .cloned()
-        }
-    }
-    .ok_or("disappearing_policy_unset")?;
-    if !policy
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err("disappearing_policy_disabled");
-    }
-    let max_ttl_ms = policy
-        .get("max_ttl_ms")
-        .and_then(Value::as_u64)
-        .ok_or("disappearing_policy_max_ttl_missing")?;
-    if ttl_ms > max_ttl_ms {
-        return Err("disappearing_ttl_exceeds_policy");
-    }
-    let trigger_allowed = policy
-        .get("allowed_triggers")
-        .and_then(Value::as_array)
-        .is_some_and(|triggers| triggers.iter().any(|value| value.as_str() == Some(trigger)));
-    if !trigger_allowed {
-        return Err("disappearing_trigger_not_allowed");
-    }
-    if !message_operation_is_encrypted(operation)
-        && !policy
-            .get("plaintext_realms_allowed")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    {
-        return Err("disappearing_plaintext_realm_not_allowed");
-    }
-    Ok(())
-}
-
 pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
     envelope: &Value,
 ) -> Option<arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility> {

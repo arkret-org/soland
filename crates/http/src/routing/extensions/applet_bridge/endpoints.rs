@@ -602,7 +602,11 @@ fn build_revoke_plan(
         let scope_realm_id = effective_scope_realm_id(&preview.effective_scope);
         let active_grant_ids = state
             .authorization()
-            .grants_for_subject(package.service_id.as_str(), &scope_realm_id)
+            .grants_for_subject(
+                package.service_id.as_str(),
+                Some(package.service_id.as_str()),
+                &scope_realm_id,
+            )
             .into_iter()
             .map(|grant| grant.grant_id)
             .collect::<std::collections::BTreeSet<_>>();

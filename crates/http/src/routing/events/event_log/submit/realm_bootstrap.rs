@@ -6,8 +6,6 @@ pub(super) struct DirectConversationFoundingCommitContext {
     pub receipt: DirectConversationFoundingAcceptanceReceipt,
     pub founding_authority_evidence:
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence,
-    pub source_service_binding:
-        arkret_models_collaboration::direct_conversation_ops::AcceptedAtServiceBinding,
 }
 
 pub(super) fn batch_begins_realm_create(envelopes: &[Value]) -> bool {
@@ -107,6 +105,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let contexts = std::slice::from_ref(&context);
     let mut validated = Vec::with_capacity(envelopes.len());
     for (index, envelope) in envelopes.iter().enumerate() {
+        super::value::validate_origin_submission_shape(state, session, envelope)?;
         validated.push(
             validate_event_envelope_with_context(
                 state,
@@ -276,9 +275,17 @@ pub(super) async fn submit_realm_bootstrap_batch(
             format!("Realm bootstrap Control Proposal Acks unavailable: {error}"),
         )
     })?;
+    let mut accepted_envelopes = Vec::with_capacity(envelopes.len());
+    for (envelope, parsed) in envelopes.iter().cloned().zip(&validated) {
+        accepted_envelopes.push(
+            super::value::accepted_event_envelope(state, session, envelope, parsed, received_at)
+                .await?
+                .0,
+        );
+    }
     let records = validated
         .iter()
-        .zip(envelopes.iter().cloned())
+        .zip(accepted_envelopes.iter().cloned())
         .map(|(parsed, envelope)| canonical_record(parsed, envelope, received_at))
         .collect::<Vec<_>>();
     // Build the federation delivery intents *before* the commit so they land in
@@ -289,10 +296,9 @@ pub(super) async fn submit_realm_bootstrap_batch(
         direct_conversation_founding_fanout_records(
             state,
             &validated,
-            &envelopes,
+            &accepted_envelopes,
             &context.receipt,
             &context.founding_authority_evidence,
-            &context.source_service_binding,
             &control_proposal_acks,
         )
         .await
@@ -306,7 +312,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     } else if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
-        peer_event_batch_fanout_records(state, &validated, &envelopes)
+        peer_event_batch_fanout_records(state, &validated, &accepted_envelopes)
             .await
             .map_err(|error| {
                 SubmitOneError::new(

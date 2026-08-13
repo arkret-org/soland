@@ -117,7 +117,7 @@ async fn signal_requires_active_authorized_device_signature() {
     let mut device = state
         .test_persistence()
         .devices()
-        .get(ALICE, ALICE_DEVICE)
+        .get(fixture_actor_core_id(ALICE).as_str(), ALICE_DEVICE)
         .await
         .unwrap()
         .unwrap();
@@ -441,7 +441,7 @@ async fn push_profile_and_moderation_contracts_work() {
         serde_json::json!({
             "key": "ak.push_rules",
             "expected_revision": 0,
-            "owner": "did:web:alice.example",
+            "owner": fixture_actor_core_id("did:web:alice.example"),
             "body": {
                 "rules": [{
                     "rule_id": "mute-device",
@@ -572,7 +572,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
             })))
             .send(&app_from_state(state.clone()))
             .await;
-    assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 400);
+    assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 422);
 
     // The strictest possible declared preference, stored the only way it may be
     // stored: opaque to this service.
@@ -581,7 +581,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
         .account_data()
         .compare_and_set(
             &soland_storage::AccountDataRecord {
-                actor: ALICE.to_owned(),
+                actor: fixture_actor_core_id(ALICE).to_string(),
                 account_data_key: "ak.presence.visibility".to_owned(),
                 revision: 1,
                 payload: serde_json::json!({
@@ -681,8 +681,10 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
     let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
     let envelope = alice_signal(&seal_ref, "typing", &signing_key);
-    let accepted = post_signal(state.clone(), &token, &envelope).await;
-    assert_eq!(accepted.status_code, Some(StatusCode::OK));
+    let mut accepted = post_signal(state.clone(), &token, &envelope).await;
+    let status = accepted.status_code;
+    let body = accepted.take_string().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "signal response: {body}");
 
     let relayed = state
         .test_persistence()
@@ -698,7 +700,10 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
             realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap()
         }
     );
-    assert_eq!(relayed[0].sender_actor_id, ALICE);
+    assert_eq!(
+        relayed[0].sender_actor_id,
+        fixture_actor_core_id(ALICE).as_str()
+    );
     assert_eq!(relayed[0].sender_device_id, ALICE_DEVICE);
     assert_eq!(
         relayed[0].envelope, envelope,
@@ -771,7 +776,7 @@ async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() 
 
     let delivered = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert_eq!(delivered.len(), 1, "Bob receives the Signal once");
-    assert_eq!(delivered[0].sender_actor_id.as_str(), ALICE);
+    assert_eq!(delivered[0].sender_actor_id, fixture_actor_core_id(ALICE));
 
     let repeat = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert!(
@@ -867,15 +872,18 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     .await;
     assert_eq!(allowed.status_code, Some(StatusCode::OK));
 
-    soland_http::authz::install_projected_grant(
+    let mut grant = soland_http::authz::install_projected_grant(
         state.test_authz(),
         DEMO_REALM_ID.to_owned(),
-        bob.to_owned(),
-        bob.to_owned(),
+        fixture_actor_core_id(bob).to_string(),
+        fixture_actor_core_id(bob).to_string(),
         DEMO_REALM_ID.to_owned(),
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
+    grant.issuer_principal_server_id = state.service_id().clone();
+    grant.subject_principal_server_id = Some(state.service_id().clone());
+    state.test_authz().upsert_projected_grant(grant);
     let granted = post_signal(
         state.clone(),
         &token,
@@ -991,7 +999,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
         serde_json::json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "owner": bob,
+            "owner": fixture_actor_core_id(bob),
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],
@@ -1049,7 +1057,10 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
         1,
         "the blocklist is not a server-side fanout filter: Bob receives the          ciphertext and fails closed after decrypting it"
     );
-    assert_eq!(bob_delivered[0].sender_actor_id.as_str(), ALICE);
+    assert_eq!(
+        bob_delivered[0].sender_actor_id,
+        fixture_actor_core_id(ALICE)
+    );
 }
 
 /// Restates `ephemeral_call_signal_enforces_structural_contract`.

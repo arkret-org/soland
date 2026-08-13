@@ -1728,7 +1728,7 @@ mod tests {
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
         let actor_id = arkret_identifiers::DidFullId::new("did:web:agent.example").unwrap();
         let actor_core_id = arkret_wire::project_full_id_to_core_id(&actor_id).unwrap();
-        arkret_wire::test_support::raw_event(
+        crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1807,7 +1807,7 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap();
         let actor_id = arkret_identifiers::DidFullId::new("did:web:invitee.example").unwrap();
-        let event = arkret_wire::test_support::raw_event(
+        let event = crate::test_event::raw_event(
             arkret_wire::EventKind::InviteAccept.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),

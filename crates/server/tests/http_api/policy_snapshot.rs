@@ -16,7 +16,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_kind": "soland",
@@ -90,7 +90,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_kind": "soland",
@@ -127,7 +127,7 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": "did:web:alice.example",
+            "actor_id": fixture_actor_core_id("did:web:alice.example"),
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
                 "service_kind": "soland",

@@ -446,7 +446,10 @@ async fn events_describe_and_single_event_submit_work() {
     let committed_idempotency = state
         .test_persistence()
         .idempotency_keys()
-        .get("did:web:alice.example", "single-event-atomic-commit")
+        .get(
+            fixture_actor_core_id("did:web:alice.example").as_str(),
+            "single-event-atomic-commit",
+        )
         .await
         .unwrap()
         .expect("accepted event commits its idempotent response");
@@ -533,7 +536,7 @@ async fn events_describe_and_single_event_submit_work() {
                     "profile": "discussion"
                 }
             },
-            "created_by": "did:web:alice.example",
+            "created_by": fixture_actor_core_id("did:web:alice.example"),
             "created_at": "2026-05-17T00:00:00.000Z"
         }
     });
@@ -564,7 +567,10 @@ async fn events_describe_and_single_event_submit_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(artifact_kind_submitted["status"], "accepted");
+    assert_eq!(
+        artifact_kind_submitted["status"], "accepted",
+        "response: {artifact_kind_submitted}"
+    );
 
     let mut unknown_schema = signed_event_envelope(
         "ak:event:ATsZ3vasJNhrTVCtZDqkPNZOffJwkjo0lE5CcbfNfpeC",
@@ -632,7 +638,10 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     let listed: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"actors": ["did:web:alice.example"], "limit": 20}))
+        .json(&serde_json::json!({
+            "actors": [fixture_actor_core_id("did:web:alice.example")],
+            "limit": 20
+        }))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -640,9 +649,10 @@ async fn events_describe_and_single_event_submit_work() {
         .await
         .unwrap();
     // Alice authored three Events here after the ordinary Realm's eight-Event
-    // closed bootstrap unit.
+    // closed bootstrap unit and the PCR create/authorize pair projected by
+    // `dev_token` for strict principal-device proof verification.
     let listed_events = listed["events"].as_array().unwrap();
-    assert_eq!(listed_events.len(), 11);
+    assert_eq!(listed_events.len(), 13);
     assert_eq!(listed_events[0]["kind"], "ak.realm.create");
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
@@ -653,7 +663,9 @@ async fn events_describe_and_single_event_submit_work() {
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": "did:web:alice.example"}))
+            .json(&serde_json::json!({
+                "actor_id": fixture_actor_core_id("did:web:alice.example")
+            }))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await
@@ -665,11 +677,19 @@ async fn events_describe_and_single_event_submit_work() {
     else {
         panic!("actor-only selector must return non-authoring aggregate");
     };
-    assert_eq!(frontier.actor_id.as_str(), "did:web:alice.example");
-    assert_eq!(frontier.realms.len(), 1);
-    assert_eq!(frontier.realms[0].next_actor_seq, 11);
     assert_eq!(
-        frontier.realms[0].frontier_event_ids[0].as_str(),
+        frontier.actor_id,
+        fixture_actor_core_id("did:web:alice.example")
+    );
+    assert_eq!(frontier.realms.len(), 2);
+    let demo_frontier = frontier
+        .realms
+        .iter()
+        .find(|frontier| frontier.realm_id.as_str() == DEMO_REALM_ID)
+        .expect("actor aggregate includes demo Realm frontier");
+    assert_eq!(demo_frontier.next_actor_seq, 11);
+    assert_eq!(
+        demo_frontier.frontier_event_ids[0].as_str(),
         artifact_kind_event_id
     );
 
@@ -927,12 +947,18 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
             "the root copies the signed create payload's registry basis verbatim"
         );
         assert!(
-            projection.actor_holds_effective_realm_owner(&realm_id, &actor, chrono::Utc::now()),
+            projection.actor_holds_effective_realm_owner(
+                &realm_id,
+                &actor,
+                &actor,
+                chrono::Utc::now(),
+            ),
             "the authority-root controller holds effective ak.realm.owner"
         );
         assert!(
             !projection.actor_holds_effective_realm_owner(
                 &realm_id,
+                "did:web:mallory.example",
                 "did:web:mallory.example",
                 chrono::Utc::now()
             ),
@@ -1438,7 +1464,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let token = "managed-agent-governance-session";
     super::agents::seed_controller_session(&state, token, controller_id).await;
     super::agents::seed_agent_provision_prerequisites(&state, controller_id).await;
-    let controller_authority_instance =
+    let controller_authority =
         super::agents::seed_active_controller_device_generation(&state, controller_id).await;
 
     // Agent provisioning is the spec-defined prepare/commit transcript. Reuse
@@ -1448,7 +1474,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &state,
         token,
         controller_id,
-        &controller_authority_instance,
+        &controller_authority,
         "governance-recovery",
         serde_json::json!({
             "actions": [
@@ -1524,6 +1550,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         // Realm id is derived from the exact create Event.
         arkret_wire::ScopeRef::RealmGenesis,
         arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
+        soland_test_support::fixture_principal_server_id(),
         0,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::to_value(create_payload).unwrap(),
@@ -1754,6 +1781,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
         },
         arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
+        soland_test_support::fixture_principal_server_id(),
         2,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
         serde_json::json!({
@@ -1913,9 +1941,17 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     .await;
     let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
     let payload = serde_json::json!({
-        "invitee": "did:web:carol.example",
+        "invitee": fixture_actor_core_id("did:web:carol.example"),
         "invite_delivery_target": {
-            "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            "recipient_service_id": state.service_id(),
+            "service_resolution": {
+                "current_record_url": format!(
+                    "https://soland.local{}",
+                    arkret_models_identity::canonical_service_current_record_path(
+                        &arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap()
+                    )
+                )
+            },
             "recipient_service_kind": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -1972,7 +2008,10 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         .unwrap()
         .expect("invite projected");
     assert_eq!(projected.status, "pending");
-    assert_eq!(projected.invitee.as_deref(), Some("did:web:carol.example"));
+    assert_eq!(
+        projected.invitee.as_deref(),
+        Some(fixture_actor_core_id("did:web:carol.example").as_str())
+    );
     assert_eq!(
         projected.introduction_evidence_digest.as_deref(),
         payload["introduction_evidence_digest"].as_str()

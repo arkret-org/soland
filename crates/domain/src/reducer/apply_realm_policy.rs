@@ -497,19 +497,6 @@ impl ProjectionState {
         ProjectionEffect::RealmPolicyBundleProjected { realm_id }
     }
 
-    pub(crate) fn apply_realm_disappearing_policy(
-        &mut self,
-        operation: &Operation,
-    ) -> ProjectionEffect {
-        let realm_id = operation.realm_id.to_string();
-        self.set_realm_null_subject_cell(
-            &realm_id,
-            arkret_wire::CellFamilyId::REALM_DISAPPEARING_POLICY_V1,
-            operation.payload.clone(),
-        );
-        ProjectionEffect::RealmDisappearingPolicyProjected { realm_id }
-    }
-
     pub(crate) fn apply_realm_search_policy(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = state_payload_value(&operation.payload).clone();

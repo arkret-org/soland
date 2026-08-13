@@ -1112,7 +1112,7 @@ mod tests {
         if let Some(invitee) = invitee {
             payload["invitee"] = json!(invitee);
         }
-        arkret_wire::test_support::raw_event(
+        crate::test_event::raw_event(
             arkret_wire::EventKind::InviteCancel.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(CANCEL_REALM).unwrap(),
@@ -1368,7 +1368,7 @@ mod tests {
                 .invite_member_is_invited(realm_id.as_str(), invitee)
         );
 
-        let mut event = arkret_wire::test_support::raw_event_at(
+        let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::InviteCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),

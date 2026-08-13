@@ -35,14 +35,14 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let signer_key_evidence = internal_admission.and_then(|admission| {
-        admission.signer_key_evidence(session, object, envelope.signature.kid.as_str())
+    let producer_signing_key = internal_admission.and_then(|admission| {
+        admission.federated_producer_signing_key(session, object, envelope.signature.kid.as_str())
     });
     crate::routing::identity::device_signing::verify_mls_welcome_claim_envelope_signature(
         state,
         &envelope,
         sender_device_id,
-        signer_key_evidence,
+        producer_signing_key,
     )
     .await
     .err()

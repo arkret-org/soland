@@ -167,7 +167,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
 pub(crate) async fn seed_active_controller_device_generation(
     state: &AppState,
     controller: &str,
-) -> arkret_wire::PrincipalAuthorityInstance {
+) -> arkret_wire::PrincipalAuthorityKey {
     let now = chrono::Utc::now();
     let generation_ref = "1";
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
@@ -219,6 +219,8 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: controller_id.clone(),
             principal_full_id: actor.clone(),
+            principal_server_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+                .unwrap(),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -243,13 +245,10 @@ pub(crate) async fn seed_active_controller_device_generation(
     .unwrap();
     let realm = arkret_identifiers::RealmId::from_event_id(&bootstrap.event_id);
     let realm_id = realm.to_string();
-    let authority_instance = arkret_wire::PrincipalAuthorityInstance::new(
+    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
         bootstrap.actor_id.clone(),
         arkret_wire::DidCoreId::new(state.service_id().to_owned()).unwrap(),
-        realm.clone(),
-        arkret_wire::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
-    )
-    .unwrap();
+    );
     let verification_method =
         arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
             .expect("fixture verification method is a DID URL");
@@ -275,6 +274,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             realm_id: realm.clone(),
         },
         controller_id.clone(),
+        soland_test_support::fixture_principal_server_id(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -317,7 +317,8 @@ pub(crate) async fn seed_active_controller_device_generation(
             .unwrap();
     }
     let resolution_record = soland_storage::PrincipalResolutionRecord {
-        authority_instance: authority_instance.clone(),
+        authority_key: authority_key.clone(),
+        pcr_realm_id: realm.clone(),
         genesis_event: bootstrap.clone(),
         current_event: bootstrap.clone(),
         projection: arkret_models_identity::PrincipalResolutionProjection {
@@ -398,7 +399,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         })
         .await
         .unwrap();
-    authority_instance
+    authority_key
 }
 
 pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
@@ -529,7 +530,7 @@ pub(super) async fn provision_agent_with_sdk_events(
     state: &AppState,
     token: &str,
     controller: &str,
-    controller_authority_instance: &arkret_wire::PrincipalAuthorityInstance,
+    controller_authority: &arkret_wire::PrincipalAuthorityKey,
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
@@ -537,7 +538,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         state,
         token,
         controller,
-        controller_authority_instance,
+        controller_authority,
         slug,
         requested_scope,
         None,
@@ -561,7 +562,7 @@ fn provision_agent_sdk_commit_attempt<'a>(
     state: &'a AppState,
     token: &'a str,
     controller: &'a str,
-    controller_authority_instance: &'a arkret_wire::PrincipalAuthorityInstance,
+    controller_authority: &'a arkret_wire::PrincipalAuthorityKey,
     slug: &'a str,
     requested_scope: Value,
     fault: Option<(
@@ -579,7 +580,7 @@ fn provision_agent_sdk_commit_attempt<'a>(
         state,
         token,
         controller,
-        controller_authority_instance,
+        controller_authority,
         slug,
         requested_scope,
         fault,
@@ -590,7 +591,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     state: &AppState,
     token: &str,
     controller: &str,
-    controller_authority_instance: &arkret_wire::PrincipalAuthorityInstance,
+    controller_authority: &arkret_wire::PrincipalAuthorityKey,
     slug: &str,
     requested_scope: Value,
     fault: Option<(
@@ -645,7 +646,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             operation_id: operation_id.clone(),
             idempotency_key: idempotency_key.clone(),
             full_id: full_id.clone(),
-            controller_authority_instance: controller_authority_instance.clone(),
+            controller_authority: controller_authority.clone(),
             slug: slug.to_owned(),
             requested_scope: scope.clone(),
             pairing_ttl_ms: None,
@@ -734,6 +735,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         agent_id.clone(),
+        soland_test_support::fixture_principal_server_id(),
         0,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0000-a13f9c2e")).unwrap(),
         serde_json::to_value(create_payload).unwrap(),
@@ -787,6 +789,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_identity::handle::HandleVisibility::Private,
         None,
         arkret_bootstrap::AgentProvisionEventDraftOptions {
+            controller_principal_server_id: arkret_identifiers::DidCoreId::new(
+                state.service_id().to_owned(),
+            )
+            .unwrap(),
             created_at: now,
             actor_seq: next_actor_seq,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
@@ -1046,14 +1052,13 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
     let token = "prod-agent-provision-session";
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority_instance =
-        seed_active_controller_device_generation(&state, controller).await;
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let (status, body) = provision_agent_with_sdk_events(
         &state,
         token,
         controller,
-        &controller_authority_instance,
+        &controller_authority,
         "production-agent",
         serde_json::json!({
                 "actions": [
@@ -1119,11 +1124,29 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         )
         .unwrap();
         event.validate_proof_bindings().unwrap();
-        assert_eq!(event.proofs.len(), 1);
+        assert_eq!(event.proofs.len(), 2);
+        assert_eq!(
+            event
+                .proofs
+                .iter()
+                .filter(|proof| proof.as_producer().is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            event
+                .proofs
+                .iter()
+                .filter(|proof| proof.as_principal_server_admission().is_some())
+                .count(),
+            1
+        );
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         arkret_signatures::verify_ed25519_detached_jws_proof(
-            &event.proofs[0],
+            event.proofs[0]
+                .as_producer()
+                .expect("provision Event carries a producer proof"),
             &canonical_bytes,
             &event.actor_id,
             &public_key,
@@ -1157,7 +1180,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         let token = format!("agent-provision-fault-{index}");
         seed_controller_session(&state, &token, controller).await;
         seed_agent_provision_prerequisites(&state, controller).await;
-        let controller_authority_instance =
+        let controller_authority =
             seed_active_controller_device_generation(&state, controller).await;
 
         let requested_scope = serde_json::json!({
@@ -1178,7 +1201,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             &state,
             &token,
             controller,
-            &controller_authority_instance,
+            &controller_authority,
             &slug,
             requested_scope,
             Some((&injector, plan)),
@@ -1305,6 +1328,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             realm_id: controller_realm_id.clone(),
         },
         controller_id.clone(),
+        soland_test_support::fixture_principal_server_id(),
         1,
         hlc.clone(),
         serde_json::json!({}),
@@ -1395,8 +1419,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     let token = "agent-list-session";
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority_instance =
-        seed_active_controller_device_generation(&state, controller).await;
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let requested_scope = serde_json::json!({
         "actions": [
@@ -1426,7 +1449,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         &state,
         token,
         controller,
-        &controller_authority_instance,
+        &controller_authority,
         "summary",
         requested_scope.clone(),
     )
@@ -1524,7 +1547,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
                     .to_owned(),
             )
             .unwrap(),
-            controller_authority_instance: controller_authority_instance.clone(),
+            controller_authority: controller_authority.clone(),
             slug: "summary".to_owned(),
             requested_scope: duplicate_scope,
             pairing_ttl_ms: None,
@@ -1558,14 +1581,13 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
     let token = "agent-device-generation-session";
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
-    let controller_authority_instance =
-        seed_active_controller_device_generation(&state, controller).await;
+    let controller_authority = seed_active_controller_device_generation(&state, controller).await;
 
     let (status, body) = provision_agent_with_sdk_events(
         &state,
         token,
         controller,
-        &controller_authority_instance,
+        &controller_authority,
         "generation-bound",
         serde_json::json!({
                 "actions": ["ak.self.events.stream.subscribe"],

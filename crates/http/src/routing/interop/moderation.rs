@@ -102,11 +102,15 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             });
-    let mut event = arkret_event_draft::TypedEventDraft::<
-        arkret_wire::event_spec::SelfModerationReport,
-    >::new(event_scope, service_actor_id, typed_payload)
-    .and_then(|draft| draft.author(actor_seq, hlc, created_at))
-    .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
+    let mut event =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
+            event_scope,
+            service_actor_id.clone(),
+            service_actor_id,
+            typed_payload,
+        )
+        .and_then(|draft| draft.author(actor_seq, hlc, created_at))
+        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
     if let Some(max_actor_seq) = max_actor_seq {
         event.prev_refs = records
             .iter()
@@ -966,6 +970,7 @@ async fn moderation_routing_visible_to_actor(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
+                actor_principal_server_id: Some(state.service_id()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -1012,7 +1017,6 @@ mod report_safety_tests {
                 sender: REPORTER.to_owned(),
                 thread_id: REALM.to_owned(),
                 content: json!({ "kind": "ak.content.text", "body": "reported" }),
-                expiry: None,
                 encrypted: false,
                 operation_id: "ak:operation:01904100-0000-7000-8000-000000000777".to_owned(),
                 created_at: chrono::Utc::now(),

@@ -447,40 +447,6 @@ fn peer_event_partial_retry(
     }
     let retained_events: Vec<arkret_wire::Event> =
         request.transported_events().cloned().collect::<Vec<_>>();
-    request.signer_key_evidence.retain(|evidence| {
-        retained_events
-            .iter()
-            .any(|event| evidence.matches_event_proof(event, &evidence.verification_method))
-    });
-    if let Some(bundle) = &mut request.agent_signer_evidence_bundle {
-        bundle.evidence.retain(|evidence| {
-            let admission_evidence = match evidence {
-                arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
-                    admission_evidence,
-                    ..
-                }
-                | arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
-                    admission_evidence,
-                    ..
-                } => admission_evidence,
-            };
-            let binding = &admission_evidence
-                .agent_authority_snapshot
-                .core
-                .signing_key_binding;
-            retained_events.iter().any(|event| {
-                event.applet_id.is_none()
-                    && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
-                    && event.proofs.iter().any(|proof| {
-                        proof.verification_method == binding.verification_method.as_str()
-                    })
-            })
-        });
-        if bundle.evidence.is_empty() {
-            request.agent_signer_evidence_bundle = None;
-        }
-    }
-
     let required_targets = retained_events
         .iter()
         .flat_map(|event| {
@@ -1647,7 +1613,7 @@ mod tests {
             "2026-07-26T00:00:01.000Z".parse().unwrap();
 
         let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
-            let mut event = arkret_wire::test_support::raw_event_at(
+            let mut event = crate::test_event::raw_event_at(
                 arkret_wire::EventKind::MessageCreate.as_str(),
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),
@@ -1676,17 +1642,20 @@ mod tests {
                 .expect("fixture Event id follows the completed digest payload");
             let event_digest =
                 arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
-            event.proofs = vec![arkret_wire::primitives::Proof {
-                kind: "detached_jws".to_owned(),
-                verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
-                    .unwrap(),
-                event_digest: event_digest.clone(),
-                created_at: issued_at,
-                domain: None,
-                audience: None,
-                proof_purpose: None,
-                jws: "a..b".to_owned(),
-            }];
+            event.proofs = vec![
+                arkret_wire::primitives::Proof {
+                    kind: "detached_jws".to_owned(),
+                    verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
+                        .unwrap(),
+                    event_digest: event_digest.clone(),
+                    created_at: issued_at,
+                    domain: None,
+                    audience: None,
+                    proof_purpose: None,
+                    jws: "a..b".to_owned(),
+                }
+                .into(),
+            ];
             let event_digest =
                 arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
 
@@ -1781,8 +1750,6 @@ mod tests {
                     submission("000000000002", "00000000ae02", "00000000ce02"),
                 ],
                 cba_proof_bundles: Vec::new(),
-                signer_key_evidence: Vec::new(),
-                agent_signer_evidence_bundle: None,
             };
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =

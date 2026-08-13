@@ -519,7 +519,6 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
     "service_discovery",
     "identity_registry",
     "identity_resolution",
-    "principal_service_binding",
     "events_sync",
     "peer_federation",
     "directory_discovery",

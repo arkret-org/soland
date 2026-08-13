@@ -7,9 +7,6 @@ mod payload_shape;
 
 pub(crate) use audit::append_encrypted_message_franking;
 pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
-pub(crate) use enrollment::{
-    project_federated_device_signing_key_evidence, validate_federated_device_signing_key_evidence,
-};
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;
 pub(in crate::routing) use envelope::validate_private_invite_envelope;

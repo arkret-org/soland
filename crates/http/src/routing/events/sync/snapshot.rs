@@ -1002,6 +1002,7 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
         }
         if is_equivocation {
             let Some(issuer) = winner_event.proofs.iter().find_map(|proof| {
+                let proof = proof.as_producer()?;
                 let (controller, _) = proof.verification_method.rsplit_once('#')?;
                 let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
                 (arkret_wire::project_full_id_to_core_id(&full_id)

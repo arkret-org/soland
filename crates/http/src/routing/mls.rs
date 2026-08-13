@@ -1006,77 +1006,40 @@ async fn verify_peer_claim_participant_authorization(
         })?;
     let key = {
         let device_id = requester_device_id;
-        if let Some(evidence) = body.requester_signing_key_evidence.as_ref() {
-            if evidence.actor_id.as_str() != body.requester.as_str()
-                || &evidence.device_id != device_id
-                || evidence.verification_method != verification_method.as_str()
-                || evidence
-                    .current_device_projection
-                    .device_record
-                    .device_authorize_event_id
-                    .as_ref()
-                    .is_none_or(|event_id| event_id.as_str() != device_authorize_event_id.as_str())
-            {
-                return reject("federated_evidence_binding");
-            }
-            if let Err(error) =
-                crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
-                    state, evidence,
-                )
-                .await
-            {
-                tracing::warn!(
-                    requester = %body.requester,
-                    target_principal_id = %body.target_principal_id,
-                    %error,
-                    "peer KeyPackage federated device evidence rejected"
-                );
-                return reject("federated_evidence_validation");
-            }
-            let Some(multibase) = evidence
-                .device_signing_key
-                .as_str()
-                .strip_prefix("did:key:")
-            else {
-                return reject("federated_evidence_key_format");
-            };
-            crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
-                .map_err(|_| peer_claim_failed())?
-        } else {
-            let facet = crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
+        let facet =
+            crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
                 state,
                 body.requester.as_str(),
                 device_id.as_str(),
             )
             .await
             .map_err(|error| AppError::internal(format!("requester device directory: {error}")))?;
-            if !matches!(
-                facet.status,
-                arkret_models_crypto::keys::DeviceStatus::Active
-            ) || facet
-                .device_authorize_event_id
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref()
-                != Some(device_authorize_event_id.as_str())
-                || !verification_method_binds_core_device(
-                    verification_method,
-                    &body.requester,
-                    device_id,
-                )
-            {
-                return reject("local_device_directory_binding");
-            }
-            let Some(multibase) = facet
-                .signing_key_did
-                .as_deref()
-                .and_then(|value| value.strip_prefix("did:key:"))
-            else {
-                return reject("local_device_directory_key_format");
-            };
-            crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
-                .map_err(|_| peer_claim_failed())?
+        if !matches!(
+            facet.status,
+            arkret_models_crypto::keys::DeviceStatus::Active
+        ) || facet
+            .device_authorize_event_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref()
+            != Some(device_authorize_event_id.as_str())
+            || !verification_method_binds_core_device(
+                verification_method,
+                &body.requester,
+                device_id,
+            )
+        {
+            return reject("local_device_directory_binding");
         }
+        let Some(multibase) = facet
+            .signing_key_did
+            .as_deref()
+            .and_then(|value| value.strip_prefix("did:key:"))
+        else {
+            return reject("local_device_directory_key_format");
+        };
+        crate::routing::identity::device_signing::decode_ed25519_key(multibase, "multibase")
+            .map_err(|_| peer_claim_failed())?
     };
     let signature_valid = crate::routing::identity::device_signing::ed25519_verify(
         &key,
@@ -1186,21 +1149,7 @@ async fn build_peer_claim_outcome(
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
-    let audience = arkret_wire::DidCoreId::new(source_service_id.to_owned())
-        .map_err(|error| AppError::internal(format!("source service id invalid: {error}")))?;
-    let evidence_request_digest = Hash::new(request_digest.to_owned())
-        .map_err(|error| AppError::internal(format!("request digest invalid: {error}")))?;
-    let claims = vec![
-        keypackage_claim_record(
-            state,
-            claimed,
-            body.claim_nonce.as_str(),
-            &audience,
-            "ak.peer.keys.keypackages.command.claim",
-            &evidence_request_digest,
-        )
-        .await?,
-    ];
+    let claims = vec![keypackage_claim_record(state, claimed, body.claim_nonce.as_str()).await?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
@@ -1693,21 +1642,8 @@ async fn claim_keypackages_for_request_inner(
         predicted.claimed_at = Some(now_secs);
         predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
         predicted.consumed_at = None;
-        let local_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("service core_id invalid: {error}")))?;
-        let evidence_request_digest = Hash::new(request_digest.clone())
-            .map_err(|error| AppError::internal(format!("request digest invalid: {error}")))?;
-        let claims = vec![
-            keypackage_claim_record(
-                state,
-                &predicted,
-                body.claim_nonce.as_str(),
-                &local_service_id,
-                "ak.self.keys.keypackages.command.claim",
-                &evidence_request_digest,
-            )
-            .await?,
-        ];
+        let claims =
+            vec![keypackage_claim_record(state, &predicted, body.claim_nonce.as_str()).await?];
         let outcome = KeyPackagesClaimOutcome {
             claim_receipt: self_keypackage_claim_receipt(state, &body, &claims, now())?,
             claims,
@@ -3423,9 +3359,6 @@ async fn keypackage_claim_record(
     state: &AppState,
     record: &MlsKeyPackageRow,
     claim_nonce: &str,
-    audience: &arkret_wire::DidCoreId,
-    operation_id: &str,
-    request_digest: &Hash,
 ) -> Result<KeyPackageClaimRecord, AppError> {
     let trust_binding = KeyPackageTrustBinding::from_row(record)?;
     let principal_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
@@ -3435,24 +3368,6 @@ async fn keypackage_claim_record(
     let device_signature =
         serde_json::from_value::<KeyOperationSignature>(record.device_signature.clone())
             .map_err(|error| AppError::internal(format!("invalid device_signature: {error}")))?;
-    let target_device_signing_key_evidence = if trust_binding.device_authorize_event_id.is_some() {
-        Some(
-            crate::jws_verify::federated_device_signing_key_evidence(
-                state,
-                &arkret_wire::DidCoreId::from(principal_id.clone()),
-                &device_id,
-                device_signature.kid.as_str(),
-            )
-            .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::FailedPrecondition, error)
-                    .with_wire_code("target_device_signing_key_evidence_unavailable")
-            })?,
-        )
-    } else {
-        None
-    };
-    let mut target_agent_signer_evidence = None;
     let (device_id, agent_id, agent_verification_method) = if trust_binding
         .agent_key_authorize_event_id
         .is_some()
@@ -3469,30 +3384,6 @@ async fn keypackage_claim_record(
         let method = arkret_wire::DidUrl::new(method).map_err(|error| {
             AppError::internal(format!("target Agent verification method invalid: {error}"))
         })?;
-        let verifier_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("service core_id invalid: {error}")))?;
-        let selector = agent_claim_evidence_selector(
-            &principal_id,
-            &method,
-            operation_id,
-            request_digest,
-            &verifier_id,
-            audience,
-            claim_nonce,
-            &record.keypackage_ref,
-            &record.keypackage_digest,
-        )?;
-        target_agent_signer_evidence = Some(
-            crate::routing::identity::agents::evidence::produce_current_agent_signer_evidence_for_request(
-                state,
-                &selector,
-            )
-            .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::FailedPrecondition, error.message)
-                    .with_wire_code("target_agent_signer_evidence_unavailable")
-            })?,
-        );
         (None, Some(principal_id.clone()), Some(method))
     } else {
         (Some(device_id), None, None)
@@ -3525,8 +3416,6 @@ async fn keypackage_claim_record(
             .map_err(|error| {
                 AppError::internal(format!("Agent authorization Event id invalid: {error}"))
             })?,
-        target_device_signing_key_evidence,
-        target_agent_signer_evidence,
         expires_at: match record.claim_expires_at_unix_ms {
             Some(expires_at_unix_ms) => unix_millis_datetime(expires_at_unix_ms)?,
             None => unix_timestamp_datetime(record.lifetime_not_after)?,
@@ -3723,7 +3612,7 @@ mod trust_binding_tests {
             "ak:realm:AYKC0LicsGtFBq78orvaQecIZl8Bxv9zAaV4Eg66tdIr".to_owned(),
         )
         .unwrap();
-        let authorize_event = arkret_wire::test_support::raw_event(
+        let authorize_event = crate::test_event::raw_event(
             arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             arkret_wire::DidCoreId::from(principal_core.clone()),

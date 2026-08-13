@@ -156,7 +156,7 @@ pub struct IdentityAnchorAccountSlot {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorSlot {
     pub actor_id: String,
-    pub authority_instance_digest: String,
+    pub principal_server_id: String,
     pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,
@@ -257,13 +257,13 @@ pub fn identity_anchor_slot_conflicts(
         else {
             return false;
         };
-        let candidate_authority_digest = record
+        let candidate_principal_server_id = record
             .envelope
-            .pointer("/payload/authority_instance/authority_instance_digest")
+            .pointer("/principal_server_id")
             .and_then(Value::as_str);
         let same_slot = candidate_generation == slot.new_device_generation;
         same_slot
-            && (candidate_authority_digest != Some(slot.authority_instance_digest.as_str())
+            && (candidate_principal_server_id != Some(slot.principal_server_id.as_str())
                 || record.canonical_digest != slot.reanchor_digest
                 || paired_replacement_authorize(record, records.iter().copied())
                     .map(|paired| paired.canonical_digest.as_str())
@@ -330,7 +330,7 @@ pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool 
             | arkret_wire::EventKind::CircleMemberState
             | arkret_wire::EventKind::InviteCreate
             | arkret_wire::EventKind::InviteAccept
-    ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
+    )
 }
 #[doc(hidden)]
 pub fn event_payload_field<'a>(envelope: &'a Value, field: &str) -> Option<&'a Value> {

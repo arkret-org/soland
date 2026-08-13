@@ -116,16 +116,21 @@ async fn verify_inbound_transaction_signature(
         ));
     }
 
-    // §7.3.1 anchor: when an active install exists, the signing key must be
-    // the installed package webhook key controlled by `source_service_id`.
-    // The no-install branch keeps authentication failure ordering stable; the
-    // request still fails the active-install gate below.
-    let install = active_install_for_service_id(state, &header_source).await?;
-    let verification_method = install
-        .as_ref()
-        .map(|install| applet_registration_verification_method(install, &header_source))
-        .transpose()?
-        .unwrap_or_else(|| format!("{header_source}#applet-service-key"));
+    // §7.3.1 anchor: the signing key comes only from an active installed
+    // registration. Without one there is no authenticated key source to try;
+    // reject at the registration gate instead of manufacturing a method URL
+    // from the Core service id.
+    let install = active_install_for_service_id(state, &header_source)
+        .await?
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "Source-Service-ID has no active effective install on this edge",
+            )
+            .with_status(StatusCode::FORBIDDEN)
+            .with_wire_code("applet_registration_unauthorized")
+            .with_top_level_reason("applet_registration_unauthorized")
+        })?;
+    let verification_method = applet_registration_verification_method(&install, &header_source)?;
 
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
@@ -178,14 +183,6 @@ async fn verify_inbound_transaction_signature(
     // §7.3.1: a verified signature is not yet authorisation — the
     // `Source-Service-ID` MUST also hit an active effective install whose
     // registration service DID equals it (§4b.1). fail closed otherwise.
-    let Some(install) = install else {
-        return Err(AppError::capability_denied(
-            "Source-Service-ID has no active effective install on this edge",
-        )
-        .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("applet_registration_unauthorized")
-        .with_top_level_reason("applet_registration_unauthorized"));
-    };
     let package = install
         .package
         .as_ref()
@@ -247,10 +244,18 @@ pub(super) fn applet_registration_verification_method(
         applet_signature_error_invalid("active applet install is missing package webhook auth")
     })?;
     let key_ref = package.webhook_auth.key_ref.trim();
-    let expected_fragment_prefix = format!("{source_service_id}#");
-    if key_ref.is_empty()
-        || (key_ref != source_service_id && !key_ref.starts_with(&expected_fragment_prefix))
-    {
+    let key_controller = key_ref
+        .split_once('#')
+        .map(|(controller, _)| controller)
+        .unwrap_or(key_ref);
+    let key_controller = arkret_identifiers::DidFullId::new(key_controller.to_owned())
+        .and_then(|full_id| arkret_identifiers::project_full_id_to_core_id(&full_id))
+        .map_err(|_| {
+            applet_signature_error_invalid(
+                "Applet webhook_auth.key_ref must name a resolvable DID verification method",
+            )
+        })?;
+    if key_ref.is_empty() || key_controller.as_str() != source_service_id {
         return Err(applet_signature_error_invalid(
             "Applet webhook_auth.key_ref must be controlled by Source-Service-ID",
         ));

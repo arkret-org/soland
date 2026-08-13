@@ -208,6 +208,15 @@ async fn validate_event_envelope_with_ingress(
             "actor_id must be a Core DidCoreId",
         ));
     }
+    let principal_server_id = event_string_field(object, &["principal_server_id"])
+        .and_then(|value| arkret_wire::DidCoreId::new(value).ok())
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_param",
+                "principal_server_id must be a Core DidCoreId",
+            )
+        })?;
     let actor_seq = object
         .get("actor_seq")
         .and_then(Value::as_u64)
@@ -574,6 +583,7 @@ async fn validate_event_envelope_with_ingress(
     validate_data_event_capability_refs(
         state,
         &actor_id,
+        principal_server_id.as_str(),
         &realm_id,
         &kind,
         object,
@@ -668,7 +678,7 @@ async fn validate_event_envelope_with_ingress(
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     event_semantic_refs(object, MAX_EVENT_REFS)?;
     validate_strand_watch_manage_others_levels(&kind, object, &actor_id)?;
-    validate_event_proofs(
+    let producer_signing_key = validate_event_proofs(
         object,
         state,
         session,
@@ -724,6 +734,7 @@ async fn validate_event_envelope_with_ingress(
         prev_refs,
         canonical_digest,
         canonical_bytes,
+        producer_signing_key: Some(producer_signing_key),
     })
 }
 
@@ -795,11 +806,8 @@ async fn enforce_device_generation_fence(
         .and_then(Value::as_str)
         && internal_admission.is_some_and(|admission| {
             admission
-                .signer_key_evidence(session, object, verification_method)
+                .federated_producer_signing_key(session, object, verification_method)
                 .is_some()
-                || admission
-                    .agent_signer_evidence(session, object, verification_method)
-                    .is_some()
         })
     {
         return Ok(());
@@ -1111,7 +1119,7 @@ mod security_frontier_material_tests {
             "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
         )
         .unwrap();
-        let mut event = arkret_wire::test_support::raw_event(
+        let mut event = crate::test_event::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id_str("did:web:alice.example"),
@@ -1147,7 +1155,7 @@ mod security_frontier_material_tests {
             "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
         )
         .unwrap();
-        let mut event = arkret_wire::test_support::raw_event(
+        let mut event = crate::test_event::raw_event(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id_str("did:web:alice.example"),

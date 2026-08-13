@@ -23,6 +23,7 @@ use super::*;
 pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
     state: &AppState,
     actor_id: &str,
+    principal_server_id: &str,
     realm_id: &str,
     kind: &str,
     object: &serde_json::Map<String, Value>,
@@ -139,9 +140,15 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     } else {
         actor_id
     };
+    let capability_subject_principal_server_id = if object.contains_key("applet_id") {
+        capability_subject
+    } else {
+        principal_server_id
+    };
     let effective_by_id = effective_historical_grants_for_subject(
         &historical_grants,
         capability_subject,
+        capability_subject_principal_server_id,
         realm_id,
         auth_time,
     );
@@ -172,7 +179,11 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             )
         })?;
-        if stored.subject != capability_subject || stored.realm_id != realm_id {
+        if stored.subject != capability_subject
+            || stored.subject_principal_server_id.as_deref()
+                != Some(capability_subject_principal_server_id)
+            || stored.realm_id != realm_id
+        {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "authorization_ref_scope",
@@ -617,6 +628,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
 pub(super) fn effective_historical_grants_for_subject(
     grants: &std::collections::BTreeMap<String, crate::authz::Grant>,
     actor_id: &str,
+    principal_server_id: &str,
     realm_id: &str,
     auth_time: chrono::DateTime<chrono::Utc>,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
@@ -625,6 +637,7 @@ pub(super) fn effective_historical_grants_for_subject(
         .iter()
         .filter(|grant| {
             grant.subject == actor_id
+                && grant.subject_principal_server_id.as_deref() == Some(principal_server_id)
                 && grant.realm_id == realm_id
                 && !grant.revoked
                 && crate::authz::grant_scope_valid(grant).is_ok()

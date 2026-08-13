@@ -173,8 +173,6 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),
-        signer_key_evidence: Vec::new(),
-        agent_signer_evidence_bundle: None,
     };
     let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
         &req.service_binding_ref,
@@ -203,8 +201,6 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),
-        signer_key_evidence: Vec::new(),
-        agent_signer_evidence_bundle: None,
     };
 
     SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)

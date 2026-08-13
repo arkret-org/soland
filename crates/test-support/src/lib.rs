@@ -11,9 +11,12 @@ use std::sync::{Arc, OnceLock};
 
 use arkret_identifiers::{CellRef, DidFullId, Hash, RealmId, SealId};
 use arkret_identity::service_identity::{
-    DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity,
+    DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity, StoredDidCoreIdentity,
 };
-use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+use arkret_models_identity::service_identity::{
+    CanonicalServiceUrl, ServiceDidDocument, ServiceDidEndpoint, ServiceDidVerificationMethod,
+    ServiceRegistrationKey, ServiceRegistrationReceipt,
+};
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
@@ -43,12 +46,15 @@ pub fn app_config() -> AppConfig {
 }
 
 pub fn app_state(config: AppConfig) -> AppState {
-    let persistence: Arc<dyn PersistenceStore> = if config.seed_demo_data {
-        Arc::new(SolandMemoryPersistenceStore::new_with_demo_data())
+    let identity = fixture_service_identity(&config);
+    let signing_seed = fixture_signing_seed(&config, &identity);
+    let persistence = if config.seed_demo_data {
+        SolandMemoryPersistenceStore::new_with_demo_data()
     } else {
-        Arc::new(SolandMemoryPersistenceStore::new())
+        SolandMemoryPersistenceStore::new()
     };
-    app_state_with_persistence(config, persistence)
+    persistence.seed_service_identity(fixture_stored_service_identity(&identity, signing_seed));
+    app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
 }
 
 /// Scoped control-seal coordinator for integration tests that require Seal
@@ -313,6 +319,19 @@ fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> 
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+#[must_use]
+pub fn fixture_principal_server_id() -> DidCoreId {
+    DidCoreId::from(
+        project_full_id_to_core_id(
+            &DidFullId::new(
+                "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            )
+            .expect("fixture service DID"),
+        )
+        .expect("fixture service projection"),
+    )
+}
+
 pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
         ServiceKind::PrincipalServer,
@@ -328,9 +347,7 @@ pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     .expect("fixture service DID");
     DidCoreIdentityState::Ready {
         identity: LocalDidCoreIdentity {
-            service_id: DidCoreId::from(
-                project_full_id_to_core_id(&full_id).expect("fixture service projection"),
-            ),
+            service_id: fixture_principal_server_id(),
             full_id,
             registration_key,
             provider: None,
@@ -342,6 +359,93 @@ pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
             last_verified_at: chrono::Utc::now(),
         },
     }
+}
+
+fn fixture_stored_service_identity(
+    state: &DidCoreIdentityState,
+    signing_seed: [u8; 32],
+) -> StoredDidCoreIdentity {
+    let identity = state
+        .identity()
+        .expect("fixture has a serving identity")
+        .clone();
+    let verification_method = format!("{}#notary-key", identity.full_id);
+    let did_document = ServiceDidDocument {
+        context: vec!["https://www.w3.org/ns/did/v1".to_owned()],
+        id: identity.full_id.clone(),
+        also_known_as: Vec::new(),
+        verification_method: vec![ServiceDidVerificationMethod {
+            id: verification_method.clone(),
+            method_type: "Multikey".to_owned(),
+            controller: identity.full_id.clone(),
+            public_key_multibase: arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+                    .verifying_key()
+                    .as_bytes(),
+            ),
+        }],
+        authentication: vec![verification_method.clone()],
+        assertion_method: vec![verification_method],
+        service: vec![ServiceDidEndpoint {
+            id: format!("{}#service", identity.full_id),
+            endpoint_type: "ArkretService".to_owned(),
+            service_kind: ServiceKind::PrincipalServer,
+            service_endpoint: identity.registration_key.public_base().clone(),
+        }],
+    };
+    let issued_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let provider_full_id =
+        DidFullId::new("did:webvh:z6mkfixture:provider.example:webvh:service".to_owned())
+            .expect("fixture provider DID");
+    let mut receipt = ServiceRegistrationReceipt {
+        registration_receipt_id: arkret_wire::ServiceRegistrationReceiptId::new(format!(
+            "ak:service_registration_receipt:{}",
+            "a".repeat(64)
+        ))
+        .expect("fixture receipt id"),
+        registration_key: identity.registration_key.clone(),
+        service_id: identity.service_id.clone(),
+        full_id: identity.full_id.clone(),
+        version_id: identity.version_id.clone(),
+        log_head_digest: format!("sha256:{}", "0".repeat(64)),
+        control_key_digest: format!("sha256:{}", "1".repeat(64)),
+        issued_at,
+        provider_service_id: project_full_id_to_core_id(&provider_full_id)
+            .expect("fixture provider projection"),
+        proof: arkret_wire::PayloadProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{provider_full_id}#service-key"
+            ))
+            .expect("fixture provider method"),
+            payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .expect("fixture receipt digest"),
+            created_at: issued_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: format!(
+                "eyJhbGciOiJFZDI1NTE5In0..{}",
+                arkret_canonical::base64url::base64url_encode([0_u8; 64])
+            ),
+        },
+    };
+    receipt.registration_receipt_id = receipt
+        .expected_registration_receipt_id()
+        .expect("fixture receipt id binding");
+    receipt.proof.payload_digest = receipt
+        .expected_payload_digest()
+        .expect("fixture receipt payload digest");
+    let stored = StoredDidCoreIdentity {
+        identity,
+        did_document,
+        registration_receipt: receipt,
+        stored_at: issued_at,
+    };
+    stored
+        .validate()
+        .expect("valid stored fixture service identity");
+    stored
 }
 
 #[derive(Default)]

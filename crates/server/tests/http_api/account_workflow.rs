@@ -26,7 +26,7 @@ fn sign_contact_draft(
     let actor = DidFullId::new(actor).unwrap();
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{device_id}")).unwrap();
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        signing_key,
+        signing_key.clone(),
         actor,
         verification_method.clone(),
     );
@@ -39,6 +39,24 @@ fn sign_contact_draft(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("sign prepared Contact Event");
+    let proof = event
+        .proofs
+        .iter()
+        .find_map(arkret_wire::EventProof::as_producer)
+        .expect("signed Contact producer proof");
+    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(&event)
+        .expect("Contact Event proof envelope bytes");
+    let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: signing_key.verifying_key().as_bytes().to_vec(),
+    };
+    arkret_signatures::verify_ed25519_detached_jws_proof(
+        proof,
+        &envelope_bytes,
+        &event.actor_id,
+        &public_key,
+    )
+    .expect("locally signed Contact proof verifies");
     event
 }
 
@@ -58,10 +76,13 @@ async fn post_contact_body<T: serde::Serialize>(
         .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.expect("Contact operation status");
-    let outcome = response
+    let outcome_value: Value = response
         .take_json()
         .await
-        .expect("typed Contact operation outcome");
+        .expect("Contact operation outcome JSON");
+    let outcome = serde_json::from_value(outcome_value.clone()).unwrap_or_else(|error| {
+        panic!("typed Contact operation outcome for {path}: {error}; {outcome_value}")
+    });
     (status, outcome)
 }
 
@@ -199,7 +220,10 @@ async fn account_viewer_returns_device_summaries() {
         .await
         .unwrap();
 
-    assert_eq!(viewer["principal_id"], "did:web:alice.example");
+    assert_eq!(
+        viewer["principal_id"],
+        fixture_actor_core_id("did:web:alice.example").as_str()
+    );
     assert_eq!(viewer["state"], "active");
     let devices = viewer["devices"].as_array().expect("viewer devices array");
     assert_eq!(devices.len(), 1);
@@ -234,7 +258,7 @@ async fn account_erasure_projects_erasure_pending_state() {
         "account erase response: {erased}"
     );
     assert_eq!(
-        state.account_lifecycle_state("did:web:alice.example"),
+        state.account_lifecycle_state(fixture_actor_core_id("did:web:alice.example").as_str()),
         "erasure_pending"
     );
 
@@ -248,7 +272,7 @@ async fn account_erasure_projects_erasure_pending_state() {
 }
 
 #[tokio::test]
-async fn local_account_register_duplicate_conflict_and_me_reads_state() {
+async fn repeated_account_projection_is_idempotent_and_me_reads_state() {
     let state = soland_test_support::app_state(test_config());
     let token = register_account(
         state.clone(),
@@ -258,15 +282,24 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
     )
     .await;
 
-    let duplicate = TestClient::post("http://server/_soland/self/account/register")
+    let bob_core = fixture_actor_core_id("did:web:bob.example");
+    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
-            "did": "did:web:bob.example",
-            "handle": "@bob",
+            "principal_id": bob_core,
+            "full_id": "did:web:bob.example",
+            "display_name": "bob",
             "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
+    assert_eq!(duplicate.status_code.unwrap(), StatusCode::OK);
+    let duplicate_body: Value = duplicate.take_json().await.unwrap();
+    assert_eq!(duplicate_body["principal_id"], bob_core.as_str());
 
     let me: Value = TestClient::get("http://server/_soland/self/account/me")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -275,7 +308,7 @@ async fn local_account_register_duplicate_conflict_and_me_reads_state() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(me["did"], "did:web:bob.example");
+    assert_eq!(me["did"], bob_core.as_str());
     assert_eq!(me["state"], "active");
 }
 
@@ -291,15 +324,18 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     )
     .await;
 
-    let lock: Value =
-        TestClient::post("http://server/_soland/admin/accounts/did:web:bob.example/lock")
-            .add_header("authorization", format!("Bearer {admin}"), true)
-            .json(&serde_json::json!({"reason": "suspicious_login"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let bob_core = fixture_actor_core_id("did:web:bob.example");
+    let lock: Value = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/lock",
+        bob_core.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"reason": "suspicious_login"}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(lock["state"], "locked");
 
     let mut old_me = TestClient::get("http://server/_soland/self/account/me")
@@ -312,7 +348,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
 
     let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": "did:web:bob.example",
+            "actor": bob_core,
             "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000002",
             "display_name": "bob"
         }))
@@ -329,15 +365,18 @@ async fn account_lifecycle_errors_surface_specific_codes() {
         "ak:device:01904100-0000-7000-8000-ca2010000003",
     )
     .await;
-    let suspend: Value =
-        TestClient::post("http://server/_soland/admin/accounts/did:web:carol.example/suspend")
-            .add_header("authorization", format!("Bearer {admin}"), true)
-            .json(&serde_json::json!({"reason": "abuse"}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
+    let carol_core = fixture_actor_core_id("did:web:carol.example");
+    let suspend: Value = TestClient::post(format!(
+        "http://server/_soland/admin/accounts/{}/suspend",
+        carol_core.as_str()
+    ))
+    .add_header("authorization", format!("Bearer {admin}"), true)
+    .json(&serde_json::json!({"reason": "abuse"}))
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
     assert_eq!(suspend["state"], "suspended");
 
     let suspended_me: Value = TestClient::get("http://server/_soland/self/account/me")
@@ -351,7 +390,7 @@ async fn account_lifecycle_errors_surface_specific_codes() {
 
     let mut suspended_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": "did:web:carol.example",
+            "actor": carol_core,
             "device_id": "ak:device:01904100-0000-7000-8000-ca2010000003",
             "display_name": "carol"
         }))
@@ -385,9 +424,10 @@ async fn account_lifecycle_errors_surface_specific_codes() {
     let deactivated_me_body: Value = deactivated_me.take_json().await.unwrap();
     assert_eq!(deactivated_me_body["error"]["code"], "account_deactivated");
 
+    let dave_core = fixture_actor_core_id("did:web:dave.example");
     let mut deactivated_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
-            "actor": "did:web:dave.example",
+            "actor": dave_core,
             "device_id": "ak:device:01904100-0000-7000-8000-da4e00000004",
             "display_name": "dave"
         }))
@@ -451,7 +491,8 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
     // placeholder until that possession-bound authorization is accepted.
     let state = soland_test_support::app_state(test_config());
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
-    let did = "did:web:bob.example";
+    let full_id = "did:web:bob.example";
+    let did = fixture_actor_core_id(full_id);
     let registered: Value = TestClient::post("http://server/_arkret/gate/account/register")
         .add_header(
             "authorization",
@@ -460,6 +501,7 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
         )
         .json(&serde_json::json!({
             "principal_id": did,
+            "full_id": full_id,
             "display_name": "bob",
             "device_id": founding_device,
         }))
@@ -469,10 +511,11 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
         .await
         .unwrap();
     assert_eq!(
-        registered["principal_id"], did,
+        registered["principal_id"],
+        did.as_str(),
         "register response: {registered}"
     );
-    let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
+    let token = dev_token_for_device(state.clone(), full_id, founding_device, "bob").await;
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -496,13 +539,14 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
 async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
-    let did = "did:web:bob-pcr-first.example";
+    let full_id = "did:web:bob-pcr-first.example";
+    let did = fixture_actor_core_id(full_id);
     let authorized_at = chrono::Utc::now();
     state
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: did.to_owned(),
+            actor: did.to_string(),
             device_id: device_id.to_owned(),
             display_name: None,
             verification_state: "verified".to_owned(),
@@ -526,7 +570,8 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did,
+            "principal_id": did.as_str(),
+            "full_id": full_id,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -537,7 +582,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
     let preserved = state
         .test_persistence()
         .devices()
-        .get(did, device_id)
+        .get(did.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -562,7 +607,8 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
 async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
-    let did = "did:web:bob-repeat.example";
+    let full_id = "did:web:bob-repeat.example";
+    let did = fixture_actor_core_id(full_id);
     let first = TestClient::post("http://server/_arkret/gate/account/register")
         .add_header(
             "authorization",
@@ -570,7 +616,8 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did,
+            "principal_id": did.as_str(),
+            "full_id": full_id,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -581,7 +628,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     let placeholder = state
         .test_persistence()
         .devices()
-        .get(did, device_id)
+        .get(did.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -610,7 +657,8 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did,
+            "principal_id": did.as_str(),
+            "full_id": full_id,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -621,7 +669,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
     let preserved = state
         .test_persistence()
         .devices()
-        .get(did, device_id)
+        .get(did.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -640,26 +688,43 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 async fn account_contacts_and_realm_lifecycle_workflow() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
+    let alice_core = fixture_actor_core_id("did:web:alice.example");
+    project_test_authorized_device(
+        &state,
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
+    .await;
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
     let bob = register_account(state.clone(), "did:web:bob.example", "@bob", bob_device_id).await;
     let bob_signing_key = test_ephemeral_device_signing_key("did:web:bob.example", bob_device_id);
-    seed_verified_device_with_public_key(
+    project_test_authorized_device(
         &state,
         "did:web:bob.example",
         bob_device_id,
-        &test_ed25519_multibase_public(&bob_signing_key),
+        &bob_signing_key,
     )
     .await;
 
-    let duplicate = TestClient::post("http://server/_soland/self/account/register")
+    let bob_core = fixture_actor_core_id("did:web:bob.example");
+    let mut duplicate = TestClient::post("http://server/_arkret/gate/account/register")
         .json(&serde_json::json!({
-            "did": "did:web:bob.example",
-            "handle": "@bob",
+            "principal_id": bob_core,
+            "full_id": "did:web:bob.example",
+            "display_name": "bob",
             "device_id": "ak:device:01904100-0000-7000-8000-b0b0b0000022"
         }))
+        .add_header(
+            "authorization",
+            format!("Bearer {ACCOUNT_REGISTER_BEARER}"),
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(duplicate.status_code.unwrap().as_u16(), 409);
+    assert_eq!(duplicate.status_code.unwrap(), StatusCode::OK);
+    let duplicate_body: Value = duplicate.take_json().await.unwrap();
+    assert_eq!(duplicate_body["principal_id"], bob_core.as_str());
 
     let hidden_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"query": "bob"}))
@@ -677,7 +742,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(me["did"], "did:web:bob.example");
+    assert_eq!(me["did"], bob_core.as_str());
 
     let (request_receipt, request_commit) = create_contact_request(&state, &alice).await;
     let duplicate_request =
@@ -753,7 +818,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(visible_bob["users"][0]["did"], "did:web:bob.example");
+    assert_eq!(
+        visible_bob["users"][0]["principal_id"],
+        bob_core.as_str(),
+        "visible directory result: {visible_bob}"
+    );
+    assert!(visible_bob["users"][0].get("did").is_none());
 
     let created_realm = seed_test_realm(
         &state,
@@ -797,7 +867,13 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(bob_invites["invites"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        bob_invites["invites"]
+            .as_array()
+            .unwrap_or_else(|| panic!("invite list response: {bob_invites}"))
+            .len(),
+        1
+    );
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     // invite.schema.json + decision 0008: a direct member invite (invitee is a
     // DID, no third_party_id) carries the recipient binding in
@@ -805,7 +881,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     // third-party/3PID invites and only holds a verification_service_id.
     assert_eq!(
         bob_invites["invites"][0]["invite_delivery_target"]["recipient_service_id"],
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
+        state.service_id().as_str()
     );
     assert_eq!(
         bob_invites["invites"][0]["join_rule_snapshot"]["introduction_evidence_digest"],
@@ -978,7 +1054,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|member| member["did"] == "did:web:bob.example")
+            .any(|member| member["did"] == bob_core.as_str())
     );
 
     let sent_message = submit_message_event(
@@ -1097,12 +1173,12 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
     assert!(
         synced_members
             .iter()
-            .any(|member| member["actor_id"] == "did:web:alice.example")
+            .any(|member| member["actor_id"] == alice_core.as_str())
     );
     assert!(
         synced_members
             .iter()
-            .any(|member| member["actor_id"] == "did:web:bob.example")
+            .any(|member| member["actor_id"] == bob_core.as_str())
     );
     assert_eq!(
         sync_with_message["realms"][&realm_id]["summary"]["joined_member_count"],
@@ -1330,20 +1406,17 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         assert!(!sessions.iter().any(|session| session.token_hash == bob));
         let bob_session = sessions
             .iter()
-            .find(|session| session.actor == "did:web:bob.example")
+            .find(|session| session.actor == bob_core.as_str())
             .expect("hashed bob session remains for revocation audit");
         assert_ne!(bob_session.token_hash, bob);
-        assert_eq!(
-            bob_session.audience,
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
-        );
+        assert_eq!(bob_session.audience, state.service_id().as_str());
         assert!(bob_session.revoked_at.is_some());
         bob_session.device_id.clone()
     };
     let bob_device = state
         .test_persistence()
         .devices()
-        .get("did:web:bob.example", &bob_device_id)
+        .get(bob_core.as_str(), &bob_device_id)
         .await
         .unwrap()
         .expect("hard logout preserves the durable device record");

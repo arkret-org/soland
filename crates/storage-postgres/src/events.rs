@@ -1393,11 +1393,8 @@ impl EventStore for PgEventStore {
         sql_query(
             "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
              FROM canonical_events \
-             WHERE state = 'accepted' AND ( \
+             WHERE state = 'accepted' AND \
                 kind IN ('ak.member.state', 'ak.circle.member.state', 'ak.invite.create', 'ak.invite.accept') \
-                OR (envelope #> '{payload,sync_endpoints}') IS NOT NULL \
-                OR (envelope #> '{payload,object,sync_endpoints}') IS NOT NULL \
-                OR (envelope #> '{payload,patch,sync_endpoints}') IS NOT NULL) \
              ORDER BY received_at ASC, id ASC",
         )
         .load::<CanonicalEventRow>(&mut *conn).await

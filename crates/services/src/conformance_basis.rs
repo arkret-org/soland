@@ -23,6 +23,7 @@ const CONFORMANCE_FIXTURE_ID_DOMAIN: &str = "soland:conformance:realm-basis:";
 
 /// Explicit inputs that distinguish one synthetic Realm basis from another.
 pub struct RealmBasisFixtureOptions<'a> {
+    pub principal_server_id: &'a str,
     pub notary_authority: Option<&'a str>,
     pub data_plane_actions: &'a [String],
     pub fixture_id_domain: &'a str,
@@ -77,6 +78,7 @@ pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 5] = [
 pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
+    principal_server_id: &str,
     notary_authority: Option<&str>,
     data_plane_actions: &[String],
 ) -> Result<ConformanceRealmBasis, String> {
@@ -84,6 +86,7 @@ pub fn build_conformance_realm_basis(
         realm_id,
         subject,
         RealmBasisFixtureOptions {
+            principal_server_id,
             notary_authority,
             data_plane_actions,
             fixture_id_domain: CONFORMANCE_FIXTURE_ID_DOMAIN,
@@ -100,6 +103,7 @@ pub fn build_realm_basis(
     options: RealmBasisFixtureOptions<'_>,
 ) -> Result<ConformanceRealmBasis, String> {
     let RealmBasisFixtureOptions {
+        principal_server_id,
         notary_authority,
         data_plane_actions,
         fixture_id_domain,
@@ -267,7 +271,13 @@ pub fn build_realm_basis(
             ),
         ));
     }
-    let owner_grant_body = grant_body(&owner_grant_id, realm_id, subject, &owner_actions)?;
+    let owner_grant_body = grant_body(
+        &owner_grant_id,
+        realm_id,
+        subject,
+        principal_server_id,
+        &owner_actions,
+    )?;
     ops.push((
         capability_grant_cell(&owner_grant_id)?,
         issued_op(
@@ -285,6 +295,7 @@ pub fn build_realm_basis(
             &content_grant_id,
             realm_id,
             subject,
+            principal_server_id,
             &explicit_content_actions,
         )?;
         ops.push((
@@ -440,6 +451,7 @@ fn grant_body(
     grant_id: &str,
     realm_id: &str,
     subject: &str,
+    principal_server_id: &str,
     actions: &[String],
 ) -> Result<Value, String> {
     Ok(serde_json::json!({
@@ -447,7 +459,9 @@ fn grant_body(
         "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
         "issuer": subject,
+        "issuer_principal_server_id": principal_server_id,
         "subject": subject,
+        "subject_principal_server_id": principal_server_id,
         "actions": actions,
         "issuer_authority_refs": [{
             "kind": "realm_root",
@@ -487,6 +501,7 @@ mod tests {
                 realm_id,
                 subject,
                 RealmBasisFixtureOptions {
+                    principal_server_id: "ak:did_core:web:principal-server.example",
                     notary_authority: notary,
                     data_plane_actions: &actions,
                     fixture_id_domain: domain,
@@ -530,8 +545,14 @@ mod tests {
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
         let subject = "did:web:soland.example";
         let action = "ak.message.create".to_owned();
-        let body = grant_body(grant_id, realm_id, subject, std::slice::from_ref(&action))
-            .expect("canonical conformance grant");
+        let body = grant_body(
+            grant_id,
+            realm_id,
+            subject,
+            "ak:did_core:web:principal-server.example",
+            std::slice::from_ref(&action),
+        )
+        .expect("canonical conformance grant");
 
         assert_eq!(
             body.get("schema").and_then(Value::as_str),

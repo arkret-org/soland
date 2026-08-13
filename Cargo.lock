@@ -5456,6 +5456,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "parking_lot",

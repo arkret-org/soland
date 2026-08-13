@@ -1073,6 +1073,7 @@ diesel::table! {
     recovery_sessions (id) {
         id -> Uuid,
         principal_id -> Text,
+        principal_server_id -> Text,
         requesting_device_id -> Text,
         trust_domain -> Text,
         policy_id -> Uuid,
@@ -1182,12 +1183,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    principal_resolutions (authority_instance_digest) {
-        authority_instance_digest -> Text,
+    principal_resolutions (principal_id, principal_server_id) {
         principal_id -> Text,
         principal_server_id -> Text,
         pcr_realm_id -> Text,
-        principal_genesis_receipt_digest -> Text,
         genesis_event_id -> Text,
         current_event_id -> Text,
         projection -> Jsonb,
@@ -1196,8 +1195,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    principal_resolution_events (authority_instance_digest, event_id) {
-        authority_instance_digest -> Text,
+    principal_resolution_events (principal_id, principal_server_id, event_id) {
+        principal_id -> Text,
+        principal_server_id -> Text,
         event_id -> Text,
         previous_event_id -> Nullable<Text>,
         method_history_head -> Text,
@@ -1457,7 +1457,6 @@ diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
-diesel::joinable!(principal_resolution_events -> principal_resolutions (authority_instance_digest));
 diesel::allow_tables_to_appear_in_same_query!(
     account_datas,
     account_lifecycle,

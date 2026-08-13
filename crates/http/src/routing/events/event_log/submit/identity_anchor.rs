@@ -174,6 +174,7 @@ pub(super) async fn submit_identity_anchor_batch(
     };
 
     let first_contexts = identity_anchor_head_context.as_slice();
+    super::value::validate_origin_submission_shape(state, session, &envelopes[0])?;
     let first =
         validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
             .await?;
@@ -206,6 +207,7 @@ pub(super) async fn submit_identity_anchor_batch(
         is_bootstrap,
     )?;
     let second_contexts = std::slice::from_ref(&identity_anchor_context);
+    super::value::validate_origin_submission_shape(state, session, &envelopes[1])?;
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
@@ -438,9 +440,29 @@ pub(super) async fn submit_identity_anchor_batch(
         .iter()
         .map(|record| record.ingress_receipt.clone())
         .collect::<Vec<_>>();
+    let accepted_envelopes = vec![
+        super::value::accepted_event_envelope(
+            state,
+            session,
+            envelopes[0].clone(),
+            &first,
+            received_at,
+        )
+        .await?
+        .0,
+        super::value::accepted_event_envelope(
+            state,
+            session,
+            envelopes[1].clone(),
+            &second,
+            received_at,
+        )
+        .await?
+        .0,
+    ];
     let records = vec![
-        canonical_record(&first, envelopes[0].clone(), received_at),
-        canonical_record(&second, envelopes[1].clone(), received_at),
+        canonical_record(&first, accepted_envelopes[0].clone(), received_at),
+        canonical_record(&second, accepted_envelopes[1].clone(), received_at),
     ];
     let authorized_generation_ref = if reanchor_conflict {
         None
@@ -542,10 +564,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.clone(),
-            authority_instance_digest: payload
-                .authority_instance
-                .authority_instance_digest
-                .to_string(),
+            principal_server_id: payload.authority.principal_server_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
@@ -559,7 +578,10 @@ pub(super) async fn submit_identity_anchor_batch(
     let deliveries = identity_anchor_fanout_records(
         state,
         session,
-        &[(&first, &envelopes[0]), (&second, &envelopes[1])],
+        &[
+            (&first, &accepted_envelopes[0]),
+            (&second, &accepted_envelopes[1]),
+        ],
         &control_proposal_acks,
         &publication_evidence,
     )
@@ -951,9 +973,14 @@ pub(super) async fn identical_historical_retry(
         return Ok(None);
     }
     if existing.iter().zip(candidates).all(|(record, candidate)| {
-        record
-            .as_ref()
-            .is_some_and(|record| record.canonical_bytes == candidate.canonical_bytes)
+        record.as_ref().is_some_and(|record| {
+            record.canonical_bytes == candidate.canonical_bytes
+                || serde_json::from_slice::<Value>(&candidate.canonical_bytes).is_ok_and(
+                    |submitted| {
+                        super::value::exact_producer_retry(&record.canonical_bytes, &submitted)
+                    },
+                )
+        })
     }) {
         if ids.iter().any(|id| EventId::new(id.clone()).is_err()) {
             return Err(unit_error("stored identity anchor Event id is invalid"));
@@ -1057,8 +1084,8 @@ fn conflicting_reanchor_slot(
     else {
         return Vec::new();
     };
-    let Some(authority_instance_digest) = reanchor_envelope
-        .pointer("/payload/authority_instance/authority_instance_digest")
+    let Some(principal_server_id) = reanchor_envelope
+        .pointer("/principal_server_id")
         .and_then(Value::as_str)
     else {
         return Vec::new();
@@ -1076,14 +1103,14 @@ fn conflicting_reanchor_slot(
             if candidate_generation != Some(new_generation) {
                 return false;
             }
-            let candidate_authority_digest = record
+            let candidate_principal_server_id = record
                 .envelope
-                .pointer("/payload/authority_instance/authority_instance_digest")
+                .pointer("/principal_server_id")
                 .and_then(Value::as_str);
             let candidate_authorize_digest =
                 soland_services::events::paired_replacement_authorize(record, existing)
                     .map(|paired| paired.canonical_digest.as_str());
-            candidate_authority_digest != Some(authority_instance_digest)
+            candidate_principal_server_id != Some(principal_server_id)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
@@ -2001,17 +2028,20 @@ mod tests {
 
     fn attach_bootstrap_fixture_proof(event: &mut arkret_wire::Event, verification_method: &str) {
         let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
-        event.proofs = vec![arkret_wire::Proof {
-            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            proof_purpose: None,
-            verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
-                .expect("fixture verification method is a DID URL"),
-            event_digest: digest,
-            created_at: event.created_at,
-            domain: None,
-            audience: None,
-            jws: "fixture.signature".to_owned(),
-        }];
+        event.proofs = vec![
+            arkret_wire::Proof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                proof_purpose: None,
+                verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
+                    .expect("fixture verification method is a DID URL"),
+                event_digest: digest,
+                created_at: event.created_at,
+                domain: None,
+                audience: None,
+                jws: "fixture.signature".to_owned(),
+            }
+            .into(),
+        ];
     }
 
     fn fixture_founding_authorize_payload(
@@ -2090,6 +2120,10 @@ mod tests {
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
                 principal_full_id: principal_full_id.clone(),
+                principal_server_id: arkret_identifiers::DidCoreId::new(
+                    "ak:did_core:webvh:z6mkfixture".to_owned(),
+                )
+                .unwrap(),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     full_id: principal_full_id.clone(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
@@ -2126,7 +2160,7 @@ mod tests {
 
         let payload = fixture_founding_authorize_payload(&principal, create.created_at);
         let authorize_verification_method = format!("{}#{}", principal_full_id, payload.device_id);
-        let mut authorize = arkret_wire::test_support::raw_event(
+        let mut authorize = crate::test_event::raw_event(
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             principal,
@@ -2194,7 +2228,7 @@ mod tests {
     fn sdk_test_envelope(envelope: &Value, actor_seq: u64) -> Value {
         let actor =
             arkret_identifiers::DidFullId::new("did:webvh:z6mkfixture:alice.example").unwrap();
-        let mut event = arkret_wire::test_support::raw_event(
+        let mut event = crate::test_event::raw_event(
             envelope["kind"].as_str().unwrap(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_identifiers::RealmId::new(
@@ -2226,17 +2260,24 @@ mod tests {
             .and_then(|proof| proof.get("jws"))
             .and_then(Value::as_str)
         {
-            event.proofs.push(arkret_wire::Proof {
-                kind: "detached_jws".to_owned(),
-                proof_purpose: None,
-                verification_method: arkret_wire::DidUrl::new(format!("{actor}#key-1")).unwrap(),
-                event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))
+            event.proofs.push(
+                arkret_wire::Proof {
+                    kind: "detached_jws".to_owned(),
+                    proof_purpose: None,
+                    verification_method: arkret_wire::DidUrl::new(format!("{actor}#key-1"))
+                        .unwrap(),
+                    event_digest: arkret_identifiers::Hash::new(format!(
+                        "sha256:{}",
+                        "a".repeat(64)
+                    ))
                     .unwrap(),
-                created_at: event.created_at,
-                domain: None,
-                audience: None,
-                jws: jws.to_owned(),
-            });
+                    created_at: event.created_at,
+                    domain: None,
+                    audience: None,
+                    jws: jws.to_owned(),
+                }
+                .into(),
+            );
         }
         event.event_id = event.derive_event_id().unwrap();
         serde_json::to_value(event).unwrap()

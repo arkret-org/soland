@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn service_internal_cas_keys_are_outside_holder_account_data() {
         assert!(is_service_internal_account_data_key(
-            "ak.internal.principal_service_binding.v1"
+            "ak.internal.fixture.v1"
         ));
         assert!(!is_service_internal_account_data_key(
             "ak.account.blocklist"

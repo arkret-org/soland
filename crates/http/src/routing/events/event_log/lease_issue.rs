@@ -605,6 +605,7 @@ fn sign_lease(
         .proofs
         .iter()
         .find_map(|proof| {
+            let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let full_id = arkret_wire::DidFullId::new(controller.to_owned()).ok()?;
             (arkret_wire::project_full_id_to_core_id(&full_id)
@@ -735,7 +736,7 @@ mod tests {
         "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
 
     fn event(kind: impl AsRef<str>, actor_seq: u64, payload: Value) -> Event {
-        arkret_wire::test_support::raw_event_at(
+        crate::test_event::raw_event_at(
             kind.as_ref(),
             ScopeRef::Realm {
                 realm_id: RealmId::new(REALM).expect("fixture Realm id"),

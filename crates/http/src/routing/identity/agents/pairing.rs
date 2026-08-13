@@ -869,6 +869,7 @@ pub(super) fn service_pairing_controller_device_id(
         .event
         .proofs
         .first()
+        .and_then(arkret_wire::EventProof::as_producer)
         .map(|proof| proof.verification_method.as_str())
         .ok_or_else(|| {
             AppError::capability_denied(

@@ -160,6 +160,12 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
             realm_id: realm_id.clone(),
         },
         actor_id,
+        arkret_identifiers::DidCoreId::from(
+            arkret_wire::project_full_id_to_core_id(
+                &arkret_identifiers::DidFullId::new("did:web:service.example".to_owned()).unwrap(),
+            )
+            .unwrap(),
+        ),
         0,
         arkret_identifiers::Hlc::new("019c00000000-0000-aabbccdd").unwrap(),
         serde_json::json!({"object": {"fields": {"purpose": "principal_control"}}}),

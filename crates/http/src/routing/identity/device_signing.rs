@@ -125,7 +125,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     state: &AppState,
     envelope: &MlsWelcomeClaimEnvelope,
     sender_device_id: Option<&str>,
-    signer_key_evidence: Option<&arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
+    producer_signing_key: Option<&arkret_wire::DidKey>,
 ) -> Result<(), &'static str> {
     envelope.validate_signature_shape()?;
     if let Some(signature_algorithm) = envelope.signature.signature_algorithm.as_deref()
@@ -143,19 +143,8 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }
-    if let Some(evidence) = signer_key_evidence {
-        let replayed = arkret_signatures::replay_federated_device_authorization(evidence)
-            .map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-        if replayed.principal_id != envelope.requester_actor_id
-            || replayed.device_id.as_str() != requester_device_id
-            || evidence.actor_id.as_str() != envelope.requester_actor_id.as_str()
-            || evidence.device_id.as_str() != requester_device_id
-            || evidence.verification_method != envelope.signature.kid.as_str()
-        {
-            return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
-        }
-        let device_public_key = evidence
-            .device_signing_key
+    if let Some(producer_signing_key) = producer_signing_key {
+        let device_public_key = producer_signing_key
             .as_str()
             .strip_prefix("did:key:")
             .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;

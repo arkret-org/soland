@@ -1744,13 +1744,10 @@ mod tests {
         let principal_id =
             arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkfixture:alice.example")
                 .unwrap();
-        let authority_instance = arkret_wire::PrincipalAuthorityInstance::new(
+        let authority = arkret_wire::PrincipalAuthorityKey::new(
             principal_id.clone(),
             arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-            RealmId::new("ak:realm:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j").unwrap(),
-            Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
-        )
-        .unwrap();
+        );
         let replacement = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
         let reanchor = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
         let pre_fence_seal_frontier = (!predecessor_refs.is_empty()).then(|| {
@@ -1762,7 +1759,7 @@ mod tests {
         });
         let payload = serde_json::from_value(json!({
             "principal_id": principal_id,
-            "authority_instance": authority_instance,
+            "authority": authority,
             "recovery_authority_kind": "pcr_policy",
             "recovery_policy_id": "ak:policy:01904100-0000-7000-8000-000000000001",
             "recovery_policy_version": 1,

@@ -250,7 +250,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AehgGDMLc7-ZyfS74e4jHU84lk8I1GrpNU5GJWkxMGV4";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -1262,6 +1262,12 @@ impl AppState {
         &self.projections
     }
 
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_projections(&self) -> &ProjectionService {
+        &self.projections
+    }
+
     pub(crate) fn persistence(&self) -> &PersistenceHandle {
         &self.persistence
     }
@@ -1825,6 +1831,7 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
         let AuthorizationCheck {
             actor,
+            actor_principal_server_id,
             action,
             resource,
             realm_id,
@@ -1832,8 +1839,9 @@ impl AuthorizationPort for SolandAuthzEngine {
             members,
             resource_facets,
         } = request;
-        let decision = self.check(
+        let decision = self.check_for_authority(
             actor,
+            actor_principal_server_id,
             action,
             resource,
             realm_id,
@@ -1857,8 +1865,12 @@ impl AuthorizationPort for SolandAuthzEngine {
         self.mark_projected_grant_revoked(grant_id);
     }
 
-    fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize {
-        self.mark_projected_grants_revoked_for_subject(subject)
+    fn mark_projected_grants_revoked_for_subject(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+    ) -> usize {
+        self.mark_projected_grants_revoked_for_subject(subject, subject_principal_server_id)
     }
 
     fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
@@ -1868,16 +1880,18 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn grants_for_subject(
         &self,
         subject: &str,
+        subject_principal_server_id: Option<&str>,
         realm_id: &str,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject(subject, realm_id)
+        self.grants_for_subject(subject, subject_principal_server_id, realm_id)
     }
 
     fn grants_for_subject_all_realms(
         &self,
         subject: &str,
+        subject_principal_server_id: Option<&str>,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_all_realms(subject)
+        self.grants_for_subject_all_realms(subject, subject_principal_server_id)
     }
 
     fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {
@@ -1936,7 +1950,7 @@ mod membership_hydration_tests {
         received_at: chrono::DateTime<chrono::Utc>,
     ) -> CanonicalEventRecord {
         let kind = kind.as_ref();
-        let event = arkret_wire::test_support::raw_event_at(
+        let event = crate::test_event::raw_event_at(
             kind,
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(realm_id).unwrap(),
@@ -2623,6 +2637,7 @@ mod membership_hydration_tests {
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
         assert!(!proj.issuer_has_projected_capability(
+            owner,
             owner,
             realm_id,
             "ak.message.create",

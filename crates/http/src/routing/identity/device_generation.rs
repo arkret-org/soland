@@ -197,7 +197,7 @@ fn reanchor_unit_fingerprint(
         "{}\u{0}{}\u{0}{}",
         reanchor
             .envelope
-            .pointer("/payload/authority_instance/authority_instance_digest")
+            .pointer("/principal_server_id")
             .and_then(Value::as_str)?,
         reanchor.canonical_digest,
         authorize.canonical_digest,
@@ -469,9 +469,8 @@ mod tests {
                 reanchor_a,
                 "ak.device.reanchor",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                json!({"payload": {
+                json!({"principal_server_id": "ak:did_core:webvh:z6mkservera", "payload": {
                     "new_device_generation": 2,
-                    "authority_instance": {"authority_instance_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                 }}),
             ),
             record(
@@ -484,9 +483,8 @@ mod tests {
                 reanchor_b,
                 "ak.device.reanchor",
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                json!({"payload": {
+                json!({"principal_server_id": "ak:did_core:webvh:z6mkserverb", "payload": {
                     "new_device_generation": 2,
-                    "authority_instance": {"authority_instance_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
                 }}),
             ),
             record(
@@ -505,9 +503,8 @@ mod tests {
                 higher,
                 "ak.device.reanchor",
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                json!({"payload": {
+                json!({"principal_server_id": "ak:did_core:webvh:z6mkservera", "payload": {
                     "new_device_generation": 3,
-                    "authority_instance": {"authority_instance_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
                 }}),
             ),
             record(
