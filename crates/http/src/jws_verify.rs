@@ -511,7 +511,7 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
                     ))
                 })?
                 .ok_or_else(|| fail("Ack actor is not a local managed Agent".to_owned()))?;
-            if agent.controller_id != method_full_id.as_str()
+            if agent.controller_id != method_principal_id.as_str()
                 || event.executed_by.as_ref() != Some(principal_id)
                 || event.authorization_ref.as_deref()
                     != Some(agent.controller_authorization_ref.as_str())

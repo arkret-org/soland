@@ -251,7 +251,7 @@ impl SolandMemoryPersistenceStore {
         let now = chrono::Utc::now();
         store.accounts.seed(AccountRecord {
             id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
-            did: "did:web:alice.example".to_owned(),
+            did: "ak:did_core:web:alice.example".to_owned(),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,
@@ -261,7 +261,7 @@ impl SolandMemoryPersistenceStore {
         store.realm_meta.seed(
             "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
             RealmMetaRecord {
-                owner: "did:web:alice.example".to_owned(),
+                owner: "ak:did_core:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "public".to_owned(),
                 history_visibility: "shared".to_owned(),

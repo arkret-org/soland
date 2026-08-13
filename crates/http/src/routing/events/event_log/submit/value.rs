@@ -285,7 +285,11 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submit_initial_event_submission_with_commit_extensions(
+    // Keep the large admission state machine off the Tokio worker stack. This
+    // boundary is shared by HTTP submission and internal controller-authored
+    // Event admission, so nesting it inside another async workflow otherwise
+    // inlines the full future into its caller.
+    Box::pin(submit_initial_event_submission_with_commit_extensions(
         state,
         session,
         submission,
@@ -294,7 +298,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         None,
         Vec::new(),
         None,
-    )
+    ))
     .await
 }
 

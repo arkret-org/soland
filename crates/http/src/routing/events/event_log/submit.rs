@@ -817,7 +817,21 @@ pub(super) async fn submit_event_batch_outcome(
     submit_event_batch_outcome_with_leases(state, session, envelopes, None, None, None).await
 }
 
-pub(in crate::routing) async fn submit_initial_event_batch_outcome(
+pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
+    submissions: Vec<arkret_wire::EventInitialSubmission>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<EventsSubmitOutcome, SubmitOneError>> + Send + 'a>,
+> {
+    Box::pin(submit_initial_event_batch_outcome_inner(
+        state,
+        session,
+        submissions,
+    ))
+}
+
+async fn submit_initial_event_batch_outcome_inner(
     state: &AppState,
     session: &SessionRecord,
     submissions: Vec<arkret_wire::EventInitialSubmission>,

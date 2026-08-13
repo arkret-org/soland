@@ -105,26 +105,33 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
 
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .accounts()
-        .put(&soland_storage::AccountRecord {
-            id: format!("ak:account:{}", uuid::Uuid::now_v7()),
-            did: actor.to_owned(),
-            localpart: "alice".to_owned(),
-            display_name: Some("Alice".to_owned()),
-            bio: None,
-            avatar_blob_ref: None,
-            created_at: now,
-        })
-        .await
-        .unwrap();
+    let actor_id = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap(),
+    )
+    .unwrap()
+    .into_string();
+    let persistence = state.test_persistence();
+    let accounts = persistence.accounts();
+    if accounts.get(&actor_id).await.unwrap().is_none() {
+        accounts
+            .put(&soland_storage::AccountRecord {
+                id: format!("ak:account:{}", uuid::Uuid::now_v7()),
+                did: actor_id.clone(),
+                localpart: "alice".to_owned(),
+                display_name: Some("Alice".to_owned()),
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+    }
     state
         .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
-            actor: actor.to_owned(),
+            actor: actor_id.clone(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             audience: state.service_id().clone(),
             session_public_key: None,
@@ -139,7 +146,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
+            actor: actor_id,
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
             verification_state: "verified".to_owned(),
@@ -200,6 +207,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
     let actor = arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_wire::project_full_id_to_core_id(&actor).unwrap();
     let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
@@ -209,7 +217,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     };
     let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
-            principal_id: arkret_wire::project_full_id_to_core_id(&actor).unwrap(),
+            principal_id: controller_id.clone(),
             principal_full_id: actor.clone(),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
@@ -266,7 +274,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        arkret_wire::project_full_id_to_core_id(&actor).unwrap(),
+        controller_id.clone(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -342,7 +350,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller.to_owned(),
+                owner: controller_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_visibility: "restricted".to_owned(),
@@ -368,7 +376,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: controller.to_owned(),
+            actor: controller_id.to_string(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
             verification_state: "verified".to_owned(),
@@ -395,13 +403,17 @@ pub(crate) async fn seed_active_controller_device_generation(
 
 pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
     let now = chrono::Utc::now();
+    let controller_id = arkret_wire::project_full_id_to_core_id(
+        &arkret_identifiers::DidFullId::new(controller.to_owned()).unwrap(),
+    )
+    .unwrap();
     let policy_id = new_prefixed_uuid7("ak:policy:");
     state
         .test_persistence()
         .recovery_policies()
         .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: controller.to_owned(),
+            principal_id: controller_id.to_string(),
             version: 1,
             acceptance_basis: arkret_wire::LeaseBasisRef::Seal(
                 arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64)))
@@ -415,7 +427,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
             raw_payload: serde_json::json!({
                 "schema": "ak.schema.recovery_policy.v1",
                 "policy_id": policy_id,
-                "principal_id": controller,
+                "principal_id": controller_id,
                 "version": 1,
                 "trust_domain": "ak:trust_domain:soland.local",
                 "allowed_proof_kinds": ["principal_signing"],
@@ -476,7 +488,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller.to_owned(),
+                owner: controller_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_visibility: "joined".to_owned(),
@@ -521,7 +533,7 @@ pub(super) async fn provision_agent_with_sdk_events(
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
-    let (status, body, commit_body) = provision_agent_sdk_commit_attempt(
+    let (status, body, commit_body, fault_outcome) = provision_agent_sdk_commit_attempt(
         state,
         token,
         controller,
@@ -531,6 +543,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         None,
     )
     .await;
+    assert!(fault_outcome.is_none());
     if status == StatusCode::CREATED {
         let app = app_from_state(state.clone());
         let mut retried = TestClient::post("http://server/_arkret/self/agents")
@@ -544,7 +557,36 @@ pub(super) async fn provision_agent_with_sdk_events(
     (status, body)
 }
 
-async fn provision_agent_sdk_commit_attempt(
+fn provision_agent_sdk_commit_attempt<'a>(
+    state: &'a AppState,
+    token: &'a str,
+    controller: &'a str,
+    controller_authority_instance: &'a arkret_wire::PrincipalAuthorityInstance,
+    slug: &'a str,
+    requested_scope: Value,
+    fault: Option<(
+        &'a soland_storage_memory::FaultInjector,
+        soland_storage_memory::FaultPlan,
+    )>,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = (StatusCode, Value, Value, Option<(StatusCode, Value)>)>
+            + Send
+            + 'a,
+    >,
+> {
+    Box::pin(provision_agent_sdk_commit_attempt_inner(
+        state,
+        token,
+        controller,
+        controller_authority_instance,
+        slug,
+        requested_scope,
+        fault,
+    ))
+}
+
+async fn provision_agent_sdk_commit_attempt_inner(
     state: &AppState,
     token: &str,
     controller: &str,
@@ -555,7 +597,7 @@ async fn provision_agent_sdk_commit_attempt(
         &soland_storage_memory::FaultInjector,
         soland_storage_memory::FaultPlan,
     )>,
-) -> (StatusCode, Value, Value) {
+) -> (StatusCode, Value, Value, Option<(StatusCode, Value)>) {
     let app = app_from_state(state.clone());
     let operation_id = arkret_wire::ProtocolOperationId::new(format!(
         "ak:operation:{}",
@@ -618,7 +660,7 @@ async fn provision_agent_sdk_commit_attempt(
     let prepare_status = prepared.status_code.expect("prepare status");
     let preparation: Value = prepared.take_json().await.expect("prepare body");
     if prepare_status != StatusCode::OK {
-        return (prepare_status, preparation, Value::Null);
+        return (prepare_status, preparation, Value::Null, None);
     }
     let preparation = serde_json::from_value::<
         arkret_models_collaboration::agent_operations::AgentProvisionOutcome,
@@ -760,37 +802,11 @@ async fn provision_agent_sdk_commit_attempt(
         arkret_signatures::SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
-    let mut provision_event =
-        prepare_self_principal_pcr_initial_submissions(state, token, vec![event])
-            .await
-            .into_iter()
-            .next()
-            .expect("single provision submission");
-    let controller_resolution = state
-        .test_persistence()
-        .principal_resolutions()
-        .by_authority_instance_digest(&controller_authority_instance.authority_instance_digest)
+    let provision_event = prepare_self_principal_pcr_initial_submissions(state, token, vec![event])
         .await
-        .unwrap()
-        .expect("controller PCR authority record");
-    let controller_notary = &controller_resolution.genesis_event.payload["object"]["notary"];
-    let controller_authority_set_ref =
-        arkret_wire::Hash::new(arkret_canonical::canonical_sha256(controller_notary).unwrap())
-            .unwrap();
-    let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
-        provision_event.event.realm_id.clone(),
-        arkret_wire::Hash::new(provision_event.event.event_digest().unwrap()).unwrap(),
-        controller_authority_set_ref,
-        now,
-        proposal_policy,
-        &signer,
-    )
-    .unwrap();
-    provision_event.control_proposal_ack = Some(
-        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
-            .unwrap(),
-    );
+        .into_iter()
+        .next()
+        .expect("single provision submission");
     let commit_body = serde_json::to_value(
         arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Commit {
             operation_id,
@@ -806,6 +822,7 @@ async fn provision_agent_sdk_commit_attempt(
         },
     )
     .unwrap();
+    let fault_expected = fault.is_some();
     if let Some((injector, plan)) = fault {
         injector.arm(plan);
     }
@@ -814,10 +831,21 @@ async fn provision_agent_sdk_commit_attempt(
         .json(&commit_body)
         .send(&app)
         .await;
-    let status = committed.status_code.expect("commit status");
-    let body: serde_json::Value = committed.take_json().await.expect("commit body");
+    let mut status = committed.status_code.expect("commit status");
+    let mut body: serde_json::Value = committed.take_json().await.expect("commit body");
+    let mut fault_outcome = None;
+    if fault_expected && status.is_server_error() {
+        fault_outcome = Some((status, body));
+        let mut retried = TestClient::post("http://server/_arkret/self/agents")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&commit_body)
+            .send(&app)
+            .await;
+        status = retried.status_code.expect("retried commit status");
+        body = retried.take_json().await.expect("retried commit body");
+    }
     if status != StatusCode::OK || body["status"] != "awaiting_pcr_genesis" {
-        return (status, body, commit_body);
+        return (status, body, commit_body, fault_outcome);
     }
 
     let predecessor = state
@@ -971,11 +999,27 @@ async fn provision_agent_sdk_commit_attempt(
         },
     )
     .unwrap();
+    let binding_request = serde_json::to_value(&binding_update.submit_body).unwrap();
     let mut binding_response =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
-            .json(&serde_json::to_value(&binding_update.submit_body).unwrap())
+            .json(&binding_request)
             .send(&app)
             .await;
+    if fault_expected
+        && fault_outcome.is_none()
+        && binding_response
+            .status_code
+            .is_some_and(|status| status.is_server_error())
+    {
+        let failed_status = binding_response.status_code.expect("failed binding status");
+        let failed_body = binding_response.take_json().await.unwrap();
+        fault_outcome = Some((failed_status, failed_body));
+        binding_response =
+            TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
+                .json(&binding_request)
+                .send(&app)
+                .await;
+    }
     assert_eq!(binding_response.status_code, Some(StatusCode::OK));
     let binding_body: Value = binding_response.take_json().await.unwrap();
     assert!(matches!(
@@ -990,7 +1034,7 @@ async fn provision_agent_sdk_commit_attempt(
         .await;
     let status = completed.status_code.expect("final commit status");
     let body = completed.take_json().await.expect("final commit body");
-    (status, body, commit_body)
+    (status, body, commit_body, fault_outcome)
 }
 
 #[tokio::test]
@@ -1029,11 +1073,15 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
 
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["status"], "complete");
+    let controller_id = arkret_wire::project_full_id_to_core_id(
+        &arkret_wire::DidFullId::new(controller.to_owned()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         state
             .test_persistence()
             .agents()
-            .list_for_controller(controller)
+            .list_for_controller(controller_id.as_str())
             .await
             .unwrap()
             .len(),
@@ -1043,10 +1091,6 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
     // Cross-repository closure: SDK producer -> Soland admission/store ->
     // account query replay -> SDK model/digest/proof verifier.
     let app = app_from_state(state.clone());
-    let controller_id = arkret_wire::project_full_id_to_core_id(
-        &arkret_wire::DidFullId::new(controller.to_owned()).unwrap(),
-    )
-    .unwrap();
     let mut replay_response = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"actors": [controller_id], "limit": 100}))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1130,7 +1174,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             }]
         });
         let slug = format!("fault-agent-{index}");
-        let (failed_status, failed_body, commit_body) = provision_agent_sdk_commit_attempt(
+        let (status, body, commit_body, fault_outcome) = provision_agent_sdk_commit_attempt(
             &state,
             &token,
             controller,
@@ -1140,11 +1184,15 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             Some((&injector, plan)),
         )
         .await;
+        let (failed_status, failed_body) = fault_outcome
+            .unwrap_or_else(|| panic!("fault plan {plan:?} did not interrupt a durable boundary"));
         assert_eq!(
             failed_status,
             StatusCode::INTERNAL_SERVER_ERROR,
             "fault plan {plan:?} did not interrupt the commit: {failed_body}"
         );
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["status"], "complete");
 
         let app = app_from_state(state.clone());
         let mut recovered = TestClient::post("http://server/_arkret/self/agents")
@@ -1160,6 +1208,7 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             "fault plan {plan:?} did not recover: {recovered_body}"
         );
         assert_eq!(recovered_body["status"], "complete");
+        assert_eq!(recovered_body, body);
 
         let mut replayed = TestClient::post("http://server/_arkret/self/agents")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -1200,8 +1249,8 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             .unwrap();
         assert_eq!(
             did_history.len(),
-            1,
-            "fault plan {plan:?} duplicated Agent DID inception"
+            2,
+            "fault plan {plan:?} did not preserve exactly entry 0 and its PCR-binding successor"
         );
         let did_document = persistence
             .webvh()
@@ -1213,12 +1262,16 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         assert_eq!(did_document.did_document["id"], agent_full_id);
         assert_eq!(
             did_document.key_log_head.as_deref(),
-            Some(did_history[0].event_digest.as_str())
+            Some(did_history[1].event_digest.as_str())
         );
+        let controller_id = arkret_wire::project_full_id_to_core_id(
+            &arkret_wire::DidFullId::new(controller.to_owned()).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             persistence
                 .agents()
-                .list_for_controller(controller)
+                .list_for_controller(controller_id.as_str())
                 .await
                 .unwrap()
                 .len(),
