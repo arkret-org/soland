@@ -10,6 +10,7 @@ pub enum AgentMembershipCascadeCommit {
     AtomicSelfLeave {
         controller_transition_event_id: EventId,
         agent_transition_event_ids: Vec<EventId>,
+        expected_agent_ids: Vec<arkret_wire::DidCoreId>,
     },
     EmergencyTerminal {
         record: AgentCleanupPendingRecord,
@@ -27,6 +28,11 @@ pub trait AgentMembershipCascadeStore: Send + Sync {
     async fn agent_cleanup_intent(
         &self,
         cleanup_intent_digest: &Hash,
+    ) -> PersistenceResult<Option<AgentCleanupPendingRecord>>;
+
+    async fn agent_cleanup_intent_for_terminal_event(
+        &self,
+        controller_terminal_event_id: &EventId,
     ) -> PersistenceResult<Option<AgentCleanupPendingRecord>>;
 
     async fn incomplete_agent_cleanup_intents(

@@ -67,6 +67,25 @@ impl soland_storage::AgentMembershipCascadeStore for PgAgentMembershipCascadeSto
         .transpose()
     }
 
+    async fn agent_cleanup_intent_for_terminal_event(
+        &self,
+        controller_terminal_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<AgentCleanupPendingRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        mark_overdue(&mut conn, Utc::now()).await?;
+        sql_query(
+            "SELECT record_json FROM agent_membership_cleanup_intents \
+             WHERE controller_terminal_event_id = $1",
+        )
+        .bind::<Text, _>(controller_terminal_event_id.as_str())
+        .get_result::<CleanupIntentRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(decode_record)
+        .transpose()
+    }
+
     async fn incomplete_agent_cleanup_intents(
         &self,
         now: chrono::DateTime<Utc>,

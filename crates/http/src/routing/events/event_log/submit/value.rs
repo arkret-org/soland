@@ -7,7 +7,6 @@ pub(super) struct PreparedAgentMembershipEvent {
     pub(super) projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
     pub(super) projected_event: soland_services::events::ProjectedEvent,
     pub(super) actor_id: String,
-    pub(super) device_id: String,
     pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
 }
 
@@ -458,6 +457,18 @@ pub(super) async fn prepare_agent_membership_initial_event(
         control_proposal_ack,
         membership_compensation_evidence: _,
     } = submission;
+    let initiator_id = event
+        .executed_by
+        .as_ref()
+        .unwrap_or(&event.actor_id)
+        .to_string();
+    let admission = InternalEventAdmission::agent_membership_cascade(
+        event.realm_id.to_string(),
+        event.actor_id.to_string(),
+        initiator_id,
+        session.device_id.clone(),
+        event.event_id.to_string(),
+    );
     let envelope = typed_event_to_canonical_value(event)?;
     let mut prepared = None;
     submit_event_value_with_context(
@@ -466,7 +477,7 @@ pub(super) async fn prepare_agent_membership_initial_event(
         envelope,
         &[],
         None,
-        None,
+        Some(&admission),
         authorization_lease.as_ref(),
         control_proposal_ack.as_ref(),
         None,
@@ -1182,6 +1193,7 @@ pub(super) async fn submit_event_value_with_context(
     additional_idempotency: Option<&soland_services::events::IdempotentResponse>,
     deferred_agent_membership: Option<&mut Option<PreparedAgentMembershipEvent>>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let preparing_agent_membership = deferred_agent_membership.is_some();
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
     {
@@ -1313,6 +1325,18 @@ pub(super) async fn submit_event_value_with_context(
             .as_object()
             .is_some_and(|object| admission.matches(session, object))
     });
+    let _agent_membership_cascade_guard = if parsed.kind
+        == arkret_wire::EventKind::MemberState.as_str()
+        && !preparing_agent_membership
+    {
+        Some(
+            agent_membership_cascade_lock(&parsed.realm_id)
+                .lock_owned()
+                .await,
+        )
+    } else {
+        None
+    };
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let _account_data_submit_guard =
@@ -2581,7 +2605,6 @@ pub(super) async fn submit_event_value_with_context(
             projected_cell_writes,
             projected_event,
             actor_id: parsed.actor_id,
-            device_id: parsed.device_id,
             ingress_receipts: accepted_response.outcome.ingress_receipts.clone(),
         });
         return Ok(accepted_response);

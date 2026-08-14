@@ -379,6 +379,7 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub async fn project_accepted_operations(state: &AppState, origin: &str, operations: &[Operation]) {
     project_accepted_operations_inner(state, origin, "", operations, None).await;
 }

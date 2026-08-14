@@ -60,6 +60,7 @@ async fn stage_agent_membership_cascade(
         AgentMembershipCascadeCommit::AtomicSelfLeave {
             controller_transition_event_id,
             agent_transition_event_ids,
+            expected_agent_ids,
         } => {
             if agent_transition_event_ids.is_empty()
                 || agent_transition_event_ids.len() > MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS
@@ -75,9 +76,24 @@ async fn stage_agent_membership_cascade(
             if expected.len() != agent_transition_event_ids.len()
                 || !expected.insert(controller_transition_event_id.as_str())
                 || expected != event_ids
+                || expected_agent_ids.len() != agent_transition_event_ids.len()
             {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: atomic Agent cascade Event set mismatch".to_owned(),
+                ));
+            }
+            let submitted_agent_ids = events
+                .iter()
+                .filter(|request| request.event.event_id != controller_transition_event_id.as_str())
+                .map(|request| request.event.actor_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_agent_ids = expected_agent_ids
+                .iter()
+                .map(arkret_wire::DidCoreId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if submitted_agent_ids != expected_agent_ids {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: atomic Agent cascade actor set mismatch".to_owned(),
                 ));
             }
         }
@@ -94,11 +110,36 @@ async fn stage_agent_membership_cascade(
                     "duplicate_conflict: emergency terminal Event set mismatch".to_owned(),
                 ));
             }
+            let terminal = events
+                .first()
+                .expect("validated singleton terminal Event set");
+            let typed =
+                serde_json::from_value::<arkret_wire::Event>(terminal.event.envelope.clone())
+                    .map_err(|error| {
+                        PersistenceError::Conflict(format!(
+                            "schema_violation: emergency terminal Event is invalid: {error}"
+                        ))
+                    })?;
+            let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
+            if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
+                || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
+                || terminal.event.canonical_digest
+                    != record.controller_terminal_event_digest.as_str()
+                || typed.principal_server_id != record.controller_authority.principal_server_id
+                || initiator != &record.initiator_authority.principal_id
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency terminal Event does not bind cleanup intent"
+                        .to_owned(),
+                ));
+            }
             let existing = sql_query(
                 "SELECT record_json FROM agent_membership_cleanup_intents \
-                 WHERE cleanup_intent_digest = $1 FOR UPDATE",
+                 WHERE cleanup_intent_digest = $1 OR controller_terminal_event_id = $2 \
+                 FOR UPDATE",
             )
             .bind::<Text, _>(record.cleanup_intent_digest.as_str())
+            .bind::<Text, _>(record.controller_terminal_event_id.as_str())
             .get_result::<AgentCleanupIntentJsonRow>(&mut *conn)
             .await
             .optional()

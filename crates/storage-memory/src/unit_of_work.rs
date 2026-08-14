@@ -33,6 +33,7 @@ fn stage_agent_membership_cascade(
         AgentMembershipCascadeCommit::AtomicSelfLeave {
             controller_transition_event_id,
             agent_transition_event_ids,
+            expected_agent_ids,
         } => {
             if agent_transition_event_ids.is_empty()
                 || agent_transition_event_ids.len() > MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS
@@ -48,9 +49,24 @@ fn stage_agent_membership_cascade(
             if expected.len() != agent_transition_event_ids.len()
                 || !expected.insert(controller_transition_event_id.as_str())
                 || expected != event_ids
+                || expected_agent_ids.len() != agent_transition_event_ids.len()
             {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: atomic Agent cascade Event set mismatch".to_owned(),
+                ));
+            }
+            let submitted_agent_ids = events
+                .iter()
+                .filter(|request| request.event.event_id != controller_transition_event_id.as_str())
+                .map(|request| request.event.actor_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_agent_ids = expected_agent_ids
+                .iter()
+                .map(arkret_wire::DidCoreId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if submitted_agent_ids != expected_agent_ids {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: atomic Agent cascade actor set mismatch".to_owned(),
                 ));
             }
         }
@@ -67,6 +83,29 @@ fn stage_agent_membership_cascade(
                     "duplicate_conflict: emergency terminal Event set mismatch".to_owned(),
                 ));
             }
+            let terminal = events
+                .first()
+                .expect("validated singleton terminal Event set");
+            let typed =
+                serde_json::from_value::<arkret_wire::Event>(terminal.event.envelope.clone())
+                    .map_err(|error| {
+                        PersistenceError::Conflict(format!(
+                            "schema_violation: emergency terminal Event is invalid: {error}"
+                        ))
+                    })?;
+            let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
+            if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
+                || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
+                || terminal.event.canonical_digest
+                    != record.controller_terminal_event_digest.as_str()
+                || typed.principal_server_id != record.controller_authority.principal_server_id
+                || initiator != &record.initiator_authority.principal_id
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency terminal Event does not bind cleanup intent"
+                        .to_owned(),
+                ));
+            }
             match records.get(record.cleanup_intent_digest.as_str()) {
                 Some(existing) if existing == record => {}
                 Some(_) => {
@@ -76,6 +115,14 @@ fn stage_agent_membership_cascade(
                     ));
                 }
                 None => {
+                    if records.values().any(|existing| {
+                        existing.controller_terminal_event_id == record.controller_terminal_event_id
+                    }) {
+                        return Err(PersistenceError::Conflict(
+                            "duplicate_conflict: terminal Event names a different cleanup intent"
+                                .to_owned(),
+                        ));
+                    }
                     records.insert(record.cleanup_intent_digest.to_string(), record.clone());
                 }
             }
@@ -805,7 +852,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
-        AppletGhostCommit, CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
+        AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletGhostCommit,
+        CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
         DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
         DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
         EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
@@ -883,6 +931,95 @@ mod tests {
             idempotency,
             outbox: Vec::new(),
         }
+    }
+
+    fn cascade_event_request(
+        seed: &str,
+        realm_id: &str,
+        actor_full_id: &str,
+    ) -> EventCommitRequest {
+        let mut request = event_request(seed.to_owned(), realm_id.to_owned(), actor_full_id, None);
+        let event: arkret_wire::Event =
+            serde_json::from_value(request.event.envelope.clone()).unwrap();
+        request.event.actor_id = event.actor_id.to_string();
+        request
+    }
+
+    fn emergency_terminal_request(realm_id: &str) -> EventCommitRequest {
+        let mut request = cascade_event_request(
+            "emergency-terminal",
+            realm_id,
+            "did:web:emergency-controller.example",
+        );
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(request.event.envelope.clone()).unwrap();
+        event.principal_server_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
+        event.executed_by =
+            Some(arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap());
+        event.refresh_content_bound_identity().unwrap();
+        request.event.event_id = event.event_id.to_string();
+        request.event.canonical_digest = event.event_digest().unwrap();
+        request.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        request.event.envelope = serde_json::to_value(event).unwrap();
+        request
+    }
+
+    fn cleanup_record(
+        controller: &EventCommitRequest,
+        realm_id: &str,
+        agent_ids: Vec<arkret_wire::DidCoreId>,
+    ) -> arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord
+    {
+        use arkret_models_collaboration::governance::agent_membership_cascade::{
+            AgentCleanupPendingRecord, AgentCleanupStatus, AgentMembershipCascadeSchema,
+        };
+
+        let accepted_at = controller.event.received_at;
+        let mut record = AgentCleanupPendingRecord {
+            schema: AgentMembershipCascadeSchema::V1,
+            realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+            controller_authority: arkret_wire::PrincipalAuthorityKey {
+                principal_id: arkret_wire::DidCoreId::new(controller.event.actor_id.clone())
+                    .unwrap(),
+                principal_server_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:web:principal.example",
+                )
+                .unwrap(),
+            },
+            controller_membership_generation_ref: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x42; 32],
+            ),
+            initiator_authority: arkret_wire::PrincipalAuthorityKey {
+                principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example")
+                    .unwrap(),
+                principal_server_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:web:principal.example",
+                )
+                .unwrap(),
+            },
+            controller_terminal_event_id: arkret_wire::EventId::new(
+                controller.event.event_id.clone(),
+            )
+            .unwrap(),
+            controller_terminal_event_digest: arkret_wire::Hash::new(
+                controller.event.canonical_digest.clone(),
+            )
+            .unwrap(),
+            expected_agent_ids: agent_ids,
+            cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            status: AgentCleanupStatus::AgentCleanupPending,
+            accepted_at,
+            cleanup_due_at: accepted_at + Duration::hours(1),
+            completed_at: None,
+            agent_transition_event_ids: None,
+        };
+        record.cleanup_intent_digest = record.expected_cleanup_intent_digest().unwrap();
+        record.validate().unwrap();
+        record
     }
 
     fn self_principal_pcr_control_request() -> EventCommitRequest {
@@ -1139,6 +1276,133 @@ mod tests {
         ));
         assert!(store.events.data.lock().contains_key(&event_id));
         assert!(store.events.quarantined.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn agent_membership_cascade_commits_exact_sets_and_durable_cleanup_atomically() {
+        let store = SolandMemoryPersistenceStore::new();
+        let realm_id = realm_id();
+        let controller = cascade_event_request(
+            "controller-terminal",
+            &realm_id,
+            "did:web:controller.example",
+        );
+        let agent_a = cascade_event_request("agent-a-leave", &realm_id, "did:web:agent-a.example");
+        let agent_b = cascade_event_request("agent-b-leave", &realm_id, "did:web:agent-b.example");
+        let controller_event_id =
+            arkret_wire::EventId::new(controller.event.event_id.clone()).unwrap();
+        let agent_event_ids = vec![
+            arkret_wire::EventId::new(agent_a.event.event_id.clone()).unwrap(),
+            arkret_wire::EventId::new(agent_b.event.event_id.clone()).unwrap(),
+        ];
+
+        let mut incomplete = EventBatchCommitRequest {
+            events: vec![controller.clone(), agent_a.clone()],
+            applet_ghosts: None,
+            agent_membership_cascade: Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
+                controller_transition_event_id: controller_event_id.clone(),
+                agent_transition_event_ids: agent_event_ids.clone(),
+                expected_agent_ids: vec![
+                    arkret_wire::DidCoreId::new(agent_a.event.actor_id.clone()).unwrap(),
+                    arkret_wire::DidCoreId::new(agent_b.event.actor_id.clone()).unwrap(),
+                ],
+            }),
+        };
+        assert!(matches!(
+            store.commit_event_batch(incomplete.clone()).await,
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("atomic Agent cascade Event set mismatch")
+        ));
+        assert!(
+            incomplete.events.iter().all(|request| !store
+                .events
+                .data
+                .lock()
+                .contains_key(&request.event.event_id)),
+            "an invalid cascade must not commit a prefix"
+        );
+
+        incomplete.events.push(agent_b.clone());
+        let committed = store.commit_event_batch(incomplete).await.unwrap();
+        assert!(committed.event_inserted);
+        assert!(
+            [&controller, &agent_a, &agent_b]
+                .into_iter()
+                .all(|request| store
+                    .events
+                    .data
+                    .lock()
+                    .contains_key(&request.event.event_id))
+        );
+
+        let terminal = emergency_terminal_request(&realm_id);
+        let expected_agent_ids = vec![
+            arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-a.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-b.example").unwrap(),
+        ];
+        let record = cleanup_record(&terminal, &realm_id, expected_agent_ids.clone());
+        let cleanup_digest = record.cleanup_intent_digest.clone();
+        let terminal_event_id = record.controller_terminal_event_id.clone();
+        store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![terminal.clone()],
+                applet_ghosts: None,
+                agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyTerminal {
+                    record: record.clone(),
+                }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .agent_membership_cascades
+                .agent_cleanup_intent(&cleanup_digest)
+                .await
+                .unwrap(),
+            Some(record)
+        );
+
+        let cleanup_a = cascade_event_request(
+            "emergency-agent-a-leave",
+            &realm_id,
+            "did:web:emergency-agent-a.example",
+        );
+        let cleanup_b = cascade_event_request(
+            "emergency-agent-b-leave",
+            &realm_id,
+            "did:web:emergency-agent-b.example",
+        );
+        let cleanup_event_ids = vec![
+            arkret_wire::EventId::new(cleanup_a.event.event_id.clone()).unwrap(),
+            arkret_wire::EventId::new(cleanup_b.event.event_id.clone()).unwrap(),
+        ];
+        store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![cleanup_a, cleanup_b],
+                applet_ghosts: None,
+                agent_membership_cascade: Some(AgentMembershipCascadeCommit::EmergencyCleanup {
+                    cleanup_intent_digest: cleanup_digest.clone(),
+                    controller_terminal_event_id: terminal_event_id,
+                    agent_transition_event_ids: cleanup_event_ids.clone(),
+                    completed_at: Utc::now(),
+                }),
+            })
+            .await
+            .unwrap();
+        let completed = store
+            .agent_membership_cascades
+            .agent_cleanup_intent(&cleanup_digest)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            completed.status,
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupStatus::AgentCleanupCompleted
+        );
+        assert_eq!(
+            completed.agent_transition_event_ids,
+            Some(cleanup_event_ids)
+        );
     }
 
     #[tokio::test]

@@ -50,6 +50,21 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn agent_cleanup_intent_for_terminal_event(
+        &self,
+        controller_terminal_event_id: &arkret_wire::EventId,
+    ) -> crate::ServiceResult<
+        Option<
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+        >,
+    >{
+        Ok(self
+            .persistence
+            .agent_membership_cascades()
+            .agent_cleanup_intent_for_terminal_event(controller_terminal_event_id)
+            .await?)
+    }
+
     pub async fn incomplete_agent_cleanup_intents(
         &self,
         now: chrono::DateTime<chrono::Utc>,

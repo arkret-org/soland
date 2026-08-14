@@ -316,6 +316,18 @@ async fn validate_agent_operation_membership(
     let Some(record) = record else {
         return Ok(());
     };
+    // The managed Agent's own PCR genesis is a lifecycle bootstrap, not a
+    // Realm-participation write. Its controller delegation, provision Event,
+    // accountability grant and PCR binding have already been checked by the
+    // closed envelope gate. Requiring an effective Realm membership here
+    // would create a cycle: the Agent PCR must exist before its first
+    // controller-generation membership binding can be projected.
+    if operation.realm_id.as_str() == record.principal_control_realm_id
+        && kinds::canonical_kind_for_operation(operation)
+            == Some(arkret_wire::EventKind::RealmCreate)
+    {
+        return Ok(());
+    }
     let result = if operation.realm_id.as_str() == record.principal_control_realm_id {
         crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
             state,

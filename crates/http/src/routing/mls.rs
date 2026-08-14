@@ -3343,13 +3343,15 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         return false;
     };
     let target_device_ids = BTreeSet::new();
-    let Ok(trust_selector) = current_keypackage_claim_trust_selector(
-        state,
-        &principal,
-        &target_device_ids,
-        Some(intended_realm_id),
-    )
-    .await
+    // This is the admission preflight for the membership transition which
+    // establishes the Agent's effective Realm membership. Requiring that
+    // membership inside the trust selector would make the first join
+    // impossible. The accepted Agent-key authorization is still checked
+    // here, and the KeyPackage's Realm binding is checked below; actual claim
+    // paths continue to pass `Some(intended_realm_id)` and recheck effective
+    // membership at commit time.
+    let Ok(trust_selector) =
+        current_keypackage_claim_trust_selector(state, &principal, &target_device_ids, None).await
     else {
         return false;
     };

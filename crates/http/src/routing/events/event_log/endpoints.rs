@@ -448,19 +448,10 @@ fn submit_event_authenticated<'a>(
         match submit {
             SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
             SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
-                let error = match submission.validate() {
-                    Ok(()) => SubmitOneError::new(
-                        StatusCode::NOT_IMPLEMENTED,
-                        "not_implemented",
-                        "agent membership cascade admission is not active",
-                    ),
-                    Err(error) => SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        format!("invalid agent membership cascade: {error}"),
-                    ),
-                };
-                render_submit_one_error(res, error);
+                match submit_agent_membership_cascade(state, session, submission).await {
+                    Ok(outcome) => res.render(Json(outcome)),
+                    Err(error) => render_submit_one_error(res, error),
+                }
             }
             SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
                 match submit_direct_conversation_founding_unit(state, session, submission).await {
@@ -514,19 +505,10 @@ async fn submit_event_dispatch(
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
         SolandEventsSubmitRequestBody::AgentMembershipCascade(submission) => {
-            let error = match submission.validate() {
-                Ok(()) => SubmitOneError::new(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "not_implemented",
-                    "agent membership cascade admission is not active",
-                ),
-                Err(error) => SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    format!("invalid agent membership cascade: {error}"),
-                ),
-            };
-            submit_one_error_value(error)
+            match submit_agent_membership_cascade(state, session, submission).await {
+                Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
+                Err(error) => submit_one_error_value(error),
+            }
         }
         SolandEventsSubmitRequestBody::DirectConversationFounding(submission) => {
             match submit_direct_conversation_founding_unit(state, session, submission).await {

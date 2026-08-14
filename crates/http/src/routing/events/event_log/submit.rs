@@ -24,12 +24,14 @@ use crate::invite_claim_proofs::{
 const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
 const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
 const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
+const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+static AGENT_MEMBERSHIP_CASCADE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
 mod identity_anchor;
 use identity_anchor::{
@@ -39,6 +41,9 @@ mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod sidecar_ensure;
 pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
+mod agent_membership_cascade;
+pub(in crate::routing) use agent_membership_cascade::submit_agent_membership_cascade;
+use agent_membership_cascade::submit_agent_membership_cascade_federation;
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
@@ -114,6 +119,19 @@ pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mut
     SERVICE_EVENT_AUTHORING_LOCK
         .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
+}
+
+fn agent_membership_cascade_lock(realm_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    use std::hash::Hash as _;
+
+    let locks = AGENT_MEMBERSHIP_CASCADE_LOCKS.get_or_init(|| {
+        (0..AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    realm_id.hash(&mut hasher);
+    locks[(hasher.finish() as usize) % AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS].clone()
 }
 
 fn stamp_projection_operation_received_at(
@@ -349,8 +367,18 @@ enum InternalEventBinding {
     SidecarEnsure {
         event_id: String,
     },
+    AgentMembershipCascade {
+        event_id: String,
+        initiator_id: String,
+    },
     PeerFederatedEvent {
         event_id: String,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: arkret_wire::DidKey,
+    },
+    PeerAgentMembershipCascade {
+        event_id: String,
+        initiator_id: String,
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     },
@@ -457,6 +485,27 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn agent_membership_cascade(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        initiator_id: impl Into<String>,
+        device_id: impl Into<String>,
+        event_id: impl Into<String>,
+    ) -> Self {
+        let initiator_id = initiator_id.into();
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            session_actor_id: initiator_id.clone(),
+            kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::AgentMembershipCascade {
+                event_id: event_id.into(),
+                initiator_id,
+            },
+        }
+    }
+
     pub(in crate::routing) fn peer_federated_event(
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
@@ -474,6 +523,32 @@ impl InternalEventAdmission {
             device_id: device_id.into(),
             binding: InternalEventBinding::PeerFederatedEvent {
                 event_id: event_id.into(),
+                producer_verification_method,
+                producer_signing_key,
+            },
+        }
+    }
+
+    pub(in crate::routing) fn peer_agent_membership_cascade(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        initiator_id: impl Into<String>,
+        device_id: impl Into<String>,
+        event_id: impl Into<String>,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: arkret_wire::DidKey,
+    ) -> Self {
+        let actor_id = actor_id.into();
+        let initiator_id = initiator_id.into();
+        Self {
+            realm_id: realm_id.into(),
+            session_actor_id: initiator_id.clone(),
+            actor_id,
+            kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::PeerAgentMembershipCascade {
+                event_id: event_id.into(),
+                initiator_id,
                 producer_verification_method,
                 producer_signing_key,
             },
@@ -519,8 +594,31 @@ impl InternalEventAdmission {
                 | InternalEventBinding::SidecarEnsure { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
+                InternalEventBinding::AgentMembershipCascade {
+                    event_id,
+                    initiator_id,
+                } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                        && object
+                            .get("executed_by")
+                            .and_then(Value::as_str)
+                            .unwrap_or(self.actor_id.as_str())
+                            == initiator_id
+                }
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                }
+                InternalEventBinding::PeerAgentMembershipCascade {
+                    event_id,
+                    initiator_id,
+                    ..
+                } => {
+                    object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
+                        && object
+                            .get("executed_by")
+                            .and_then(Value::as_str)
+                            .unwrap_or(self.actor_id.as_str())
+                            == initiator_id
                 }
             }
     }
@@ -536,6 +634,13 @@ impl InternalEventAdmission {
         }
         match &self.binding {
             InternalEventBinding::PeerFederatedEvent {
+                producer_verification_method,
+                producer_signing_key,
+                ..
+            } if producer_verification_method.as_str() == verification_method => {
+                Some(producer_signing_key)
+            }
+            InternalEventBinding::PeerAgentMembershipCascade {
                 producer_verification_method,
                 producer_signing_key,
                 ..
@@ -2114,21 +2219,8 @@ pub(crate) async fn submit_federation_events(
             return;
         }
         EventsSubmitFederationRequestBody::AgentMembershipCascade(cascade) => {
-            if let Err(error) = cascade.validate() {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    &format!("invalid agent membership cascade: {error}"),
-                );
-                return;
-            }
-            render_error(
-                res,
-                StatusCode::NOT_IMPLEMENTED,
-                "not_implemented",
-                "agent membership cascade federation admission is not active",
-            );
+            submit_agent_membership_cascade_federation(state, req, cascade, request_hash, res)
+                .await;
             return;
         }
     };

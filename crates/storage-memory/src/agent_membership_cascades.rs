@@ -33,6 +33,29 @@ impl soland_storage::AgentMembershipCascadeStore for MemoryAgentMembershipCascad
         Ok(records.get(cleanup_intent_digest.as_str()).cloned())
     }
 
+    async fn agent_cleanup_intent_for_terminal_event(
+        &self,
+        controller_terminal_event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<AgentCleanupPendingRecord>> {
+        let mut records = self.data.lock();
+        let digest = records.iter().find_map(|(digest, record)| {
+            (record.controller_terminal_event_id == *controller_terminal_event_id)
+                .then(|| digest.clone())
+        });
+        let Some(digest) = digest else {
+            return Ok(None);
+        };
+        let record = records
+            .get_mut(&digest)
+            .expect("selected cleanup intent exists");
+        if record.status == AgentCleanupStatus::AgentCleanupPending
+            && record.cleanup_due_at <= Utc::now()
+        {
+            record.status = AgentCleanupStatus::AgentCleanupOverdue;
+        }
+        Ok(Some(record.clone()))
+    }
+
     async fn incomplete_agent_cleanup_intents(
         &self,
         now: chrono::DateTime<Utc>,
