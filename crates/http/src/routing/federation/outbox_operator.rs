@@ -352,10 +352,18 @@ pub async fn requeue_dead_letter(
 
 /// Re-run the wire contract over the stored request body.
 ///
-/// The peer-Event rail is the only one with a typed federation transport
-/// contract; the private operations rail carries its own envelope, so there is
+/// The peer-Event and peer-invite rails carry typed federation transport
+/// contracts; the private operations rail carries its own envelope, so there is
 /// nothing to re-derive for it beyond it still being parseable JSON.
 fn revalidate_transport(delivery: &FederationDeliveryRecord) -> Result<(), String> {
+    if delivery.endpoint == "/_arkret/peer/invites" {
+        let body: arkret_models_collaboration::governance::invite_addressing::InviteDeliveryRequestBody =
+            serde_json::from_str(&delivery.payload_json)
+                .map_err(|error| format!("stored federation request no longer parses: {error}"))?;
+        return body
+            .validate_minimal()
+            .map_err(|error| format!("stored federation request is no longer valid: {error}"));
+    }
     if delivery.endpoint == "/_arkret/peer/events" {
         let body: arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody =
             serde_json::from_str(&delivery.payload_json)
