@@ -180,6 +180,9 @@ impl SyncService {
         })
     }
 
+    /// Fixture-only: observe the in-memory revocation cache size. Nothing on a
+    /// production path reads it, so it stays out of release builds.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn cached_cursor_revocation_count(&self) -> usize {
         self.cursor_revocations.lock().len()

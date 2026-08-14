@@ -805,58 +805,6 @@ async fn accept_agent_relay(
     })
 }
 
-fn repair_agent_evidence_selector(
-    request: &DirectConversationRepairDispatchRequest,
-    destination_service_id: &arkret_wire::DidCoreId,
-) -> Result<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector, AppError>
-{
-    let DirectConversationRepairAuthorization::NativeAgent {
-        requester_agent_id,
-        verification_method,
-        ..
-    } = &request.requester_authorization
-    else {
-        return Err(AppError::param_invalid(
-            "Agent evidence selector requires Native Agent authorization",
-        ));
-    };
-    let request_digest = Hash::new(canonical_digest(request, "repair dispatch")?)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let operation_id = stable_repair_operation_id(request.request_id.as_str())?;
-    let challenge = arkret_wire::NonEmptyString::new(format!(
-        "direct-conversation-repair:{}:{}",
-        request.request_id, request_digest
-    ))
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(
-        arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            agent_id: arkret_wire::DidCoreId::from(requester_agent_id.clone()),
-            verification_method: verification_method.clone(),
-            operation_id,
-            request_digest,
-            verifier_id: destination_service_id.clone(),
-            audience: destination_service_id.clone(),
-            challenge,
-        },
-    )
-}
-
-fn stable_repair_operation_id(
-    request_id: &str,
-) -> Result<arkret_wire::ProtocolOperationId, AppError> {
-    use sha2::{Digest as _, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak.direct-conversation-repair-operation-v1\n");
-    hasher.update(request_id.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x70;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    arkret_wire::ProtocolOperationId::new(format!("ak:operation:{}", uuid::Uuid::from_bytes(bytes)))
-        .map_err(|error| AppError::internal(error.to_string()))
-}
-
 async fn repair_peer(
     state: &AppState,
     request: &DirectConversationRepairDispatchRequest,

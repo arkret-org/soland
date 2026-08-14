@@ -557,6 +557,11 @@ impl ContactService {
             .endorse(digest.into(), coordinates, endorsement);
     }
 
+    /// Fixture-only: drop every runtime direct binding installed through
+    /// [`Self::install_direct_binding`]. No production path resets the map, so
+    /// this stays out of release builds.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn clear_runtime_direct_bindings(&self) {
         self.runtime_direct_bindings.lock().clear();
     }

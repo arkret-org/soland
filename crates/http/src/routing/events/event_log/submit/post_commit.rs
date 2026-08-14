@@ -979,7 +979,7 @@ async fn dynamic_peer_event_targets(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
 ) -> Result<Vec<DynamicPeerEventTarget>, String> {
-    let mut service_frontiers = {
+    let service_frontiers = {
         let projection = state.projections().snapshot();
         // sync/federation.md §4.4 — peers whose federation service delegation
         // for this Realm has been revoked MUST NOT receive future outbound

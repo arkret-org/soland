@@ -989,7 +989,7 @@ impl PeerReadAuthz {
         realm_id: &str,
         meta: &RealmMetaRecord,
         event_time: DateTime<Utc>,
-        needs_plaintext: bool,
+        _needs_plaintext: bool,
     ) -> bool {
         self.realm_members.get(realm_id).is_some_and(|members| {
             members.values().any(|member| {
