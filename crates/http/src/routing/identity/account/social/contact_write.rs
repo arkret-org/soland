@@ -942,7 +942,7 @@ fn signed_current_proof(
             AppError::param_invalid("Contact Event has no actor-bound proof controller")
         })?;
     let issuer = event.actor_id.clone();
-    let terminal = event.kind == arkret_wire::EventKind::ContactTombstoned;
+    let terminal = event.kind == arkret_wire::EventKind::ContactTombstone;
     let head_digest = Hash::new(
         event
             .event_digest()
@@ -2097,7 +2097,7 @@ pub(super) async fn tombstone(
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 reason: None,
             };
-            prepare::<arkret_wire::event_spec::ContactTombstoned>(
+            prepare::<arkret_wire::event_spec::ContactTombstone>(
                 state,
                 session,
                 body.operation_id,

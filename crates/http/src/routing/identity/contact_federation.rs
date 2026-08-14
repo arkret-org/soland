@@ -388,7 +388,7 @@ async fn peer_contacts_submit(
                 current_proof,
                 true,
             )?;
-            ("ak.contact.tombstoned", signed_event, contact_address)
+            ("ak.contact.tombstone", signed_event, contact_address)
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => {
@@ -636,7 +636,7 @@ fn contact_event_subject_core_id(
             serde_json::from_value::<ContactScopeUpdatePayload>(payload.clone())
                 .map(|payload| payload.peer.contact_actor_id().clone())
         }
-        "ak.contact.tombstoned" => {
+        "ak.contact.tombstone" => {
             serde_json::from_value::<ContactTombstonedPayload>(payload.clone())
                 .map(|payload| payload.peer.contact_actor_id().clone())
         }
@@ -1544,16 +1544,14 @@ fn validate_contact_lineage_carrier(
                 ));
             }
         }
-        arkret_wire::EventKind::ContactTombstoned => {
+        arkret_wire::EventKind::ContactTombstone => {
             let payload = serde_json::from_value::<ContactTombstonedPayload>(
                 serde_json::to_value(&event.payload).map_err(|error| {
                     AppError::internal(format!("Contact tombstone payload encode: {error}"))
                 })?,
             )
             .map_err(|_| {
-                super::super::events::peer::schema_violation(
-                    "invalid ak.contact.tombstoned payload",
-                )
+                super::super::events::peer::schema_violation("invalid ak.contact.tombstone payload")
             })?;
             if lineage.peer != payload.peer
                 || lineage.contact_round_id != payload.contact_round_id
@@ -3211,16 +3209,16 @@ async fn project_delivered_contact_fact(
             save_contact_cas(contacts, expected_updated_at, contact).await?;
             Ok("accepted")
         }
-        "ak.contact.tombstoned" => {
+        "ak.contact.tombstone" => {
             let tombstone = serde_json::from_value::<ContactTombstonedPayload>(payload.clone())
                 .map_err(|_| {
                     super::super::events::peer::schema_violation(
-                        "invalid ak.contact.tombstoned payload",
+                        "invalid ak.contact.tombstone payload",
                     )
                 })?;
             if tombstone.peer.contact_actor_id().as_str() != subject_id {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned peer does not match the addressed holder",
+                    "ak.contact.tombstone peer does not match the addressed holder",
                 ));
             }
             let Some(mut row) = contacts
@@ -3229,7 +3227,7 @@ async fn project_delivered_contact_fact(
                 .map_err(|error| AppError::internal(error.to_string()))?
             else {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned references no Contact round",
+                    "ak.contact.tombstone references no Contact round",
                 ));
             };
             if row.status == "tombstoned" {
@@ -3237,7 +3235,7 @@ async fn project_delivered_contact_fact(
                     return Ok("duplicate");
                 }
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned conflicts with the terminal Contact round",
+                    "ak.contact.tombstone conflicts with the terminal Contact round",
                 ));
             }
             let predecessor = if row.requester == issuer {
@@ -3250,7 +3248,7 @@ async fn project_delivered_contact_fact(
                 || predecessor != Some(tombstone.predecessor_event_ref.as_str())
             {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned lineage CAS mismatch",
+                    "ak.contact.tombstone lineage CAS mismatch",
                 ));
             }
             let expected_updated_at = row.updated_at;
@@ -3259,7 +3257,7 @@ async fn project_delivered_contact_fact(
             row.tombstone_event_ref = Some(contact_event_id.to_owned());
             let remote_proof = carrier_current_proof.ok_or_else(|| {
                 super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned carrier is missing its terminal proof",
+                    "ak.contact.tombstone carrier is missing its terminal proof",
                 )
             })?;
             let mut bundle = row.contact_round_evidence.clone().ok_or_else(|| {
@@ -3270,7 +3268,7 @@ async fn project_delivered_contact_fact(
             })?;
             if remote_proof.contact_round_id != bundle.contact_round_id || !remote_proof.terminal {
                 return Err(super::super::events::peer::schema_violation(
-                    "ak.contact.tombstoned proof has invalid contact_round or terminal state",
+                    "ak.contact.tombstone proof has invalid contact_round or terminal state",
                 ));
             }
             let local_proof = mirrored_contact_current_proof(
