@@ -467,19 +467,9 @@ pub(super) async fn submit_identity_anchor_batch(
     let authorized_generation_ref = if reanchor_conflict {
         None
     } else if is_reanchor {
-        Some(
-            typed_device_reanchor_payload(&envelopes[0])?
-                .new_device_generation
-                .to_string(),
-        )
+        Some(typed_device_reanchor_payload(&envelopes[0])?.new_device_generation)
     } else if is_bootstrap {
-        Some(
-            pcr_genesis_pins
-                .as_ref()
-                .ok_or_else(|| unit_error("PCR bootstrap is missing validated DID log pins"))?
-                .did_version_id
-                .clone(),
-        )
+        bootstrap_generation_ref(&envelopes[0])?
     } else {
         bootstrap_generation_ref(&envelopes[0])?
     };
@@ -1311,7 +1301,7 @@ async fn validate_unit_relationships(
             "device re-anchor requires an existing B-model generation",
         )
     })?;
-    if current.current_ref.parse::<u64>().ok() != Some(payload.previous_device_generation) {
+    if current.current_ref != payload.previous_device_generation {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
             "device_generation_fenced",
@@ -1651,7 +1641,7 @@ pub(super) fn canonical_record(
     }
 }
 
-fn bootstrap_generation_ref(create_envelope: &Value) -> Result<Option<String>, SubmitOneError> {
+fn bootstrap_generation_ref(create_envelope: &Value) -> Result<Option<u64>, SubmitOneError> {
     create_envelope
         .get("refs")
         .and_then(Value::as_array)
@@ -1663,8 +1653,7 @@ fn bootstrap_generation_ref(create_envelope: &Value) -> Result<Option<String>, S
         })
         .and_then(|reference| reference.get("id"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .map(Some)
+        .map(|_| Some(1))
         .ok_or_else(|| unit_error("PCR bootstrap is missing its validated DID inception ref"))
 }
 
@@ -1672,7 +1661,7 @@ async fn identity_anchor_device_projection(
     state: &AppState,
     authorize: &ValidatedEventEnvelope,
     envelope: &Value,
-    authorized_generation_ref: Option<String>,
+    authorized_generation_ref: Option<u64>,
     accepted_at: DateTime<Utc>,
 ) -> Result<soland_services::events::IdentityAnchorDeviceState, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
@@ -1727,7 +1716,7 @@ async fn identity_anchor_device_projection(
     if let Some(generation_ref) = authorized_generation_ref {
         payload_object.insert(
             "authorized_generation_ref".to_owned(),
-            Value::String(generation_ref),
+            Value::Number(generation_ref.into()),
         );
     } else {
         payload_object.remove("authorized_generation_ref");
@@ -2197,12 +2186,7 @@ mod tests {
     #[test]
     fn genesis_generation_comes_from_closed_unit_inception_ref() {
         let envelopes = sdk_canonical_self_principal_bootstrap_unit();
-        let expected = envelopes[0]["refs"][0]["id"].as_str().unwrap();
-
-        assert_eq!(
-            bootstrap_generation_ref(&envelopes[0]).unwrap().as_deref(),
-            Some(expected)
-        );
+        assert_eq!(bootstrap_generation_ref(&envelopes[0]).unwrap(), Some(1));
     }
 
     #[test]

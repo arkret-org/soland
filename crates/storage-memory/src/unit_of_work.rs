@@ -4,10 +4,10 @@ use soland_storage::{
     PersistenceError, PersistenceResult, ids,
 };
 
-use crate::SolandMemoryPersistenceStore;
 use crate::events::quarantine_memory_event;
 #[cfg(feature = "fault-injection")]
 use crate::{FaultPoint, FaultTiming};
+use crate::{MemoryDeviceRevocationState, SolandMemoryPersistenceStore};
 
 fn stage_control_proposal_ack(
     staged: &mut std::collections::BTreeMap<String, arkret_wire::ControlProposalAck>,
@@ -45,7 +45,8 @@ fn stage_control_proposal_ack(
         ));
     }
     if request.self_principal_pcr_device_authorized {
-        if request.control_proposal_ack.is_some()
+        if event.kind == arkret_wire::EventKind::DeviceRevoke
+            || request.control_proposal_ack.is_some()
             || !soland_storage::has_self_principal_pcr_device_authorized_shape(&event)
         {
             return Err(PersistenceError::Conflict(
@@ -79,6 +80,35 @@ fn stage_control_proposal_ack(
     }
     staged.insert(request.event.event_id.clone(), ack.clone());
     Ok(())
+}
+
+fn stage_device_revocation(
+    state: &mut MemoryDeviceRevocationState,
+    request: &EventCommitRequest,
+) -> PersistenceResult<bool> {
+    if let Some(selector) = request.device_revocation_gate.as_ref() {
+        state.status(selector).ensure_allowed()?;
+    }
+    let is_revoke = arkret_wire::EventKind::DeviceRevoke == request.event.kind;
+    let Some(transition) = request.device_revocation_transition.as_ref() else {
+        return if is_revoke {
+            Err(PersistenceError::Conflict(
+                "schema_violation: accepted device revoke is missing derived transition".to_owned(),
+            ))
+        } else {
+            Ok(false)
+        };
+    };
+    if !is_revoke
+        || transition.proposal_event_id != request.event.event_id
+        || transition.proposal_digest != request.event.canonical_digest
+        || request.control_proposal_ack.as_ref() != Some(&transition.control_proposal_ack)
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: device revocation transition does not bind Event and Ack".to_owned(),
+        ));
+    }
+    state.stage_transition(transition, chrono::Utc::now())
 }
 
 fn stage_canonical_event(
@@ -223,6 +253,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
+        let mut device_revocations = self.device_revocations.state.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -232,6 +263,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
         let mut staged_invite_policies = invite_policies.clone();
+        let mut staged_device_revocations = device_revocations.clone();
 
         stage_device_pairing_authorization(
             &mut staged_pairings,
@@ -270,6 +302,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 "event_hash_collision".to_owned(),
             ));
         }
+        let revocation_inserted =
+            stage_device_revocation(&mut staged_device_revocations, &request)?;
         if let Some(existing) = staged_events.get(&request.event.event_id) {
             if existing.canonical_bytes != request.event.canonical_bytes {
                 quarantine_memory_event(
@@ -283,6 +317,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 );
                 return Err(PersistenceError::Conflict(
                     "event_hash_collision".to_owned(),
+                ));
+            }
+            if revocation_inserted {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: replayed revoke Event lacks its atomic target".to_owned(),
                 ));
             }
             *pairings = staged_pairings;
@@ -370,6 +409,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *pairings = staged_pairings;
         *contacts = staged_contacts;
         *invite_policies = staged_invite_policies;
+        *device_revocations = staged_device_revocations;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -406,6 +446,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
+        let mut device_revocations = self.device_revocations.state.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -417,6 +458,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
         let mut staged_invite_policies = invite_policies.clone();
+        let mut staged_device_revocations = device_revocations.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
@@ -458,6 +500,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     "event_hash_collision".to_owned(),
                 ));
             }
+            let revocation_inserted =
+                stage_device_revocation(&mut staged_device_revocations, &event_request)?;
             if let Some(existing) = staged_events.get(&event_request.event.event_id) {
                 if existing.canonical_bytes != event_request.event.canonical_bytes {
                     if !events.contains_key(&event_request.event.event_id) {
@@ -474,6 +518,12 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     );
                     return Err(PersistenceError::Conflict(
                         "event_hash_collision".to_owned(),
+                    ));
+                }
+                if revocation_inserted {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: replayed revoke Event lacks its atomic target"
+                            .to_owned(),
                     ));
                 }
                 continue;
@@ -596,6 +646,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *pairings = staged_pairings;
         *contacts = staged_contacts;
         *invite_policies = staged_invite_policies;
+        *device_revocations = staged_device_revocations;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
@@ -612,8 +663,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
-        AppletGhostCommit, CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest,
-        EventCommitUnitOfWork, IdempotencyRecord, PersistenceError,
+        AppletGhostCommit, CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
+        DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
+        DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
+        EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+        EventProjectionStoreRegistry, IdempotencyRecord, PersistenceError, ProjectionEventRecord,
     };
 
     use super::stage_control_proposal_ack;
@@ -681,6 +735,8 @@ mod tests {
             },
             control_proposal_ack: None,
             self_principal_pcr_device_authorized: false,
+            device_revocation_transition: None,
+            device_revocation_gate: None,
             projections: Vec::new(),
             idempotency,
             outbox: Vec::new(),
@@ -773,10 +829,107 @@ mod tests {
             },
             control_proposal_ack: None,
             self_principal_pcr_device_authorized: true,
+            device_revocation_transition: None,
+            device_revocation_gate: None,
             projections: Vec::new(),
             idempotency: None,
             outbox: Vec::new(),
         }
+    }
+
+    fn device_revoke_request() -> (EventCommitRequest, DeviceRevocationGateSelector) {
+        let realm_id = realm_id();
+        let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let principal_server_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap();
+        let created_at = Utc::now();
+        let event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            },
+            actor_id.clone(),
+            principal_server_id.clone(),
+            0,
+            arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
+            serde_json::json!({
+                "principal_id": actor_id,
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                "revoked_by": "ak:did_core:web:alice.example",
+                "revoked_at": created_at,
+                "reason": "fixture"
+            }),
+            created_at,
+        )
+        .unwrap();
+        let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: event.realm_id.clone(),
+            proposal_digest: event_digest.clone(),
+            received_at: created_at,
+            decision_due_at: created_at + policy.decision_window,
+            absolute_due_at: created_at + policy.absolute_horizon,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new("did:web:soland.example#authority-1")
+                    .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                jws: "e30..c2ln".to_owned(),
+                extra: Default::default(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        let control_proposal_ack =
+            arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy)
+                .unwrap();
+        let event_id = event.event_id.to_string();
+        let canonical_digest = event_digest.to_string();
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        let selector = DeviceRevocationGateSelector {
+            principal_id: actor_id.to_string(),
+            principal_server_id: principal_server_id.to_string(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            target_device_authorize_event_id:
+                "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
+            target_device_generation_ref: 7,
+        };
+        let transition = DeviceRevocationTransition {
+            selector: selector.clone(),
+            proposal_event_id: event_id.clone(),
+            proposal_digest: canonical_digest.clone(),
+            control_proposal_ack: control_proposal_ack.clone(),
+        };
+        (
+            EventCommitRequest {
+                device_pairing_authorization: None,
+                contact_projection: None,
+                event: CanonicalEventRecord {
+                    event_id,
+                    actor_id: actor_id.to_string(),
+                    actor_seq: event.actor_seq,
+                    realm_id: Some(realm_id),
+                    kind: event.kind.to_string(),
+                    schema_id: "arkret://events/device/revoke/v1".to_owned(),
+                    canonical_digest,
+                    canonical_bytes,
+                    envelope: serde_json::to_value(event).unwrap(),
+                    received_at: created_at,
+                },
+                control_proposal_ack: Some(control_proposal_ack),
+                self_principal_pcr_device_authorized: false,
+                device_revocation_transition: Some(transition),
+                device_revocation_gate: None,
+                projections: Vec::new(),
+                idempotency: None,
+                outbox: Vec::new(),
+            },
+            selector,
+        )
     }
 
     #[test]
@@ -844,6 +997,208 @@ mod tests {
         ));
         assert!(store.events.data.lock().contains_key(&event_id));
         assert!(store.events.quarantined.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn device_revoke_acceptance_replay_gate_seal_and_cleanup_are_one_state_machine() {
+        let store = SolandMemoryPersistenceStore::new();
+        let (request, selector) = device_revoke_request();
+        let proposal_digest = request.event.canonical_digest.clone();
+        let proposal_event_id = request.event.event_id.clone();
+
+        let accepted = store.commit_event(request.clone()).await.unwrap();
+        assert!(accepted.event_inserted);
+        assert!(matches!(
+            store.device_revocations.gate_status(&selector).await.unwrap(),
+            DeviceRevocationGateStatus::Pending { ref blocking_proposal_digest }
+                if blocking_proposal_digest == &proposal_digest
+        ));
+        let first_targets = store
+            .device_revocations
+            .list_targets(&selector)
+            .await
+            .unwrap();
+        assert_eq!(first_targets.len(), 1);
+        assert_eq!(first_targets[0].acceptance_seq, 1);
+
+        let gated_event_id = typed_id("ak:event:");
+        let mut gated_event = event_request(
+            gated_event_id.clone(),
+            realm_id(),
+            "did:web:alice.example",
+            None,
+        );
+        gated_event.device_revocation_gate = Some(selector.clone());
+        assert!(matches!(
+            store.commit_event(gated_event).await,
+            Err(PersistenceError::Conflict(reason)) if reason == "device_revocation_pending"
+        ));
+        assert!(!store.events.data.lock().contains_key(&gated_event_id));
+
+        assert!(matches!(
+            store
+                .device_messages()
+                .append(
+                    Some(&selector),
+                    DeviceMessageRecord {
+                        idempotency_key: "revocation-pending-message".to_owned(),
+                        sender: selector.principal_id.clone(),
+                        recipient: selector.principal_id.clone(),
+                        device_id: selector.device_id.clone(),
+                        position: 1,
+                        content: serde_json::json!({"kind": "fixture"}),
+                        created_at: Utc::now(),
+                    },
+                )
+                .await,
+            Err(PersistenceError::Conflict(reason)) if reason == "device_revocation_pending"
+        ));
+
+        let replay = store.commit_event(request).await.unwrap();
+        assert_eq!(replay, soland_storage::EventCommitOutcome::default());
+        assert_eq!(
+            store
+                .device_revocations
+                .list_targets(&selector)
+                .await
+                .unwrap(),
+            first_targets
+        );
+
+        let linearization_request = DeviceRevocationGateLinearizationRequest {
+            principal_id: selector.principal_id.clone(),
+            principal_server_id: selector.principal_server_id.clone(),
+            device_id: selector.device_id.clone(),
+            expected_device_authorize_event_id: Some(
+                selector.target_device_authorize_event_id.clone(),
+            ),
+            expected_device_generation_ref: Some(selector.target_device_generation_ref),
+            origin_current_selector: Some(selector.clone()),
+            action_class: DeviceRevocationGateAction::SessionGrantIssue,
+            intent_digest: format!("sha256:{}", "b".repeat(64)),
+            requested_at: Utc::now(),
+        };
+        let first = store
+            .device_revocations
+            .linearize_gate(linearization_request.clone())
+            .await
+            .unwrap();
+        let replay = store
+            .device_revocations
+            .linearize_gate(linearization_request)
+            .await
+            .unwrap();
+        assert_eq!(first, replay);
+        assert!(matches!(
+            first.status,
+            DeviceRevocationGateStatus::Pending { .. }
+        ));
+
+        let sealed_at = Utc::now();
+        assert!(
+            store
+                .device_revocations
+                .mark_sealed(
+                    &proposal_digest,
+                    &format!("ak:seal:sha256:{}", "c".repeat(64)),
+                    sealed_at
+                )
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            store
+                .device_revocations
+                .gate_status(&selector)
+                .await
+                .unwrap(),
+            DeviceRevocationGateStatus::Revoked { .. }
+        ));
+        assert_eq!(
+            store
+                .device_revocations
+                .pending_cleanup_intents(10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .device_revocations
+                .complete_material_cleanup(&proposal_digest, Utc::now())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .device_revocations
+                .pending_cleanup_intents(10)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the durable task remains until the MLS step is acknowledged"
+        );
+        assert!(
+            store
+                .device_revocations
+                .complete_mls_obligation_by_event_id(&proposal_event_id, Utc::now())
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .device_revocations
+                .pending_cleanup_intents(10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_event_commit_leaves_no_revocation_event_ack_or_pending_target() {
+        let store = SolandMemoryPersistenceStore::new();
+        let (mut request, selector) = device_revoke_request();
+        let event_id = request.event.event_id.clone();
+        request.projections.push(ProjectionEventRecord {
+            event_id: event_id.clone(),
+            realm_id: "not-a-typed-realm".to_owned(),
+            event_kind: arkret_wire::EventKind::DeviceRevoke.to_string(),
+            operation_kind: "revoke".to_owned(),
+            operation_id: None,
+            sender: Some(selector.principal_id.clone()),
+            payload: serde_json::json!({}),
+            created_at: Utc::now(),
+            received_at: Utc::now(),
+        });
+
+        assert!(store.commit_event(request).await.is_err());
+        assert!(!store.events.data.lock().contains_key(&event_id));
+        assert!(
+            !store
+                .events
+                .control_proposal_acks
+                .lock()
+                .contains_key(&event_id)
+        );
+        assert!(
+            store
+                .device_revocations
+                .list_targets(&selector)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .device_revocations
+                .gate_status(&selector)
+                .await
+                .unwrap(),
+            DeviceRevocationGateStatus::Active
+        );
     }
 
     #[tokio::test]

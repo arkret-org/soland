@@ -715,7 +715,7 @@ pub fn verify_principal_authorized_control_ack_jws_async<'a>(
         .ok_or_else(|| fail("principal Ack device generation is unavailable".to_owned()))?;
         if generation.status
             != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-            || generation.current_ref != generation_ref.as_str()
+            || generation.current_ref != generation_ref
         {
             return Err(fail(
                 "principal Ack signer is outside the active device generation".to_owned(),
@@ -993,7 +993,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         .ok_or_else(|| fail("principal device generation is unavailable".to_owned()))?;
         if generation.status
             != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-            || generation.current_ref != generation_ref.as_str()
+            || generation.current_ref != generation_ref
         {
             return Err(fail(
                 "principal Event signer is outside the active device generation".to_owned(),

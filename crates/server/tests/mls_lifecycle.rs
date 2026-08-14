@@ -637,24 +637,7 @@ async fn mls_lifecycle_end_to_end() {
     .unwrap();
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
-    let mut bob_device_record = state
-        .test_persistence()
-        .devices()
-        .get(bob_core.as_str(), bob_device)
-        .await
-        .unwrap()
-        .unwrap();
-    bob_device_record.payload["device_public_key"] =
-        json!(ed25519_public_multibase(&event_signing_key));
-    bob_device_record.payload["device_authorize_event_id"] =
-        json!(soland_test_support::fixture_content_bound_id("ak:event:"));
-    bob_device_record.verification_state = "verified".to_owned();
-    state
-        .test_persistence()
-        .devices()
-        .put(&bob_device_record)
-        .await
-        .unwrap();
+    project_authorized_principal_device(&state, bob_did, bob_device, &event_signing_key).await;
 
     let group_id = "ak:mls_group:abc";
     let lifecycle_keypackage_id = "ak:mls_keypackage:lifecycle-bob";

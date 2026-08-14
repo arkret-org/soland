@@ -14,21 +14,22 @@ use super::{
     MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore,
     MemoryCircleProjectionStore, MemoryConsentCellStore, MemoryContactStore,
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
-    MemoryDevicePairingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
-    MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryHandleReleaseStore,
-    MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
-    MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore,
-    MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
-    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
-    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
-    MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
-    MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore, MemoryProjectionEventStore,
-    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
-    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
-    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
-    MemoryServiceIdentityStore, MemoryServiceRouteStore, MemorySessionStore, MemorySidecarStore,
-    MemorySignalRelayStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemoryDevicePairingStore, MemoryDeviceRevocationStore, MemoryEventStore,
+    MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
+    MemoryFederationOutboxStore, MemoryHandleReleaseStore, MemoryIdempotencyStore,
+    MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
+    MemoryKeyBackupStore, MemoryMessageStore, MemoryMimiConsentCorrelationStore,
+    MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
+    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
+    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
+    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore,
+    MemoryProjectionEventStore, MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore,
+    MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
+    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
     MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
     MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
     MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
@@ -65,6 +66,7 @@ pub struct SolandMemoryPersistenceStore {
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
     pub(crate) device_pairings: MemoryDevicePairingStore,
+    pub(crate) device_revocations: MemoryDeviceRevocationStore,
     pub(crate) federation_outbox: MemoryFederationOutboxStore,
     federation_frontier_exchange: MemoryFederationFrontierExchangeStore,
     handle_releases: MemoryHandleReleaseStore,
@@ -127,6 +129,7 @@ impl SolandMemoryPersistenceStore {
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
         let device_inventory_data = devices.shared_data();
+        let device_revocations = MemoryDeviceRevocationStore::new(device_inventory_data.clone());
         let publication_evidence_data = Arc::new(Mutex::new(BTreeMap::new()));
         let federation_outbox = MemoryFederationOutboxStore::new();
         let canonical_events = Arc::new(Mutex::new(BTreeMap::new()));
@@ -159,6 +162,7 @@ impl SolandMemoryPersistenceStore {
             blobs: MemoryBlobStore::new(),
             devices,
             device_pairings: MemoryDevicePairingStore::new(),
+            device_revocations: device_revocations.clone(),
             federation_outbox,
             federation_frontier_exchange: MemoryFederationFrontierExchangeStore::new(),
             handle_releases: MemoryHandleReleaseStore::new(),
@@ -197,7 +201,10 @@ impl SolandMemoryPersistenceStore {
             events,
             projection_events,
             applets: MemoryAppletStore::new(),
-            device_messages: MemoryDeviceMessageStore::with_inventory(device_inventory_data),
+            device_messages: MemoryDeviceMessageStore::with_inventory_and_revocations(
+                device_inventory_data,
+                device_revocations.state.clone(),
+            ),
             device_keys: MemoryDeviceKeyStore::new(),
             one_time_keys: MemoryOneTimeKeyStore::new(),
             key_backups: MemoryKeyBackupStore::new(),
@@ -211,7 +218,9 @@ impl SolandMemoryPersistenceStore {
                 publication_evidence_data,
             ),
             // G3.S1: MLS lifecycle stores.
-            mls_key_packages: MemoryMlsKeyPackageStore::new(),
+            mls_key_packages: MemoryMlsKeyPackageStore::with_revocations(
+                device_revocations.state.clone(),
+            ),
             mls_welcomes: MemoryMlsWelcomeStore::new(),
             mls_commits: MemoryMlsCommitStore::new(),
             agent_participation: MemoryAgentParticipationStore::new(),
@@ -361,6 +370,10 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn device_pairings(&self) -> &dyn DevicePairingStore {
         &self.device_pairings
+    }
+
+    fn device_revocations(&self) -> &dyn soland_storage::DeviceRevocationStore {
+        &self.device_revocations
     }
 }
 

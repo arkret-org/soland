@@ -279,7 +279,7 @@ mod tests {
             payload: json!({
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "device_public_key": "z6Mkexample",
-                "authorized_generation_ref": "1-QmGeneration"
+                "authorized_generation_ref": 1
             }),
             created_at,
             updated_at: created_at,
@@ -301,8 +301,8 @@ mod tests {
             refreshed
                 .payload
                 .get("authorized_generation_ref")
-                .and_then(serde_json::Value::as_str),
-            Some("1-QmGeneration")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
         );
         assert_eq!(
             refreshed

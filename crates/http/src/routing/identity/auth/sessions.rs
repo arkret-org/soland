@@ -56,13 +56,15 @@ pub async fn authenticated_session(
         // for this request, never persisted as a local bearer. Writes and
         // sensitive reads bypass the introspection cache so revocation is
         // observed before admitting a high-risk operation.
-        return super::super::auth_grant_dpop::grant_dpop_session(
+        let session = super::super::auth_grant_dpop::grant_dpop_session(
             state,
             req,
             token,
             request_requires_fresh_introspection(req),
         )
-        .await;
+        .await?;
+        enforce_session_device_revocation_gate(state, &session).await?;
+        return Ok(session);
     }
     if bearer_looks_like_session_grant(token) {
         return Err((
@@ -113,7 +115,103 @@ pub async fn authenticated_session(
     if session.expires_at <= now() {
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
+    enforce_session_device_revocation_gate(state, &session).await?;
     Ok(session)
+}
+
+async fn enforce_session_device_revocation_gate(
+    state: &AppState,
+    session: &SessionRecord,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    if session.agent_session.is_some() {
+        return Ok(());
+    }
+    let current = super::super::device_generation::active_device_revocation_gate_selector(
+        state,
+        &session.actor,
+        &session.device_id,
+    )
+    .await;
+    let current = match current {
+        Ok(current) => current,
+        Err(_) if state.config().development_mode && session.session_grant.is_none() => {
+            // The deployment-local dev-login surface deliberately creates a
+            // synthetic session before a PCR authorization exists so pairing
+            // and account-bootstrap flows can be exercised. Such a placeholder
+            // has no accepted generation that could be pending or revoked; the
+            // legacy revoked_at check above still rejects an explicitly revoked
+            // device. Production and SessionGrant-backed sessions remain
+            // fail-closed on every missing or stale authority selector.
+            return Ok(());
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "device_revoked",
+                "device authorization is not active",
+            ));
+        }
+    };
+    let selector = if let Some(grant) = session.session_grant.as_ref() {
+        let binding = grant.device_binding.as_ref().ok_or((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "human session grant omitted its exact device binding",
+        ))?;
+        if binding.device_id.as_str() != session.device_id {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "session grant device binding does not match the session",
+            ));
+        }
+        soland_storage::DeviceRevocationGateSelector {
+            principal_id: session.actor.clone(),
+            principal_server_id: session.audience.clone(),
+            device_id: binding.device_id.to_string(),
+            target_device_authorize_event_id: binding.authorization_event_id.to_string(),
+            target_device_generation_ref: binding.model_generation_ref,
+        }
+    } else {
+        current.clone()
+    };
+    if selector != current {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "session device generation is no longer current",
+        ));
+    }
+    let status = state
+        .persistence()
+        .device_revocation_gate_status(&selector)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "device revocation state unavailable",
+            )
+        })?;
+    match status {
+        soland_storage::DeviceRevocationGateStatus::Active => Ok(()),
+        soland_storage::DeviceRevocationGateStatus::Pending { .. } => Err((
+            StatusCode::CONFLICT,
+            "device_revocation_pending",
+            "device revocation is pending",
+        )),
+        soland_storage::DeviceRevocationGateStatus::Revoked { .. } => Err((
+            StatusCode::CONFLICT,
+            "device_revoked",
+            "device generation is revoked",
+        )),
+        soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
+        | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => Err((
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "session device authority binding is no longer current",
+        )),
+    }
 }
 
 fn request_requires_fresh_introspection(req: &Request) -> bool {

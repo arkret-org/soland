@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 
 use crate::{
-    CanonicalEventRecord, ContactRecord, DevicePairingAuthorizationCommit, FederationOutboxRecord,
+    CanonicalEventRecord, ContactRecord, DevicePairingAuthorizationCommit,
+    DeviceRevocationGateSelector, DeviceRevocationTransition, FederationOutboxRecord,
     IdempotencyRecord, PersistenceResult, ProjectionEventRecord,
 };
 
@@ -32,6 +33,11 @@ pub struct EventCommitRequest {
     pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    /// Reducer-derived target for an accepted `ak.device.revoke`. The target
+    /// and canonical Ack commit in the same transaction as the Event.
+    pub device_revocation_transition: Option<DeviceRevocationTransition>,
+    /// Exact author-device generation rechecked inside the Event transaction.
+    pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
     /// The Event proof itself is the proposal authority because this is an
     /// authority-authored Control Move in a self-principal PCR. Such a Move
     /// deliberately carries no independent Control Proposal Ack, but still

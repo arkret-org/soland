@@ -50,7 +50,7 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
             "device_id": device_id,
             "display_name": display_name,
         }))
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code;
     let login: Value = response
@@ -62,10 +62,19 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display_name: 
         Some(StatusCode::OK),
         "dev-login failed for {actor} / {device_id}: {login}"
     );
-    login["session_credential"]
+    let token = login["session_credential"]
         .as_str()
         .unwrap_or_else(|| panic!("dev-login response missing session_credential: {login}"))
-        .to_owned()
+        .to_owned();
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
+    soland_test_support::project_authorized_principal_device(
+        &state,
+        actor,
+        device_id,
+        &signing_key,
+    )
+    .await;
+    token
 }
 
 async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> Value {

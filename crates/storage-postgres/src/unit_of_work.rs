@@ -367,6 +367,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 }
                 continue;
             }
+            if let Some(selector) = request.device_revocation_gate.as_ref() {
+                crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
+            }
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
@@ -445,7 +448,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .into());
                 }
                 let control_proposal_ack = if request.self_principal_pcr_device_authorized {
-                    if request.control_proposal_ack.is_some()
+                    if typed_event.kind == arkret_wire::EventKind::DeviceRevoke
+                        || request.control_proposal_ack.is_some()
                         || !soland_storage::has_self_principal_pcr_device_authorized_shape(
                             &typed_event,
                         )
@@ -515,8 +519,36 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
+                if typed_event.kind == arkret_wire::EventKind::DeviceRevoke {
+                    let transition = request.device_revocation_transition.as_ref().ok_or_else(|| {
+                        PersistenceError::Conflict(
+                            "schema_violation: accepted device revoke is missing derived transition"
+                                .to_owned(),
+                        )
+                    })?;
+                    if transition.proposal_event_id != request.event.event_id
+                        || transition.proposal_digest != request.event.canonical_digest
+                        || request.control_proposal_ack.as_ref()
+                            != Some(&transition.control_proposal_ack)
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: device revocation transition does not bind Event and Ack"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    crate::insert_transition_in_transaction(conn, transition, chrono::Utc::now())
+                        .await?;
+                } else if request.device_revocation_transition.is_some() {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: non-revoke Event carries device revocation transition"
+                            .to_owned(),
+                    )
+                    .into());
+                }
             } else if request.control_proposal_ack.is_some()
                 || request.self_principal_pcr_device_authorized
+                || request.device_revocation_transition.is_some()
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: non-Control Event cannot carry Control Proposal authority"

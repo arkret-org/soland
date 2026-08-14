@@ -79,6 +79,31 @@ async fn send_device_messages(
 ) -> JsonResult<DeviceMessagesSendOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let restricted_fresh_device_verification = state.config().development_mode
+        && session.session_grant.is_none()
+        && body.messages.iter().all(|(principal_id, targets)| {
+            principal_id.as_str() == session.actor
+                && targets
+                    .values()
+                    .all(|target| target.kind.as_str().starts_with("ak.key.verification."))
+        });
+    let sender_revocation_gate =
+        match super::device_generation::active_device_revocation_gate_selector(
+            state,
+            &session.actor,
+            &session.device_id,
+        )
+        .await
+        {
+            Ok(selector) => Some(selector),
+            Err(_) if restricted_fresh_device_verification => None,
+            Err(error) => {
+                return Err(AppError::internal(format!(
+                    "current device revocation selector unavailable: {error}"
+                )));
+            }
+        };
     let idempotency_key = req
         .headers()
         .get("Idempotency-Key")
@@ -91,7 +116,6 @@ async fn send_device_messages(
         ));
     }
     let idempotency_key = idempotency_key.to_owned();
-    let body = body.into_inner();
     let request_digest = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let request_key = arkret_canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
@@ -242,6 +266,7 @@ async fn send_device_messages(
             request_key,
             request_digest,
             idempotency_expires_at: idempotency_expires_at + chrono::Duration::hours(1),
+            device_revocation_gate: sender_revocation_gate,
             target_snapshot_guard: None,
             items: batch_items,
         })
@@ -258,6 +283,15 @@ async fn send_device_messages(
         }
         DeviceMessageBatchCommitOutcome::SnapshotConflict => {
             return Err(AppError::conflict("recipient device snapshot changed"));
+        }
+        DeviceMessageBatchCommitOutcome::DeviceRevocationPending => {
+            return Err(AppError::conflict("device revocation is pending")
+                .with_wire_code("device_revocation_pending"));
+        }
+        DeviceMessageBatchCommitOutcome::DeviceRevoked => {
+            return Err(
+                AppError::conflict("device generation is revoked").with_wire_code("device_revoked")
+            );
         }
     };
     let outcome = device_message_send_outcome(&prepared_targets, &message_outcomes)?;
@@ -335,6 +369,21 @@ pub(crate) async fn fanout_actor_private_update(
     let event_type = update.kind();
     let origin_device_id = update.sender_device_id();
     let created_at = update.created_at();
+    let sender_revocation_gate =
+        match super::device_generation::active_device_revocation_gate_selector(
+            state,
+            actor,
+            origin_device_id,
+        )
+        .await
+        {
+            Ok(selector) => Some(selector),
+            Err(_) if state.config().development_mode => None,
+            Err(error) => {
+                tracing::warn!(%error, actor, origin_device_id, "actor-private fanout rejected because the sender device authority is not active");
+                return 0;
+            }
+        };
     let envelope = match serde_json::to_value(&update) {
         Ok(envelope) => envelope,
         Err(error) => {
@@ -356,15 +405,18 @@ pub(crate) async fn fanout_actor_private_update(
         let idempotency_key = format!("{event_type}:{actor}:{origin_device_id}:{position}");
         match state
             .deliveries()
-            .append_device_message(DeviceMessageState {
-                idempotency_key,
-                sender: actor.to_owned(),
-                recipient: actor.to_owned(),
-                device_id: device.device_id,
-                position,
-                content: envelope.clone(),
-                created_at,
-            })
+            .append_device_message(
+                sender_revocation_gate.as_ref(),
+                DeviceMessageState {
+                    idempotency_key,
+                    sender: actor.to_owned(),
+                    recipient: actor.to_owned(),
+                    device_id: device.device_id,
+                    position,
+                    content: envelope.clone(),
+                    created_at,
+                },
+            )
             .await
         {
             Ok(()) => delivered += 1,
@@ -732,8 +784,8 @@ mod tests {
     #[tokio::test]
     async fn fanout_skips_devices_registered_under_other_principals() {
         let state = test_state();
-        let controller = "did:web:alice.example";
-        let agent = "did:web:agent.alice.example";
+        let controller = "ak:did_core:web:alice.example";
+        let agent = "ak:did_core:web:agent.alice.example";
         let origin_device = "ak:device:01904100-0000-7000-8000-0000000000c0";
         let other_controller_device = "ak:device:01904100-0000-7000-8000-0000000000c1";
         let agent_device = "ak:device:01904100-0000-7000-8000-0000000000a1";

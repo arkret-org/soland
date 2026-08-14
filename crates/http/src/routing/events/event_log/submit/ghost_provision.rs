@@ -292,6 +292,8 @@ async fn prepare_ghost_event(
             received_at,
         },
         control_proposal_ack,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
         self_principal_pcr_device_authorized: false,
         projections: projected_event
             .iter()

@@ -51,6 +51,7 @@ use arkret_models_identity::account::{
     AccountUpdateProfileOutcome,
 };
 use arkret_models_identity::actor_profile::{AccountMaterializedProfile, ActorProfile};
+use arkret_models_identity::{DeviceSummaryStatus, DeviceSummaryVerificationState};
 use arkret_state::lattice::CellState;
 use arkret_wire::ErrorCode;
 use base64::Engine;
@@ -2163,10 +2164,23 @@ async fn account_device_summaries(
         .devices_for_actor(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    devices.into_iter().map(account_device_summary).collect()
+    let current_generation = super::device_generation::current_device_generation(state, actor)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let mut summaries = Vec::with_capacity(devices.len());
+    for device in devices {
+        summaries
+            .push(account_device_summary(state, actor, device, current_generation.as_ref()).await?);
+    }
+    Ok(summaries)
 }
 
-fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary, AppError> {
+async fn account_device_summary(
+    state: &AppState,
+    actor: &str,
+    device: DeviceIdentity,
+    current_generation: Option<&super::device_generation::DeviceGenerationView>,
+) -> Result<AccountDeviceSummary, AppError> {
     let device_id = DeviceId::new(device.device_id.clone()).map_err(|error| {
         AppError::internal(format!(
             "stored device_id `{}` is invalid: {error}",
@@ -2177,14 +2191,6 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
         .display_name
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
-    let authorized = device.revoked_at.is_none() && device.verification_state == "verified";
-    let status = if device.revoked_at.is_some() {
-        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Revoked
-    } else if authorized {
-        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Active
-    } else {
-        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Unknown
-    };
     let authorized_event_ref = device
         .payload
         .get("device_authorize_event_id")
@@ -2198,16 +2204,217 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
             })
         })
         .transpose()?;
-    Ok(AccountDeviceSummary {
+    let authorized_generation_ref = device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_u64);
+    let mut revocation_states = if let (Some(event_id), Some(generation_ref)) =
+        (authorized_event_ref.as_ref(), authorized_generation_ref)
+    {
+        let selector = soland_storage::DeviceRevocationGateSelector {
+            principal_id: actor.to_owned(),
+            principal_server_id: state.service_id().clone(),
+            device_id: device_id.to_string(),
+            target_device_authorize_event_id: event_id.to_string(),
+            target_device_generation_ref: generation_ref,
+        };
+        state
+            .persistence()
+            .device_revocation_targets(&selector)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("device revocation state is unavailable: {error}"))
+            })?
+            .into_iter()
+            .filter_map(device_revocation_gate_record)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    revocation_states.sort_by(|left, right| {
+        (left.acceptance_seq(), left.proposal_digest().as_str())
+            .cmp(&(right.acceptance_seq(), right.proposal_digest().as_str()))
+    });
+    let has_revoked = revocation_states
+        .iter()
+        .any(arkret_wire::DeviceRevocationGateRecord::is_revoked);
+    let has_pending = revocation_states
+        .iter()
+        .any(arkret_wire::DeviceRevocationGateRecord::is_pending);
+    if device.revoked_at.is_some() && !has_revoked {
+        return Err(AppError::internal(
+            "revoked device has no durable covering revocation record",
+        ));
+    }
+    let expired = device
+        .payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|value| value.with_timezone(&chrono::Utc) <= now());
+    let status = if has_revoked {
+        DeviceSummaryStatus::Revoked
+    } else if has_pending {
+        DeviceSummaryStatus::RevocationPending
+    } else if expired {
+        DeviceSummaryStatus::Expired
+    } else if current_generation.is_some_and(|generation| {
+        generation.status == super::device_generation::DeviceGenerationStatus::Conflicted
+    }) {
+        DeviceSummaryStatus::Conflicted
+    } else if authorized_generation_ref.is_some_and(|authorized| {
+        current_generation.is_some_and(|current| authorized != current.current_ref)
+    }) {
+        DeviceSummaryStatus::GenerationFenced
+    } else {
+        DeviceSummaryStatus::Active
+    };
+    let verification_state = match device.verification_state.as_str() {
+        "verified" => DeviceSummaryVerificationState::Verified,
+        "stale" => DeviceSummaryVerificationState::Stale,
+        _ => DeviceSummaryVerificationState::Unresolved,
+    };
+    let summary = AccountDeviceSummary {
         device_id,
         status,
-        verification_state: device.verification_state.clone(),
+        verification_state,
         display_name,
+        authorized_at: authorized_event_ref.as_ref().map(|_| device.created_at),
         authorized_event_ref,
-        authorized_at: authorized.then_some(device.created_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,
-    })
+        revocation_states: (!revocation_states.is_empty()).then_some(revocation_states),
+    };
+    summary
+        .validate()
+        .map_err(|error| AppError::internal(format!("device summary is invalid: {error}")))?;
+    Ok(summary)
+}
+
+fn device_revocation_gate_record(
+    record: soland_storage::DeviceRevocationTargetRecord,
+) -> Option<Result<arkret_wire::DeviceRevocationGateRecord, AppError>> {
+    use arkret_wire::{
+        DEVICE_REVOCATION_DENIED_ACTIONS, DeviceRevocationDecisionState,
+        DeviceRevocationFaultReason, DeviceRevocationGateRecord, DeviceRevocationPendingState,
+        DeviceRevocationPendingStatus, DeviceRevocationStateSchema, DeviceRevokedState,
+        DeviceRevokedStatus, PrincipalAuthorityKey, SealId,
+    };
+
+    let soland_storage::DeviceRevocationTargetRecord {
+        selector,
+        proposal_event_id,
+        proposal_digest,
+        accepted_at,
+        acceptance_seq,
+        control_proposal_ack,
+        status,
+    } = record;
+    let common = (|| -> Result<_, AppError> {
+        Ok((
+            PrincipalAuthorityKey {
+                principal_id: DidCoreId::new(selector.principal_id.clone()).map_err(|error| {
+                    AppError::internal(format!("stored revocation principal invalid: {error}"))
+                })?,
+                principal_server_id: DidCoreId::new(selector.principal_server_id.clone()).map_err(
+                    |error| {
+                        AppError::internal(format!(
+                            "stored revocation Principal Server invalid: {error}"
+                        ))
+                    },
+                )?,
+            },
+            DeviceId::new(selector.device_id.clone()).map_err(|error| {
+                AppError::internal(format!("stored revocation device invalid: {error}"))
+            })?,
+            EventId::new(selector.target_device_authorize_event_id.clone()).map_err(|error| {
+                AppError::internal(format!(
+                    "stored revocation authorization Event invalid: {error}"
+                ))
+            })?,
+            EventId::new(proposal_event_id.clone()).map_err(|error| {
+                AppError::internal(format!("stored revoke proposal Event invalid: {error}"))
+            })?,
+            Hash::new(proposal_digest.clone()).map_err(|error| {
+                AppError::internal(format!("stored revoke proposal digest invalid: {error}"))
+            })?,
+        ))
+    })();
+
+    match status {
+        soland_storage::DeviceRevocationTargetStatus::Rejected { .. } => None,
+        soland_storage::DeviceRevocationTargetStatus::Pending {
+            decisions,
+            decision_overdue,
+        } => Some(common.and_then(
+            |(principal_authority, device_id, authorize_event_id, proposal_event_id, digest)| {
+                let (decision_state, decisions, fault_reason) = if decision_overdue {
+                    (
+                        DeviceRevocationDecisionState::Overdue,
+                        (!decisions.is_empty()).then_some(decisions),
+                        Some(DeviceRevocationFaultReason::ControlProposalDecisionOverdue),
+                    )
+                } else if decisions.is_empty() {
+                    (DeviceRevocationDecisionState::Pending, None, None)
+                } else {
+                    (
+                        DeviceRevocationDecisionState::Deferred,
+                        Some(decisions),
+                        None,
+                    )
+                };
+                let state = DeviceRevocationPendingState {
+                    schema: DeviceRevocationStateSchema::V1,
+                    principal_authority,
+                    device_id,
+                    target_device_authorize_event_id: authorize_event_id,
+                    target_device_generation_ref: selector.target_device_generation_ref,
+                    proposal_event_id,
+                    proposal_digest: digest,
+                    accepted_at,
+                    acceptance_seq,
+                    control_proposal_ack,
+                    status: DeviceRevocationPendingStatus::RevocationPending,
+                    decision_state,
+                    denied_actions: DEVICE_REVOCATION_DENIED_ACTIONS,
+                    decisions,
+                    fault_reason,
+                };
+                state.validate().map_err(|error| {
+                    AppError::internal(format!("stored pending revocation state invalid: {error}"))
+                })?;
+                Ok(DeviceRevocationGateRecord::Pending(state))
+            },
+        )),
+        soland_storage::DeviceRevocationTargetStatus::Revoked {
+            covering_seal_id,
+            sealed_at,
+        } => Some(common.and_then(
+            |(principal_authority, device_id, authorize_event_id, proposal_event_id, digest)| {
+                let state = DeviceRevokedState {
+                    schema: DeviceRevocationStateSchema::V1,
+                    principal_authority,
+                    device_id,
+                    target_device_authorize_event_id: authorize_event_id,
+                    target_device_generation_ref: selector.target_device_generation_ref,
+                    proposal_event_id,
+                    proposal_digest: digest,
+                    accepted_at,
+                    acceptance_seq,
+                    control_proposal_ack,
+                    status: DeviceRevokedStatus::Revoked,
+                    covering_seal_id: SealId::new(covering_seal_id).map_err(|error| {
+                        AppError::internal(format!("stored covering Seal id invalid: {error}"))
+                    })?,
+                    sealed_at,
+                };
+                state.validate().map_err(|error| {
+                    AppError::internal(format!("stored revoked state invalid: {error}"))
+                })?;
+                Ok(DeviceRevocationGateRecord::Revoked(state))
+            },
+        )),
+    }
 }
 
 #[cfg(test)]

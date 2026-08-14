@@ -999,6 +999,7 @@ mod tests {
             "content": {
                 "body": "ping",
                 "mentions": [{
+                    "kind": "mention",
                     "subject_id": agent,
                     "mention_text_original": "@agent"
                 }]

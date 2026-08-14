@@ -1,10 +1,10 @@
 use super::{
-    BTreeMap, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey,
-    MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget,
-    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Mutex,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, Uuid, Value,
-    VecDeque, async_trait, mls_epoch_key,
+    BTreeMap, DeviceRevocationGateStatus, MlsCommitEpochAdvance, MlsCommitEpochRecord,
+    MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
+    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
+    MlsWelcomeStore, Mutex, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
+    PersistenceResult, Uuid, Value, VecDeque, async_trait, mls_epoch_key,
 };
 
 #[derive(Default)]
@@ -16,10 +16,20 @@ struct MemoryMlsKeyPackageState {
 #[derive(Default)]
 pub(crate) struct MemoryMlsKeyPackageStore {
     state: Mutex<MemoryMlsKeyPackageState>,
+    revocations: Option<std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>>,
 }
 impl MemoryMlsKeyPackageStore {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn with_revocations(
+        revocations: std::sync::Arc<Mutex<crate::MemoryDeviceRevocationState>>,
+    ) -> Self {
+        Self {
+            state: Mutex::default(),
+            revocations: Some(revocations),
+        }
     }
 }
 #[async_trait]
@@ -61,9 +71,29 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             intended_realm_id,
             device_authorize_event_id,
             agent_key_authorize_event_id,
+            device_revocation_gate,
             claimed_at,
             claim_expires_at_unix_ms,
         } = claim;
+        let gate_required = matches!(target, MlsKeyPackageClaimTarget::Group(_))
+            && device_authorize_event_id.is_some();
+        let _revocations = match (
+            gate_required,
+            device_revocation_gate.as_ref(),
+            &self.revocations,
+        ) {
+            (true, Some(selector), Some(revocations)) => {
+                let guard = revocations.lock();
+                guard.status(selector).ensure_allowed()?;
+                Some(guard)
+            }
+            (true, None, Some(_)) => {
+                return Err(PersistenceError::SchemaViolation(
+                    "device KeyPackage claim is missing revocation selector".to_owned(),
+                ));
+            }
+            _ => None,
+        };
         let (group_id, terminal_without_claim, retiring) = match target {
             MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false, false),
             MlsKeyPackageClaimTarget::Retire => ("retired", true, true),
@@ -202,6 +232,30 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         &self,
         attempt: PeerKeyPackageClaimAttempt<'_>,
     ) -> PersistenceResult<PeerKeyPackageClaimAttemptResult> {
+        let _revocations = match (
+            attempt.device_authorize_event_id.is_some(),
+            attempt.device_revocation_gate.as_ref(),
+            &self.revocations,
+        ) {
+            (true, Some(selector), Some(revocations)) => {
+                let guard = revocations.lock();
+                match guard.status(selector) {
+                    DeviceRevocationGateStatus::Active => Some(guard),
+                    DeviceRevocationGateStatus::Pending { .. }
+                    | DeviceRevocationGateStatus::Revoked { .. }
+                    | DeviceRevocationGateStatus::AuthorityMismatch
+                    | DeviceRevocationGateStatus::GenerationMismatch => {
+                        return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
+                    }
+                }
+            }
+            (true, None, Some(_)) => {
+                return Err(PersistenceError::SchemaViolation(
+                    "peer device KeyPackage claim is missing revocation selector".to_owned(),
+                ));
+            }
+            _ => None,
+        };
         let mut state = self.state.lock();
         let ledger_key = (
             attempt.ledger.source_service_id.clone(),
@@ -559,6 +613,7 @@ mod tests {
                     "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
                 ),
                 agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &first_ledger,
@@ -570,6 +625,7 @@ mod tests {
                     "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
                 ),
                 agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &second_ledger,
@@ -613,6 +669,7 @@ mod tests {
                     "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
                 ),
                 agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
                 claimed_at: 10,
                 claim_expires_at_unix_ms: i64::MAX - 1,
                 ledger: &ledger,
@@ -718,6 +775,7 @@ mod tests {
                             "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD",
                         ),
                         agent_key_authorize_event_id: None,
+                        device_revocation_gate: None,
                         claimed_at: 10,
                         claim_expires_at_unix_ms: 20_000,
                         ledger,

@@ -51,7 +51,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_key = SigningKey::from_bytes(&[61u8; 32]);
     let alice_device_public = test_ed25519_multibase_public(&alice_device_key);
-    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_public).await;
+    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_key).await;
     let upload_body = signed_keys_upload_body(
         alice,
         alice_device,
@@ -737,8 +737,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
     let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
     let expected_principal_id_key = format!("did:key:{alice_device_multibase}");
-    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_multibase)
-        .await;
+    seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_key).await;
 
     // Member B queries member A's (actor, device) directory entry.
     let bob = dev_token_for_device(
@@ -816,14 +815,12 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
     let bob_device_key = SigningKey::from_bytes(&[204u8; 32]);
     let bob_device_multibase = test_ed25519_multibase_public(&bob_device_key);
     let expected_principal_id_key = format!("did:key:{bob_device_multibase}");
-    seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_multibase).await;
+    seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_key).await;
     let carol = "did:web:carol.example";
     let carol_core = core_principal(carol);
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
-    let carol_device_multibase = test_ed25519_multibase_public(&carol_device_key);
-    seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_multibase)
-        .await;
+    seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_key).await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
 
     let realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
@@ -1076,20 +1073,18 @@ async fn keys_query_hides_revoked_device() {
     let mobile_device = "ak:device:01904100-0000-7000-8000-9b04e0000007";
     let desktop_key = SigningKey::from_bytes(&[62u8; 32]);
     let mobile_key = SigningKey::from_bytes(&[63u8; 32]);
-    let desktop_public = test_ed25519_multibase_public(&desktop_key);
-    let mobile_public = test_ed25519_multibase_public(&mobile_key);
     seed_verified_device_with_public_key(
         &state,
         "did:web:alice.example",
         desktop_device,
-        &desktop_public,
+        &desktop_key,
     )
     .await;
     seed_verified_device_with_public_key(
         &state,
         "did:web:alice.example",
         mobile_device,
-        &mobile_public,
+        &mobile_key,
     )
     .await;
 

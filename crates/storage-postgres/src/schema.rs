@@ -441,6 +441,65 @@ diesel::table! {
 }
 
 diesel::table! {
+    device_revocation_linearization_heads (principal_id, principal_server_id, device_id, target_device_authorize_event_id, target_device_generation_ref) {
+        principal_id -> Text,
+        principal_server_id -> Text,
+        device_id -> Text,
+        target_device_authorize_event_id -> Text,
+        target_device_generation_ref -> Int8,
+        last_seq -> Int8,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    device_revocation_targets (proposal_digest) {
+        proposal_digest -> Text,
+        principal_id -> Text,
+        principal_server_id -> Text,
+        device_id -> Text,
+        target_device_authorize_event_id -> Text,
+        target_device_generation_ref -> Int8,
+        proposal_event_id -> Text,
+        accepted_at -> Timestamptz,
+        acceptance_seq -> Int8,
+        control_proposal_ack -> Jsonb,
+    }
+}
+
+diesel::table! {
+    device_revocation_gate_receipts (principal_id, principal_server_id, device_id, target_device_authorize_event_id, target_device_generation_ref, action_class, intent_digest) {
+        principal_id -> Text,
+        principal_server_id -> Text,
+        device_id -> Text,
+        target_device_authorize_event_id -> Text,
+        target_device_generation_ref -> Int8,
+        action_class -> Text,
+        intent_digest -> Text,
+        decision_payload -> Jsonb,
+        linearization_seq -> Int8,
+        linearized_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    device_revocation_cleanup_intents (proposal_digest) {
+        proposal_digest -> Text,
+        proposal_event_id -> Text,
+        covering_seal_id -> Text,
+        principal_id -> Text,
+        principal_server_id -> Text,
+        device_id -> Text,
+        target_device_authorize_event_id -> Text,
+        target_device_generation_ref -> Int8,
+        created_at -> Timestamptz,
+        material_cleanup_completed_at -> Nullable<Timestamptz>,
+        mls_obligation_completed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     event_batch_receipts (pk) {
         pk -> Int8,
         schema -> Text,
@@ -1482,6 +1541,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_message_txns,
     device_messages,
     device_pairings,
+    device_revocation_cleanup_intents,
+    device_revocation_gate_receipts,
+    device_revocation_linearization_heads,
+    device_revocation_targets,
     devices,
     event_batch_receipts,
     event_batch_receipt_events,

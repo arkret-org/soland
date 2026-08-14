@@ -74,6 +74,10 @@ pub(super) fn router() -> Router {
                 .post(peer_direct_conversation_repair_relay),
         )
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
+        .push(
+            Router::with_path("device-revocations/check")
+                .post(super::peer_device_revocations::check_device_revocation_gate),
+        )
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
 
@@ -180,7 +184,9 @@ async fn peer_principal_genesis(
         .and_then(json_ok)
 }
 
-async fn trusted_account_authority_service_id(state: &AppState) -> Result<DidCoreId, AppError> {
+pub(in crate::routing::events) async fn trusted_account_authority_service_id(
+    state: &AppState,
+) -> Result<DidCoreId, AppError> {
     if let Some(service_id) = state.config().account_authority_service_id.as_deref() {
         return arkret_identifiers::DidCoreId::new(service_id.to_owned()).map_err(|error| {
             AppError::internal(format!(
@@ -1620,7 +1626,9 @@ fn json_contains_string(value: &Value, expected: &str) -> bool {
     }
 }
 
-fn source_service_id_from_request(req: &Request) -> Result<String, AppError> {
+pub(in crate::routing::events) fn source_service_id_from_request(
+    req: &Request,
+) -> Result<String, AppError> {
     required_header(req, HEADER_SOURCE_SERVICE_ID)
 }
 

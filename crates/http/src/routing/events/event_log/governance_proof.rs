@@ -686,8 +686,8 @@ async fn materialize_realm_control_with_transported_seals(
                         && device
                             .payload
                             .get("authorized_generation_ref")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(generation.current_ref.as_str())
+                            .and_then(serde_json::Value::as_u64)
+                            == Some(generation.current_ref)
                 })
             });
             if !current_generation_signer {
@@ -1214,8 +1214,8 @@ pub(crate) async fn first_generation_event_seal_requirement(
                     && record
                         .envelope
                         .pointer("/payload/new_device_generation")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(generation.current_ref.as_str())
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(generation.current_ref)
             })
             .collect::<Vec<_>>();
         if candidates.is_empty() {

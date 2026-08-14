@@ -169,7 +169,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     controller: &str,
 ) -> arkret_wire::PrincipalAuthorityKey {
     let now = chrono::Utc::now();
-    let generation_ref = "1";
+    let generation_ref = 1_u64;
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
     state
         .test_persistence()

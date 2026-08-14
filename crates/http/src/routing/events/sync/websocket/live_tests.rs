@@ -170,6 +170,7 @@ async fn run_introspection_mock(
     audience: String,
     holder_jkt: String,
     session_public_key: String,
+    device_binding: arkret_models_identity::SessionGrantDeviceBinding,
 ) {
     loop {
         let Ok((mut stream, _)) = listener.accept().await else {
@@ -197,7 +198,8 @@ async fn run_introspection_mock(
                 "issuer": "ak:did_core:web:coauth.local",
                 "subject": "ak:did_core:web:alice.example",
                 "service_account_id": "alice",
-                "device_id": ALICE_DEVICE,
+                "device_id": device_binding.device_id.clone(),
+                "device_binding": device_binding.clone(),
                 "audience": audience,
                 "scopes": [
                     "urn:arkret:principal-server:session.bind",
@@ -231,6 +233,101 @@ async fn run_introspection_mock(
             .write_all(&bytes)
             .await
             .expect("write introspection body");
+    }
+}
+
+async fn install_alice_device_authority(
+    state: &AppState,
+) -> arkret_models_identity::SessionGrantDeviceBinding {
+    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
+
+    let actor =
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
+    let principal_server_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let created_at = chrono::Utc::now();
+    let mut genesis = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::RealmCreate.as_str(),
+        arkret_wire::ScopeRef::RealmGenesis,
+        actor.clone(),
+        principal_server_id.clone(),
+        0,
+        arkret_identifiers::Hlc::new("0196419b0000-0000-00000001".to_owned()).unwrap(),
+        serde_json::json!({"object": {"purpose": "principal_control"}}),
+        created_at,
+    )
+    .unwrap();
+    genesis.refs = vec![arkret_wire::EventRef::new(
+        format!("sha256:{}", "1".repeat(64)),
+        "did_inception",
+    )];
+    genesis.refresh_content_bound_identity().unwrap();
+    let mut authorize = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: genesis.realm_id.clone(),
+        },
+        actor.clone(),
+        principal_server_id,
+        1,
+        arkret_identifiers::Hlc::new("0196419b0000-0001-00000001".to_owned()).unwrap(),
+        serde_json::json!({"device_id": ALICE_DEVICE}),
+        created_at,
+    )
+    .unwrap();
+    authorize.prev_refs = vec![genesis.event_id.clone()];
+    authorize.refresh_content_bound_identity().unwrap();
+
+    for event in [&genesis, &authorize] {
+        state
+            .test_persistence()
+            .events()
+            .put(soland_storage::CanonicalEventRecord {
+                event_id: event.event_id.to_string(),
+                actor_id: event.actor_id.to_string(),
+                actor_seq: event.actor_seq,
+                realm_id: Some(event.realm_id.to_string()),
+                kind: event.kind.to_string(),
+                schema_id: "ak.schema.event.v1".to_owned(),
+                canonical_digest: event.event_digest().unwrap(),
+                canonical_bytes: arkret_canonical::canonical_json_bytes(
+                    &event.digest_payload().unwrap(),
+                )
+                .unwrap(),
+                envelope: serde_json::to_value(event).unwrap(),
+                received_at: created_at,
+            })
+            .await
+            .unwrap();
+    }
+    state
+        .identities()
+        .save_device(SaveDeviceCommand {
+            actor_id: actor.to_string(),
+            device_id: ALICE_DEVICE.to_owned(),
+            display_name: None,
+            device: DeviceIdentity {
+                actor_id: actor.to_string(),
+                device_id: ALICE_DEVICE.to_owned(),
+                display_name: None,
+                verification_state: "verified".to_owned(),
+                payload: serde_json::json!({
+                    "device_id": ALICE_DEVICE,
+                    "device_authorize_event_id": authorize.event_id,
+                    "authorized_generation_ref": 1
+                }),
+                created_at,
+                updated_at: created_at,
+                revoked_at: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    arkret_models_identity::SessionGrantDeviceBinding {
+        device_id: arkret_identifiers::DeviceId::new(ALICE_DEVICE.to_owned()).unwrap(),
+        authorization_event_id: authorize.event_id,
+        model_generation_ref: 1,
     }
 }
 
@@ -401,6 +498,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
         Some(format!("http://{introspection_addr}/introspect"));
     config.session_grant_introspection_bearer = Some("test-service-bearer".to_owned());
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+    let device_binding = install_alice_device_authority(&state).await;
     let description = crate::routing::system::describe::build_server_description(&state);
     let advertised = arkret_models_discovery::websocket_binding::select_websocket_binding(
         &description,
@@ -426,6 +524,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
         )
         .expect("WebSocket DPoP public JWK is supported")
         .into_string(),
+        device_binding,
     ));
     let server = Server::new(acceptor);
     let server_handle = server.handle();

@@ -396,13 +396,7 @@ async fn push_profile_and_moderation_contracts_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
-    seed_verified_device_with_public_key(
-        &state,
-        ALICE,
-        ALICE_DEVICE,
-        &test_ed25519_multibase_public(&event_signing_key),
-    )
-    .await;
+    seed_verified_device_with_public_key(&state, ALICE, ALICE_DEVICE, &event_signing_key).await;
 
     let push: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)

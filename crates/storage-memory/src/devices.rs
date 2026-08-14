@@ -2,7 +2,8 @@ use super::{
     Arc, BTreeMap, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageAckTokenRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    Mutex, OneTimeKeyStore, PersistenceResult, Utc, Value, VecDeque, async_trait,
+    DeviceRevocationGateSelector, DeviceRevocationGateStatus, Mutex, OneTimeKeyStore,
+    PersistenceError, PersistenceResult, Utc, Value, VecDeque, async_trait,
     device_message_expires_at, ensure_device_message_id, fresh_device_message_ack_token,
 };
 // In-memory device inventory store
@@ -88,6 +89,7 @@ type DeviceMessageIntent = (String, bool, chrono::DateTime<Utc>);
 #[derive(Default)]
 pub(crate) struct MemoryDeviceMessageStore {
     inventory: Option<Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>>,
+    revocations: Option<Arc<Mutex<crate::MemoryDeviceRevocationState>>>,
     queue: Mutex<VecDeque<DeviceMessageRecord>>,
     txns: Mutex<BTreeMap<String, DeviceMessageTransaction>>,
     message_intents: Mutex<BTreeMap<String, DeviceMessageIntent>>,
@@ -95,18 +97,33 @@ pub(crate) struct MemoryDeviceMessageStore {
     lost_watermarks: Mutex<BTreeMap<(String, String), i64>>,
 }
 impl MemoryDeviceMessageStore {
-    pub(crate) fn with_inventory(
+    pub(crate) fn with_inventory_and_revocations(
         inventory: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
+        revocations: Arc<Mutex<crate::MemoryDeviceRevocationState>>,
     ) -> Self {
         Self {
             inventory: Some(inventory),
+            revocations: Some(revocations),
             ..Self::default()
         }
     }
 }
 #[async_trait]
 impl DeviceMessageStore for MemoryDeviceMessageStore {
-    async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
+    async fn append(
+        &self,
+        device_revocation_gate: Option<&DeviceRevocationGateSelector>,
+        mut message: DeviceMessageRecord,
+    ) -> PersistenceResult<()> {
+        let _revocations = if let (Some(selector), Some(revocations)) =
+            (device_revocation_gate, &self.revocations)
+        {
+            let guard = revocations.lock();
+            guard.status(selector).ensure_allowed()?;
+            Some(guard)
+        } else {
+            None
+        };
         ensure_device_message_id(&mut message);
         self.queue.lock().push_back(message);
         Ok(())
@@ -159,6 +176,28 @@ impl DeviceMessageStore for MemoryDeviceMessageStore {
         &self,
         mut batch: DeviceMessageBatchRecord,
     ) -> PersistenceResult<DeviceMessageBatchCommitOutcome> {
+        let _revocations = if let (Some(selector), Some(revocations)) =
+            (batch.device_revocation_gate.as_ref(), &self.revocations)
+        {
+            let guard = revocations.lock();
+            match guard.status(selector) {
+                DeviceRevocationGateStatus::Active => Some(guard),
+                DeviceRevocationGateStatus::Pending { .. } => {
+                    return Ok(DeviceMessageBatchCommitOutcome::DeviceRevocationPending);
+                }
+                DeviceRevocationGateStatus::Revoked { .. } => {
+                    return Ok(DeviceMessageBatchCommitOutcome::DeviceRevoked);
+                }
+                DeviceRevocationGateStatus::AuthorityMismatch
+                | DeviceRevocationGateStatus::GenerationMismatch => {
+                    return Err(PersistenceError::Conflict(
+                        "failed_precondition: device gate selector mismatch".to_owned(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let now = Utc::now();
         let mut txns = self.txns.lock();
         let mut intents = self.message_intents.lock();

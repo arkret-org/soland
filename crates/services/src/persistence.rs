@@ -35,6 +35,90 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    #[must_use]
+    pub fn device_revocation_store(&self) -> Arc<dyn soland_storage::DeviceRevocationStore> {
+        Arc::new(self.clone())
+    }
+    pub async fn device_revocation_gate_status(
+        &self,
+        selector: &soland_storage::DeviceRevocationGateSelector,
+    ) -> crate::ServiceResult<soland_storage::DeviceRevocationGateStatus> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .gate_status(selector)
+            .await?)
+    }
+
+    pub async fn device_revocation_targets(
+        &self,
+        selector: &soland_storage::DeviceRevocationGateSelector,
+    ) -> crate::ServiceResult<Vec<soland_storage::DeviceRevocationTargetRecord>> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .list_targets(selector)
+            .await?)
+    }
+
+    pub async fn linearize_device_revocation_gate(
+        &self,
+        request: soland_storage::DeviceRevocationGateLinearizationRequest,
+    ) -> crate::ServiceResult<soland_storage::DeviceRevocationGateLinearization> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .linearize_gate(request)
+            .await?)
+    }
+
+    pub async fn pending_device_revocation_cleanup_intents(
+        &self,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::DeviceRevocationCleanupIntent>> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .pending_cleanup_intents(limit)
+            .await?)
+    }
+
+    pub async fn complete_device_revocation_material_cleanup(
+        &self,
+        proposal_digest: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .complete_material_cleanup(proposal_digest, completed_at)
+            .await?)
+    }
+
+    pub async fn complete_device_revocation_mls_obligation(
+        &self,
+        proposal_digest: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .complete_mls_obligation(proposal_digest, completed_at)
+            .await?)
+    }
+
+    pub async fn complete_device_revocation_mls_obligation_by_event_id(
+        &self,
+        proposal_event_id: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .complete_mls_obligation_by_event_id(proposal_event_id, completed_at)
+            .await?)
+    }
+
     pub async fn idempotency_record(
         &self,
         principal_id: &str,
@@ -510,6 +594,126 @@ impl PersistenceHandle {
     #[doc(hidden)]
     pub fn shared_for_tests(&self) -> Arc<TestPersistenceStore> {
         self.persistence.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl soland_storage::DeviceRevocationStore for PersistenceHandle {
+    fn bind_control_event_store(
+        &self,
+        control_events: Arc<dyn arkret_state::state::ControlEventStore>,
+    ) {
+        self.persistence
+            .device_revocations()
+            .bind_control_event_store(control_events);
+    }
+
+    async fn gate_status(
+        &self,
+        selector: &soland_storage::DeviceRevocationGateSelector,
+    ) -> PersistenceResult<soland_storage::DeviceRevocationGateStatus> {
+        self.persistence
+            .device_revocations()
+            .gate_status(selector)
+            .await
+    }
+
+    async fn list_targets(
+        &self,
+        selector: &soland_storage::DeviceRevocationGateSelector,
+    ) -> PersistenceResult<Vec<soland_storage::DeviceRevocationTargetRecord>> {
+        self.persistence
+            .device_revocations()
+            .list_targets(selector)
+            .await
+    }
+
+    async fn linearize_gate(
+        &self,
+        request: soland_storage::DeviceRevocationGateLinearizationRequest,
+    ) -> PersistenceResult<soland_storage::DeviceRevocationGateLinearization> {
+        self.persistence
+            .device_revocations()
+            .linearize_gate(request)
+            .await
+    }
+
+    async fn mark_rejected(
+        &self,
+        proposal_digest: &str,
+        terminal_decision: &arkret_wire::ControlProposalDecision,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .mark_rejected(proposal_digest, terminal_decision)
+            .await
+    }
+
+    async fn commit_decision(
+        &self,
+        proposal_digest: &str,
+        decision: &arkret_wire::ControlProposalDecision,
+        policy: arkret_wire::ControlProposalDecisionPolicy,
+    ) -> PersistenceResult<soland_storage::ControlProposalDecisionCommitOutcome> {
+        self.persistence
+            .device_revocations()
+            .commit_decision(proposal_digest, decision, policy)
+            .await
+    }
+
+    async fn mark_sealed(
+        &self,
+        proposal_digest: &str,
+        covering_seal_id: &str,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .mark_sealed(proposal_digest, covering_seal_id, sealed_at)
+            .await
+    }
+
+    async fn pending_cleanup_intents(
+        &self,
+        limit: usize,
+    ) -> PersistenceResult<Vec<soland_storage::DeviceRevocationCleanupIntent>> {
+        self.persistence
+            .device_revocations()
+            .pending_cleanup_intents(limit)
+            .await
+    }
+
+    async fn complete_material_cleanup(
+        &self,
+        proposal_digest: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .complete_material_cleanup(proposal_digest, completed_at)
+            .await
+    }
+
+    async fn complete_mls_obligation(
+        &self,
+        proposal_digest: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .complete_mls_obligation(proposal_digest, completed_at)
+            .await
+    }
+
+    async fn complete_mls_obligation_by_event_id(
+        &self,
+        proposal_event_id: &str,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .complete_mls_obligation_by_event_id(proposal_event_id, completed_at)
+            .await
     }
 }
 

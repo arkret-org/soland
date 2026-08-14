@@ -1,6 +1,8 @@
 use arkret_wire::{MlsGroupId, RealmId};
 
-use super::{PersistenceError, PersistenceResult, Uuid, Value, async_trait};
+use super::{
+    DeviceRevocationGateSelector, PersistenceError, PersistenceResult, Uuid, Value, async_trait,
+};
 /// G3.S1 — durable KeyPackage row.
 ///
 /// The Pg backend's `(actor_id, device_id, id)` composite key is what
@@ -287,6 +289,7 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
     pub mls_group_id: &'a str,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
+    pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
@@ -311,6 +314,7 @@ pub struct MlsKeyPackageClaim<'a> {
     pub intended_realm_id: Option<&'a str>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
+    pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: Option<i64>,
 }

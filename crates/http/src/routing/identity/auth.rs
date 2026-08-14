@@ -12,8 +12,8 @@
 //! - `auth_or_render` — the standard "extract session or 401" wrapper used by nearly every
 //!   protected handler
 //! - `authenticated_session` — the underlying session-lookup pipeline
-//! - `is_device_revoked` / `revoke_device_record` — device-revocation gates (also used by
-//!   `keys_query` to mask revoked devices and by other auth adjacent paths)
+//! - `is_device_revoked` — terminal device-revocation checks; pending state comes from the durable
+//!   proposal index
 //! - `session_credential_hash` / `token_for` — credential derivation primitives
 
 use arkret_identifiers::{DeviceId, EventId};
@@ -70,8 +70,8 @@ use login::dev_login;
 use logout::session_revoke;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
-    active_delegated_sessions_for_actor, is_device_revoked, revoke_device_record,
-    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash, token_for,
+    active_delegated_sessions_for_actor, is_device_revoked, revoke_devices_for_actor,
+    revoke_sessions_for_actor, session_credential_hash, token_for,
 };
 pub use sessions::{auth_or_render, authenticated_session};
 

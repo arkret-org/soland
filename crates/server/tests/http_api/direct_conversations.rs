@@ -207,47 +207,7 @@ async fn project_authorized_device(
     device_id: &str,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> String {
-    let control_realm = soland_test_support::fixture_principal_control_realm(actor);
-    let actor_full = arkret_identifiers::DidFullId::new(actor.to_owned()).unwrap();
-    let actor_core = arkret_wire::project_full_id_to_core_id(&actor_full).unwrap();
-    let realm_id = arkret_identifiers::RealmId::new(control_realm).unwrap();
-    let event = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::DeviceAuthorize.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        actor_core.clone(),
-        soland_test_support::fixture_principal_server_id(),
-        1,
-        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
-        serde_json::json!({
-            "principal_id": actor_core,
-            "device_id": device_id,
-            "device_public_key": test_ed25519_multibase_public(signing_key),
-            "hpke_key": "z6LSDirectConversationFixtureHpkeKey",
-            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": actor_core,
-            "not_before": "2026-05-25T00:00:00.000Z",
-            "authorization_binding_kind": "registration_anchor",
-            "device_signature": "c2ln"
-        }),
-        Utc::now(),
-    )
-    .unwrap();
-    let authorize = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
-            "ak:operation:",
-        ))
-        .unwrap(),
-        arkret_wire::OperationKind::Create,
-        None,
-        &event,
-    )
-    .unwrap();
-    let authorize_event_id = authorize.context.event_id.to_string();
-    soland_test_support::project_accepted_operations(state, actor_core.as_str(), &[authorize])
-        .await;
-    authorize_event_id
+    project_test_authorized_device(state, actor, device_id, signing_key).await
 }
 
 async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: &str) {
@@ -594,6 +554,7 @@ async fn direct_resolve_private_detail_stays_redacted_in_production() {
     let state = soland_test_support::app_state(config);
     let token = "production-direct-resolve-session";
     super::agents::seed_controller_session(&state, token, "did:web:alice.example").await;
+    super::agents::seed_active_controller_device_generation(&state, "did:web:alice.example").await;
 
     let mut response = post_authenticated_canonical(
         state,

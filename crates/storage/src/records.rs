@@ -12,6 +12,8 @@ use arkret_wire::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::DeviceRevocationGateSelector;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentSessionRecord {
     pub granted_scope: Vec<String>,
@@ -454,6 +456,12 @@ pub struct DeviceMessageBatchRecord {
     pub request_digest: String,
     pub idempotency_expires_at: chrono::DateTime<chrono::Utc>,
     pub target_snapshot_guard: Option<DeviceMessageTargetSnapshotGuard>,
+    /// Sender device generation rechecked while holding the same persistence
+    /// boundary as request/message idempotency and queue insertion.
+    /// Required for local protected-subject writes. `None` is reserved for
+    /// independently authenticated peer/internal fanout, whose sender device
+    /// is not authoritative at this service.
+    pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
     pub items: Vec<DeviceMessageBatchItemRecord>,
 }
 
@@ -482,6 +490,8 @@ pub enum DeviceMessageBatchCommitOutcome {
     RequestConflict,
     MessageConflict { message_key: String },
     SnapshotConflict,
+    DeviceRevocationPending,
+    DeviceRevoked,
 }
 
 #[derive(Clone, Debug)]

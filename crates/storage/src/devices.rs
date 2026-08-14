@@ -3,8 +3,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use super::{
     DeviceInventoryRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
-    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, PersistenceResult,
-    Utc, Uuid, Value, async_trait,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord,
+    DeviceRevocationGateSelector, PersistenceResult, Utc, Uuid, Value, async_trait,
 };
 /// Trait for durable device inventory operations.
 #[async_trait]
@@ -31,7 +31,11 @@ pub trait DeviceInventoryStore: Send + Sync {
 /// To-device message queue + idempotency-key set.
 #[async_trait]
 pub trait DeviceMessageStore: Send + Sync {
-    async fn append(&self, message: DeviceMessageRecord) -> PersistenceResult<()>;
+    async fn append(
+        &self,
+        device_revocation_gate: Option<&DeviceRevocationGateSelector>,
+        message: DeviceMessageRecord,
+    ) -> PersistenceResult<()>;
     /// Read current request/message idempotency state before dynamic device-policy checks. The
     /// subsequent commit rechecks the same records atomically to close inspection races.
     async fn inspect_batch(

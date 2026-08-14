@@ -29,7 +29,7 @@ pub(crate) mod realm_policy;
 pub(crate) mod realm_organization;
 
 use access::policy::policy_document_to_response;
-use admin::audit::append_audit_log;
+pub(crate) use admin::audit::append_audit_log;
 use events::operations::validate_canonical_json_value;
 #[cfg(test)]
 use events::operations::validate_operation_semantics;

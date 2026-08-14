@@ -1,8 +1,9 @@
 use arkret_models_identity::{
-    DidDocument, PrincipalResolutionEvidence, PrincipalResolutionProjection,
-    ResolutionDidBindingEvidenceKind, ResolutionDidBindingEvidenceReceipt,
-    ResolutionDidBindingMethodProof, ResolutionDidBindingMethodProofKind,
-    ResolutionMethodEvidenceBoundary, ResolutionMethodHistoryEvidence,
+    DidDocument, PrincipalResolutionProjection, PrincipalResolutionProjectionAttestationCore,
+    PublicPrincipalResolution, ResolutionDidBindingEvidenceKind,
+    ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
+    ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
+    ResolutionMethodHistoryEvidence,
 };
 use arkret_wire::{DidCoreId, DidFullId, Hash, PrincipalAuthorityKey};
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -22,7 +23,7 @@ async fn open_principal_resolution(
     principal_id: PathParam<String>,
     principal_server_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<PrincipalResolutionEvidence> {
+) -> JsonResult<PublicPrincipalResolution> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let principal_id = DidCoreId::new(principal_id.into_inner())
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
@@ -41,15 +42,43 @@ async fn open_principal_resolution(
 
     let method_history_evidence =
         principal_method_history_evidence(state, &record.projection).await?;
-    let evidence = PrincipalResolutionEvidence {
+    let issued_at = chrono::Utc::now();
+    let method_history_evidence_digest = Hash::new(
+        arkret_canonical::canonical_sha256(&method_history_evidence).map_err(|error| {
+            AppError::internal(format!("method history evidence digest failed: {error}"))
+        })?,
+    )
+    .map_err(|error| AppError::internal(format!("method history digest is invalid: {error}")))?;
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let projection_attestation =
+        arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
+            PrincipalResolutionProjectionAttestationCore {
+                principal_id: principal_id.clone(),
+                principal_server_id: authority.principal_server_id.clone(),
+                resolution_projection: record.projection.clone(),
+                method_history_evidence_digest,
+                issued_at,
+                expires_at: issued_at + chrono::Duration::seconds(30),
+            },
+            verification_method,
+            state.notary_signing_key().as_ref(),
+        )
+        .map_err(|error| {
+            AppError::internal(format!("principal resolution attestation failed: {error}"))
+        })?;
+    let evidence = PublicPrincipalResolution {
         principal_id,
-        authority,
-        current_resolution: record.projection,
-        method_history_evidence: Some(method_history_evidence),
+        principal_server_id: authority.principal_server_id,
+        resolution_projection: record.projection,
+        method_history_evidence,
+        projection_attestation,
     };
-    evidence.validate_authority_binding().map_err(|error| {
+    evidence.validate_attestation_binding().map_err(|error| {
         AppError::internal(format!(
-            "principal resolution authority binding is invalid: {error}"
+            "principal resolution attestation binding is invalid: {error}"
         ))
     })?;
     json_ok(evidence)

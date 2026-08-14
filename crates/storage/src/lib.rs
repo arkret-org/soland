@@ -36,6 +36,7 @@ mod contacts;
 pub mod contract_tests;
 mod control_proposal_acks;
 mod device_pairings;
+mod device_revocations;
 mod devices;
 mod events;
 mod federation;
@@ -76,6 +77,7 @@ pub use blobs::*;
 pub use contacts::*;
 pub use control_proposal_acks::*;
 pub use device_pairings::*;
+pub use device_revocations::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;
@@ -170,6 +172,10 @@ pub enum ConflictCode {
     CasConflict,
     /// The device pairing request the Event refers to does not exist.
     DevicePairingNotFound,
+    /// The exact device generation has an unresolved revoke proposal.
+    DeviceRevocationPending,
+    /// The exact device generation has a covering revoke Seal.
+    DeviceRevoked,
     /// The same identity already exists with different canonical bytes.
     DuplicateConflict,
     /// Two verified Event variants share one full EventId. Internal name for
@@ -199,10 +205,12 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::AppletRevoked,
         Self::CasConflict,
         Self::DevicePairingNotFound,
+        Self::DeviceRevocationPending,
+        Self::DeviceRevoked,
         Self::DuplicateConflict,
         Self::EventHashCollision,
         Self::EventIdDigestMismatch,
@@ -223,6 +231,8 @@ impl ConflictCode {
             Self::AppletRevoked => "applet_revoked",
             Self::CasConflict => "cas_conflict",
             Self::DevicePairingNotFound => "device_pairing_not_found",
+            Self::DeviceRevocationPending => "device_revocation_pending",
+            Self::DeviceRevoked => "device_revoked",
             Self::DuplicateConflict => "duplicate_conflict",
             Self::EventHashCollision => "event_hash_collision",
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
@@ -328,6 +338,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
     fn device_pairings(&self) -> &dyn DevicePairingStore;
+    fn device_revocations(&self) -> &dyn DeviceRevocationStore;
 }
 
 /// Federation, retention, organization, and audit persistence registry.
