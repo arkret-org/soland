@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::ServiceResult;
 
-pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "stale_peer";
+pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "peer_stale";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {

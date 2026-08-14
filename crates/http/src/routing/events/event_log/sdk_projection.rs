@@ -25,7 +25,7 @@ pub(in crate::routing) fn event_semantic_refs(
     let Some(values) = value.as_array() else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "refs must be an array",
         ));
     };
@@ -44,21 +44,21 @@ pub(in crate::routing) fn event_semantic_refs(
         let Some(reference) = value.as_object() else {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "refs entries must be objects",
             ));
         };
         let id = event_string_field(reference, &["id"]).ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "refs entries require id",
             )
         })?;
         let role = event_string_field(reference, &["role"]).ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "refs entries require role",
             )
         })?;
@@ -66,7 +66,7 @@ pub(in crate::routing) fn event_semantic_refs(
             if arkret_identifiers::GrantId::new(id.clone()).is_err() {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "authorized_by refs must use the ak:grant: typed prefix",
                 ));
             }
@@ -968,6 +968,6 @@ mod refs_limit_tests {
             "role": "authorized_by"
         }]);
         let err = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap_err();
-        assert_eq!(err.code, "invalid_param");
+        assert_eq!(err.code, "param_invalid");
     }
 }

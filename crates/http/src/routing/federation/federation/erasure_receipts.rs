@@ -40,7 +40,7 @@ async fn submit(
         .with_wire_code("erasure_receipt_authority_invalid"));
     }
     body.package.validate_bindings().map_err(|error| {
-        AppError::invalid_param(format!("invalid erasure receipt package: {error}"))
+        AppError::param_invalid(format!("invalid erasure receipt package: {error}"))
             .with_wire_code("erasure_receipt_stub_binding_mismatch")
     })?;
     let proof_input = body
@@ -48,14 +48,14 @@ async fn submit(
         .receipt
         .canonical_proof_input()
         .map_err(|error| {
-            AppError::invalid_param(format!("invalid erasure receipt proof input: {error}"))
+            AppError::param_invalid(format!("invalid erasure receipt proof input: {error}"))
                 .with_wire_code("erasure_receipt_proof_invalid")
         })?;
     body.package
         .receipt
         .validate_proof_payload_digests()
         .map_err(|error| {
-            AppError::invalid_param(format!("invalid erasure receipt proof digest: {error}"))
+            AppError::param_invalid(format!("invalid erasure receipt proof digest: {error}"))
                 .with_wire_code("erasure_receipt_proof_invalid")
         })?;
     for proof in &body.package.receipt.proofs {
@@ -68,7 +68,7 @@ async fn submit(
         )
         .await
         .map_err(|reason| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "erasure receipt proof verification failed: {reason}"
             ))
             .with_wire_code("erasure_receipt_proof_invalid")
@@ -256,5 +256,5 @@ fn required_header(req: &Request, name: &str) -> Result<String, AppError> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| AppError::invalid_param(format!("missing {name} header")))
+        .ok_or_else(|| AppError::param_invalid(format!("missing {name} header")))
 }

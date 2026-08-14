@@ -97,7 +97,7 @@ impl Handler for RequestWireSizeLimitMiddleware {
 /// Admit a canonical JSON body under the operation's registered byte budget.
 ///
 /// Syntactically invalid JSON is deliberately passed through so operation
-/// handlers remain the authority for `bad_json`. Duplicate keys, excessive
+/// handlers remain the authority for `json_invalid`. Duplicate keys, excessive
 /// depth, forbidden canonical values and non-canonical spelling are valid JSON
 /// schema violations and are rejected here before typed decoding.
 #[derive(Clone)]
@@ -125,7 +125,7 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
             match class.admit_canonical(payload) {
                 Ok(_) => {}
                 Err(WireError::Canonical(CanonicalError::CanonicalJson(_))) => {
-                    // Preserve the handler's operation-specific `bad_json`
+                    // Preserve the handler's operation-specific `json_invalid`
                     // response for malformed syntax.
                 }
                 Err(

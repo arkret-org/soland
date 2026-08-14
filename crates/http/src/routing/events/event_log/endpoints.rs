@@ -212,7 +212,9 @@ async fn events_describe(
     if req.method().as_str() == "QUERY" {
         req.parse_json::<arkret_models_collaboration::event_query::EventsDescribeRequestBody>()
             .await
-            .map_err(|_| AppError::bad_json("invalid ak.self.events.read.describe request body"))?;
+            .map_err(|_| {
+                AppError::json_invalid("invalid ak.self.events.read.describe request body")
+            })?;
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut description = describe(
@@ -274,7 +276,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "bad_json",
+                "json_invalid",
                 "invalid event envelope",
             );
             return;
@@ -673,7 +675,7 @@ async fn resolve_events(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     body.validate()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     // `max_resolve` is advertised as one selector budget, so every selector
     // kind spends from it. Leaving `seal_refs` out let a caller draw the full
     // event budget and 64 Seal lookups on top of it.
@@ -803,7 +805,7 @@ async fn events_frontier(
             req.parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
                 .await
                 .map_err(|_| {
-                    AppError::bad_json("invalid ak.self.events.read.frontier request body")
+                    AppError::json_invalid("invalid ak.self.events.read.frontier request body")
                 })?,
         )
     } else {
@@ -821,7 +823,7 @@ async fn events_frontier(
         .map(|realm_id| realm_id.as_str().to_owned())
         .or_else(|| query_param(req, "realm_id"));
     if actor_id.is_none() && realm_selector.is_none() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "events.frontier requires at least one of realm_id or actor_id",
         ));
     }
@@ -838,7 +840,7 @@ async fn events_frontier(
         && let Some(realm_value) = realm_selector.as_ref()
     {
         let realm_id = RealmId::new(realm_value.clone())
-            .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+            .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
         let own_pcr = state
             .projections()
             .snapshot()
@@ -976,10 +978,10 @@ async fn events_frontier(
     // only authoring surface; actor-only is a read-only per-Realm aggregate.
     let actor = actor_id.expect("selector presence checked above");
     let actor_id = arkret_wire::DidCoreId::new(actor.clone())
-        .map_err(|_| AppError::invalid_param("actor_id must be a valid core identity"))?;
+        .map_err(|_| AppError::param_invalid("actor_id must be a valid core identity"))?;
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
-            .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+            .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
         let is_session_actor = actor_id == session_core_id;
         let own_actor_pcr = is_session_actor
             && state

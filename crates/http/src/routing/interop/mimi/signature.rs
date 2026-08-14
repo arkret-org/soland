@@ -16,7 +16,9 @@ pub(super) async fn verify_mimi_write_service_proof(
     let body_bytes = req
         .payload()
         .await
-        .map_err(|error| AppError::bad_json(format!("unable to read MIMI request body: {error}")))?
+        .map_err(|error| {
+            AppError::json_invalid(format!("unable to read MIMI request body: {error}"))
+        })?
         .to_vec();
     let source_service_id = mimi_required_header(req, "source-service-id")?;
     let source_service_id = arkret_wire::DidCoreId::new(source_service_id)

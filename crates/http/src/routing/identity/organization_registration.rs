@@ -133,7 +133,7 @@ pub(crate) async fn get(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let actor = aa.authenticated_session(state, req).await?.actor;
     let organization_id = DidCoreId::new(organization_id.into_inner())
-        .map_err(|error| AppError::invalid_param(format!("invalid organization_id: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid organization_id: {error}")))?;
     let current = state
         .organization_registrations()
         .current(&organization_id)
@@ -248,7 +248,7 @@ async fn parse_registration_body<T: DeserializeOwned>(req: &mut Request) -> Resu
                 && serde_json::from_value::<OrganizationRegistrationScope>(scope.clone()).is_err()
             {
                 return Err(AppError::new(
-                    ErrorCode::OrganizationRegistrationScopeUnsupported,
+                    ErrorCode::UnsupportedOrganizationRegistrationScope,
                     "organization registration scope is unsupported",
                 ));
             }
@@ -297,7 +297,7 @@ fn map_error(error: OrganizationRegistrationError) -> AppError {
             AppError::new(ErrorCode::OrganizationRegistrationQuorumNotMet, detail)
         }
         OrganizationRegistrationErrorCode::ScopeUnsupported => {
-            AppError::new(ErrorCode::OrganizationRegistrationScopeUnsupported, detail)
+            AppError::new(ErrorCode::UnsupportedOrganizationRegistrationScope, detail)
         }
         OrganizationRegistrationErrorCode::Revoked => {
             AppError::new(ErrorCode::OrganizationRegistrationRevoked, detail)

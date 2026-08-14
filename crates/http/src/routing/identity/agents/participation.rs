@@ -71,7 +71,7 @@ pub(super) async fn set_agent_participation(
         .expected_version
         .checked_add(1)
         .filter(|version| *version <= MAX_PARTICIPATION_REPLACE_EXPECTED_VERSION)
-        .ok_or_else(|| AppError::invalid_param("expected_version exceeds supported range"))?;
+        .ok_or_else(|| AppError::param_invalid("expected_version exceeds supported range"))?;
     let selection_value = serde_json::to_value(body.selection).unwrap_or(Value::Null);
     if !state
         .agent_participations()

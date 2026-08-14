@@ -211,7 +211,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
     let (status, body) =
         post_account_device_pair(state.clone(), &unverified_token, first_new_device, "c2ln").await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], "device_not_authorized", "{body}");
+    assert_eq!(body["error"]["code"], "device_unauthorized", "{body}");
 
     let (status, body) =
         post_account_device_pair(state.clone(), &trusted_token, second_new_device, "!").await;

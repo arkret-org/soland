@@ -21,8 +21,8 @@ use arkret_models_collaboration::contact_operations::{
     ContactCurrentProof, ContactRound, ContactRoundEvidenceBundle, ContactScope,
     ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
     PeerContactControlKind, PeerContactControlReceipt, PeerContactControlReceiptDomain,
-    PeerContactControlSubmitOutcome, PeerContactDisposition, PeerContactEventSubmitOutcome,
-    PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain, PeerContactSubmitOutcome,
+    PeerContactControlSubmitOutcome, PeerContactEventSubmitOutcome, PeerContactMirrorReceipt,
+    PeerContactMirrorReceiptDomain, PeerContactOutcome, PeerContactSubmitOutcome,
     PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
 };
 use arkret_models_collaboration::events_payloads::contact::{
@@ -97,10 +97,10 @@ pub(crate) async fn prepare_peer_contact_carrier(
     }
     let (_, contact_address) = peer_contact_delivery_address(delivery);
     contact_address.validate_shape().map_err(|error| {
-        AppError::invalid_param(format!("invalid contact delivery address: {error}"))
+        AppError::param_invalid(format!("invalid contact delivery address: {error}"))
     })?;
     if contact_address.recipient_service_id.as_str() != recipient_service_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "contact_address.recipient_service_id does not match delivery destination",
         ));
     }
@@ -191,7 +191,9 @@ async fn peer_contacts_submit(
     let delivery = req
         .parse_json::<PeerContactSubmitRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ak.peer.contacts.command.submit request body"))?;
+        .map_err(|_| {
+            AppError::json_invalid("invalid ak.peer.contacts.command.submit request body")
+        })?;
     let (_, carried_address) = peer_contact_delivery_address(&delivery);
     carried_address.validate_shape().map_err(|error| {
         super::super::events::peer::schema_violation(format!(
@@ -513,10 +515,10 @@ async fn peer_contacts_submit(
         outcome,
     )
     .await;
-    let disposition = if outcome == "duplicate" {
-        PeerContactDisposition::Duplicate
+    let outcome = if outcome == "duplicate" {
+        PeerContactOutcome::Duplicate
     } else {
-        PeerContactDisposition::Accepted
+        PeerContactOutcome::Accepted
     };
     if matches!(delivery, PeerContactSubmitRequestBody::Request { .. }) {
         let request_digest = contact_control_request_digest(&delivery)?;
@@ -526,7 +528,7 @@ async fn peer_contacts_submit(
             return json_ok(replayed);
         }
     }
-    let mirror_receipt = sign_contact_mirror_receipt(state, &delivery, signed_event, disposition)?;
+    let mirror_receipt = sign_contact_mirror_receipt(state, &delivery, signed_event, outcome)?;
     if matches!(delivery, PeerContactSubmitRequestBody::Request { .. }) {
         persist_request_mirror_receipt(state, &subject_id, &issuer, &mirror_receipt).await?;
         enqueue_glare_finalize_if_ready(state, &subject_id, &issuer).await?;
@@ -584,7 +586,7 @@ async fn peer_contacts_submit(
     }
     let response = PeerContactSubmitOutcome::Event(PeerContactEventSubmitOutcome {
         result_kind,
-        status: disposition,
+        status: outcome,
         mirror_receipt,
         current_proof,
         retry_after_ms: None,
@@ -769,12 +771,12 @@ pub(crate) fn validate_mirror_receipt_cryptography(
     if receipt.issuer.as_str() != expected_service_id
         || receipt.recipient_service_id.as_str() != expected_service_id
         || !matches!(
-            receipt.disposition,
-            PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+            receipt.outcome,
+            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
         )
     {
         return Err(super::super::events::peer::cross_domain_replay(format!(
-            "{field} issuer, recipient, or authoritative disposition is invalid"
+            "{field} issuer, recipient, or authoritative outcome is invalid"
         )));
     }
     let signing_bytes = receipt
@@ -960,12 +962,12 @@ async fn finalize_contact_proof_refresh(
         state,
         request,
         PeerContactControlKind::ProofRefresh,
-        PeerContactDisposition::Accepted,
+        PeerContactOutcome::Accepted,
         Some(result_digest),
     )?;
     let outcome =
         PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::ProofRefresh {
-            status: PeerContactDisposition::Accepted,
+            status: PeerContactOutcome::Accepted,
             control_receipt,
             current_proof: current_proof.clone(),
         });
@@ -1223,8 +1225,8 @@ async fn finalize_glare_contact_round(
                 && receipt.signed_event_ref == local_request.core.request_event_ref
                 && receipt.signed_event_digest == local_request.core.request_digest
                 && matches!(
-                    receipt.disposition,
-                    PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+                    receipt.outcome,
+                    PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
                 )
         })
         .cloned()
@@ -1233,12 +1235,12 @@ async fn finalize_glare_contact_round(
             state,
             request,
             PeerContactControlKind::GlareFinalize,
-            PeerContactDisposition::Deferred,
+            PeerContactOutcome::Deferred,
             None,
         )?;
         return Ok(PeerContactSubmitOutcome::ControlDeferred(
             arkret_models_collaboration::contact_operations::PeerContactControlDeferredOutcome {
-                status: PeerContactDisposition::Deferred,
+                status: PeerContactOutcome::Deferred,
                 request_kind: PeerContactControlKind::GlareFinalize,
                 control_receipt,
                 retry_after_ms: Some(1_000),
@@ -1372,12 +1374,12 @@ async fn finalize_glare_contact_round(
         state,
         request,
         PeerContactControlKind::GlareFinalize,
-        PeerContactDisposition::Accepted,
+        PeerContactOutcome::Accepted,
         Some(result_digest),
     )?;
     let outcome =
         PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::GlareFinalize {
-            status: PeerContactDisposition::Accepted,
+            status: PeerContactOutcome::Accepted,
             control_receipt,
             glare_concurrency_attestation: local_attestation,
             current_proof: Some(local_current_proof),
@@ -1592,7 +1594,7 @@ fn sign_contact_mirror_receipt(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     event: &Event,
-    disposition: PeerContactDisposition,
+    outcome: PeerContactOutcome,
 ) -> Result<PeerContactMirrorReceipt, AppError> {
     let request_digest = Hash::new(
         canonical::canonical_sha256(request)
@@ -1617,7 +1619,7 @@ fn sign_contact_mirror_receipt(
         "request_digest": request_digest,
         "signed_event_ref": event.event_id,
         "signed_event_digest": signed_event_digest,
-        "disposition": disposition,
+        "outcome": outcome,
         "recipient_service_id": issuer,
         "received_at": arkret_canonical::format_timestamp_canonical(received_at),
         "issuer": issuer,
@@ -1633,7 +1635,7 @@ fn sign_contact_mirror_receipt(
         request_digest,
         signed_event_ref: event.event_id.clone(),
         signed_event_digest,
-        disposition,
+        outcome,
         recipient_service_id: issuer.clone(),
         received_at,
         issuer,
@@ -1745,8 +1747,8 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
                 && receipt.signed_event_ref == local_request.core.request_event_ref
                 && receipt.signed_event_digest == local_request.core.request_digest
                 && matches!(
-                    receipt.disposition,
-                    PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+                    receipt.outcome,
+                    PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
                 )
         })
         .cloned()
@@ -1869,7 +1871,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             }),
         ) if matches!(
             status,
-            PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
         ) =>
         {
             validate_outbound_control_receipt(
@@ -2097,7 +2099,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             }),
         ) if matches!(
             status,
-            PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
         ) =>
         {
             if super::account::canonical_contact_digest(current_proof)?
@@ -2174,7 +2176,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     if outcome.result_kind != expected_kind
         || !matches!(
             outcome.status,
-            PeerContactDisposition::Accepted | PeerContactDisposition::Duplicate
+            PeerContactOutcome::Accepted | PeerContactOutcome::Duplicate
         )
         || outcome.mirror_receipt.signed_event_ref != signed_event.event_id
         || outcome.mirror_receipt.signed_event_digest
@@ -2314,9 +2316,9 @@ pub(crate) async fn reenqueue_deferred_contact_control(
             ));
         }
     };
-    if deferred.status != PeerContactDisposition::Deferred
+    if deferred.status != PeerContactOutcome::Deferred
         || deferred.request_kind != expected_kind
-        || deferred.control_receipt.disposition != PeerContactDisposition::Deferred
+        || deferred.control_receipt.outcome != PeerContactOutcome::Deferred
         || deferred.control_receipt.result_digest.is_some()
     {
         return Err(super::super::events::peer::schema_violation(
@@ -2375,7 +2377,7 @@ fn validate_outbound_control_receipt(
     let request_digest = contact_control_request_digest(request)?;
     if receipt.request_kind != expected_kind
         || receipt.request_digest != request_digest
-        || receipt.disposition == PeerContactDisposition::Deferred
+        || receipt.outcome == PeerContactOutcome::Deferred
         || receipt.result_digest != expected_result_digest
         || receipt.issuer.as_str() != peer_service_id
         || receipt.recipient_service_id.as_str() != peer_service_id
@@ -2399,7 +2401,7 @@ struct ContactControlReceiptSigningTranscript<'a> {
     domain: &'a PeerContactControlReceiptDomain,
     request_kind: PeerContactControlKind,
     request_digest: &'a Hash,
-    disposition: PeerContactDisposition,
+    outcome: PeerContactOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     result_digest: Option<&'a Hash>,
     recipient_service_id: &'a arkret_wire::DidCoreId,
@@ -2415,7 +2417,7 @@ fn contact_control_receipt_signing_bytes(
         domain: &receipt.domain,
         request_kind: receipt.request_kind,
         request_digest: &receipt.request_digest,
-        disposition: receipt.disposition,
+        outcome: receipt.outcome,
         result_digest: receipt.result_digest.as_ref(),
         recipient_service_id: &receipt.recipient_service_id,
         received_at: receipt.received_at,
@@ -2468,7 +2470,7 @@ fn sign_contact_control_receipt(
     state: &AppState,
     request: &PeerContactSubmitRequestBody,
     request_kind: PeerContactControlKind,
-    disposition: PeerContactDisposition,
+    outcome: PeerContactOutcome,
     result_digest: Option<Hash>,
 ) -> Result<PeerContactControlReceipt, AppError> {
     let request_digest = Hash::new(
@@ -2487,7 +2489,7 @@ fn sign_contact_control_receipt(
         "domain": "ak.peer-contact.control-receipt.v1",
         "request_kind": request_kind,
         "request_digest": request_digest,
-        "disposition": disposition,
+        "outcome": outcome,
         "result_digest": result_digest,
         "recipient_service_id": issuer,
         "received_at": arkret_canonical::format_timestamp_canonical(received_at),
@@ -2510,7 +2512,7 @@ fn sign_contact_control_receipt(
         domain: PeerContactControlReceiptDomain::V1,
         request_kind,
         request_digest,
-        disposition,
+        outcome,
         result_digest,
         recipient_service_id: issuer.clone(),
         received_at,
@@ -3654,7 +3656,7 @@ mod tests {
                 "domain": "ak.peer-contact.control-receipt.v1",
                 "request_kind": "proof_refresh",
                 "request_digest": exact.clone(),
-                "disposition": "accepted",
+                "outcome": "accepted",
                 "result_digest": format!("sha256:{}", "8".repeat(64)),
                 "recipient_service_id": "did:web:bob-service.example",
                 "received_at": "2026-08-09T00:00:00.000Z",

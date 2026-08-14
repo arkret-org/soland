@@ -113,7 +113,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let requested_filename = match sanitized_blob_filename(req) {
         Ok(filename) => filename.or(upload_body.filename),
         Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
             return;
         }
     };
@@ -128,7 +128,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "invalid blob realm_id",
                 );
                 return;
@@ -151,7 +151,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "multipart size_bytes must match content length",
         );
         return;
@@ -178,21 +178,21 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let upload_purpose = match blob_upload_purpose(req) {
         Ok(purpose) => purpose,
         Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
             return;
         }
     };
     let mut encryption = match encrypted_attachment_metadata(req) {
         Ok(encryption) => encryption,
         Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
             return;
         }
     };
     let encrypted_flag = match blob_encrypted_flag(req) {
         Ok(flag) => flag,
         Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
             return;
         }
     };
@@ -208,7 +208,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "encrypted blob uploads require x-arkret-attachment-envelope or a supported encrypted x-arkret-blob-purpose",
         );
         return;
@@ -217,7 +217,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "x-arkret-blob-encrypted=false conflicts with encrypted attachment metadata",
         );
         return;
@@ -226,7 +226,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "search index shard uploads must be encrypted",
         );
         return;
@@ -273,7 +273,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         Ok(_) => {}
         Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
             return;
         }
     }
@@ -366,7 +366,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "blob_ref is required",
         );
         return;
@@ -375,7 +375,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "purpose is required",
         );
         return;
@@ -384,7 +384,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "invalid blob purpose",
         );
         return;
@@ -398,7 +398,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "Authorization and presign are mutually exclusive",
         );
         return;
@@ -525,7 +525,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             let range = match parse_range(req, total_len).transpose() {
                 Ok(range) => range,
                 Err(message) => {
-                    render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+                    render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
                     return;
                 }
             };
@@ -679,7 +679,7 @@ async fn blob_presign(
     let blob_ref = body.blob_ref.as_str();
     let purpose = body.purpose.as_deref().unwrap_or("download");
     if !is_valid_blob_purpose(purpose) {
-        return Err(AppError::invalid_param("invalid blob purpose"));
+        return Err(AppError::param_invalid("invalid blob purpose"));
     }
     let blob = state
         .deliveries()
@@ -985,7 +985,7 @@ impl BlobUploadBodyError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code: "invalid_param",
+            code: "param_invalid",
             message: message.into(),
         }
     }

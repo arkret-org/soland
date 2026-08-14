@@ -292,25 +292,25 @@ async fn upload_keypackage(
             "device_id must match the calling session",
         ));
     }
-    if body.key_packages.is_empty() {
-        return Err(AppError::missing_param("key_packages is required"));
+    if body.keypackages.is_empty() {
+        return Err(AppError::param_missing("keypackages is required"));
     }
     let trust_binding = current_keypackage_trust_binding(state, &principal_id, &device_id).await?;
     let unsigned_upload = body.unsigned();
     let upload_signing_input =
         arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&unsigned_upload)
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "KeyPackage upload canonical input failed: {error}"
                 ))
             })?;
     if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref() {
         let first_entry = body
-            .key_packages
+            .keypackages
             .first()
             .expect("non-empty KeyPackage upload checked above");
-        let first_key_package = decode_key_package(first_entry.key_package.as_str())
-            .map_err(AppError::invalid_param)?;
+        let first_key_package =
+            decode_key_package(first_entry.keypackage.as_str()).map_err(AppError::param_invalid)?;
         validate_agent_keypackage_upload(
             state,
             &principal_id,
@@ -320,7 +320,7 @@ async fn upload_keypackage(
             &upload_signing_input,
         )
         .await
-        .map_err(AppError::invalid_param)?;
+        .map_err(AppError::param_invalid)?;
     } else {
         verify_device_keypackage_signature(
             state,
@@ -336,7 +336,7 @@ async fn upload_keypackage(
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
-    for entry in body.key_packages {
+    for entry in body.keypackages {
         if entry.keypackage_id.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
@@ -355,7 +355,7 @@ async fn upload_keypackage(
             continue;
         }
         let keypackage_ref = entry.keypackage_ref.clone();
-        let key_package_bytes_b64 = entry.key_package.to_string();
+        let key_package_bytes_b64 = entry.keypackage.to_string();
         let key_package_bytes = match decode_key_package(&key_package_bytes_b64) {
             Ok(bytes) => bytes,
             Err(reason) => {
@@ -553,7 +553,7 @@ async fn peer_claim_keypackage(
     let body = req
         .parse_json::<PeerKeyPackagesClaimRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid peer KeyPackage claim request body"))?;
+        .map_err(|_| AppError::json_invalid("invalid peer KeyPackage claim request body"))?;
     let body_value = serde_json::to_value(&body)
         .map_err(|error| AppError::internal(format!("peer claim serialize: {error}")))?;
 
@@ -756,7 +756,7 @@ async fn peer_query_keypackage_claim(
     let body = req
         .parse_json::<PeerKeyPackagesClaimQueryRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid peer KeyPackage claim query body"))?;
+        .map_err(|_| AppError::json_invalid("invalid peer KeyPackage claim query body"))?;
     crate::routing::events::peer::validate_peer_request(state, req, true).await?;
     body.validate_shape()
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
@@ -1047,7 +1047,7 @@ async fn verify_peer_claim_participant_authorization(
         signature.sig.as_str(),
     );
     if !signature_valid {
-        return reject("signature_invalid");
+        return reject("directory_governance_proof_signature_invalid");
     }
     Ok(true)
 }
@@ -1491,7 +1491,7 @@ async fn claim_keypackages_for_request_inner(
     let binding = body
         .validate_proof_shape(&authority, Utc::now())
         .map_err(|error| {
-            AppError::invalid_param(format!("KeyPackage self-claim proof invalid: {error}"))
+            AppError::param_invalid(format!("KeyPackage self-claim proof invalid: {error}"))
         })?;
     crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
         &binding,
@@ -1870,7 +1870,7 @@ async fn consume_keypackages(
     let consume_signing_input =
         arkret_models_crypto::http_bodies::keypackages_consume_signing_input(&body.unsigned())
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "KeyPackage consume canonical input failed: {error}"
                 ))
             })?;
@@ -2536,7 +2536,7 @@ async fn revoke_keypackages(
     let revoke_signing_input =
         arkret_models_crypto::http_bodies::keypackages_revoke_signing_input(&body.unsigned())
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "KeyPackage revoke canonical input failed: {error}"
                 ))
             })?;
@@ -2827,13 +2827,13 @@ async fn verify_device_keypackage_signature(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("authorized device signing key is unavailable"))?;
+        .ok_or_else(|| AppError::param_invalid("authorized device signing key is unavailable"))?;
     if !crate::routing::identity::device_signature_kid_points_to_device_key(
         signature.kid.as_str(),
         principal.as_str(),
         device_public_key,
     ) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "KeyPackage signature kid does not point to the authorized device key",
         ));
     }
@@ -2841,14 +2841,14 @@ async fn verify_device_keypackage_signature(
         device_public_key,
         "multibase",
     )
-    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("device signing key is invalid: {error}")))?;
     arkret_signatures::keypackages::verify_keypackage_signing_input(
         &verifying_key.to_bytes(),
         signature.kid.as_str(),
         signing_input,
         signature,
     )
-    .map_err(|_| AppError::invalid_param("device_signature_invalid"))
+    .map_err(|_| AppError::param_invalid("device_signature_invalid"))
 }
 
 async fn verify_session_keypackage_write_signature(
@@ -2859,7 +2859,7 @@ async fn verify_session_keypackage_write_signature(
     signing_input: &[u8],
 ) -> Result<(), AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
     if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
         let authorize_event_id = binding
             .agent_key_authorize_event_id
@@ -2871,7 +2871,7 @@ async fn verify_session_keypackage_write_signature(
                 .key_package_by_ref(keypackage_ref)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
-                .ok_or_else(|| AppError::invalid_param("KeyPackage signature target is missing"))?;
+                .ok_or_else(|| AppError::param_invalid("KeyPackage signature target is missing"))?;
             if record.actor_id != session.actor
                 || record.device_id != session.device_id
                 || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
@@ -2891,7 +2891,7 @@ async fn verify_session_keypackage_write_signature(
                 signing_input,
             )
             .await
-            .map_err(AppError::invalid_param)?;
+            .map_err(AppError::param_invalid)?;
         }
         return Ok(());
     }
@@ -2907,17 +2907,17 @@ async fn verify_session_keypackage_write_signature(
 
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {
     if capabilities.is_empty() {
-        return Err(AppError::missing_param("required_capabilities is required"));
+        return Err(AppError::param_missing("required_capabilities is required"));
     }
     let mut out = BTreeSet::new();
     for capability in capabilities {
         if capability.is_empty() {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "required_capabilities entries must be non-empty",
             ));
         }
         if !out.insert(capability.clone()) {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "required_capabilities entries must be unique",
             ));
         }
@@ -3154,7 +3154,7 @@ fn keypackage_ref_failure(
 
 fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
     if refs.is_empty() {
-        return Err(AppError::missing_param("key_package_refs is required"));
+        return Err(AppError::param_missing("key_package_refs is required"));
     }
     Ok(refs.to_vec())
 }
@@ -3388,7 +3388,7 @@ async fn keypackage_claim_record(
     } else {
         (Some(device_id), None, None)
     };
-    let key_package = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
+    let keypackage = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
     Ok(KeyPackageClaimRecord {
         claim_id: format!("{}:{claim_nonce}", record.id),
         keypackage_ref: record.keypackage_ref.clone(),
@@ -3398,7 +3398,7 @@ async fn keypackage_claim_record(
         device_id,
         agent_id,
         agent_verification_method,
-        key_package,
+        keypackage,
         capabilities: record.capabilities.clone(),
         capabilities_digest: Hash::new(record.capabilities_digest.clone())
             .map_err(|error| AppError::internal(format!("invalid capabilities_digest: {error}")))?,
@@ -3662,7 +3662,7 @@ mod trust_binding_tests {
         )
         .unwrap();
         let record = identity.key_package_record().unwrap();
-        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.key_package.as_str()).unwrap();
+        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.keypackage.as_str()).unwrap();
         let upload = identity
             .signed_key_packages_upload_request(&[record], verification_method)
             .unwrap();

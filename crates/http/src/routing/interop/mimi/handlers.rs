@@ -35,7 +35,7 @@ pub(super) async fn mimi_key_material(
     let body = typed_body_value(body.into_inner(), "mimi key material")?;
     verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     let target = body
         .get("target_identifier")
@@ -55,7 +55,7 @@ pub(super) async fn mimi_key_material(
         }),
     );
     json_ok(MimiKeyMaterialOutcome {
-        key_packages: Vec::new(),
+        keypackages: Vec::new(),
         group_info: None,
         failures: Vec::new(),
         signature: None,
@@ -80,10 +80,10 @@ pub(super) async fn mimi_room_update(
     let room_uri = mimi_room_uri(state, &room_id);
     verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
-        return Err(AppError::invalid_param("invalid MIMI room id"));
+        return Err(AppError::param_invalid("invalid MIMI room id"));
     }
     // If the update carries a `room_binding` block, persist it as a
     // `ak.mimi.room_binding` projection event so the Arkret
@@ -99,7 +99,7 @@ pub(super) async fn mimi_room_update(
     {
         Some(binding) => {
             let submission = body.get("room_binding_event").cloned().ok_or_else(|| {
-                AppError::invalid_param(
+                AppError::param_invalid(
                     "room_binding update requires a caller-authored room_binding_event",
                 )
                 .with_wire_code("mimi_room_binding_event_missing")
@@ -108,7 +108,7 @@ pub(super) async fn mimi_room_update(
         }
         _ => {
             if body.get("room_binding_event").is_some() {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "room_binding_event is only valid for a room binding update",
                 )
                 .with_wire_code("mimi_room_binding_event_unexpected"));
@@ -158,10 +158,10 @@ pub(super) async fn mimi_notify(
     let room_uri = mimi_room_uri(state, &room_id);
     verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
-        return Err(AppError::invalid_param("invalid MIMI room id"));
+        return Err(AppError::param_invalid("invalid MIMI room id"));
     }
     // Notify is an ephemeral MIMI control signal, not an Arkret Event. It must
     // not mint an Event id or enter the canonical projection timeline.
@@ -203,10 +203,10 @@ pub(super) async fn mimi_room_message(
     let room_uri = mimi_room_uri(state, &room_id);
     verify_mimi_write_service_proof(state, req, Some(&room_uri)).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     if !valid_mimi_room_id(&room_id) {
-        return Err(AppError::invalid_param("invalid MIMI room id"));
+        return Err(AppError::param_invalid("invalid MIMI room id"));
     }
     let message = decode_mimi_message_payload(&body)?;
     let source_format = message
@@ -218,7 +218,7 @@ pub(super) async fn mimi_room_message(
         .and_then(|value| value.as_str())
         .unwrap_or("application/mimi-content");
     if !valid_mimi_content_type(source_format) {
-        return Err(AppError::invalid_param("unsupported MIMI content type"));
+        return Err(AppError::param_invalid("unsupported MIMI content type"));
     }
     let operation_id = ids::generate_operation_id();
     let mimi_message_id = message
@@ -268,7 +268,7 @@ pub(super) async fn mimi_room_message(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id))
-        .ok_or_else(|| AppError::invalid_param("MIMI binding carries a non-canonical realm_id"))?;
+        .ok_or_else(|| AppError::param_invalid("MIMI binding carries a non-canonical realm_id"))?;
     let created_at = chrono::Utc::now();
     let mimi_provenance = json!({
         "facade": "soland.mimi.v1",
@@ -358,7 +358,7 @@ pub(super) async fn mimi_group_info(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let room_id = strand_id.into_inner();
     if !valid_mimi_room_id(&room_id) {
-        return Err(AppError::invalid_param("invalid MIMI room id"));
+        return Err(AppError::param_invalid("invalid MIMI room id"));
     }
     let realm_id = mimi_bound_realm_id(state, &room_id).await?.ok_or_else(|| {
         AppError::not_found("MIMI room is not bound to any Arkret Realm")
@@ -406,7 +406,7 @@ pub(super) async fn mimi_consent_request(
     let body = body.into_inner();
     let body_value = typed_body_value(body.clone(), "mimi consent request")?;
     if let Some(message) = unsupported_mimi_draft(&body_value) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     let source_service_id =
         verify_mimi_consent_write_authority(state, req, aa, body.requester_id.as_str()).await?;
@@ -465,10 +465,10 @@ pub(super) async fn mimi_consent_update(
     let body = body.into_inner();
     let body_value = typed_body_value(body.clone(), "mimi consent update")?;
     if let Some(message) = unsupported_mimi_draft(&body_value) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     body.validate_consent_event().map_err(|error| {
-        AppError::invalid_param(format!("MIMI consent Event binding is invalid: {error}"))
+        AppError::param_invalid(format!("MIMI consent Event binding is invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let (session, source_service_id) =
@@ -552,7 +552,7 @@ async fn verify_mimi_consent_update_authority(
             .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
             .map(|(_, fragment)| fragment.to_owned())
             .ok_or_else(|| {
-                AppError::invalid_param("MIMI consent Event requires a DID URL proof key")
+                AppError::param_invalid("MIMI consent Event requires a DID URL proof key")
                     .with_wire_code("invalid_proof")
             })?;
         (
@@ -675,12 +675,12 @@ async fn verify_mimi_consent_actor_proof(
     body: &MimiUpdateConsentRequestBody,
 ) -> Result<(), AppError> {
     body.validate_consent_event().map_err(|error| {
-        AppError::invalid_param(format!("MIMI consent Event carrier is invalid: {error}"))
+        AppError::param_invalid(format!("MIMI consent Event carrier is invalid: {error}"))
             .with_wire_code("invalid_consent_event")
     })?;
     let proof = &body.signature;
     if proof.domain.as_deref() != Some(state.config().trust_domain.as_str()) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "MIMI consent proof domain does not match the destination trust domain",
         )
         .with_wire_code("invalid_proof"));
@@ -691,7 +691,7 @@ async fn verify_mimi_consent_actor_proof(
         None => false,
     };
     if !audience_matches {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "MIMI consent proof audience does not cover the destination service",
         )
         .with_wire_code("invalid_proof"));
@@ -701,13 +701,13 @@ async fn verify_mimi_consent_actor_proof(
         .num_seconds()
         .unsigned_abs();
     if age_seconds > MIMI_OPERATION_PROOF_WINDOW_SECONDS as u64 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "MIMI consent proof created_at is outside the accepted replay window",
         )
         .with_wire_code("invalid_proof"));
     }
     let binding = body.signature_binding_bytes().map_err(|error| {
-        AppError::invalid_param(format!("MIMI consent proof binding is invalid: {error}"))
+        AppError::param_invalid(format!("MIMI consent proof binding is invalid: {error}"))
             .with_wire_code("invalid_proof")
     })?;
     crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
@@ -725,7 +725,7 @@ async fn verify_mimi_consent_actor_proof(
             verification_method = %proof.verification_method,
             "MIMI consent actor proof verification failed"
         );
-        AppError::invalid_param("MIMI consent actor proof JWS verification failed")
+        AppError::param_invalid("MIMI consent actor proof JWS verification failed")
             .with_wire_code("invalid_proof")
     })?;
     Ok(())
@@ -753,37 +753,37 @@ pub(super) async fn mimi_identifiers_query(
     let body = typed_body_value(body.into_inner(), "mimi identifiers query")?;
     verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     let identifiers = body
         .get("identifiers")
         .and_then(Value::as_array)
         .filter(|values| !values.is_empty())
-        .ok_or_else(|| AppError::missing_param("identifiers is required"))?;
+        .ok_or_else(|| AppError::param_missing("identifiers is required"))?;
     let mut matches = Vec::with_capacity(identifiers.len());
     for identifier in identifiers {
         let kind = identifier
             .get("kind")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("identifier entries require kind"))?;
+            .ok_or_else(|| AppError::param_invalid("identifier entries require kind"))?;
         if !matches!(
             kind,
             "mimi_uri" | "did" | "handle" | "phone" | "email" | "opaque"
         ) {
-            return Err(AppError::invalid_param("identifier kind is unsupported"));
+            return Err(AppError::param_invalid("identifier kind is unsupported"));
         }
         let commitment = identifier
             .get("identifier_commitment")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
-                AppError::invalid_param("identifier entries require identifier_commitment")
+                AppError::param_invalid("identifier entries require identifier_commitment")
             })?;
         Hash::new(commitment.to_owned())
-            .map_err(|_| AppError::invalid_param("identifier_commitment must be a hash"))?;
+            .map_err(|_| AppError::param_invalid("identifier_commitment must be a hash"))?;
         matches.push(MimiIdentifierMatch {
             identifier_commitment: Hash::new(commitment.to_owned())
-                .map_err(|_| AppError::invalid_param("identifier_commitment must be a hash"))?,
+                .map_err(|_| AppError::param_invalid("identifier_commitment must be a hash"))?,
             matched: false,
             mimi_uri: None,
             subject: None,
@@ -822,7 +822,7 @@ pub(super) async fn mimi_report_abuse(
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
     let source_provider = verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     // Extract room_id segment from MIMI URI
     // `mimi://provider/rooms/<id>` so we can look up a bound Realm if any.
@@ -841,7 +841,7 @@ pub(super) async fn mimi_report_abuse(
     } else if let Some(bound) = bound_realm {
         bound
     } else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Arkret Realm",
         )
         .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
@@ -850,13 +850,13 @@ pub(super) async fn mimi_report_abuse(
         .get("reporter_did")
         .or_else(|| body.get("reporter"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("mimi report requires reporter"))?;
+        .ok_or_else(|| AppError::param_invalid("mimi report requires reporter"))?;
     enforce_mimi_reporter_resolution(state, reporter, &body).await?;
     let target_ref = body
         .get("target_event_digest")
         .or_else(|| body.get("target_ref"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("mimi report requires target_ref"))?;
+        .ok_or_else(|| AppError::param_invalid("mimi report requires target_ref"))?;
     let evidence_package = body.get("evidence_package").unwrap_or(&Value::Null);
     let franking_proof = body
         .get("frank")
@@ -955,7 +955,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
     body: &Value,
 ) -> Result<(), AppError> {
     DidFullId::new(reporter.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("invalid reporter DID: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid reporter DID: {error}")))?;
     if state
         .identities()
         .account(reporter)
@@ -1000,12 +1000,12 @@ pub(super) async fn mimi_proxy_download(
     let body = typed_body_value(body.into_inner(), "mimi proxy download")?;
     verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
-        return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
+        return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     let asset_ref = body
         .get("asset_ref")
         .and_then(|value| value.as_str())
-        .ok_or_else(|| AppError::missing_param("asset_ref is required"))?;
+        .ok_or_else(|| AppError::param_missing("asset_ref is required"))?;
     enforce_mimi_proxy_download_egress_policy(state, asset_ref)?;
     let asset_policy = body
         .get("asset_privacy_policy")
@@ -1215,7 +1215,7 @@ mod consent_proof_tests {
             .await
             .expect_err("tampered body must fail");
 
-        assert_eq!(error.code, ErrorCode::InvalidParam);
+        assert_eq!(error.code, ErrorCode::ParamInvalid);
         assert_eq!(
             error.wire_code_override.as_deref(),
             Some("invalid_consent_event")
@@ -1232,7 +1232,7 @@ mod consent_proof_tests {
             .await
             .expect_err("cross-domain proof must fail");
 
-        assert_eq!(error.code, ErrorCode::InvalidParam);
+        assert_eq!(error.code, ErrorCode::ParamInvalid);
         assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
     }
 

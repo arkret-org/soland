@@ -112,7 +112,7 @@ pub(super) async fn issue_key_backup_delete_challenge(
             AppError::capability_denied(format!("authenticated actor is not a valid DID: {error}"))
         })?;
     let typed_backup_id = BackupId::new(backup_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("backup_id is invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("backup_id is invalid: {error}")))?;
     let service_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service_id is not a valid DID: {error}")))?;
     let audience = NonEmptyString::new(service_audience(state)?)
@@ -595,7 +595,7 @@ async fn verify_trusted_recovery_service_delete(
 ) -> Result<(), AppError> {
     check_proof_envelope(challenge, proof, expected_digest)?;
     if !recovery_session_id.starts_with(RECOVERY_SESSION_ID_PREFIX) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "key backup delete recovery_session_id must start with ak:recovery_session:",
         ));
     }

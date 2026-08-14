@@ -13,7 +13,7 @@ pub(super) async fn resolve_agent_pairing(
     req: &mut Request,
 ) -> JsonResult<AgentPairingBootstrap> {
     if agent_pairing_token_appears_in_url(req) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "pairing_token must be sent in the JSON body, never in URL path or query",
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -23,7 +23,7 @@ pub(super) async fn resolve_agent_pairing(
     let body = req
         .parse_json::<AgentPairingResolveRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid agent pairing resolve request body"))?;
+        .map_err(|_| AppError::json_invalid("invalid agent pairing resolve request body"))?;
     let pairing_token = body.pairing_token.trim();
     if !is_agent_pairing_token_shape(pairing_token) {
         return Err(agent_pairing_not_found());
@@ -83,20 +83,20 @@ pub(super) async fn submit_agent_runtime_key_request(
     let body = body.into_inner();
     let pairing_code = body.pairing_code.trim();
     if pairing_code.is_empty() {
-        return Err(AppError::invalid_param("pairing_code is required"));
+        return Err(AppError::param_invalid("pairing_code is required"));
     }
     let agent_id = body.agent_id.as_str();
     validate_agent_id(agent_id)?;
     if body.verification_method.trim().is_empty() {
-        return Err(AppError::invalid_param("verification_method is required"));
+        return Err(AppError::param_invalid("verification_method is required"));
     }
     if verification_method_principal(&body.verification_method) != agent_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "verification_method DID must match agent_id",
         ));
     }
     if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "verification_method fragment must be the stable Agent endpoint device_id",
         ));
     }
@@ -116,18 +116,18 @@ pub(super) async fn submit_agent_runtime_key_request(
         state.service_id(),
     )?;
     let agent_did = arkret_wire::DidCoreId::new(agent_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("agent_id invalid: {error}")))?;
     let public_key_digest = arkret_signatures::agent::validate_agent_runtime_public_key(
         &body.public_key,
         &body.verification_method,
     )
-    .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?
+    .map_err(|error| AppError::param_invalid(format!("public_key invalid: {error}")))?
     .runtime_request_digest;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
     let attestation_digest =
         arkret_signatures::agent::agent_runtime_attestation_digest(runtime_attestation.as_ref())
             .map_err(|error| {
-                AppError::invalid_param(format!("runtime_attestation invalid: {error}"))
+                AppError::param_invalid(format!("runtime_attestation invalid: {error}"))
             })?;
     let binding_digest = arkret_signatures::agent::agent_runtime_key_binding_digest_from_digests(
         &agent_did,
@@ -136,7 +136,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         &public_key_digest,
         &attestation_digest,
     )
-    .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("runtime key binding invalid: {error}")))?;
     let existing_binding = agent_record.runtime_key_binding_digest.as_deref();
     if existing_binding.is_some_and(|existing| existing != binding_digest.as_str()) {
         return Err(AppError::new(
@@ -647,7 +647,7 @@ pub(super) async fn agent_key_pair(
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
     if idempotency_key != event_id {
         return Err(AppError::conflict(
             "Idempotency-Key must equal authorize_event.event.event_id",
@@ -675,15 +675,15 @@ pub(super) async fn agent_key_pair(
     let agent_id = body.agent_id.as_str();
     validate_agent_id(agent_id)?;
     if body.verification_method.trim().is_empty() {
-        return Err(AppError::invalid_param("verification_method is required"));
+        return Err(AppError::param_invalid("verification_method is required"));
     }
     if verification_method_principal(&body.verification_method) != agent_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "verification_method DID must match agent_id",
         ));
     }
     if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "verification_method fragment must be the stable Agent endpoint device_id",
         ));
     }
@@ -808,7 +808,7 @@ pub(super) async fn agent_key_pair(
         ));
     }
     let authorize_event_value = serde_json::to_value(&body.authorize_event.event)
-        .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("authorize_event invalid: {error}")))?;
     // Development and production consume the exact controller-signed Event
     // supplied by the client. A server-generated substitute would break the
     // Agent-PCR authorship and idempotency contract.
@@ -907,19 +907,19 @@ pub(super) fn agent_key_cell_ref(
     key_id: &str,
 ) -> Result<arkret_identifiers::CellRef, AppError> {
     let subject = arkret_wire::composite_subject(&[agent_id.as_str(), key_id])
-        .map_err(|error| AppError::invalid_param(format!("agent key subject invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("agent key subject invalid: {error}")))?;
     arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.agent.key.v1:{subject}"))
-        .map_err(|error| AppError::invalid_param(format!("agent key cell invalid: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("agent key cell invalid: {error}")))
 }
 
 fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<(), AppError> {
     let payload = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload,
     >(serde_json::to_value(&event.payload).map_err(|error| {
-        AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
+        AppError::param_invalid(format!("authorize_event.payload invalid: {error}"))
     })?)
     .map_err(|error| {
-        AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
+        AppError::param_invalid(format!("authorize_event.payload invalid: {error}"))
     })?;
     // v1 carries no producer `effects[]`: the writes are derived from
     // `kind + payload` by the registered contract (`event-and-patch.md`
@@ -931,13 +931,13 @@ fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<()
     let derived =
         arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "authorize_event Agent key projection failed: {error}"
                 ))
             })?;
     let expected_cell = agent_key_cell_ref(&payload.agent_id, &payload.key_id)?;
     if derived.len() != 2 || derived.iter().any(|write| write.cell != expected_cell) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event must derive the atomic Agent key re-authorization pair on its own key cell",
         ));
     }
@@ -978,15 +978,15 @@ async fn validate_agent_signing_key_binding_parts(
         .get("signing_key_binding_digest")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::invalid_param(
+            AppError::param_invalid(
                 "authorize_event.payload.signing_key_binding_digest is required",
             )
         })?;
     let actual_binding_digest =
         arkret_signatures::agent_evidence::agent_signing_key_binding_digest(binding)
-            .map_err(|reason| AppError::invalid_param(reason.as_str()))?;
+            .map_err(|reason| AppError::param_invalid(reason.as_str()))?;
     if actual_binding_digest.as_str() != expected_binding_digest {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.signing_key_binding_digest must bind signing_key_binding",
         ));
     }
@@ -1010,7 +1010,7 @@ async fn validate_agent_signing_key_binding_parts(
         ),
     ] {
         if !matches {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "signing_key_binding {field} does not match the pairing request"
             )));
         }
@@ -1019,15 +1019,15 @@ async fn validate_agent_signing_key_binding_parts(
         .get("public_key_digest")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::invalid_param("authorize_event.payload.public_key_digest is required")
+            AppError::param_invalid("authorize_event.payload.public_key_digest is required")
         })
         .and_then(|value| {
             arkret_wire::Hash::new(value.to_owned())
-                .map_err(|error| AppError::invalid_param(error.to_string()))
+                .map_err(|error| AppError::param_invalid(error.to_string()))
         })?;
     let expected_runtime_request_digest =
         arkret_wire::Hash::new(runtime_public_key_digest.to_owned())
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
     arkret_signatures::agent_evidence::validate_agent_signing_key_binding_digest_domains(
         binding,
         verification_method,
@@ -1035,16 +1035,16 @@ async fn validate_agent_signing_key_binding_parts(
         &expected_authorization_digest,
     )
     .map_err(|reason| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "signing_key_binding key material does not match its digest domains: {reason:?}"
         ))
     })?;
     let issued_at = payload
         .get("issued_at")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("authorize_event.payload.issued_at is required"))?;
+        .ok_or_else(|| AppError::param_invalid("authorize_event.payload.issued_at is required"))?;
     if arkret_canonical::format_timestamp_canonical(binding.issued_at) != issued_at {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "signing_key_binding.issued_at must match authorize_event.payload.issued_at",
         ));
     }
@@ -1053,13 +1053,13 @@ async fn validate_agent_signing_key_binding_parts(
         .expires_at
         .map(arkret_canonical::format_timestamp_canonical);
     if binding_expires_at.as_deref() != payload_expires_at {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "signing_key_binding.expires_at must match authorize_event.payload.expires_at",
         ));
     }
     let signing_bytes =
         arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(binding)
-            .map_err(|reason| AppError::invalid_param(reason.as_str()))?;
+            .map_err(|reason| AppError::param_invalid(reason.as_str()))?;
     let verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
         &signing_bytes,
         binding.controller_proof.jws.as_str(),
@@ -1069,7 +1069,7 @@ async fn validate_agent_signing_key_binding_parts(
     )
     .await;
     verification.map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "signing_key_binding controller proof invalid: {error}"
         ))
         .with_wire_code("agent_signing_key_mismatch")
@@ -1083,12 +1083,12 @@ async fn validate_requested_scope_disclosure(
 ) -> Result<(), AppError> {
     let disclosure = &body.requested_scope_disclosure;
     disclosure.validate().map_err(|error| {
-        AppError::invalid_param(format!("requested_scope_disclosure invalid: {error}"))
+        AppError::param_invalid(format!("requested_scope_disclosure invalid: {error}"))
     })?;
     if disclosure.agent_id.as_str() != agent_record.id
         || disclosure.controller_id.as_str() != agent_record.controller_id
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "requested_scope_disclosure principal binding does not match the Agent record",
         ));
     }
@@ -1096,7 +1096,7 @@ async fn validate_requested_scope_disclosure(
         || disclosure.audience.as_str()
             != arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "requested_scope_disclosure verifier or audience does not match this operation",
         ));
     }
@@ -1107,13 +1107,13 @@ async fn validate_requested_scope_disclosure(
     if disclosure.request_id.as_str() != format!("ak:request:{pairing_request_uuid}")
         || disclosure.challenge.as_str() != pairing_request_id
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "requested_scope_disclosure request or challenge does not match the open pairing request",
         ));
     }
     let now = chrono::Utc::now();
     if now < disclosure.issued_at || now > disclosure.expires_at {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "requested_scope_disclosure presentation window is not active",
         ));
     }
@@ -1144,7 +1144,7 @@ async fn validate_requested_scope_disclosure(
         ))
     })?;
     if disclosure.requested_scope_digest != stored_digest {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "requested_scope_disclosure does not match the provisioned Agent ceiling",
         ));
     }
@@ -1190,7 +1190,7 @@ async fn validate_requested_scope_disclosure(
         }
         proof_errors.push(verification.unwrap_err());
     }
-    Err(AppError::invalid_param(format!(
+    Err(AppError::param_invalid(format!(
         "requested_scope_disclosure has no valid controller proof: {}",
         proof_errors.join("; ")
     )))
@@ -1216,7 +1216,7 @@ fn ensure_current_runtime_key_request_matches(
         ));
     }
     let agent_id = arkret_wire::DidCoreId::new(body.agent_id.as_str().to_owned())
-        .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("agent_id invalid: {error}")))?;
     let current_binding = arkret_signatures::agent::agent_runtime_key_binding_digest(
         &agent_id,
         &body.pairing_request_id,
@@ -1224,7 +1224,7 @@ fn ensure_current_runtime_key_request_matches(
         &body.public_key,
         runtime_attestation_value(body.runtime_attestation.as_ref())?.as_ref(),
     )
-    .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("runtime key binding invalid: {error}")))?;
     if agent_record.runtime_key_binding_digest.as_deref() != Some(current_binding.as_str()) {
         return Err(pairing_failed_precondition(
             "runtime key binding changed after controller discovery",
@@ -1364,7 +1364,7 @@ pub(super) async fn submit_production_key_authorize_event(
     )
     .await
     .map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "ak.agent.key.authorize submit failed: {}",
             error.message
         ))
@@ -1384,7 +1384,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     service_id: &str,
 ) -> Result<(), AppError> {
     if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.kind must be ak.agent.key.authorize",
         ));
     }
@@ -1423,14 +1423,14 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     }
     let payload = envelope
         .get("payload")
-        .ok_or_else(|| AppError::invalid_param("authorize_event.payload is required"))?;
+        .ok_or_else(|| AppError::param_invalid("authorize_event.payload is required"))?;
     if payload.get("agent_id").and_then(Value::as_str) != Some(agent_id) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.agent_id must match the pairing request",
         ));
     }
     if payload.get("verification_method").and_then(Value::as_str) != Some(verification_method) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.verification_method must match the pairing request",
         ));
     }
@@ -1447,12 +1447,12 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     let audience = payload
         .get("audience")
         .and_then(Value::as_array)
-        .ok_or_else(|| AppError::invalid_param("authorize_event.payload.audience is required"))?;
+        .ok_or_else(|| AppError::param_invalid("authorize_event.payload.audience is required"))?;
     if !audience
         .iter()
         .any(|value| value.as_str() == Some(service_id))
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.audience must include this principal server",
         ));
     }
@@ -1461,7 +1461,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             .as_str()
             .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
             .ok_or_else(|| {
-                AppError::invalid_param("authorize_event.payload.expires_at must be rfc3339")
+                AppError::param_invalid("authorize_event.payload.expires_at must be rfc3339")
             })?;
         if expires_at.with_timezone(&chrono::Utc) <= chrono::Utc::now() {
             return Err(pairing_failed_precondition(
@@ -1472,7 +1472,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     if payload.get("public_key_digest").and_then(Value::as_str)
         != Some(authorized_public_key_digest)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.public_key_digest must bind the raw signing key",
         ));
     }
@@ -1484,15 +1484,15 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         service_id,
     )?;
     let approval_evidence = payload.get("approval_evidence").ok_or_else(|| {
-        AppError::invalid_param("authorize_event.payload.approval_evidence is required")
+        AppError::param_invalid("authorize_event.payload.approval_evidence is required")
     })?;
     if approval_evidence.get("kind").and_then(Value::as_str) != Some("pairing_request") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.approval_evidence.kind must be pairing_request",
         ));
     }
     if approval_evidence.get("evidence_ref").is_some() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.approval_evidence.ref must be absent for pairing_request evidence",
         ));
     }
@@ -1507,7 +1507,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .and_then(Value::as_str)
         != Some(pairing_request_id)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.approval_evidence.pairing_request_id must match the pairing request",
         ));
     }
@@ -1516,7 +1516,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .and_then(Value::as_str)
         != Some(expected_digest.as_str())
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.approval_evidence.request_canonical_digest must bind the pairing request",
         ));
     }
@@ -1525,9 +1525,9 @@ pub(super) fn ensure_key_authorize_event_matches_request(
 
 fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<String, AppError> {
     let value = serde_json::to_value(body)
-        .map_err(|error| AppError::invalid_param(format!("pairing request invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("pairing request invalid: {error}")))?;
     let canonical = arkret_canonical::canonical_json_bytes(&value).map_err(|error| {
-        AppError::invalid_param(format!("pairing request canonicalization failed: {error}"))
+        AppError::param_invalid(format!("pairing request canonicalization failed: {error}"))
     })?;
     Ok(arkret_canonical::sha256_digest(&canonical))
 }
@@ -1623,7 +1623,7 @@ fn runtime_attestation_value(
     runtime_attestation
         .map(serde_json::to_value)
         .transpose()
-        .map_err(|error| AppError::invalid_param(format!("runtime_attestation invalid: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("runtime_attestation invalid: {error}")))
 }
 
 pub(super) fn runtime_ed25519_public_key(
@@ -1631,10 +1631,10 @@ pub(super) fn runtime_ed25519_public_key(
     verification_method: &str,
 ) -> Result<[u8; 32], AppError> {
     let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     arkret_signatures::agent::validate_agent_runtime_public_key(public_key, &verification_method)
         .map(|validated| validated.raw_public_key)
-        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("public_key invalid: {error}")))
 }
 
 pub(super) fn verify_runtime_key_pair_proof_of_possession(
@@ -1687,12 +1687,12 @@ fn verify_runtime_key_proof_of_possession(
     service_id: &str,
 ) -> Result<(), AppError> {
     let agent_id = arkret_wire::DidCoreId::new(agent_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("agent_id invalid: {error}")))?;
     let service_id = arkret_wire::DidCoreId::new(service_id.to_owned())
         .map_err(|error| AppError::internal(format!("configured service_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
     if proof_of_possession.audience != service_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "proof_of_possession.audience must match this principal server",
         ));
     }
@@ -1705,7 +1705,7 @@ fn verify_runtime_key_proof_of_possession(
             runtime_attestation,
         )
         .map_err(|error| {
-            AppError::invalid_param(format!("runtime key binding invalid: {error}"))
+            AppError::param_invalid(format!("runtime key binding invalid: {error}"))
         })?;
     let signing_bytes = proof_of_possession
         .validate_shape(
@@ -1719,19 +1719,19 @@ fn verify_runtime_key_proof_of_possession(
             chrono::Utc::now(),
         )
         .map_err(|error| {
-            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+            AppError::param_invalid(format!("proof_of_possession invalid: {error}"))
         })?;
     let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
-        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("public_key invalid: {error}")))?;
     let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(proof_of_possession.signature.as_bytes())
-        .map_err(|_| AppError::invalid_param("proof_of_possession.signature is not base64url"))?;
+        .map_err(|_| AppError::param_invalid("proof_of_possession.signature is not base64url"))?;
     let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
-        AppError::invalid_param("proof_of_possession.signature must be a 64-byte Ed25519 signature")
+        AppError::param_invalid("proof_of_possession.signature must be a 64-byte Ed25519 signature")
     })?;
     verifying_key
         .verify(&signing_bytes, &signature)
-        .map_err(|_| AppError::invalid_param("proof_of_possession.signature is invalid"))?;
+        .map_err(|_| AppError::param_invalid("proof_of_possession.signature is invalid"))?;
     Ok(())
 }
 
@@ -1775,10 +1775,10 @@ pub(super) fn runtime_public_key_digest(
     verification_method: &str,
 ) -> Result<String, AppError> {
     let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     arkret_signatures::agent::validate_agent_runtime_public_key(public_key, &verification_method)
         .map(|validated| validated.runtime_request_digest.as_str().to_owned())
-        .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("public_key is invalid: {error}")))
 }
 
 pub(super) fn ensure_authorize_event_scope_within_requested(
@@ -1786,25 +1786,25 @@ pub(super) fn ensure_authorize_event_scope_within_requested(
     payload: &Value,
 ) -> Result<(), AppError> {
     let scope = payload.get("agent_key_scope").ok_or_else(|| {
-        AppError::invalid_param("authorize_event.payload.agent_key_scope is required")
+        AppError::param_invalid("authorize_event.payload.agent_key_scope is required")
     })?;
     let actions = scope
         .get("actions")
         .and_then(Value::as_array)
         .filter(|actions| !actions.is_empty())
         .ok_or_else(|| {
-            AppError::invalid_param("authorize_event.payload.agent_key_scope.actions is required")
+            AppError::param_invalid("authorize_event.payload.agent_key_scope.actions is required")
         })?;
     if actions
         .iter()
         .any(|action| action.as_str().is_none_or(str::is_empty))
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.agent_key_scope.actions must be non-empty strings",
         ));
     }
     if !agent_key_scope_within_requested_scope(agent_record, scope) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event.payload.agent_key_scope must be within the provisioned requested_scope",
         ));
     }
@@ -1826,9 +1826,9 @@ pub(super) fn pairing_request_binding_digest(
     let pairing_code = required_pairing_code(agent_record)?;
     let expires_at = required_pairing_expires_at(agent_record)?;
     let controller = arkret_wire::DidCoreId::new(controller.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("controller DID invalid: {error}")))?;
     let agent_id = arkret_wire::DidCoreId::new(agent_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("agent DID invalid: {error}")))?;
     let audience = arkret_wire::DidCoreId::new(service_id.to_owned()).map_err(|error| {
         AppError::internal(format!("configured service core_id invalid: {error}"))
     })?;

@@ -342,7 +342,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "bad_json",
+                "json_invalid",
                 "invalid ak.peer.events.command.submit request body",
             );
             return;
@@ -395,11 +395,11 @@ async fn peer_events_resolve(
     .await?;
     request
         .validate()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let source_service_id = source_service_id_from_request(req)?;
     for digest in &request.event_digests {
         if !is_valid_hash_digest(digest.as_str()) {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "invalid event digest: {digest}"
             )));
         }
@@ -557,10 +557,10 @@ async fn peer_events_frontier(
         .into_string()
     } else {
         query_param(req, "realm_id")
-            .ok_or_else(|| AppError::missing_param("realm_id is required"))?
+            .ok_or_else(|| AppError::param_missing("realm_id is required"))?
     };
     let realm_id =
-        RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     if is_realm_deleted(state, realm_id.as_str()).await {
         return Err(AppError::not_found("not found"));
     }
@@ -727,33 +727,33 @@ impl PeerEventsQueryParts {
 
     fn validate(&self) -> Result<(), AppError> {
         if self.realms.is_empty() && self.actors.is_empty() {
-            return Err(AppError::missing_param(
+            return Err(AppError::param_missing(
                 "ak.peer.events.read.scan requires at least one of realms[] / actors[]",
             ));
         }
         if self.after.is_some() && self.before.is_some() {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "specify either 'after' or 'before', not both",
             ));
         }
         if !matches!(self.order.as_str(), "default" | "ascending" | "descending") {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "order must be default, ascending, or descending",
             ));
         }
         for realm in &self.realms {
             RealmId::new(realm.clone())
-                .map_err(|_| AppError::invalid_param(format!("invalid realm: {realm}")))?;
+                .map_err(|_| AppError::param_invalid(format!("invalid realm: {realm}")))?;
         }
         for actor in &self.actors {
             if validate_did(actor).is_err() {
-                return Err(AppError::invalid_param(format!("invalid actor: {actor}")));
+                return Err(AppError::param_invalid(format!("invalid actor: {actor}")));
             }
         }
         if let Some(kind) = &self.kind_filter
             && (!kind.starts_with("ak.") || kind.contains(' '))
         {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "invalid event kind: {kind}"
             )));
         }
@@ -1430,7 +1430,7 @@ fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppErr
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",
         ),
-        super::sync::SyncCursorError::Invalid(message) => AppError::invalid_param(message),
+        super::sync::SyncCursorError::Invalid(message) => AppError::param_invalid(message),
         super::sync::SyncCursorError::Mismatch(message)
         | super::sync::SyncCursorError::Integrity(message) => AppError::new(
             soland_http::error::ErrorCode::CursorIntegrityInvalid,
@@ -1492,7 +1492,7 @@ where
 {
     req.parse_json::<T>()
         .await
-        .map_err(|_| AppError::bad_json(message))
+        .map_err(|_| AppError::json_invalid(message))
 }
 
 pub(in crate::routing) async fn validate_peer_request(
@@ -1635,7 +1635,7 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 pub(in crate::routing) fn schema_violation(message: impl Into<String>) -> AppError {
-    AppError::invalid_param(message)
+    AppError::param_invalid(message)
         .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation")
 }

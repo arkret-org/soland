@@ -46,14 +46,14 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
 
     let patch: Map<String, Value> = req.parse_json().await.map_err(|error| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("settings body must be a JSON object of key -> value: {error}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
     if patch.is_empty() {
         return Err(AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             "settings patch must set at least one key".to_owned(),
         )
         .with_status(StatusCode::BAD_REQUEST));
@@ -64,7 +64,7 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
     let mut next = (*state.settings()).clone();
     for (key, value) in &patch {
         next.apply_key(key, value.clone()).map_err(|error| {
-            AppError::new(ErrorCode::InvalidParam, error.to_string())
+            AppError::new(ErrorCode::ParamInvalid, error.to_string())
                 .with_status(StatusCode::BAD_REQUEST)
         })?;
     }

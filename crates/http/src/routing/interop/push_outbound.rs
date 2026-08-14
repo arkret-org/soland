@@ -185,12 +185,12 @@ async fn outbound_push_bridge_resolve(
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
     if push_gateway_url.is_empty() {
-        return Err(AppError::invalid_param("push_gateway_url is required"));
+        return Err(AppError::param_invalid("push_gateway_url is required"));
     }
 
     let service_base_url =
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
-            AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
+            AppError::param_invalid("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
@@ -251,11 +251,11 @@ async fn outbound_push_bridge_fetch(
 
     let push_gateway_url = body.push_gateway_url.trim().to_owned();
     if push_gateway_url.is_empty() {
-        return Err(AppError::invalid_param("push_gateway_url is required"));
+        return Err(AppError::param_invalid("push_gateway_url is required"));
     }
     let service_base_url =
         derive_push_gateway_service_base_url(&push_gateway_url).ok_or_else(|| {
-            AppError::invalid_param("push_gateway_url must be an absolute push gateway URL")
+            AppError::param_invalid("push_gateway_url must be an absolute push gateway URL")
         })?;
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");

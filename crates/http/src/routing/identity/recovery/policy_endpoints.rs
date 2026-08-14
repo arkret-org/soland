@@ -216,11 +216,11 @@ pub(super) async fn recovery_policy_put(
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {
-        AppError::invalid_param(format!("invalid recovery policy publication: {error}"))
+        AppError::param_invalid(format!("invalid recovery policy publication: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let typed_payload = request.policy_payload().map_err(|error| {
-        AppError::invalid_param(format!("invalid recovery policy payload: {error}"))
+        AppError::param_invalid(format!("invalid recovery policy payload: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let payload = serde_json::to_value(&typed_payload.value)
@@ -286,7 +286,7 @@ pub(super) async fn recovery_policy_put(
                 .with_wire_code("recovery_policy_supersedes_invalid"));
             }
             None if validated.version != 1 => {
-                return Err(AppError::invalid_param(format!(
+                return Err(AppError::param_invalid(format!(
                     "genesis policy MUST have version=1; got {}",
                     validated.version
                 ))
@@ -300,7 +300,7 @@ pub(super) async fn recovery_policy_put(
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
         .map_err(|error| {
-            let code = ErrorCode::from_wire(&error.code).unwrap_or(ErrorCode::InvalidParam);
+            let code = ErrorCode::from_wire(&error.code).unwrap_or(ErrorCode::ParamInvalid);
             AppError::new(code, error.message)
                 .with_status(error.status)
                 .with_wire_code(error.code)
@@ -348,7 +348,7 @@ pub(super) async fn recovery_policy_put(
         soland_services::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
             actual,
         } => {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "genesis policy MUST have version=1; got {actual}"
             ))
             .with_wire_code("recovery_policy_genesis_not_v1"));

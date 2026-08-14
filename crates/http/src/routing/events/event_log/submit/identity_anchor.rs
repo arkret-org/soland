@@ -388,7 +388,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 unit_error("reanchor requires a Control Proposal Ack for each Control Move")
             })?;
         let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+            SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
         })?;
         let policy = crate::control_proposal::control_proposal_policy(
             state,
@@ -536,7 +536,7 @@ pub(super) async fn submit_identity_anchor_batch(
     let frontier_cas = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
-            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+            SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
         })?;
         let raw_leaves = state
             .projections()
@@ -1143,7 +1143,7 @@ async fn validate_unit_relationships(
     let create_event_id = arkret_wire::EventId::new(first.event_id.clone()).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             format!("identity anchor create event_id is invalid: {error}"),
         )
     })?;
@@ -1544,7 +1544,7 @@ async fn validate_pre_fence_seal_frontier(
     basis: Option<&arkret_wire::DeviceReanchorPreFenceSealFrontier>,
 ) -> Result<(), SubmitOneError> {
     let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
     })?;
     let leaves =
         crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(

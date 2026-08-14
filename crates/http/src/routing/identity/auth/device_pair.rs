@@ -26,7 +26,7 @@ async fn authorize_account_device_pair(
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
     body.validate_authorize_event_binding().map_err(|error| {
-        AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
     let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
     let active_generation = crate::routing::identity::device_generation::current_device_generation(
@@ -50,14 +50,14 @@ async fn authorize_account_device_pair(
                 return Err(AppError::capability_denied(
                     "authorizing device is outside the active device generation",
                 )
-                .with_wire_code("device_not_authorized"));
+                .with_wire_code("device_unauthorized"));
             }
             Ok(generation.current_ref.clone())
         })
         .transpose()?;
     let pairing_code = body.pairing_code.as_str().trim();
     if pairing_code.is_empty() {
-        return Err(AppError::missing_param("pairing_code is required"));
+        return Err(AppError::param_missing("pairing_code is required"));
     }
     let pair_pubkey = pair_pubkey_material(&body.new_device_pubkey)?;
     let device_id = pair_pubkey.device_id.clone();
@@ -92,7 +92,7 @@ async fn authorize_account_device_pair(
 
     let authorized_at = now();
     let staged_new_device_pubkey = serde_json::to_value(&body.new_device_pubkey)
-        .map_err(|error| AppError::invalid_param(format!("new_device_pubkey invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("new_device_pubkey invalid: {error}")))?;
     match (
         body.device_pairing_request_id.as_ref(),
         body.challenge_transcript.as_ref(),
@@ -150,7 +150,7 @@ async fn authorize_account_device_pair(
             .map_err(device_pairing_proof_failed)?;
         }
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "exactly one of device_pairing_request_id or challenge_transcript is required",
             )
             .with_wire_code("schema_violation"));
@@ -161,7 +161,7 @@ async fn authorize_account_device_pair(
         .event
         .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
         .map_err(|error| {
-            AppError::invalid_param(format!("authorize_event payload invalid: {error}"))
+            AppError::param_invalid(format!("authorize_event payload invalid: {error}"))
         })?;
     if authorize_payload.principal_id.as_str() != session.actor
         || authorize_payload.device_id.as_str() != device_id
@@ -172,7 +172,7 @@ async fn authorize_account_device_pair(
                 if id.as_str() == session.device_id
         )
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "authorize_event does not bind the authenticated authorizer and candidate device",
         )
         .with_wire_code("schema_violation"));
@@ -184,7 +184,7 @@ async fn authorize_account_device_pair(
                 authorize_payload.device_public_key.as_str().to_owned(),
             )
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "authorize_event device_public_key is not a did:key: {error}"
                 ))
             })?,
@@ -200,7 +200,7 @@ async fn authorize_account_device_pair(
     target_attestation
         .validate_against_pair_request(&body)
         .map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "pairing target attestation does not bind the exact authorize Event: {error}"
             ))
             .with_wire_code("schema_violation")
@@ -317,12 +317,12 @@ async fn ensure_authorizing_device_verified(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
             AppError::capability_denied("authorizing device is not registered")
-                .with_wire_code("device_not_authorized")
+                .with_wire_code("device_unauthorized")
         })?;
     if device.revoked_at.is_some() || device.verification_state != "verified" {
         return Err(
             AppError::capability_denied("authorizing device is not verified")
-                .with_wire_code("device_not_authorized"),
+                .with_wire_code("device_unauthorized"),
         );
     }
     Ok(device)
@@ -344,18 +344,18 @@ fn pair_pubkey_material(
             device_id: device_id.to_string(),
             device_public_key,
         })
-        .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ak:device id"))
+        .map_err(|_| AppError::param_invalid("new_device_pubkey.kid must be a ak:device id"))
 }
 
 fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError> {
     let public_key = public_key.trim();
     let bytes = arkret_canonical::base64url_decode(public_key).map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "new_device_pubkey.key must be a base64url Ed25519 key: {error}"
         ))
     })?;
     let public_key_bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "new_device_pubkey.key decoded to {} bytes, expected 32",
             bytes.len()
         ))

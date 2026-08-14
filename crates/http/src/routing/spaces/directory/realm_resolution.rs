@@ -56,7 +56,7 @@ pub(super) async fn resolve_realm(
         && body.invite_token.is_none()
         && body.signed_link.is_none()
     {
-        return Err(AppError::missing_param(
+        return Err(AppError::param_missing(
             "one of realm_id, alias, invite_token, or signed_link is required",
         ));
     }
@@ -144,7 +144,7 @@ pub(super) async fn resolve_target(
     let body = body.into_inner();
     let address = body.address.trim();
     if address.is_empty() {
-        return Err(AppError::missing_param("address is required"));
+        return Err(AppError::param_missing("address is required"));
     }
     let parsed = parse_address(address).map_err(|_| AppError::not_found("not found"))?;
     let session = authenticated_session(state, req).await.ok();

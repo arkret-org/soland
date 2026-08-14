@@ -93,7 +93,7 @@ pub(super) async fn dev_login(
     let (actor, device_id) = match (actor, device_id) {
         (Ok(actor), Ok(device_id)) => (actor, device_id),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "actor must be a DID core id and device_id is required",
             ));
         }
@@ -101,7 +101,7 @@ pub(super) async fn dev_login(
     let actor_str = actor.as_str();
     let device_id_str = device_id.as_str();
     if device_id_str.trim().is_empty() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "actor must be a DID core id and device_id is required",
         ));
     }

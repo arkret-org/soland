@@ -129,7 +129,7 @@ pub(crate) fn is_controller_private_account_data_key(account_data_key: &str) -> 
 
 fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     crate::routing::account_data_encryption::validate_encrypted_account_data_key(account_data_key)
-        .map_err(|error| AppError::invalid_param(error.message()))
+        .map_err(|error| AppError::param_invalid(error.message()))
 }
 
 fn validate_private_account_data_content_for_actor(
@@ -142,7 +142,7 @@ fn validate_private_account_data_content_for_actor(
         content,
         Some(actor_id),
     )
-    .map_err(|error| AppError::invalid_param(error.message()))
+    .map_err(|error| AppError::param_invalid(error.message()))
 }
 
 #[cfg(test)]
@@ -154,7 +154,7 @@ fn validate_private_account_data_content(
         account_data_key,
         content,
     )
-    .map_err(|error| AppError::invalid_param(error.message()))
+    .map_err(|error| AppError::param_invalid(error.message()))
 }
 
 pub(super) fn router() -> Router {
@@ -170,12 +170,12 @@ pub(super) fn router() -> Router {
 
 fn validate_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     if account_data_key.is_empty() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "account_data_key must not be empty",
         ));
     }
     if account_data_key.len() > MAX_ACCOUNT_DATA_KEY_BYTES {
-        return Err(AppError::invalid_param("account_data_key too long"));
+        return Err(AppError::param_invalid("account_data_key too long"));
     }
     // Keys are dot-delimited namespaces (`ak.contacts.realm.<realm_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
@@ -184,7 +184,7 @@ fn validate_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     if account_data_key.chars().any(|c| {
         c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#'
     }) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "account_data_key contains forbidden character",
         ));
     }
@@ -408,7 +408,7 @@ async fn admit_caller_signed_account_data_set(
     .await
     .map_err(|error| {
         AppError::new(
-            soland_http::error::ErrorCode::InvalidParam,
+            soland_http::error::ErrorCode::ParamInvalid,
             format!("account_data Event admission failed: {}", error.message),
         )
         .with_status(error.status)
@@ -930,7 +930,7 @@ mod tests {
     /// must be hard-rejected for put/get/delete regardless of session kind.
     /// All three handlers call `validate_registered_account_data_key` before
     /// any session/agent branching, so this validator-level rejection is the
-    /// shared invalid_param outcome for agent sessions and plain sessions
+    /// shared param_invalid outcome for agent sessions and plain sessions
     /// alike; and legacy stored rows stay controller-private so agent-session
     /// list filtering and the account-stream skip both keep applying.
     #[test]

@@ -146,6 +146,6 @@ mod tests {
             salvo::http::HeaderValue::from_static("gzip"),
         );
 
-        assert!(reject_content_encoding(&request, || AppError::invalid_param("encoded")).is_err());
+        assert!(reject_content_encoding(&request, || AppError::param_invalid("encoded")).is_err());
     }
 }

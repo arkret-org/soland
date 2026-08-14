@@ -101,7 +101,7 @@ async fn keys_upload(
         *one_time_key_alg_counts
             .entry(
                 arkret_wire::NonEmptyString::new(algorithm.to_owned()).map_err(|error| {
-                    AppError::invalid_param(format!("one-time key algorithm is invalid: {error}"))
+                    AppError::param_invalid(format!("one-time key algorithm is invalid: {error}"))
                 })?,
             )
             .or_insert(0) += 1;
@@ -412,10 +412,10 @@ fn verify_keys_upload_device_signature(
     device_signature: &arkret_models_crypto::artifacts_keys::KeyOperationSignature,
 ) -> Result<(), AppError> {
     let record = current_device.ok_or_else(|| {
-        AppError::invalid_param("keys/upload requires an authorized device_public_key")
+        AppError::param_invalid("keys/upload requires an authorized device_public_key")
     })?;
     if record.verification_state != "verified" || record.revoked_at.is_some() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "keys/upload requires a verified, non-revoked device",
         ));
     }
@@ -426,7 +426,7 @@ fn verify_keys_upload_device_signature(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            AppError::invalid_param("keys/upload requires authoritative device_public_key")
+            AppError::param_invalid("keys/upload requires authoritative device_public_key")
         })?;
     let signature_algorithm = device_signature
         .signature_algorithm
@@ -434,32 +434,32 @@ fn verify_keys_upload_device_signature(
         .map(arkret_wire::NonEmptyString::as_str)
         .unwrap_or_default();
     if signature_algorithm != "Ed25519" {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "keys/upload device_signature.signature_algorithm must be Ed25519",
         ));
     }
     let kid = device_signature.kid.as_str();
     if !device_signature_kid_points_to_device_key(kid, actor, device_public_key) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "keys/upload device_signature.kid does not point to the authorized device key",
         ));
     }
     let signing_input = arkret_models_crypto::keys_upload_signing_input(unsigned)
-        .map_err(|error| AppError::invalid_param(format!("keys/upload canonicalize: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("keys/upload canonicalize: {error}")))?;
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(device_signature.sig.as_bytes())
-        .map_err(|_| AppError::invalid_param("keys/upload signature is not base64url"))?;
+        .map_err(|_| AppError::param_invalid("keys/upload signature is not base64url"))?;
     let signature = Signature::from_slice(&signature_bytes)
-        .map_err(|_| AppError::invalid_param("keys/upload signature must be 64 bytes"))?;
+        .map_err(|_| AppError::param_invalid("keys/upload signature must be 64 bytes"))?;
     let verifying_key = crate::routing::identity::device_signing::decode_ed25519_key(
         device_public_key,
         "multibase",
     )
-    .map_err(|error| AppError::invalid_param(format!("device signing key is invalid: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("device signing key is invalid: {error}")))?;
     use ed25519_dalek::Verifier as _;
     verifying_key
         .verify(&signing_input, &signature)
-        .map_err(|_| AppError::invalid_param("keys/upload signature verification failed"))
+        .map_err(|_| AppError::param_invalid("keys/upload signature verification failed"))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.keys.command.claim", tags("identity"))]
@@ -477,7 +477,7 @@ async fn keys_claim(
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
         let actor_core = arkret_wire::project_full_id_to_core_id(&actor).map_err(|error| {
-            AppError::invalid_param(format!("claim actor cannot project: {error}"))
+            AppError::param_invalid(format!("claim actor cannot project: {error}"))
         })?;
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {

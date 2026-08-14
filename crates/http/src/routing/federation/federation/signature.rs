@@ -83,7 +83,7 @@ pub(in crate::routing) async fn verify_inbound_peer_http_signature(
             req.payload()
                 .await
                 .map_err(|error| {
-                    AppError::bad_json(format!("unable to read peer request body: {error}"))
+                    AppError::json_invalid(format!("unable to read peer request body: {error}"))
                 })?
                 .to_vec(),
         ),

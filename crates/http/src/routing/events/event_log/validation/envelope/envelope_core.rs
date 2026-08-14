@@ -159,20 +159,20 @@ async fn validate_event_envelope_with_ingress(
     let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "event_id is required",
         )
     })?;
     if !is_valid_event_id(&event_id) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "event_id must use the ak:event: typed prefix",
         ));
     }
 
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
-        event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
+        event_validation_error(StatusCode::BAD_REQUEST, "param_missing", "kind is required")
     })?;
     // Receipt objects are not durable Event kinds. Legacy plaintext transient
     // kinds are absent from the active registry and fail the registry gate
@@ -197,14 +197,14 @@ async fn validate_event_envelope_with_ingress(
     let actor_id = event_string_field(object, &["actor_id"]).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "actor_id is required",
         )
     })?;
     if arkret_wire::DidCoreId::new(actor_id.clone()).is_err() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "actor_id must be a Core DidCoreId",
         ));
     }
@@ -213,7 +213,7 @@ async fn validate_event_envelope_with_ingress(
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "principal_server_id must be a Core DidCoreId",
             )
         })?;
@@ -223,7 +223,7 @@ async fn validate_event_envelope_with_ingress(
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "missing_param",
+                "param_missing",
                 "actor_seq is required",
             )
         })?;
@@ -326,7 +326,7 @@ async fn validate_event_envelope_with_ingress(
         let executed_by = arkret_wire::DidCoreId::new(executed_by).map_err(|_| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "executed_by must be a Core DidCoreId",
             )
         })?;

@@ -84,14 +84,14 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         })?;
     typed_payload
         .validate_provenance(&service_actor_id)
-        .map_err(AppError::invalid_param)?;
+        .map_err(AppError::param_invalid)?;
     if typed_payload.provenance
         != Some(
             arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
         )
         || typed_payload.source_provider.is_none()
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "service-authored moderation report requires MIMI facade provenance",
         ));
     }
@@ -193,7 +193,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     .await
     .map_err(|error| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("moderation Event admission failed: {}", error.message),
         )
         .with_status(error.status)
@@ -336,7 +336,7 @@ fn moderation_effective_scope_value(
             realm_id: scope_realm,
         }) => {
             if scope_realm.as_str() != realm_id {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "effective_scope.realm_id must match report realm_id",
                 ));
             }
@@ -347,7 +347,7 @@ fn moderation_effective_scope_value(
             circle_id,
         }) => {
             if scope_realm.as_str() != realm_id {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "effective_scope.realm_id must match report realm_id",
                 ));
             }
@@ -359,7 +359,7 @@ fn moderation_effective_scope_value(
         }
         // `ScopeRef` is #[non_exhaustive]; fail closed on any scope
         // kind this build does not understand rather than guessing a shape.
-        Some(_) => Err(AppError::invalid_param(
+        Some(_) => Err(AppError::param_invalid(
             "effective_scope kind is not supported",
         )),
     }
@@ -448,10 +448,10 @@ fn validate_moderation_evidence_package(
     }
     let object = evidence_package
         .as_object()
-        .ok_or_else(|| AppError::invalid_param("evidence_package must be an object"))?;
+        .ok_or_else(|| AppError::param_invalid("evidence_package must be an object"))?;
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(evidence_package).map_err(|error| {
-            AppError::bad_json(format!(
+            AppError::json_invalid(format!(
                 "evidence_package is not canonical-json encodable: {error}"
             ))
         })?;
@@ -472,13 +472,13 @@ fn validate_moderation_evidence_package(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package.encryption is required",
         ));
     };
     let encryption = encryption.to_ascii_lowercase();
     if matches!(encryption.as_str(), "none" | "plaintext" | "cleartext") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package must be encrypted",
         ));
     }
@@ -487,7 +487,7 @@ fn validate_moderation_evidence_package(
         .and_then(Value::as_str)
         .is_some_and(is_valid_report_hash)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package.ciphertext_digest must be a hash digest",
         ));
     }
@@ -496,7 +496,7 @@ fn validate_moderation_evidence_package(
         .and_then(Value::as_str)
         .is_some_and(|digest| !is_valid_report_hash(digest))
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package.plaintext_digest must be a hash digest",
         ));
     }
@@ -505,7 +505,7 @@ fn validate_moderation_evidence_package(
         .and_then(Value::as_array)
         .is_none_or(|recipients| recipients.is_empty())
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package.recipients must name at least one moderator audience",
         ));
     }
@@ -515,12 +515,12 @@ fn validate_moderation_evidence_package(
             .and_then(|audience| audience.get("effective_scope"))
             == Some(effective_scope);
     if !scope_matches {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "evidence_package audience must bind the report effective_scope",
         ));
     }
     if let Some(key) = contains_forbidden_key(evidence_package, EVIDENCE_PACKAGE_FORBIDDEN_KEYS) {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "evidence_package contains forbidden key `{key}`"
         )));
     }
@@ -538,28 +538,28 @@ async fn validate_moderation_franking_proof(
     }
     let object = franking_proof
         .as_object()
-        .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
+        .ok_or_else(|| AppError::param_invalid("franking_proof must be an object"))?;
     if object.get("kind").and_then(Value::as_str)
         != Some(EventKind::ModerationFrankingProof.as_str())
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.kind must be ak.moderation.franking_proof",
         ));
     }
     if object.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.realm_id must match report realm_id",
         ));
     }
     if !required_string_field(object, "franking_proof_id", "franking_proof")?
         .starts_with("ak:franking_proof:")
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.franking_proof_id must be a franking proof id",
         ));
     }
     if !required_string_field(object, "event_id", "franking_proof")?.starts_with("ak:event:") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.event_id must be an event id",
         ));
     }
@@ -569,34 +569,34 @@ async fn validate_moderation_franking_proof(
             .and_then(Value::as_str)
             .is_some_and(is_valid_report_hash)
         {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "franking_proof.{field} must be a hash digest"
             )));
         }
     }
     let received_by = required_string_field(object, "received_by", "franking_proof")?;
     validate_did(received_by)
-        .map_err(|_| AppError::invalid_param("franking_proof.received_by must be a DID"))?;
+        .map_err(|_| AppError::param_invalid("franking_proof.received_by must be a DID"))?;
     let replay_nonce = required_string_field(object, "replay_nonce", "franking_proof")?;
     if !is_valid_replay_nonce(replay_nonce) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.replay_nonce must be base64url 16..256 chars",
         ));
     }
     if required_string_field(object, "signature", "franking_proof")?.is_empty() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.signature must be non-empty",
         ));
     }
     let received_at = required_string_field(object, "received_at", "franking_proof")?;
     if arkret_canonical::validate_timestamp_canonical(received_at).is_err() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.received_at must be a canonical Arkret timestamp",
         ));
     }
     validate_franking_sender_claim(object)?;
     if let Some(key) = contains_forbidden_key(franking_proof, FRANKING_PROOF_FORBIDDEN_KEYS) {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "franking_proof contains forbidden key `{key}`"
         )));
     }
@@ -683,22 +683,22 @@ fn encrypted_event_payload_digest(
 // `reason_code`, so it is sourced from the SDK as `arkret_wire::ReasonCode::PROOF_INVALID`
 // rather than a local literal.
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::invalid_param(message).with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
+    AppError::param_invalid(message).with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Result<(), AppError> {
     let sender_claim = object
         .get("sender_claim")
         .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("franking_proof.sender_claim must be an object"))?;
+        .ok_or_else(|| AppError::param_invalid("franking_proof.sender_claim must be an object"))?;
     let actor_id = required_string_field(sender_claim, "actor_id", "franking_proof.sender_claim")?;
     validate_did(actor_id).map_err(|_| {
-        AppError::invalid_param("franking_proof.sender_claim.actor_id must be a DID")
+        AppError::param_invalid("franking_proof.sender_claim.actor_id must be a DID")
     })?;
     let device_id =
         required_string_field(sender_claim, "device_id", "franking_proof.sender_claim")?;
     if !device_id.starts_with("ak:device:") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.sender_claim.device_id must be a device id",
         ));
     }
@@ -707,7 +707,7 @@ fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Re
         .and_then(Value::as_str)
         .is_some_and(is_valid_report_hash)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "franking_proof.sender_claim.mls_group_id_digest must be a hash digest",
         ));
     }
@@ -722,7 +722,7 @@ fn required_string_field<'a>(
     object
         .get(field)
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param(format!("{context}.{field} is required")))
+        .ok_or_else(|| AppError::param_invalid(format!("{context}.{field} is required")))
 }
 
 fn is_valid_report_hash(value: &str) -> bool {
@@ -799,21 +799,21 @@ async fn moderation_report(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     body.validate()
-        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let event = &body.report_event.event;
     let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
         serde_json::from_value(Value::Object(event.payload.clone().into_iter().collect()))
-            .map_err(|error| AppError::invalid_param(format!("report_event payload: {error}")))?;
+            .map_err(|error| AppError::param_invalid(format!("report_event payload: {error}")))?;
     let principal_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::internal(format!(
             "authenticated session principal id is invalid: {error}"
         ))
     })?;
     let event_value = serde_json::to_value(event)
-        .map_err(|error| AppError::invalid_param(format!("report_event encode: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("report_event encode: {error}")))?;
     let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&event_value)
         .map_err(|error| {
-            AppError::invalid_param(format!("report_event canonical form: {}", error.message))
+            AppError::param_invalid(format!("report_event canonical form: {}", error.message))
         })?;
     let exact_replay = state
         .event_queries()
@@ -860,10 +860,10 @@ async fn moderation_report(
             effective_scope: event.scope_ref.clone(),
         };
     body.validate_authoring_context(&principal_id, &accepted_target)
-        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let report_id = body
         .report_id()
-        .map_err(|error| AppError::invalid_param(format!("report_event: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     crate::routing::events::event_log::submit_initial_event_submission(
         state,
         &session,
@@ -1119,7 +1119,7 @@ mod report_safety_tests {
         });
         let bad = valid_evidence(bad_scope);
         let error = validate_moderation_evidence_package(&bad, &scope).unwrap_err();
-        assert_eq!(error.code, ErrorCode::InvalidParam);
+        assert_eq!(error.code, ErrorCode::ParamInvalid);
     }
 
     #[test]

@@ -1138,7 +1138,7 @@ mod tests {
         )
         .expect_err("wrong pairing code must change the expected digest");
 
-        assert_eq!(err.wire_code(), "invalid_param");
+        assert_eq!(err.wire_code(), "param_invalid");
         assert!(err.message.contains("request_canonical_digest"));
     }
 
@@ -1312,7 +1312,7 @@ mod tests {
             service_id,
         )
         .expect_err("agent_key_scope must not exceed provisioned requested_scope");
-        assert_eq!(err.wire_code(), "invalid_param");
+        assert_eq!(err.wire_code(), "param_invalid");
         assert!(err.message.contains("agent_key_scope"));
     }
 
@@ -1356,7 +1356,7 @@ mod tests {
         )
         .expect_err("authorize_event public key digest must bind the raw authorization key");
 
-        assert_eq!(err.wire_code(), "invalid_param");
+        assert_eq!(err.wire_code(), "param_invalid");
         assert!(err.message.contains("public_key_digest"));
     }
 }

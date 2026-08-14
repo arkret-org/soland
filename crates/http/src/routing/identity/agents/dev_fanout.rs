@@ -161,9 +161,9 @@ pub(super) async fn submit_provision_event(
     let event = &submission.event;
     let payload =
         arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload::try_from(event)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::invalid_param(format!("session DID core id is invalid: {error}"))
+        AppError::param_invalid(format!("session DID core id is invalid: {error}"))
     })?;
     if event.actor_id != session_core_id
         || event.realm_id.as_str() != controller_realm_id
@@ -174,7 +174,7 @@ pub(super) async fn submit_provision_event(
         || payload.agent_slug != agent_slug
         || payload.requested_scope_digest != *requested_scope_digest
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "provision_event does not match the authenticated allocation",
         ));
     }
@@ -210,7 +210,7 @@ pub(super) fn validate_durable_agent_lifecycle(
         "ak.self.agent.resume" => ("resume", "active"),
         "ak.self.agent.deactivate" => ("deactivate", "deactivated"),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "unsupported Agent lifecycle Event kind",
             ));
         }
@@ -231,7 +231,7 @@ pub(super) fn validate_durable_agent_lifecycle(
     }
     if event.proofs.is_empty() {
         return Err(
-            AppError::invalid_param("lifecycle_event must carry a controller proof")
+            AppError::param_invalid("lifecycle_event must carry a controller proof")
                 .with_wire_code("controller_signed_event_required"),
         );
     }
@@ -243,7 +243,7 @@ pub(super) fn validate_durable_agent_lifecycle(
         || event.payload.get("previous_status").and_then(Value::as_str) != Some(previous_status)
         || payload_reason != reason
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event payload does not match the requested transition",
         ));
     }
@@ -257,7 +257,7 @@ pub(super) fn validate_durable_agent_lifecycle(
     let derived =
         arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "lifecycle_event Agent status projection failed: {error}"
                 ))
             })?;
@@ -270,7 +270,7 @@ pub(super) fn validate_durable_agent_lifecycle(
                     && op.to.as_ref().and_then(Value::as_str) == Some(next_status)
         );
     if !matches_transition {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event must derive the exact Agent status transition",
         ));
     }

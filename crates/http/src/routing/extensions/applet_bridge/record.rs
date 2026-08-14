@@ -211,5 +211,5 @@ pub(super) fn idempotency_key(req: &Request) -> Option<String> {
 
 pub(super) fn applet_id_param(req: &Request) -> Result<String, AppError> {
     req.param::<String>("applet_id")
-        .ok_or_else(|| AppError::missing_param("applet_id path segment required"))
+        .ok_or_else(|| AppError::param_missing("applet_id path segment required"))
 }

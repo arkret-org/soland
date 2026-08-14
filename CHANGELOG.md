@@ -200,7 +200,7 @@ below. Producers on the old wire MUST upgrade.
 - **REMOVED LEGACY device-hierarchy reset payload** — `trust_domain` and
   `reset_event_id` are now required wire fields. Verification order is
   `cross_domain_replay_rejected` → `reset_event_id_mismatch` →
-  `invalid_signature` (T08).
+  `signature_invalid` (T08).
 - **`ak.realm.policy_bundle` reducer** — `relaxed_window_max_ms`
   hard-rejects above 300 000 ms (`relaxed_window_exceeds_ceiling`);
   `ak.profile.e2ee_relaxed.v1` is mutually exclusive with the audit

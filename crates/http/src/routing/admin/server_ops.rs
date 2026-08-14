@@ -282,7 +282,7 @@ async fn update_account_status(
     let body = body.into_inner();
     let status = body.status.trim();
     if status.is_empty() {
-        return Err(AppError::invalid_param("status is required"));
+        return Err(AppError::param_invalid("status is required"));
     }
     let status = status.to_owned();
     admin_set_account_status(state, &session.actor, &account_id, &status, body.reason).await
@@ -432,7 +432,7 @@ fn normalize_admin_account_status(
 ) -> Result<AdminAccountStatusProjection, AppError> {
     let management_status = status.trim();
     if management_status.is_empty() {
-        return Err(AppError::invalid_param("status is required"));
+        return Err(AppError::param_invalid("status is required"));
     }
     let reason = reason
         .as_deref()
@@ -447,12 +447,12 @@ fn normalize_admin_account_status(
         "disabled" => ("deactivated", Some("disabled")),
         "recovery_locked" => ("locked", Some("recovery_locked")),
         "pending_deletion" | "erasure_pending" => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "pending deletion must use the account erasure flow",
             ));
         }
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "status must be active, locked, suspended, deactivated, disabled, or recovery_locked",
             ));
         }

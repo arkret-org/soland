@@ -43,15 +43,15 @@ use crate::{JsonResult, json_ok};
 fn validate_destructive_reason(reason: &str) -> Result<String, AppError> {
     let reason = reason.trim();
     if reason.is_empty() {
-        return Err(AppError::invalid_param("reason is required"));
+        return Err(AppError::param_invalid("reason is required"));
     }
     if reason.chars().count() > DESTRUCTIVE_REASON_MAX_CHARS {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "reason must not exceed 512 characters",
         ));
     }
     if reason.chars().any(char::is_control) {
-        return Err(AppError::invalid_param("reason must be a single line"));
+        return Err(AppError::param_invalid("reason must be a single line"));
     }
 
     let lower = reason.to_ascii_lowercase();
@@ -67,7 +67,7 @@ fn validate_destructive_reason(reason: &str) -> Result<String, AppError> {
         .iter()
         .any(|marker| lower.contains(marker))
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "reason must not contain credentials or secrets",
         ));
     }
@@ -381,7 +381,7 @@ async fn reassign_handle(
     let body = body.into_inner();
     let new_subject_id = body.new_subject_id.trim().to_owned();
     if new_subject_id.is_empty() {
-        return Err(AppError::invalid_param("new_subject_id is required"));
+        return Err(AppError::param_invalid("new_subject_id is required"));
     }
     let reason = validate_destructive_reason(&body.reason)?;
 

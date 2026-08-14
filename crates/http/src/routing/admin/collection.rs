@@ -168,7 +168,7 @@ pub(super) async fn admin_collection(
     let start = match cursor.as_deref() {
         Some(raw) => raw
             .parse::<usize>()
-            .map_err(|_| AppError::invalid_param("invalid cursor"))?,
+            .map_err(|_| AppError::param_invalid("invalid cursor"))?,
         None => 0,
     };
     let total = items.len();
@@ -237,13 +237,13 @@ pub(super) async fn admin_create_realm(
     let body = body.into_inner();
     let title = body.title.trim();
     if title.is_empty() {
-        return Err(AppError::invalid_param("title is required"));
+        return Err(AppError::param_invalid("title is required"));
     }
     if !matches!(
         body.realm_class.as_str(),
         "principal_control" | "collaboration"
     ) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "realm_class must be principal_control or collaboration",
         ));
     }
@@ -253,7 +253,7 @@ pub(super) async fn admin_create_realm(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("invite_only");
     if !matches!(discoverability, "public" | "invite_only" | "private") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "discoverability must be public, invite_only, or private",
         ));
     }
@@ -326,7 +326,7 @@ pub(super) async fn admin_get_realm_item(
     realm_id: &str,
 ) -> Result<AdminRealmItem, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid realm_id: {error}")))?;
     let realm = {
         let realms = state.realm_directory().snapshot();
         realms.get(&realm_id_value).cloned()
@@ -345,7 +345,7 @@ pub(super) async fn admin_realm_member_items(
     realm_id: &str,
 ) -> Result<Vec<AdminRealmMemberItem>, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid realm_id: {error}")))?;
     let members = {
         let realms = state.realm_directory().snapshot();
         realms.get(&realm_id_value).map(|realm| {

@@ -64,7 +64,7 @@ pub(super) async fn submit_signal(
     )?;
 
     let raw: Value = req.parse_json().await.map_err(|error| {
-        AppError::bad_json(format!("signal envelope is not valid JSON: {error}"))
+        AppError::json_invalid(format!("signal envelope is not valid JSON: {error}"))
     })?;
     let envelope = parse_signal_envelope(raw)?;
 
@@ -189,17 +189,19 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
 /// malformed Signal (§3: "不存在 plaintext branch").
 fn parse_signal_envelope(raw: Value) -> Result<SignalEnvelope, AppError> {
     let Some(object) = raw.as_object() else {
-        return Err(AppError::bad_json("signal envelope must be a JSON object"));
+        return Err(AppError::json_invalid(
+            "signal envelope must be a JSON object",
+        ));
     };
     if !object.contains_key("encrypted_payload") {
         return Err(AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             "signal envelopes are encrypted-only; there is no plaintext branch",
         )
         .with_reason_code(arkret_wire::ReasonCode::SIGNAL_PLAINTEXT_FORBIDDEN));
     }
     serde_json::from_value::<SignalEnvelope>(raw).map_err(|error| {
-        AppError::bad_json(format!(
+        AppError::json_invalid(format!(
             "signal envelope does not match ak.schema.signal_envelope.v1: {error}"
         ))
     })
@@ -290,7 +292,7 @@ async fn admit_signal(
         .await
     {
         return Err(AppError::new(
-            ErrorCode::SignalClassNotPermitted,
+            ErrorCode::SignalClassDenied,
             "signal_class=moderation requires the ak.call.moderate capability",
         ));
     }
@@ -628,11 +630,11 @@ fn structural_error(error: arkret_wire::Error) -> AppError {
 }
 
 fn signal_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::InvalidParam, message)
+    AppError::new(ErrorCode::ParamInvalid, message)
 }
 
 fn signal_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::InvalidParam, message)
+    AppError::new(ErrorCode::ParamInvalid, message)
         .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 

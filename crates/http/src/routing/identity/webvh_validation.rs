@@ -158,7 +158,7 @@ impl From<WebvhValidationError> for AppError {
     fn from(error: WebvhValidationError) -> Self {
         let status = error.http_status();
         let code = if status == StatusCode::UNAUTHORIZED {
-            ErrorCode::InvalidSignature
+            ErrorCode::SignatureInvalid
         } else {
             ErrorCode::SchemaViolation
         };

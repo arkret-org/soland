@@ -98,7 +98,7 @@ mod tests {
         body: &Value,
     ) -> Result<(), AppError> {
         let typed_backup_id = BackupId::new(backup_id.to_owned()).map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
             ))
         })?;

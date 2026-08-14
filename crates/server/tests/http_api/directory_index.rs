@@ -185,7 +185,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
         .send(&app())
         .await;
     // error-code-registry.json: a known field that violates its schema
-    // constraint is `schema_violation` / 422 (rather than invalid_param / 400).
+    // constraint is `schema_violation` / 422 (rather than param_invalid / 400).
     assert_eq!(invalid.status_code.unwrap().as_u16(), 422);
 }
 

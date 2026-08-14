@@ -24,7 +24,7 @@ async fn load_owned_security_transaction(
     transaction_id: &str,
 ) -> Result<SecurityTransactionRecord, AppError> {
     TransactionId::new(transaction_id.to_owned())
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let record = state
         .security_transactions()
         .transaction(transaction_id)
@@ -67,7 +67,7 @@ pub(super) async fn security_transaction_create(
     let (resource, canonical_request) = request
         .into_initial_resource(coordinator_service_id, chrono::Utc::now())
         .map_err(|error| {
-            AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+            AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
         })?;
     let stored = state
         .security_transactions()
@@ -119,7 +119,7 @@ pub(super) async fn security_transaction_continue(
     let transaction_id = transaction_id.into_inner();
     let request = body.into_inner();
     let canonical_request = arkret_canonical::canonical_json_bytes(&request)
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let session = aa.authenticated_session(state, req).await?;
     let transaction = load_owned_security_transaction(state, &session, &transaction_id).await?;
 
@@ -326,7 +326,7 @@ async fn submit_rotation_event_unit(
         unit.request.clone().into_iter().collect(),
     ))
     .map_err(|error| {
-        AppError::invalid_param(format!("prepared rotation Event unit is invalid: {error}"))
+        AppError::param_invalid(format!("prepared rotation Event unit is invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
@@ -653,10 +653,10 @@ pub(crate) async fn backup_series_erase_command(
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {
-        AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
     let canonical_request = arkret_canonical::canonical_json_bytes(&request)
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let transaction_id = request.transaction_id.as_str().to_owned();
     let mut transaction = load_owned_security_transaction(state, &session, &transaction_id).await?;
 
@@ -758,7 +758,7 @@ pub(crate) async fn backup_series_erase_command(
     }
     for proof in &request.authorization_lease.proofs {
         let issuer = arkret_identity::verification_method_did(&proof.verification_method)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let audience_covers_issuer = match proof.audience.as_ref() {
             Some(arkret_wire::Audience::Single(audience)) => audience == issuer.as_str(),
             Some(arkret_wire::Audience::Multiple(audiences)) => {
@@ -777,7 +777,7 @@ pub(crate) async fn backup_series_erase_command(
         let binding_bytes = request
             .authorization_lease
             .proof_binding_bytes(proof)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         crate::jws_verify::verify_did_controlled_jws_async(
             &binding_bytes,
             &proof.jws,
@@ -1064,14 +1064,14 @@ async fn continue_rotation_local_commit(
 ) -> JsonResult<SecurityTransaction> {
     let (binding, _) = rotation_parts(&transaction)?;
     let attestation = request.client_attestation.ok_or_else(|| {
-        AppError::invalid_param("local commit requires client_attestation")
+        AppError::param_invalid("local commit requires client_attestation")
             .with_wire_code("schema_violation")
     })?;
     let arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotationLocalCommit(commit) =
         &attestation.artifact
     else {
         return Err(
-            AppError::invalid_param("local commit requires SecurityRotationLocalCommit")
+            AppError::param_invalid("local commit requires SecurityRotationLocalCommit")
                 .with_wire_code("schema_violation"),
         );
     };
@@ -1109,7 +1109,7 @@ async fn continue_rotation_local_commit(
         &attestation.auth_data.signature,
         &attestation
             .signing_bytes()
-            .map_err(|error| AppError::invalid_param(error.to_string()))?,
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
     )?;
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     begin_rotation_step(
@@ -1142,16 +1142,16 @@ async fn continue_issue_terminal_receipt(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let attestation = request.client_attestation.as_ref().ok_or_else(|| {
-        AppError::invalid_param("terminal recovery step requires client_attestation")
+        AppError::param_invalid("terminal recovery step requires client_attestation")
             .with_wire_code("schema_violation")
     })?;
     attestation.validate_structural().map_err(|error| {
-        AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
     let arkret_models_crypto::ClientStepAttestationArtifact::RecoveryReceipt(receipt) =
         &attestation.artifact
     else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "terminal recovery step requires a RecoveryReceipt artifact",
         )
         .with_wire_code("schema_violation"));
@@ -1346,14 +1346,14 @@ async fn continue_issue_terminal_receipt(
         &attestation.auth_data.signature,
         &attestation
             .signing_bytes()
-            .map_err(|error| AppError::invalid_param(error.to_string()))?,
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
     )?;
     verify_recovery_device_signature(
         &recovery_device_key,
         &receipt.auth_data.signature,
         &receipt
             .signature_transcript_bytes()
-            .map_err(|error| AppError::invalid_param(error.to_string()))?,
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
     )?;
 
     match expected_model {
@@ -1600,10 +1600,10 @@ fn verify_recovery_device_signature(
         .decode(signature.as_bytes())
         .or_else(|_| STANDARD.decode(signature.as_bytes()))
         .map_err(|_| {
-            AppError::invalid_param("recovery device signature is not base64/base64url")
+            AppError::param_invalid("recovery device signature is not base64/base64url")
         })?;
     let signature = Signature::from_slice(&raw)
-        .map_err(|_| AppError::invalid_param("recovery device signature must be 64 bytes"))?;
+        .map_err(|_| AppError::param_invalid("recovery device signature must be 64 bytes"))?;
     key.verify(signing_bytes, &signature).map_err(|_| {
         AppError::conflict("recovery device signature verification failed")
             .with_wire_code("security_transaction_failed_precondition")

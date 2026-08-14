@@ -927,13 +927,13 @@ fn production_requires_canonical_event_time_fields() {
 
     let err =
         validate_event_time_fields(&state, &object).expect_err("production requires created_at");
-    assert_eq!(err.code, "missing_param");
+    assert_eq!(err.code, "param_missing");
     assert!(err.message.contains("created_at"));
 
     object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00Z"));
     let err = validate_event_time_fields(&state, &object)
         .expect_err("whole-second shorthand is not canonical milliseconds");
-    assert_eq!(err.code, "invalid_param");
+    assert_eq!(err.code, "param_invalid");
 
     object.insert(
         "created_at".to_owned(),
@@ -941,17 +941,17 @@ fn production_requires_canonical_event_time_fields() {
     );
     let err = validate_event_time_fields(&state, &object)
         .expect_err("microseconds are not canonical milliseconds");
-    assert_eq!(err.code, "invalid_param");
+    assert_eq!(err.code, "param_invalid");
 
     object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00.000Z"));
     let err = validate_event_time_fields(&state, &object).expect_err("production requires hlc");
-    assert_eq!(err.code, "missing_param");
+    assert_eq!(err.code, "param_missing");
     assert!(err.message.contains("hlc"));
 
     object.insert("hlc".to_owned(), json!("019041000000-0000-AABBCCDD"));
     let err =
         validate_event_time_fields(&state, &object).expect_err("uppercase HLC is not canonical");
-    assert_eq!(err.code, "invalid_param");
+    assert_eq!(err.code, "param_invalid");
 
     object.insert("hlc".to_owned(), json!("019041000000-0000-aabbccdd"));
     validate_event_time_fields(&state, &object).expect("canonical timestamps accepted");
@@ -972,7 +972,7 @@ fn production_requires_requirements_schema() {
 
     let err = event_requirements_schema_id(&state, &object)
         .expect_err("production requires requirements.schema[]");
-    assert_eq!(err.code, "missing_param");
+    assert_eq!(err.code, "param_missing");
 
     object.insert(
         "requirements".to_owned(),
@@ -2347,7 +2347,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
         false,
     )
     .unwrap_err();
-    assert_eq!(err.code, "stale_seal_ref");
+    assert_eq!(err.code, "seal_ref_stale");
 }
 
 #[test]
@@ -2370,7 +2370,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
         false,
     )
     .unwrap_err();
-    assert_eq!(err.code, "stale_seal_ref");
+    assert_eq!(err.code, "seal_ref_stale");
 }
 
 #[test]

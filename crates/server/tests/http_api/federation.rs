@@ -537,7 +537,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     let rejected = outcome["rejected"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["id"], authored_event_id(&welcome_event));
-    assert_eq!(rejected[0]["reason_code"], "profile_unsupported");
+    assert_eq!(rejected[0]["reason_code"], "unsupported_profile");
     assert!(
         rejected[0]["detail"]
             .as_str()

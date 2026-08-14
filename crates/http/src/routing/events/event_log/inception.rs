@@ -12,12 +12,12 @@ pub(super) fn require_object_field(
         Some(Value::Object(_)) => Ok(()),
         Some(_) => Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "event payload must be a JSON object",
         )),
         None => Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "event payload is required",
         )),
     }
@@ -31,14 +31,14 @@ pub(super) fn event_ref_list(
     let Some(value) = object.get(key) else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "event reference lists are required",
         ));
     };
     let Some(values) = value.as_array() else {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "event reference lists must be arrays",
         ));
     };
@@ -69,14 +69,14 @@ pub(super) fn event_ref_list(
             let Some(event_id) = value.as_str() else {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "event references must be strings",
                 ));
             };
             if !is_valid_event_id(event_id) {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "event references must use the ak:event: typed prefix",
                 ));
             }
@@ -139,7 +139,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     let actor_core_id = arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             format!("root-anchored Event actor_id must be a core id: {error}"),
         )
     })?;
@@ -206,7 +206,7 @@ pub(super) async fn resolve_event_root_anchor_method(
             .ok_or_else(|| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "missing_param",
+                    "param_missing",
                     "root-anchored Event must carry realm_id",
                 )
             })?;

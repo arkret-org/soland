@@ -11,7 +11,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
     realm_id: &str,
 ) -> Result<arkret_state::SnapshotManifest, soland_http::error::AppError> {
     let realm_id_value = arkret_identifiers::RealmId::new(realm_id.to_owned())
-        .map_err(|_| soland_http::error::AppError::invalid_param("invalid realm_id"))?;
+        .map_err(|_| soland_http::error::AppError::param_invalid("invalid realm_id"))?;
     {
         let realms = state.realm_directory().snapshot();
         if realms.get(&realm_id_value).is_none() {

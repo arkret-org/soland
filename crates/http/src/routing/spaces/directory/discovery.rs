@@ -42,7 +42,7 @@ pub(super) async fn directory_announce(
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
-            AppError::invalid_param(message)
+            AppError::param_invalid(message)
                 .with_status(status)
                 .with_wire_code(code)
         })?;
@@ -86,7 +86,7 @@ pub(super) async fn directory_withdraw(
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
-            AppError::invalid_param(message)
+            AppError::param_invalid(message)
                 .with_status(status)
                 .with_wire_code(code)
         })?;

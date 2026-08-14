@@ -39,7 +39,7 @@
 //! close timer, cool-off window, or timer-service check (content-moderation.md
 //! §5.5.2; spec §5.5 deleted the cool-off path).
 
-use arkret_models_collaboration::governance::moderation_appeal::AppealVerdict;
+use arkret_models_collaboration::governance::moderation_appeal::AppealDecision;
 
 use super::*;
 
@@ -52,10 +52,10 @@ fn payload_str(operation: &Operation, field: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn appeal_verdict(operation: &Operation) -> Result<AppealVerdict, &'static str> {
+fn appeal_verdict(operation: &Operation) -> Result<AppealDecision, &'static str> {
     operation
         .typed_payload::<arkret_wire::event_spec::ModerationAppealDecision>()
-        .map(|payload| payload.verdict)
+        .map(|payload| payload.decision)
         .map_err(|_| "schema_violation")
 }
 
@@ -612,7 +612,8 @@ impl ProjectionState {
             {
                 map.insert(
                     "verdict".to_owned(),
-                    serde_json::to_value(verdict).expect("AppealVerdict serialization cannot fail"),
+                    serde_json::to_value(verdict)
+                        .expect("AppealDecision serialization cannot fail"),
                 );
             }
         }
@@ -651,7 +652,7 @@ impl ProjectionState {
                 // Resolve the appealed decision_ref from the submit-time cell.
                 let decision_ref = self.moderation_appeal_decision_ref(appeal_id);
                 match verdict {
-                    AppealVerdict::Overturn => {
+                    AppealDecision::Overturn => {
                         let Some(decision_ref) = decision_ref else {
                             return Err("appeal_overturn_missing_lift");
                         };
@@ -663,7 +664,7 @@ impl ProjectionState {
                         }
                         Ok(())
                     }
-                    AppealVerdict::Modify => {
+                    AppealDecision::Modify => {
                         let modify_ref = payload_str(operation, "modify_decision_ref")
                             .ok_or("appeal_modify_missing_decision")?;
                         // The new decision MUST already be present (ordered
@@ -674,7 +675,7 @@ impl ProjectionState {
                         Ok(())
                     }
                     // uphold: original decision stands, no pairing required.
-                    AppealVerdict::Uphold => Ok(()),
+                    AppealDecision::Uphold => Ok(()),
                 }
             }
             // close: reviewer close OR appellant withdrawal. Withdrawal is

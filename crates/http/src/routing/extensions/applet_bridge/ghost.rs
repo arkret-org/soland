@@ -117,12 +117,12 @@ pub(super) fn validate_ghost_actor_provision_request(
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
     if provision.schema != GhostActorProvisionRequestBody::SCHEMA {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "schema must be ak.applet.ghost_actor.provision_request.v1",
         ));
     }
     if provision.applet_id.as_str() != path_applet_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "body applet_id must match applet_id path segment",
         ));
     }
@@ -132,13 +132,13 @@ pub(super) fn validate_ghost_actor_provision_request(
         ("external_user_id", provision.external_user_id.as_str()),
     ] {
         if value.trim().is_empty() {
-            return Err(AppError::missing_param(format!("{field} is required")));
+            return Err(AppError::param_missing(format!("{field} is required")));
         }
     }
     if let Some(display_name) = provision.display_name.as_deref()
         && display_name.trim().is_empty()
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "display_name must be omitted or non-empty",
         ));
     }
@@ -250,7 +250,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         || accountability.executed_by.is_some()
         || !applet_matches(accountability)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "accountability_grant_event envelope does not match the Applet provision binding",
         ));
     }
@@ -260,7 +260,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         || profile.executed_by.as_ref() != Some(&service_actor_id)
         || !applet_matches(profile)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "profile_event envelope does not match the delegated Ghost provision binding",
         ));
     }
@@ -269,7 +269,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
             && event_ref.role == "accountability"
             && event_ref.critical
     }) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "profile_event must critically reference accountability_grant_event",
         ));
     }
@@ -291,13 +291,13 @@ pub(super) async fn validate_signed_ghost_provision_events(
 
     let grant: AccountabilityGrantPayload = serde_json::from_value(
         serde_json::to_value(&accountability.payload).map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "accountability_grant_event payload invalid: {error}"
             ))
         })?,
     )
     .map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "accountability_grant_event payload invalid: {error}"
         ))
     })?;
@@ -310,14 +310,14 @@ pub(super) async fn validate_signed_ghost_provision_events(
             arkret_models_collaboration::governance::accountability::AccountabilityGrantStatus::Active
         )
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "accountability_grant_event payload does not bind the service to the Ghost",
         ));
     }
     grant
         .validate_lifecycle_at(chrono::Utc::now())
         .map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "accountability_grant_event payload invalid: {error}"
             ))
         })?;
@@ -328,7 +328,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         .with_wire_code("invalid_proof"));
     }
     let proof_binding = grant.canonical_proof_binding_bytes().map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "accountability payload proof binding is invalid: {error}"
         ))
     })?;
@@ -340,7 +340,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         grant.proof.verification_method.as_str(),
     )
     .map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "accountability payload proof JWS verification failed: {error}"
         ))
         .with_wire_code("invalid_proof")
@@ -348,10 +348,10 @@ pub(super) async fn validate_signed_ghost_provision_events(
 
     let profile_payload: arkret_models_collaboration::events_payloads::ActorProfileCreatePayload =
         serde_json::from_value(serde_json::to_value(&profile.payload).map_err(|error| {
-            AppError::invalid_param(format!("profile_event payload invalid: {error}"))
+            AppError::param_invalid(format!("profile_event payload invalid: {error}"))
         })?)
         .map_err(|error| {
-            AppError::invalid_param(format!("profile_event payload invalid: {error}"))
+            AppError::param_invalid(format!("profile_event payload invalid: {error}"))
         })?;
     let actor_profile = profile_payload.object;
     let expected_display_name = provision
@@ -382,7 +382,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         || actor_profile.profile_fields.get("external_ref") != Some(&expected_external_ref)
         || !has_exact_accountable_principal
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "profile_event payload does not exactly match the Ghost provision request",
         ));
     }
@@ -472,7 +472,7 @@ pub(super) fn external_user_from_ghost_request(
             .or(external_user.external_id.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::missing_param("external_user.id is required"))?;
+            .ok_or_else(|| AppError::param_missing("external_user.id is required"))?;
         let display_name = external_user.display_name.clone();
         return Ok((external_id.to_owned(), display_name));
     }
@@ -481,7 +481,7 @@ pub(super) fn external_user_from_ghost_request(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::missing_param("external_id is required"))?;
+        .ok_or_else(|| AppError::param_missing("external_id is required"))?;
     let display_name = body.display_name.clone();
     Ok((external_id.to_owned(), display_name))
 }

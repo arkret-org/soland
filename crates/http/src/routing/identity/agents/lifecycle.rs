@@ -95,7 +95,7 @@ fn agent_provision_phase_key(
 
 fn agent_provision_request_hash(body: &AgentProvisionRequestBody) -> Result<String, AppError> {
     arkret_canonical::canonical_sha256(&serde_json::to_value(body).map_err(|error| {
-        AppError::invalid_param(format!("Agent provision request invalid: {error}"))
+        AppError::param_invalid(format!("Agent provision request invalid: {error}"))
     })?)
     .map(|digest| digest.to_string())
     .map_err(|error| AppError::internal(format!("Agent provision request digest failed: {error}")))
@@ -318,14 +318,14 @@ pub(super) async fn provision_agent(
             }
 
             let prepared_slug = arkret_wire::string_profiles::prepare_agent_slug(&slug)
-                .map_err(|error| AppError::invalid_param(format!("slug is invalid: {error}")))?;
+                .map_err(|error| AppError::param_invalid(format!("slug is invalid: {error}")))?;
             if prepared_slug != slug {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "slug must already use the canonical agent-slug profile",
                 ));
             }
             validate_agent_slug(&slug)
-                .map_err(|error| AppError::invalid_param(format!("slug is invalid: {error}")))?;
+                .map_err(|error| AppError::param_invalid(format!("slug is invalid: {error}")))?;
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(&controller_id)
@@ -358,7 +358,7 @@ pub(super) async fn provision_agent(
                 record.agent_slug.as_deref() == Some(slug.as_str())
                     && agent_record_reserves_selector_slug(record, &now_utc)
             }) {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "slug is already bound to an active or open agent for this controller",
                 ));
             }
@@ -366,7 +366,7 @@ pub(super) async fn provision_agent(
             let agent_id = arkret_wire::project_full_id_to_core_id(&full_id)
                 .map(arkret_wire::DidCoreId::from)
                 .map_err(|error| {
-                    AppError::invalid_param(format!("Agent full_id projection failed: {error}"))
+                    AppError::param_invalid(format!("Agent full_id projection failed: {error}"))
                 })?;
             let controller_did = controller_authority.principal_id.clone();
             let initial_resolution =
@@ -528,7 +528,7 @@ pub(super) async fn provision_agent(
                 arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload::try_from(
                     &provision_event.event,
                 )
-                .map_err(|error| AppError::invalid_param(error.to_string()))?;
+                .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let controller_core_id = &prepared.controller_authority.principal_id;
             if &provision_event.event.actor_id != controller_core_id
                 || provision_event.event.realm_id != controller_realm_id
@@ -539,14 +539,14 @@ pub(super) async fn provision_agent(
                 || provision_payload.agent_slug != slug
                 || provision_payload.requested_scope_digest != requested_scope_digest
             {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "provision_event does not match its authenticated allocation",
                 ));
             }
 
             let requested_scope_value =
                 serde_json::to_value(&requested_scope).map_err(|error| {
-                    AppError::invalid_param(format!("requested_scope is invalid: {error}"))
+                    AppError::param_invalid(format!("requested_scope is invalid: {error}"))
                 })?;
             let provision_event_id = provision_event.event.event_id.to_string();
             let commit_key = agent_provision_phase_key("commit", &operation_id, &idempotency_key);
@@ -610,7 +610,7 @@ pub(super) async fn provision_agent(
                         && agent_record_reserves_selector_slug(record, &now_utc)
                 })
             {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "slug is already bound to an active or open agent for this controller",
                 ));
             }
@@ -831,7 +831,7 @@ pub(super) async fn provision_agent(
 
 fn abandonment_request_digest(value: &impl serde::Serialize) -> Result<String, AppError> {
     arkret_canonical::canonical_sha256(value)
-        .map_err(|error| AppError::invalid_param(format!("abandonment request invalid: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("abandonment request invalid: {error}")))
 }
 
 fn abandonment_credential_fingerprint(session: &SessionRecord) -> String {
@@ -1684,12 +1684,12 @@ pub(super) async fn attach_agent_grant(
     let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
     body.validate()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let grant_payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
         body.grant_event
             .event
             .typed_payload::<arkret_wire::event_spec::CapabilityGrant>()
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let grant = &grant_payload.grant;
     if !agent_grant_within_requested_scope(
         &record,
@@ -1753,20 +1753,20 @@ pub(super) async fn detach_agent_grant(
     )
     .await?;
     let typed_grant_id = GrantId::new(grant_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("grant_id is invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("grant_id is invalid: {error}")))?;
     let body = body.into_inner();
     body.validate()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let payload = body
         .payload()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if payload.grant_id != typed_grant_id
         || payload
             .grant_ref
             .as_ref()
             .is_some_and(|grant_ref| grant_ref != &typed_grant_id)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "revoke_event payload grant_id/grant_ref must equal the path grant_id",
         ));
     }

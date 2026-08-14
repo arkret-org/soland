@@ -87,7 +87,7 @@ pub(super) fn enforce_mimi_submit_binding(
     match binding_payload.get("status").and_then(Value::as_str) {
         Some("accepted") => {}
         Some(_) | None => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "MIMI room binding is not writable in its current state",
             )
             .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
@@ -106,7 +106,7 @@ pub(super) fn enforce_mimi_submit_binding(
         }
         _ => {
             return Err(
-                AppError::invalid_param("MIMI room binding has no writable provider role")
+                AppError::param_invalid("MIMI room binding has no writable provider role")
                     .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
             );
         }
@@ -120,22 +120,22 @@ pub(super) fn enforce_mimi_submit_binding(
         return Ok(());
     };
     let submit_group_id = mimi_submit_mls_group_id(body, message).ok_or_else(|| {
-        AppError::invalid_param("MIMI submit_message is missing mls_group_id")
+        AppError::param_invalid("MIMI submit_message is missing mls_group_id")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
     if submit_group_id != binding_group_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "MIMI submit_message mls_group_id does not match room binding",
         )
         .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
     }
     let epoch = mimi_submit_epoch(body, message).ok_or_else(|| {
-        AppError::invalid_param("MIMI submit_message is missing MLS epoch")
+        AppError::param_invalid("MIMI submit_message is missing MLS epoch")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
     let governance_binding = mimi_governance_binding_candidate(binding_payload, body, message)
         .ok_or_else(|| {
-            AppError::invalid_param("MIMI submit_message lacks governance_binding")
+            AppError::param_invalid("MIMI submit_message lacks governance_binding")
                 .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
     validate_mimi_submit_governance_binding(
@@ -155,14 +155,14 @@ pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), 
         .is_none_or(|value| value.trim().is_empty())
     {
         return Err(
-            AppError::invalid_param("MIMI room binding requires hub_provider")
+            AppError::param_invalid("MIMI room binding requires hub_provider")
                 .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
         );
     }
     match payload.get("local_provider_role").and_then(Value::as_str) {
         Some("hub" | "follower" | "observer") => {}
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "MIMI room binding requires a known local_provider_role",
             )
             .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE));
@@ -171,7 +171,7 @@ pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), 
     match payload.get("status").and_then(Value::as_str) {
         Some("proposed" | "accepted" | "revoked" | "migrating") => Ok(()),
         _ => Err(
-            AppError::invalid_param("MIMI room binding requires a lifecycle status")
+            AppError::param_invalid("MIMI room binding requires a lifecycle status")
                 .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
         ),
     }
@@ -234,7 +234,7 @@ pub(super) fn validate_mimi_submit_governance_binding(
     epoch: u64,
 ) -> Result<(), AppError> {
     let error = |reason: &'static str| {
-        AppError::invalid_param("MIMI submit_message governance_binding is not valid")
+        AppError::param_invalid("MIMI submit_message governance_binding is not valid")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
             .with_reason_detail(reason)
     };
@@ -280,7 +280,7 @@ pub(super) async fn admit_mimi_room_binding_event(
 ) -> Result<String, AppError> {
     let submission: arkret_wire::EventInitialSubmission = serde_json::from_value(submission)
         .map_err(|error| {
-            AppError::invalid_param(format!("MIMI room binding Event is invalid: {error}"))
+            AppError::param_invalid(format!("MIMI room binding Event is invalid: {error}"))
                 .with_wire_code("schema_violation")
         })?;
     let realm_id = binding
@@ -289,7 +289,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         .and_then(Value::as_str)
         .or_else(|| binding.get("realm_id").and_then(Value::as_str))
         .ok_or_else(|| {
-            AppError::invalid_param(
+            AppError::param_invalid(
                 "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
             )
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
@@ -301,7 +301,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         .get("sender_actor_id")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::invalid_param("room binding update requires sender_actor_id")
+            AppError::param_invalid("room binding update requires sender_actor_id")
                 .with_wire_code("mimi_room_binding_event_mismatch")
         })?;
     let binding_group_id = binding.get("mls_group_id").and_then(Value::as_str);
@@ -314,7 +314,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         || binding_group_id.is_none()
         || binding_group_id != update_group_id
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "room_binding_event does not match the authenticated MIMI room update",
         )
         .with_wire_code("mimi_room_binding_event_mismatch"));
@@ -326,7 +326,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
         .map(|(_, fragment)| fragment.to_owned())
         .ok_or_else(|| {
-            AppError::invalid_param("MIMI room binding Event requires a DID URL proof key")
+            AppError::param_invalid("MIMI room binding Event requires a DID URL proof key")
                 .with_wire_code("invalid_proof")
         })?;
     let now = chrono::Utc::now();

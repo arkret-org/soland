@@ -1562,7 +1562,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
 
     assert_eq!(duplicate.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let duplicate_body: Value = duplicate.take_json().await.unwrap();
-    assert_eq!(duplicate_body["error"]["code"], "invalid_param");
+    assert_eq!(duplicate_body["error"]["code"], "param_invalid");
     assert!(
         duplicate_body["error"]["message"]
             .as_str()

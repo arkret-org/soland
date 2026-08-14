@@ -25,7 +25,7 @@ pub(super) async fn issue_authorization_leases(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<arkret_wire::AuthorizationLeaseIssueRequest>,
+    body: JsonBody<arkret_wire::AuthorizationLeaseIssueRequestBody>,
 ) -> JsonResult<arkret_wire::AuthorizationLeaseIssueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -42,7 +42,7 @@ pub(super) async fn issue_authorization_leases(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             AppError::new(
-                ErrorCode::MissingParam,
+                ErrorCode::ParamMissing,
                 "authorization lease issuance requires Idempotency-Key",
             )
             .with_status(StatusCode::BAD_REQUEST)
@@ -616,7 +616,7 @@ fn sign_lease(
         })
         .ok_or_else(|| {
             AppError::new(
-                ErrorCode::InvalidSignature,
+                ErrorCode::SignatureInvalid,
                 "Event has no proof controller that projects to actor_id",
             )
             .with_status(StatusCode::FORBIDDEN)

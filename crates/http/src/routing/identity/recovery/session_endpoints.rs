@@ -424,13 +424,13 @@ pub(super) async fn recovery_session_create(
         })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "requesting_device_id `{requesting_device_id}` must start with ak:device:",
         )));
     }
     let trust_domain = payload.trust_domain.as_str().to_owned();
     if !trust_domain.starts_with("ak:trust_domain:") {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "trust_domain `{trust_domain}` must start with ak:trust_domain:",
         )));
     }
@@ -664,15 +664,15 @@ pub(super) async fn recovery_session_proof_submit(
         .map_err(|error| AppError::internal(format!("recovery proof submit serialize: {error}")))?;
     let proof = payload_value
         .get("proof")
-        .ok_or_else(|| AppError::invalid_param("proof object is required"))?
+        .ok_or_else(|| AppError::param_invalid("proof object is required"))?
         .as_object()
-        .ok_or_else(|| AppError::invalid_param("proof object is required"))?;
+        .ok_or_else(|| AppError::param_invalid("proof object is required"))?;
     let proof_kind = proof
         .get("kind")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("proof.kind is required"))?;
+        .ok_or_else(|| AppError::param_invalid("proof.kind is required"))?;
     if !ALLOWED_PROOF_KINDS.contains(&proof_kind) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             format!("proof.kind `{proof_kind}` not in spec enum",),
         )
         .with_wire_code("recovery_proof_kind_unknown"));
@@ -694,10 +694,10 @@ pub(super) async fn recovery_session_proof_submit(
     let echoed = proof
         .get("challenge")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("proof.challenge is required"))?;
+        .ok_or_else(|| AppError::param_invalid("proof.challenge is required"))?;
     if !constant_time_str_eq(echoed, &record.challenge) {
         return Err(AppError::new(
-            ErrorCode::InvalidSignature,
+            ErrorCode::SignatureInvalid,
             "proof.challenge does not match the session challenge",
         )
         .with_status(StatusCode::CONFLICT)
@@ -929,7 +929,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 ) -> Result<(), AppError> {
     let signature_algorithm = required_proof_string(proof, "signature_algorithm")?;
     if signature_algorithm != "Ed25519" {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519`",
         )));
     }
@@ -1029,7 +1029,7 @@ pub(super) async fn verify_recovery_unlock_proof(
 ) -> Result<(), AppError> {
     let signature_algorithm = required_proof_string(proof, "signature_algorithm")?;
     if signature_algorithm != "Ed25519" {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519` for recovery_unlock",
         )));
     }
@@ -1068,11 +1068,11 @@ pub(super) async fn verify_recovery_unlock_proof(
     let typed_proof = serde_json::from_value::<arkret_models_crypto::RecoverySessionUnlockProof>(
         Value::Object(proof.clone()),
     )
-    .map_err(|error| AppError::invalid_param(format!("invalid recovery_unlock proof: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("invalid recovery_unlock proof: {error}")))?;
     let proof_body = typed_proof
         .signature_independent_proof_body()
         .map_err(|error| {
-            AppError::invalid_param(format!("invalid recovery_unlock proof: {error}"))
+            AppError::param_invalid(format!("invalid recovery_unlock proof: {error}"))
         })?;
     let transcript =
         generic_recovery_proof_transcript(record, "recovery_unlock", json!(proof_body));
@@ -1203,7 +1203,7 @@ fn required_proof_string<'a>(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param(format!("proof.{key} is required")))
+        .ok_or_else(|| AppError::param_invalid(format!("proof.{key} is required")))
 }
 
 fn trusted_recovery_service_proof_body(proof: &Map<String, Value>) -> Result<Value, AppError> {
@@ -1288,7 +1288,7 @@ fn value_requires_attestation(value: &Value) -> bool {
 }
 
 fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::InvalidSignature, message.into())
+    AppError::new(ErrorCode::SignatureInvalid, message.into())
         .with_status(StatusCode::UNAUTHORIZED)
         .with_wire_code("recovery_proof_authority_invalid")
 }

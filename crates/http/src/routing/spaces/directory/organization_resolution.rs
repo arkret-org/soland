@@ -49,7 +49,7 @@ pub(super) async fn resolve_organization(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.organization_principal_id.is_none() && body.handle.is_none() {
-        return Err(AppError::missing_param(
+        return Err(AppError::param_missing(
             "organization_principal_id or handle is required",
         ));
     }

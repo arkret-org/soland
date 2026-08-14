@@ -149,7 +149,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     .await
     .map_err(|error| {
         AppError::new(
-            soland_http::error::ErrorCode::InvalidParam,
+            soland_http::error::ErrorCode::ParamInvalid,
             format!("MIMI Event admission failed: {}", error.message),
         )
         .with_status(error.status)
@@ -161,7 +161,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
 pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {
     let Some(opaque) = body.get("update").and_then(|update| update.get("payload")) else {
         return Err(
-            AppError::invalid_param("MIMI room update requires update.payload")
+            AppError::param_invalid("MIMI room update requires update.payload")
                 .with_wire_code("mimi_payload_invalid"),
         );
     };
@@ -178,7 +178,7 @@ pub(super) fn mimi_room_binding_payload(update_payload: &Value) -> Option<&Value
 pub(super) fn decode_mimi_message_payload(body: &Value) -> Result<Value, AppError> {
     let opaque = body
         .get("ciphertext")
-        .ok_or_else(|| AppError::invalid_param("MIMI submit_message requires ciphertext"))?;
+        .ok_or_else(|| AppError::param_invalid("MIMI submit_message requires ciphertext"))?;
     decode_required_mimi_opaque_json(opaque, "ciphertext_digest", "MIMI ciphertext payload")
 }
 
@@ -191,7 +191,7 @@ pub(super) fn decode_optional_mimi_opaque_json(
         return Ok(None);
     };
     let value = arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
-        AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
+        AppError::param_invalid(format!("{context} is not canonical JSON: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })?;
     Ok(Some(value))
@@ -205,7 +205,7 @@ pub(super) fn decode_required_mimi_opaque_json(
     let bytes = decode_mimi_opaque_bytes(opaque, digest_field, context, true)?
         .expect("required opaque payload returns bytes");
     arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
-        AppError::invalid_param(format!("{context} is not canonical JSON: {error}"))
+        AppError::param_invalid(format!("{context} is not canonical JSON: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })
 }
@@ -220,27 +220,27 @@ pub(super) fn decode_mimi_opaque_bytes(
         .get(digest_field)
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::invalid_param(format!("{context} requires {digest_field}"))
+            AppError::param_invalid(format!("{context} requires {digest_field}"))
                 .with_wire_code("mimi_payload_invalid")
         })?;
     let payload = match opaque.get("payload").and_then(Value::as_str) {
         Some(payload) if !payload.trim().is_empty() => payload,
         _ if require_payload => {
             return Err(
-                AppError::invalid_param(format!("{context} requires payload"))
+                AppError::param_invalid(format!("{context} requires payload"))
                     .with_wire_code("mimi_payload_invalid"),
             );
         }
         _ => return Ok(None),
     };
     let bytes = arkret_canonical::base64url_decode(payload).map_err(|error| {
-        AppError::invalid_param(format!("{context} payload is not base64url: {error}"))
+        AppError::param_invalid(format!("{context} payload is not base64url: {error}"))
             .with_wire_code("mimi_payload_invalid")
     })?;
     let observed = arkret_canonical::sha256_digest(&bytes);
     if observed != digest {
         return Err(
-            AppError::invalid_param(format!("{context} digest mismatch"))
+            AppError::param_invalid(format!("{context} digest mismatch"))
                 .with_wire_code("mimi_payload_digest_mismatch"),
         );
     }
@@ -445,7 +445,7 @@ pub(super) fn map_mimi_message_content(
     let explicit_downgrade = mimi_explicit_downgrade(body, &content);
 
     if e2ee_boundary && plaintext_detected && transcript_binding.is_none() && !explicit_downgrade {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "MIMI E2EE plaintext requires transcript_binding or explicit e2ee_downgrade marker",
         )
         .with_wire_code("mimi_e2ee_boundary_unmarked"));

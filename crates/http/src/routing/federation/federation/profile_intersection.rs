@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::state::AppState;
 use crate::wire;
 
-const CODE_PROFILE_UNSUPPORTED: &str = "profile_unsupported";
+const CODE_PROFILE_UNSUPPORTED: &str = "unsupported_profile";
 
 #[derive(Clone, Debug)]
 pub(crate) struct FederationProfileGateRejection {
@@ -19,7 +19,7 @@ pub(crate) struct FederationProfileGateRejection {
 }
 
 impl FederationProfileGateRejection {
-    fn profile_unsupported(message: impl Into<String>) -> Self {
+    fn unsupported_profile(message: impl Into<String>) -> Self {
         Self {
             code: CODE_PROFILE_UNSUPPORTED,
             message: message.into(),
@@ -137,15 +137,15 @@ impl FederationProfileIntersection {
     ) -> Result<(), FederationProfileGateRejection> {
         match (local, peer) {
             (true, true) => Ok(()),
-            (false, true) => Err(FederationProfileGateRejection::profile_unsupported(
+            (false, true) => Err(FederationProfileGateRejection::unsupported_profile(
                 format!(
                     "local ServiceDescribe profile/capability declarations do not cover {atom}"
                 ),
             )),
-            (true, false) => Err(FederationProfileGateRejection::profile_unsupported(
+            (true, false) => Err(FederationProfileGateRejection::unsupported_profile(
                 format!("peer ServiceDescribe profile/capability declarations do not cover {atom}"),
             )),
-            (false, false) => Err(FederationProfileGateRejection::profile_unsupported(
+            (false, false) => Err(FederationProfileGateRejection::unsupported_profile(
                 format!("local/peer ServiceDescribe profile intersection does not cover {atom}"),
             )),
         }
@@ -313,14 +313,14 @@ async fn peer_semantic_claims(
     let mut features = BTreeSet::new();
     if let Some(description) = fetch_peer_description(state, source_service_id).await {
         if description.service_id.as_str() != source_service_id {
-            return Err(FederationProfileGateRejection::profile_unsupported(
+            return Err(FederationProfileGateRejection::unsupported_profile(
                 "peer ServiceDescribe service_id does not match Source-Service-ID",
             ));
         }
         if let Some(expected_trust_domain) = source_trust_domain
             && description.trust_domain.as_str() != expected_trust_domain
         {
-            return Err(FederationProfileGateRejection::profile_unsupported(
+            return Err(FederationProfileGateRejection::unsupported_profile(
                 "peer ServiceDescribe trust_domain does not match Source-Trust-Domain",
             ));
         }

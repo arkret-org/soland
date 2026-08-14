@@ -22,7 +22,7 @@ async fn prepare_ghost_event(
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
-            "bad_json",
+            "json_invalid",
             "event envelope cannot be encoded",
         )
     })?;

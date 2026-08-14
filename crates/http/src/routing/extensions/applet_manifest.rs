@@ -117,8 +117,8 @@ struct AppletManifestVerifyOutcome {
 /// `Display`-parsing.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AppletManifestError {
-    #[error("signature_invalid")]
-    SignatureInvalid,
+    #[error("directory_governance_proof_signature_invalid")]
+    DirectoryGovernanceProofSignatureInvalid,
     #[error("untrusted_signer")]
     UntrustedSigner,
     #[error("schema_hash_mismatch")]
@@ -132,7 +132,9 @@ pub enum AppletManifestError {
 impl AppletManifestError {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::SignatureInvalid => "signature_invalid",
+            Self::DirectoryGovernanceProofSignatureInvalid => {
+                "directory_governance_proof_signature_invalid"
+            }
             Self::UntrustedSigner => "untrusted_signer",
             Self::SchemaHashMismatch => "schema_hash_mismatch",
             Self::UnknownCapability(_) => "unknown_capability",
@@ -185,7 +187,7 @@ pub fn verify_manifest(
         .decode(manifest.signature.as_bytes())
         .map_err(|e| AppletManifestError::MalformedManifest(format!("signature base64: {e}")))?;
     if sig_bytes.len() != 64 {
-        return Err(AppletManifestError::SignatureInvalid);
+        return Err(AppletManifestError::DirectoryGovernanceProofSignatureInvalid);
     }
     let mut sig_arr = [0u8; 64];
     sig_arr.copy_from_slice(&sig_bytes);
@@ -194,7 +196,7 @@ pub fn verify_manifest(
     let signing_body = manifest_signing_bytes(manifest);
     verifying_key
         .verify(&signing_body, &signature)
-        .map_err(|_| AppletManifestError::SignatureInvalid)?;
+        .map_err(|_| AppletManifestError::DirectoryGovernanceProofSignatureInvalid)?;
 
     Ok(VerifiedAppletManifest {
         id: manifest.id.clone(),
@@ -288,7 +290,7 @@ async fn verify_endpoint(
 ) -> JsonResult<AppletManifestVerifyOutcome> {
     let body = body.into_inner();
     if body.trusted_registry_did.trim().is_empty() {
-        return Err(AppError::missing_param("trusted_registry_did is required"));
+        return Err(AppError::param_missing("trusted_registry_did is required"));
     }
     match verify_manifest(&body.manifest_json, &body.trusted_registry_did) {
         Ok(verified) => json_ok(AppletManifestVerifyOutcome {
@@ -346,7 +348,10 @@ mod tests {
         // Tamper after signing.
         manifest.metadata = json!({"namespace": "bridge.other"});
         let err = verify_manifest(&manifest, "did:web:registry.example").unwrap_err();
-        assert_eq!(err, AppletManifestError::SignatureInvalid);
+        assert_eq!(
+            err,
+            AppletManifestError::DirectoryGovernanceProofSignatureInvalid
+        );
     }
 
     #[test]

@@ -211,7 +211,7 @@ pub(super) fn local_handle_resolution_outcome(
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
         principal_id: DidCoreId::new(did.clone()).map_err(|err| {
-            AppError::invalid_param(format!("invalid resolved actor principal id: {err}"))
+            AppError::param_invalid(format!("invalid resolved actor principal id: {err}"))
         })?,
         handle: canonical_handle,
         verified: true,
@@ -496,7 +496,7 @@ pub(super) async fn resolve_handle(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.handle.trim().is_empty() {
-        return Err(AppError::missing_param("handle is required"));
+        return Err(AppError::param_missing("handle is required"));
     }
     let service_domain = service_handle_domain(state);
     let Some(lookup) = handle_lookup(&body.handle, &service_domain) else {
@@ -616,7 +616,7 @@ pub(super) async fn signed_handle_claim(
     let service_id = state.service_id().clone();
     let default_domain = service_handle_domain(state);
     let lookup = handle_lookup(handle, &default_domain)
-        .ok_or_else(|| AppError::invalid_param("handle must be canonicalizable"))?;
+        .ok_or_else(|| AppError::param_invalid("handle must be canonicalizable"))?;
     let canonical_handle = lookup.canonical;
     let localpart = lookup.localpart;
     let handle_domain = lookup.authority;
@@ -726,7 +726,7 @@ pub(super) async fn list_handles_for_subject(
     let subject_did = body.subject.clone();
     let subject = subject_did.as_str().to_owned();
     if subject.is_empty() {
-        return Err(AppError::missing_param("subject is required"));
+        return Err(AppError::param_missing("subject is required"));
     }
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
         &json!({ "subject": subject.as_str() }),
@@ -951,7 +951,7 @@ fn cursor_binding_record(
 
 fn cursor_app_error(error: CursorAuthorityError) -> AppError {
     match error {
-        CursorAuthorityError::InvalidParam(message) => AppError::invalid_param(message)
+        CursorAuthorityError::ParamInvalid(message) => AppError::param_invalid(message)
             .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         CursorAuthorityError::Expired => AppError::new(
             soland_http::error::ErrorCode::CursorExpired,

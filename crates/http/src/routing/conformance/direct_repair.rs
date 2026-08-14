@@ -88,12 +88,12 @@ pub async fn install(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     if body.events.len() < 5 || body.events.len() > 16 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "direct repair fixture requires founding, activation, and rejoin Events",
         ));
     }
     if body.binding.participants_unordered.len() != 2 || body.contacts.len() != 2 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "direct repair fixture requires one exact pair and two directional Contacts",
         ));
     }
@@ -107,7 +107,7 @@ pub async fn install(
         .iter()
         .any(|kind| !body.events.iter().any(|event| &event.kind == kind))
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "direct repair fixture is missing a canonical projected Event",
         ));
     }
@@ -116,7 +116,7 @@ pub async fn install(
         .iter()
         .any(|event| event.realm_id.as_str() != body.binding.realm_id)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "direct repair fixture Events must share the bound Realm",
         ));
     }
@@ -126,11 +126,11 @@ pub async fn install(
     for event in &body.events {
         let event_digest = event
             .event_digest()
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let envelope = serde_json::to_value(event)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope)
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         state
             .event_queries()
             .store_canonical_event(CanonicalEventRecord {
@@ -159,17 +159,17 @@ pub async fn install(
                 None,
                 event,
             )
-            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let writes = state
                 .projections()
                 .project_accepted_cell_writes(event)
-                .map_err(AppError::invalid_param)?;
+                .map_err(AppError::param_invalid)?;
             if let ProjectionEffectView::Rejected { reason } =
                 state
                     .projections()
                     .apply_projected(&operation, &writes, state.hlc())
             {
-                return Err(AppError::invalid_param(format!(
+                return Err(AppError::param_invalid(format!(
                     "direct repair fixture projection rejected: {reason}"
                 )));
             }

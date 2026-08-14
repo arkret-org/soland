@@ -111,21 +111,21 @@ async fn issue_ice_config(
     let realm_id = body.realm_id.as_str();
     let call_id = body.call_id.as_str();
     if call_id.is_empty() {
-        return Err(AppError::missing_param("call_id is required"));
+        return Err(AppError::param_missing("call_id is required"));
     }
     let actor_id = body.actor_id.as_str();
     let device_id = body.device_id.as_str();
 
     if !is_valid_webrtc_session_id(call_id) {
-        return Err(AppError::invalid_param("invalid call_id"));
+        return Err(AppError::param_invalid("invalid call_id"));
     }
     if DidCoreId::new(actor_id.to_owned()).is_err() || actor_id != session.actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "actor_id must match the authenticated actor",
         ));
     }
     if validate_device_id(device_id).is_err() || device_id != session.device_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "device_id must match the authenticated device",
         ));
     }
@@ -382,7 +382,7 @@ impl MediaProviderKind {
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
-                ErrorCode::InvalidParam,
+                ErrorCode::ParamInvalid,
                 format!("unknown media focus provider `{value}`"),
             )
             .with_wire_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
@@ -569,23 +569,23 @@ async fn handle_rtc_token(
     // instead of a stringly soland mirror.
     let realm_id = body.realm_id.clone();
     if !is_valid_webrtc_session_id(body.call_id.as_str()) {
-        return Err(AppError::invalid_param("invalid call_id"));
+        return Err(AppError::param_invalid("invalid call_id"));
     }
     let call_id = body.call_id.clone();
     if body.actor_id.as_str() != session.actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "actor_id must match the authenticated actor",
         ));
     }
     let actor_id = body.actor_id.clone();
     if body.device_id.as_str() != session.device_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "device_id must match the authenticated device",
         ));
     }
     let device_id = body.device_id.clone();
     if body.focus_id.trim().is_empty() {
-        return Err(AppError::invalid_param("focus_id is required"));
+        return Err(AppError::param_invalid("focus_id is required"));
     }
     // Authz (`media-service-binding.md` §6 commit ordering) — the token issuer does NOT
     // depend on any ephemeral signaling session. Per `media-service-binding.md`
@@ -1091,11 +1091,11 @@ fn media_service_epoch_from_descriptor(
     for focus in focus_descriptors {
         let focus_id = focus.focus_id.trim().to_owned();
         if focus_id.is_empty() {
-            return Err(AppError::invalid_param("focus_id is required"));
+            return Err(AppError::param_invalid("focus_id is required"));
         }
         let provider = focus.provider.trim();
         if provider.is_empty() {
-            return Err(AppError::invalid_param("media focus type is required"));
+            return Err(AppError::param_invalid("media focus type is required"));
         }
         let provider = MediaProviderKind::parse(provider)?;
         let issuer_kid = trimmed_non_empty(focus.issuer_kid)

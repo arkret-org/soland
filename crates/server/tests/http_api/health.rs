@@ -323,7 +323,7 @@ async fn server_describe_accepts_only_its_selected_role() {
         .await;
     assert_eq!(rejected.status_code.unwrap().as_u16(), 400);
     let rejected: Value = rejected.take_json().await.unwrap();
-    assert_eq!(rejected["error"]["code"], "invalid_param");
+    assert_eq!(rejected["error"]["code"], "param_invalid");
 }
 
 #[tokio::test]

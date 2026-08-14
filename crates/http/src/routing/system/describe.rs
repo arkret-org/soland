@@ -303,7 +303,7 @@ async fn server_describe(
     if let Some(service_kind) = service_kind.into_inner()
         && service_kind != arkret_wire::ServiceKind::PrincipalServer.as_str()
     {
-        return Err(soland_http::error::AppError::invalid_param(format!(
+        return Err(soland_http::error::AppError::param_invalid(format!(
             "service_kind {service_kind:?} is not available on this binding"
         )));
     }

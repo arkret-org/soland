@@ -100,7 +100,7 @@ fn state_response_from(
 fn parse_realm_scope(realm_str: &str) -> Result<RealmId, AppError> {
     RealmId::new(realm_str.to_owned()).map_err(|e| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("invalid realm_id `{realm_str}`: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -110,7 +110,7 @@ fn parse_realm_scope(realm_str: &str) -> Result<RealmId, AppError> {
 fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
     let Some(realm_str) = query_param(req, "realm_id") else {
         return Err(AppError::new(
-            ErrorCode::MissingParam,
+            ErrorCode::ParamMissing,
             "realm_id query parameter is required".to_owned(),
         )
         .with_status(StatusCode::BAD_REQUEST));
@@ -139,14 +139,14 @@ async fn admin_get_cell(
 
     let Some(cell_id_str) = req.param::<String>("cell_id") else {
         return Err(AppError::new(
-            ErrorCode::MissingParam,
+            ErrorCode::ParamMissing,
             "cell_id path segment is required".to_owned(),
         )
         .with_status(StatusCode::BAD_REQUEST));
     };
     let cell_ref = CellRef::new(cell_id_str.clone()).map_err(|e| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("invalid cell_id `{cell_id_str}`: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -157,7 +157,7 @@ async fn admin_get_cell(
     // family slot would leak into the registry resolver.
     let _ = arkret_wire::cell::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("cell_id is not a parseable ak:cell:<family>:<subject>: {e}"),
         )
         .with_status(StatusCode::BAD_REQUEST)

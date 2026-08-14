@@ -33,7 +33,7 @@ pub(crate) async fn federation_actor_events(
     ensure_private_inbound_read_rail_local(state)?;
     let actor = actor_id.into_inner();
     if DidFullId::new(actor.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid actor_id"));
+        return Err(AppError::param_invalid("invalid actor_id"));
     }
     const FEDERATION_ACTOR_EVENTS_SCAN_CAP: usize = 10_000;
     let mut events = state
@@ -102,7 +102,7 @@ pub(crate) async fn federation_realm_members(
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id_value = RealmId::new(realm_id.into_inner())
-        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     let members = state
         .realm_directory()
         .snapshot()
@@ -200,9 +200,9 @@ pub(crate) async fn federation_seals_pull(
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid realm_id"));
+        return Err(AppError::param_invalid("invalid realm_id"));
     }
-    let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    let realm = RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     let leaves = state
         .projections()
         .realm_seal_leaves(&realm)

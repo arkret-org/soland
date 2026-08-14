@@ -268,7 +268,7 @@ pub enum PolicyClientError {
     Transport(String),
     Timeout,
     BadResponse(String),
-    SignatureInvalid(String),
+    DirectoryGovernanceProofSignatureInvalid(String),
 }
 
 impl std::fmt::Display for PolicyClientError {
@@ -278,7 +278,9 @@ impl std::fmt::Display for PolicyClientError {
             Self::Transport(s) => write!(f, "policy client transport error: {s}"),
             Self::Timeout => write!(f, "policy client timeout"),
             Self::BadResponse(s) => write!(f, "policy client bad response: {s}"),
-            Self::SignatureInvalid(s) => write!(f, "policy client signature invalid: {s}"),
+            Self::DirectoryGovernanceProofSignatureInvalid(s) => {
+                write!(f, "policy client signature invalid: {s}")
+            }
         }
     }
 }
@@ -563,64 +565,82 @@ impl PolicyClient {
         response: &PolicyCheckOutcome,
     ) -> Result<(), PolicyClientError> {
         if response.signature.sig.is_empty() {
-            return Err(PolicyClientError::SignatureInvalid("empty sig".to_owned()));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                "empty sig".to_owned(),
+            ));
         }
         let kid = &response.signature.kid;
         let Some((kid_did_part, kid_fragment)) = kid.split_once('#') else {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "kid missing fragment: {kid}"
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!("kid missing fragment: {kid}"),
+            ));
         };
         if kid_did_part.is_empty() || kid_fragment.is_empty() {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "kid has empty DID or fragment: {kid}"
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!("kid has empty DID or fragment: {kid}"),
+            ));
         }
         // The kid's resolvable controller MUST project to the declared stable
         // policy-server service identity.
-        let kid_full_id = arkret_identifiers::DidFullId::new(kid_did_part.to_owned())
-            .map_err(|error| PolicyClientError::SignatureInvalid(error.to_string()))?;
-        let kid_service_id = arkret_wire::project_full_id_to_core_id(&kid_full_id)
-            .map_err(|error| PolicyClientError::SignatureInvalid(error.to_string()))?;
+        let kid_full_id =
+            arkret_identifiers::DidFullId::new(kid_did_part.to_owned()).map_err(|error| {
+                PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
+            })?;
+        let kid_service_id =
+            arkret_wire::project_full_id_to_core_id(&kid_full_id).map_err(|error| {
+                PolicyClientError::DirectoryGovernanceProofSignatureInvalid(error.to_string())
+            })?;
         if kid_service_id != config.policy_server_service_id {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "kid {kid_did_part} does not project to policy_server_service_id {server}",
-                server = config.policy_server_service_id
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "kid {kid_did_part} does not project to policy_server_service_id {server}",
+                    server = config.policy_server_service_id
+                ),
+            ));
         }
         if response.bound_to.policy_server_id != config.policy_server_service_id {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.policy_server_id {bt} != config {cfg}",
-                bt = response.bound_to.policy_server_id.as_str(),
-                cfg = config.policy_server_service_id
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "bound_to.policy_server_id {bt} != config {cfg}",
+                    bt = response.bound_to.policy_server_id.as_str(),
+                    cfg = config.policy_server_service_id
+                ),
+            ));
         }
         if response.bound_to.realm_id != request.realm_id {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.realm_id {bt} != request {req}",
-                bt = response.bound_to.realm_id.as_str(),
-                req = request.realm_id.as_str()
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "bound_to.realm_id {bt} != request {req}",
+                    bt = response.bound_to.realm_id.as_str(),
+                    req = request.realm_id.as_str()
+                ),
+            ));
         }
         if response.bound_to.actor_id != request.actor_id {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.actor_id {bt} != request {req}",
-                bt = response.bound_to.actor_id.as_str(),
-                req = request.actor_id.as_str()
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "bound_to.actor_id {bt} != request {req}",
+                    bt = response.bound_to.actor_id.as_str(),
+                    req = request.actor_id.as_str()
+                ),
+            ));
         }
         if response.bound_to.action != request.action {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.action {} != request {}",
-                response.bound_to.action, request.action
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "bound_to.action {} != request {}",
+                    response.bound_to.action, request.action
+                ),
+            ));
         }
         if response.bound_to.request_canonical_digest != request.request_canonical_digest {
-            return Err(PolicyClientError::SignatureInvalid(format!(
-                "bound_to.request_canonical_digest {bt} != request {req}",
-                bt = response.bound_to.request_canonical_digest.as_str(),
-                req = request.request_canonical_digest.as_str()
-            )));
+            return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+                format!(
+                    "bound_to.request_canonical_digest {bt} != request {req}",
+                    bt = response.bound_to.request_canonical_digest.as_str(),
+                    req = request.request_canonical_digest.as_str()
+                ),
+            ));
         }
 
         let Some(resolve_key) = &self.verification_key_resolver else {
@@ -629,12 +649,16 @@ impl PolicyClient {
             ));
         };
         let verifying_key = resolve_key(kid).map_err(|e| {
-            PolicyClientError::SignatureInvalid(format!("verification key resolution failed: {e}"))
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(format!(
+                "verification key resolution failed: {e}"
+            ))
         })?;
         let signature = decode_policy_signature(&response.signature.sig)?;
         let transcript = policy_decision_transcript_bytes(request, response)?;
         verifying_key.verify(&transcript, &signature).map_err(|e| {
-            PolicyClientError::SignatureInvalid(format!("Ed25519 verify failed: {e}"))
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(format!(
+                "Ed25519 verify failed: {e}"
+            ))
         })?;
         Ok(())
     }
@@ -652,18 +676,19 @@ pub(crate) fn policy_decision_transcript_bytes(
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {
     if sig.bytes().all(|b| b == b'A') {
-        return Err(PolicyClientError::SignatureInvalid(
+        return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
             "signature is the all-zero sentinel".to_owned(),
         ));
     }
     let bytes = URL_SAFE_NO_PAD.decode(sig.as_bytes()).map_err(|e| {
-        PolicyClientError::SignatureInvalid(format!("signature is not base64url: {e}"))
+        PolicyClientError::DirectoryGovernanceProofSignatureInvalid(format!(
+            "signature is not base64url: {e}"
+        ))
     })?;
     if bytes.len() != 64 {
-        return Err(PolicyClientError::SignatureInvalid(format!(
-            "Ed25519 signature must be 64 bytes, got {}",
-            bytes.len()
-        )));
+        return Err(PolicyClientError::DirectoryGovernanceProofSignatureInvalid(
+            format!("Ed25519 signature must be 64 bytes, got {}", bytes.len()),
+        ));
     }
     let mut raw = [0u8; 64];
     raw.copy_from_slice(&bytes);
@@ -1034,8 +1059,8 @@ mod tests {
             .await
             .expect_err("signature mismatch must be rejected");
         match err {
-            PolicyClientError::SignatureInvalid(_) => {}
-            other => panic!("expected SignatureInvalid, got {other:?}"),
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(_) => {}
+            other => panic!("expected DirectoryGovernanceProofSignatureInvalid, got {other:?}"),
         }
     }
 
@@ -1068,11 +1093,13 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            PolicyClientError::SignatureInvalid(message) => assert!(
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(message) => assert!(
                 message.contains("Ed25519 verify failed"),
                 "{label}: unexpected message: {message}"
             ),
-            other => panic!("{label}: expected SignatureInvalid, got {other:?}"),
+            other => {
+                panic!("{label}: expected DirectoryGovernanceProofSignatureInvalid, got {other:?}")
+            }
         }
     }
 
@@ -1151,13 +1178,13 @@ mod tests {
             .await
             .expect_err("forged signature must be rejected");
         match err {
-            PolicyClientError::SignatureInvalid(message) => {
+            PolicyClientError::DirectoryGovernanceProofSignatureInvalid(message) => {
                 assert!(
                     message.contains("Ed25519 verify failed"),
                     "unexpected message: {message}"
                 );
             }
-            other => panic!("expected SignatureInvalid, got {other:?}"),
+            other => panic!("expected DirectoryGovernanceProofSignatureInvalid, got {other:?}"),
         }
     }
 }

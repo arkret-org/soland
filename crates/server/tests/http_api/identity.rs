@@ -410,7 +410,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .await;
     assert_eq!(reused_key.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let reused_key_body: Value = reused_key.take_json().await.unwrap();
-    assert_eq!(reused_key_body["error"]["code"], "invalid_param");
+    assert_eq!(reused_key_body["error"]["code"], "param_invalid");
 
     let did_signing = SigningKey::from_bytes(&[41u8; 32]);
     let update_signing = SigningKey::from_bytes(&[42u8; 32]);
@@ -594,17 +594,17 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     let proof_value = invalid_proof["operation"]["proof"][0]["proofValue"]
         .as_str()
         .expect("SDK inception proofValue");
-    let mut invalid_signature = bs58::decode(
+    let mut signature_invalid = bs58::decode(
         proof_value
             .strip_prefix('z')
             .expect("proofValue uses base58btc multibase"),
     )
     .into_vec()
     .expect("SDK inception proofValue decodes");
-    invalid_signature[0] ^= 1;
+    signature_invalid[0] ^= 1;
     invalid_proof["operation"]["proof"][0]["proofValue"] = Value::String(format!(
         "z{}",
-        bs58::encode(invalid_signature).into_string()
+        bs58::encode(signature_invalid).into_string()
     ));
     let mut invalid_proof_response =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")

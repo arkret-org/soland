@@ -210,7 +210,7 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
     // `ParseError::SerdeJson`):
     //   * body parses as JSON but violates the declared schema contract (missing field / bad typed
     //     value) → 422 `schema_violation`;
-    //   * body is not valid JSON at all (syntax / EOF) → 400 `invalid_param` — it never parsed, so
+    //   * body is not valid JSON at all (syntax / EOF) → 400 `param_invalid` — it never parsed, so
     //     `schema_violation` ("parsed input…") does not apply, and `bad_request` is not a
     //     registered code.
     if status == StatusCode::BAD_REQUEST
@@ -231,7 +231,7 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
             );
         } else {
             let detail = format!("request body is not valid JSON: {serde_error}");
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", &detail);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", &detail);
         }
         ctrl.skip_rest();
         return;
@@ -245,10 +245,10 @@ pub async fn error_catcher(res: &mut Response, ctrl: &mut FlowCtrl) {
         StatusCode::TOO_MANY_REQUESTS => ("rate_limited", "rate limited"),
         StatusCode::INTERNAL_SERVER_ERROR => ("internal_error", "internal server error"),
         // Fallback for framework-originated client errors that carry no typed
-        // AppError. `invalid_param` is the registered generic 400; other 4xx
+        // AppError. `param_invalid` is the registered generic 400; other 4xx
         // statuses without a specific code also degrade to it rather than an
         // unregistered `bad_request`.
-        _ if status.is_client_error() => ("invalid_param", "invalid request"),
+        _ if status.is_client_error() => ("param_invalid", "invalid request"),
         _ => ("internal_error", "internal server error"),
     };
     render_error(res, status, code, message);
@@ -271,7 +271,7 @@ pub async fn wait_for_sync_token(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "X-Arkret-Wait-For must be ASCII",
         );
         return;
@@ -281,7 +281,7 @@ pub async fn wait_for_sync_token(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "X-Arkret-Wait-For must contain exactly one ak:cursor token",
         );
         return;

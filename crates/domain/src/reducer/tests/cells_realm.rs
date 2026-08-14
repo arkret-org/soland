@@ -468,7 +468,7 @@ fn realm_upgrade_requires_a_registered_direct_edge() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { ref reason }
-            if reason == arkret_wire::ErrorCode::PROFILE_UNSUPPORTED
+            if reason == arkret_wire::ErrorCode::UNSUPPORTED_PROFILE
     ));
     assert_eq!(
         state.realm_reducer_profile(realm_id),
@@ -1653,7 +1653,7 @@ fn the_bundle_projects_every_registered_component() {
             "witnessed_min_attestations": 1,
             "witness_independence": "distinct_did"
         },
-        "preauth": {"require_consent": true}
+        "preauth": {"consent_required": true}
     });
     serde_json::from_value::<
         arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload,

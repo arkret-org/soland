@@ -212,23 +212,23 @@ pub(super) async fn put_key_backup(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("Idempotency-Key is required for key-backup PUT"))?
+        .ok_or_else(|| AppError::param_invalid("Idempotency-Key is required for key-backup PUT"))?
         .to_owned();
     if idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key must not exceed 128 bytes",
         ));
     }
     let backup_id = backup_id.into_inner();
     if backup_id.trim().is_empty() {
-        return Err(AppError::invalid_param("backup_id is required"));
+        return Err(AppError::param_invalid("backup_id is required"));
     }
     // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
     // `ak:backup:<uuidv7>`; parse into the SDK typed id up front so a
     // non-conforming id fails before any persistence side effect.
     let typed_backup_id =
         arkret_identifiers::BackupId::new(backup_id.clone()).map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
             ))
         })?;
@@ -237,7 +237,7 @@ pub(super) async fn put_key_backup(
     // OpenAPI request contract is strong rather than `Value`.
     let backup = backup.into_inner();
     let request_hash = arkret_canonical::canonical_sha256(&backup).map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "key backup body is not canonical-hashable: {error}"
         ))
     })?;
@@ -410,7 +410,7 @@ async fn list_key_backups_impl(
     if let Some(class) = backup_class_filter.as_deref()
         && !KEY_BACKUP_CLASSES.contains(&class)
     {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "unsupported backup_kind `{class}`"
         )));
     }
@@ -555,7 +555,7 @@ pub(super) async fn delete_key_backup(
         .parse_json::<KeysBackupsDeleteRequestBody>()
         .await
         .map_err(|error| {
-            AppError::invalid_param(format!(
+            AppError::param_invalid(format!(
                 "ak.self.keys.backups.resource.delete request body is invalid: {error}"
             ))
         })?;
@@ -572,7 +572,7 @@ pub(super) async fn delete_key_backup(
         body.request_id.as_str()
     );
     let request_hash = arkret_canonical::canonical_sha256(&body).map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "delete request body is not canonical-hashable: {error}"
         ))
     })?;

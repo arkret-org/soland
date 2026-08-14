@@ -106,7 +106,7 @@ pub(crate) fn scope_selector_to_realm_id(
     if RealmId::new(value.to_owned()).is_ok() {
         return Ok(value.to_owned());
     }
-    Err(soland_http::error::AppError::invalid_param(
+    Err(soland_http::error::AppError::param_invalid(
         "invalid realm_id",
     ))
 }

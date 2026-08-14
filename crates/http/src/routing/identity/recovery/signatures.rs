@@ -72,13 +72,13 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
     let auth_data = payload
         .get("auth_data")
         .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data is required"))?;
     let verification_method = auth_data
         .get("verification_method")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data.verification_method is required"))?;
     if !recovery_policy_verification_method_matches_session(
         verification_method,
         &record.principal_id,
@@ -99,7 +99,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         payload,
     )?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+        AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let transcript_bytes = typed
@@ -109,7 +109,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
     let signature_b64 = auth_data
         .get("signature")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data.signature is required"))?;
     let raw = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
         .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))
@@ -134,7 +134,7 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
             "session device `{}` is not bound to principal `{principal_id}` with a public key",
             session.device_id
         ))
-        .with_wire_code("recovery_policy_device_not_authorized")
+        .with_wire_code("recovery_policy_device_unauthorized")
     };
     let device = state
         .identities()
@@ -166,13 +166,13 @@ pub(super) async fn verify_recovery_auth_signature(
     let auth_data = payload
         .get("auth_data")
         .and_then(Value::as_object)
-        .ok_or_else(|| AppError::invalid_param("auth_data is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data is required"))?;
     let verification_method = auth_data
         .get("verification_method")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data.verification_method is required"))?;
     let (method_did, device_fragment) = verification_method.rsplit_once('#').ok_or_else(|| {
         recovery_signature_error("recovery authority method has no device fragment")
     })?;
@@ -280,7 +280,7 @@ pub(super) async fn verify_recovery_auth_signature(
         payload,
     )?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+        AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
     })?;
     let transcript_bytes = typed
@@ -289,7 +289,7 @@ pub(super) async fn verify_recovery_auth_signature(
     let signature_b64 = auth_data
         .get("signature")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("auth_data.signature is required"))?;
+        .ok_or_else(|| AppError::param_invalid("auth_data.signature is required"))?;
     let raw = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
         .or_else(|_| STANDARD.decode(signature_b64.as_bytes()))

@@ -41,7 +41,7 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
     serde_json::to_value(envelope).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
-            "bad_json",
+            "json_invalid",
             format!("event envelope re-encode failed: {error}"),
         )
     })
@@ -1118,7 +1118,7 @@ pub(super) async fn submit_event_value_with_context(
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
-            "bad_json",
+            "json_invalid",
             "event envelope cannot be encoded",
         )
     })?;
@@ -1177,7 +1177,7 @@ pub(super) async fn submit_event_value_with_context(
     if !crate::wire::SUPPORTED_REDUCER_PROFILES.contains(&profile.as_str()) {
         return Err(SubmitOneError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            arkret_wire::ErrorCode::PROFILE_UNSUPPORTED,
+            arkret_wire::ErrorCode::UNSUPPORTED_PROFILE,
             format!("Realm reducer profile {profile} is not implemented"),
         ));
     }

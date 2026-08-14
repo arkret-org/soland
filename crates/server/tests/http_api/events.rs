@@ -109,7 +109,7 @@ async fn fetch_chunked_mls_governance_proof(
     );
     object.insert("chunk_index".to_owned(), Value::from(0));
     object.remove("expected_bundle_digest");
-    let base_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
+    let base_request: arkret_models_crypto::MlsGovernanceProofRequestBody =
         serde_json::from_value(request_value).expect("typed chunk-0 proof request");
     let base_request_body = arkret_canonical::canonical_json_bytes(&base_request)
         .expect("canonical chunk-0 proof request");
@@ -1127,7 +1127,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         ],
         "the creator membership Event is the bootstrap Realm's only key-access frontier Event"
     );
-    let request = arkret_models_crypto::MlsGovernanceProofRequestBodyBody {
+    let request = arkret_models_crypto::MlsGovernanceProofRequestBody {
         realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
         effective_scope: arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
@@ -1334,7 +1334,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     valid_request_value["trusted_anchor_seal_id"] =
         Value::String(bundle.trusted_anchor_seal_id.to_string());
     valid_request_value["chunk_index"] = Value::from(0);
-    let valid_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
+    let valid_request: arkret_models_crypto::MlsGovernanceProofRequestBody =
         serde_json::from_value(valid_request_value).expect("typed proof request");
     let leaves = vec![arkret_models_crypto::MlsSecurityFrontierLeaf {
         leaf_index: 0,
@@ -1446,7 +1446,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         .take_json()
         .await
         .expect("chunk range error body");
-    assert_eq!(out_of_range_body["error"]["code"], "invalid_param");
+    assert_eq!(out_of_range_body["error"]["code"], "param_invalid");
 
     let (_, second_bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;

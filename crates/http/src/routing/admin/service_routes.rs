@@ -43,12 +43,12 @@ fn decode_cursor(value: Option<String>) -> Result<Option<ServiceRouteStoredKey>,
     };
     let bytes = URL_SAFE_NO_PAD
         .decode(value)
-        .map_err(|_| AppError::invalid_param("invalid service-route cursor"))?;
+        .map_err(|_| AppError::param_invalid("invalid service-route cursor"))?;
     let cursor: RouteCursor = serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::invalid_param("invalid service-route cursor"))?;
+        .map_err(|_| AppError::param_invalid("invalid service-route cursor"))?;
     Ok(Some(ServiceRouteStoredKey {
         service_id: arkret_wire::DidCoreId::new(cursor.service_id)
-            .map_err(|_| AppError::invalid_param("invalid service-route cursor"))?,
+            .map_err(|_| AppError::param_invalid("invalid service-route cursor"))?,
         service_kind: validate_service_kind(cursor.service_kind)?,
     }))
 }
@@ -69,7 +69,7 @@ fn validate_service_kind(value: String) -> Result<String, AppError> {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(AppError::invalid_param("invalid service_kind"));
+        return Err(AppError::param_invalid("invalid service_kind"));
     }
     Ok(value)
 }
@@ -331,7 +331,7 @@ async fn admin_get_service_route(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
     let service_id = arkret_wire::DidCoreId::new(service_id.into_inner())
-        .map_err(|_| AppError::invalid_param("invalid service_id core"))?;
+        .map_err(|_| AppError::param_invalid("invalid service_id core"))?;
     let service_kind = validate_service_kind(service_kind.into_inner())?;
     let detail = load_detail(state, service_id, service_kind).await?;
     append_audit_log(

@@ -83,10 +83,10 @@ async fn send_device_messages(
         .headers()
         .get("Idempotency-Key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?
         .trim();
     if idempotency_key.is_empty() || idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key must contain 1 to 128 characters",
         ));
     }
@@ -205,7 +205,7 @@ async fn send_device_messages(
                 return Err(AppError::capability_denied(
                     "secret to-device messages require authorized sender and recipient devices",
                 )
-                .with_wire_code("device_not_authorized"));
+                .with_wire_code("device_unauthorized"));
             }
             let deliverable = target_active
                 && (target_verified || sender_verified && same_principal && verification_bootstrap);
@@ -427,7 +427,7 @@ async fn get_device_messages(
                 ));
             }
             Err(SyncCursorError::Invalid(message)) => {
-                return Err(AppError::invalid_param(message));
+                return Err(AppError::param_invalid(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
                 return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
@@ -445,7 +445,7 @@ async fn get_device_messages(
         None => 0,
     };
     let page_limit = match limit.into_inner() {
-        Some(0) => return Err(AppError::invalid_param("limit must be greater than zero")),
+        Some(0) => return Err(AppError::param_invalid("limit must be greater than zero")),
         Some(limit) => (limit as usize).min(TO_DEVICE_PAGE_LIMIT),
         None => TO_DEVICE_PAGE_LIMIT,
     };
@@ -527,7 +527,7 @@ async fn ack_device_messages(
     let body = body.into_inner();
     let ack_token = body.ack_token.trim();
     if ack_token.is_empty() {
-        return Err(AppError::invalid_param("invalid_ack_token"));
+        return Err(AppError::param_invalid("invalid_ack_token"));
     }
     let Some(pruned_count) = state
         .deliveries()
@@ -535,7 +535,7 @@ async fn ack_device_messages(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
-        return Err(AppError::invalid_param("invalid_ack_token"));
+        return Err(AppError::param_invalid("invalid_ack_token"));
     };
     json_ok(DeviceMessagesAckOutcome {
         ok: true,

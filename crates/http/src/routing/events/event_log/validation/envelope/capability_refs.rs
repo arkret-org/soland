@@ -554,7 +554,7 @@ fn data_event_authorization_is_high_risk(
 }
 
 fn stale_seal_ref_error(message: impl Into<String>) -> EventValidationError {
-    event_validation_error(StatusCode::PRECONDITION_FAILED, "stale_seal_ref", message)
+    event_validation_error(StatusCode::PRECONDITION_FAILED, "seal_ref_stale", message)
 }
 
 pub(super) fn data_event_state_at_seal_ref(

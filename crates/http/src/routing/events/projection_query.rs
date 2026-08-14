@@ -104,7 +104,7 @@ fn is_object_terminal(state: ObjectLifecycleState) -> bool {
 
 fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     Ok(realm_id)
 }
 
@@ -999,7 +999,7 @@ async fn list_space_container_projections(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
@@ -1083,7 +1083,7 @@ async fn list_strand_projections(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(
@@ -1287,7 +1287,7 @@ async fn get_strand_projection(
     let session = aa.authenticated_session(state, req).await?;
     let strand_id = strand_id.into_inner();
     StrandId::new(strand_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid strand_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid strand_id format"))?;
     let realm_id = {
         let proj = state.projections().snapshot();
         let Some(strand) = proj.strands.get(&strand_id) else {
@@ -1466,7 +1466,7 @@ async fn get_document_projection(
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let morph_id = morph_id.into_inner();
     MorphId::new(morph_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid morph_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid morph_id format"))?;
     {
         let proj = state.projections().snapshot();
         let Some(morph) = proj.morphs.get(&morph_id) else {
@@ -1549,7 +1549,7 @@ async fn list_morph_projections(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::invalid_param("invalid realm_id format"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::new(

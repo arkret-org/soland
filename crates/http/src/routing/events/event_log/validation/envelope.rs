@@ -112,7 +112,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
         if RealmId::new(realm_id.clone()).is_err() {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "realm_id must use the ak:realm: typed prefix",
             ));
         }
@@ -121,7 +121,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
 
     Err(event_validation_error(
         StatusCode::BAD_REQUEST,
-        "missing_param",
+        "param_missing",
         "realm_id is required",
     ))
 }
@@ -142,14 +142,14 @@ fn derive_realm_id_from_event_id(
     let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "event_id is required to derive the Realm id",
         )
     })?;
     let event_id = arkret_wire::EventId::new(event_id.clone()).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "event_id must use the ak:event: typed prefix",
         )
     })?;
@@ -189,7 +189,7 @@ mod event_derived_id_tests {
         .expect("object fixture")
         .clone();
         let error = event_realm_id(&object).expect_err("reserved header bits must fail closed");
-        assert_eq!(error.code, "invalid_param");
+        assert_eq!(error.code, "param_invalid");
     }
 }
 

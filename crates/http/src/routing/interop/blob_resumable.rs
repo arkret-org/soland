@@ -288,7 +288,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "Upload-Defer-Length is not supported; declare Upload-Length",
         );
         return;
@@ -302,7 +302,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "Upload-Length is required",
         );
         return;
@@ -328,7 +328,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         Some(raw) => match parse_upload_metadata(raw) {
             Ok(metadata) => metadata,
             Err(message) => {
-                render_error(res, StatusCode::BAD_REQUEST, "invalid_param", message);
+                render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
                 return;
             }
         },
@@ -379,7 +379,7 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
-                    "bad_json",
+                    "json_invalid",
                     "invalid creation-with-upload body",
                 );
                 return;
@@ -532,7 +532,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "invalid_param",
+            "param_invalid",
             "PATCH requires content-type application/offset+octet-stream",
         );
         return;
@@ -546,7 +546,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "Upload-Offset is required",
         );
         return;
@@ -575,7 +575,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "bad_json",
+                "json_invalid",
                 "invalid chunk body",
             );
             return;
@@ -708,7 +708,7 @@ async fn complete_resumable_upload(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "invalid blob upload purpose",
         );
         return;
@@ -721,7 +721,7 @@ async fn complete_resumable_upload(
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "Upload-Metadata encrypted must be true or false",
             );
             return;
@@ -733,7 +733,7 @@ async fn complete_resumable_upload(
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "invalid blob realm_id",
                 );
                 return;
@@ -757,7 +757,7 @@ async fn complete_resumable_upload(
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "content_digest must be sha256:<64 lowercase hex>",
                 );
                 return;
@@ -770,7 +770,7 @@ async fn complete_resumable_upload(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "search index shard uploads must be encrypted",
         );
         return;
@@ -783,7 +783,7 @@ async fn complete_resumable_upload(
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "encrypted resumable uploads require a supported encrypted Upload-Metadata purpose",
             );
             return;

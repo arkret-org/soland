@@ -130,7 +130,7 @@ impl ProjectionState {
             || !arkret_wire::can_upgrade_reducer_profile(&current, target)
         {
             return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),
+                reason: arkret_wire::ErrorCode::UNSUPPORTED_PROFILE.to_owned(),
             };
         }
         self.realm_null_subject_cells.insert(
@@ -1203,7 +1203,7 @@ impl ProjectionState {
                 || !arkret_wire::is_reducer_profile_id(profile)
             {
                 return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),
+                    reason: arkret_wire::ErrorCode::UNSUPPORTED_PROFILE.to_owned(),
                 };
             }
             Some(profile.to_owned())

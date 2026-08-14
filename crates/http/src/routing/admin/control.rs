@@ -100,7 +100,7 @@ async fn admin_emit_resync_required(
     } = body.into_inner();
     if realm_id.is_empty() {
         return Err(
-            AppError::new(ErrorCode::InvalidParam, "realm_id is required".to_owned())
+            AppError::new(ErrorCode::ParamInvalid, "realm_id is required".to_owned())
                 .with_status(StatusCode::BAD_REQUEST),
         );
     }
@@ -148,7 +148,7 @@ async fn admin_emit_unauthorized(
     } = body.into_inner();
     if realm_id.is_empty() {
         return Err(
-            AppError::new(ErrorCode::InvalidParam, "realm_id is required".to_owned())
+            AppError::new(ErrorCode::ParamInvalid, "realm_id is required".to_owned())
                 .with_status(StatusCode::BAD_REQUEST),
         );
     }

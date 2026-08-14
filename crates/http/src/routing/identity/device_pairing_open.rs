@@ -63,13 +63,13 @@ pub(super) async fn stage_device_pairing(
     let body = body.into_inner();
     validate_new_device_pubkey(&body.new_device_pubkey)?;
     let new_device_pubkey = serde_json::to_value(&body.new_device_pubkey)
-        .map_err(|error| AppError::invalid_param(format!("new_device_pubkey invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("new_device_pubkey invalid: {error}")))?;
     let device_metadata = body
         .device_metadata
         .as_ref()
         .map(serde_json::to_value)
         .transpose()
-        .map_err(|error| AppError::invalid_param(format!("device_metadata invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("device_metadata invalid: {error}")))?;
     let display_name = body
         .display_name
         .as_deref()
@@ -144,7 +144,7 @@ pub(super) async fn resolve_device_pairing(
     let body = req
         .parse_json::<DevicePairingResolveRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid device pairing resolve request body"))?;
+        .map_err(|_| AppError::json_invalid("invalid device pairing resolve request body"))?;
     let pairing_token = body.pairing_token.trim();
     if !is_device_pairing_token_shape(pairing_token) {
         return Err(device_pairing_not_found());
@@ -228,7 +228,7 @@ pub(super) async fn device_pairing_status(
     let body = req
         .parse_json::<DevicePairingStatusRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid device pairing status request body"))?;
+        .map_err(|_| AppError::json_invalid("invalid device pairing status request body"))?;
     let record = state
         .device_pairings()
         .get(body.device_pairing_request_id.as_str())
@@ -333,7 +333,7 @@ fn reject_device_pairing_query(req: &Request) -> Result<(), AppError> {
     if req.uri().query().is_none() {
         return Ok(());
     }
-    Err(AppError::invalid_param(
+    Err(AppError::param_invalid(
         "device pairing inputs must be sent in the JSON body, never in URL path or query",
     )
     .with_status(StatusCode::BAD_REQUEST)
@@ -372,19 +372,19 @@ fn device_pairing_not_found() -> AppError {
 fn validate_new_device_pubkey(new_device_pubkey: &PublicKey) -> Result<(), AppError> {
     let public_key = new_device_pubkey.key.as_str().trim();
     let bytes = arkret_canonical::base64url_decode(public_key).map_err(|error| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "new_device_pubkey.key must be a base64url Ed25519 key: {error}"
         ))
     })?;
     let _: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        AppError::invalid_param(format!(
+        AppError::param_invalid(format!(
             "new_device_pubkey.key decoded to {} bytes, expected 32",
             bytes.len()
         ))
     })?;
     DeviceId::new(new_device_pubkey.kid.as_str().to_owned())
         .map(|_| ())
-        .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ak:device id"))
+        .map_err(|_| AppError::param_invalid("new_device_pubkey.kid must be a ak:device id"))
 }
 
 #[cfg(test)]

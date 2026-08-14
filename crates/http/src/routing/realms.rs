@@ -136,10 +136,10 @@ async fn list_realm_links_impl(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+        .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     let direction_str = direction.into_inner().unwrap_or_else(|| "both".to_owned());
     let direction_enum = RealmLinkDirection::parse(&direction_str)
-        .ok_or_else(|| AppError::invalid_param("direction MUST be one of outbound|inbound|both"))?;
+        .ok_or_else(|| AppError::param_invalid("direction MUST be one of outbound|inbound|both"))?;
     // `link_kind_allow` is a comma-separated list — keeps the query
     // surface dense and avoids repeated query params.
     let allow_raw = link_kind_allow.into_inner();
@@ -153,7 +153,7 @@ async fn list_realm_links_impl(
                     RealmLinkKind::parse(value)
                         .map(|kind| kind.as_str().to_owned())
                         .ok_or_else(|| {
-                            AppError::invalid_param(format!(
+                            AppError::param_invalid(format!(
                                 "link_kind_allow contains unknown kind '{value}'"
                             ))
                         })
@@ -239,33 +239,33 @@ fn caller_signed_realm_link_edge(
     event: &arkret_wire::Event,
 ) -> Result<RealmLinkEdge, AppError> {
     if event.kind != arkret_wire::EventKind::RealmLink {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "link_event.event.kind must be ak.realm.link",
         ));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "link_event.event.actor_id must be the authenticated caller",
         ));
     }
     if event.realm_id.as_str() != realm_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "link_event.event.realm_id must equal the path realm_id",
         ));
     }
     let payload: RealmLinkPayload =
         serde_json::from_value(Value::Object(event.payload.clone().into_iter().collect()))
-            .map_err(|e| AppError::invalid_param(format!("link_event payload: {e}")))?;
+            .map_err(|e| AppError::param_invalid(format!("link_event payload: {e}")))?;
     if let Some(expected_target) = expected_target
         && payload.target_realm_id.as_str() != expected_target
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "link_event payload.target_realm_id must equal the path target_realm_id",
         ));
     }
     Ok(RealmLinkEdge {
         realm_id: RealmId::new(realm_id.to_owned())
-            .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?,
+            .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?,
         payload,
     })
 }
@@ -355,7 +355,7 @@ async fn delete_realm_link(
         &submission.event,
     )?;
     if edge.payload.status != RealmLinkStatus::Tombstoned {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "link_event payload.status must be tombstoned on this operation",
         ));
     }

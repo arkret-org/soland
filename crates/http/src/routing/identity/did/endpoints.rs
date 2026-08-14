@@ -280,17 +280,17 @@ pub(crate) async fn embedded_webvh_register(
     require_embedded_webvh_registration_bearer(state, req)?;
     let body = body.into_inner();
     if !valid_multibase_key(&body.did_public_key_multibase) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "did_public_key_multibase must be a non-empty multibase value",
         ));
     }
     if !valid_multibase_key(&body.update_public_key_multibase) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "update_public_key_multibase must be a non-empty multibase value",
         ));
     }
     if !valid_multibase_key(&body.next_update_public_key_multibase) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "next_update_public_key_multibase must be a non-empty multibase value",
         ));
     }
@@ -306,27 +306,27 @@ pub(crate) async fn embedded_webvh_register(
         ),
     ] {
         crate::routing::identity::webvh_validation::decode_ed25519_public_key(key)
-            .map_err(|error| AppError::invalid_param(format!("{role} key is invalid: {error}")))?;
+            .map_err(|error| AppError::param_invalid(format!("{role} key is invalid: {error}")))?;
     }
     if body.did_public_key_multibase == body.update_public_key_multibase
         || body.did_public_key_multibase == body.next_update_public_key_multibase
         || body.update_public_key_multibase == body.next_update_public_key_multibase
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "DID authentication key, active identity root, and next identity root must be distinct",
         ));
     }
     let version_time = match body.version_time.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => {
             if chrono::DateTime::parse_from_rfc3339(value).is_err() {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "version_time must be an RFC3339 timestamp",
                 ));
             }
             value.to_owned()
         }
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "version_time is required so the client can sign the webvh log entry",
             ));
         }
@@ -344,13 +344,13 @@ pub(crate) async fn embedded_webvh_register(
             let digest = sha256_hex(body.did_public_key_multibase.as_bytes());
             normalize_webvh_local_id(&format!("user-{}", &digest[..12]))
         })
-        .ok_or_else(|| AppError::invalid_param("invalid local_id"))?;
+        .ok_or_else(|| AppError::param_invalid("invalid local_id"))?;
     let did_key_fragment =
         normalize_webvh_key_fragment(body.did_key_id.as_deref().unwrap_or("did-key-1"))
-            .ok_or_else(|| AppError::invalid_param("invalid did_key_id"))?;
+            .ok_or_else(|| AppError::param_invalid("invalid did_key_id"))?;
     let update_key_fragment =
         normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"))
-            .ok_or_else(|| AppError::invalid_param("invalid update_key_id"))?;
+            .ok_or_else(|| AppError::param_invalid("invalid update_key_id"))?;
     let (method_authority, https_authority) =
         embedded_webvh_authority(&state.config().public_base_url).map_err(|message| {
             AppError::new(ErrorCode::TemporarilyUnavailable, message)
@@ -408,14 +408,14 @@ pub(crate) async fn embedded_webvh_register(
         "parameters": parameters,
         "state": did_document_skeleton,
     });
-    let scid = derive_webvh_scid(&entry_skeleton).map_err(AppError::invalid_param)?;
+    let scid = derive_webvh_scid(&entry_skeleton).map_err(AppError::param_invalid)?;
     let location =
         embedded_webvh_location_with_scid(&method_authority, &https_authority, &local_id, &scid);
     let did_key_id = format!("{}#{}", location.did, did_key_fragment);
     let update_key_id = format!("{}#{}", location.did, update_key_fragment);
     let mut log_entry = substitute_webvh_scid(entry_skeleton, &scid);
     let version_hash =
-        webvh_entry_hash_multibase(&log_entry, &scid).map_err(AppError::invalid_param)?;
+        webvh_entry_hash_multibase(&log_entry, &scid).map_err(AppError::param_invalid)?;
     let version_id = format!("1-{version_hash}");
     if let Value::Object(map) = &mut log_entry {
         map.insert("versionId".to_owned(), Value::String(version_id.clone()));
@@ -427,7 +427,7 @@ pub(crate) async fn embedded_webvh_register(
         .cloned()
         .unwrap_or_else(|| json!({"id": location.did}));
     if let Err(message) = verify_webvh_log_proof(&log_entry) {
-        return Err(AppError::new(ErrorCode::InvalidSignature, message)
+        return Err(AppError::new(ErrorCode::SignatureInvalid, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
     let inception = [WebvhLogEntry::new(log_entry.clone())];
@@ -568,23 +568,23 @@ pub(crate) async fn embedded_webvh_rotate(
     let body = body.into_inner();
     let did = body.did.trim().to_owned();
     if validate_did(&did).is_err() || !did.starts_with("did:webvh:") {
-        return Err(AppError::invalid_param("did must be a valid did:webvh"));
+        return Err(AppError::param_invalid("did must be a valid did:webvh"));
     }
     let entry = body.log_entry;
     if !entry.is_object() {
-        return Err(AppError::invalid_param("log_entry must be an object"));
+        return Err(AppError::param_invalid("log_entry must be an object"));
     }
     let version_id = entry
         .get("versionId")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| AppError::invalid_param("log_entry.versionId is required"))?;
+        .ok_or_else(|| AppError::param_invalid("log_entry.versionId is required"))?;
     let new_document = entry
         .get("state")
         .filter(|state| state.is_object())
         .cloned()
         .ok_or_else(|| {
-            AppError::invalid_param("log_entry.state (the new DID document) is required")
+            AppError::param_invalid("log_entry.state (the new DID document) is required")
         })?;
     ensure_webvh_document_id(&did, &new_document)?;
     let event_digest = did_log_event_digest(&entry)?;
@@ -695,10 +695,10 @@ pub(crate) async fn embedded_webvh_rotate(
 fn ensure_webvh_document_id(did: &str, document: &Value) -> Result<(), AppError> {
     match document.get("id").and_then(Value::as_str) {
         Some(value) if value == did => Ok(()),
-        Some(_) => Err(AppError::invalid_param(
+        Some(_) => Err(AppError::param_invalid(
             "log_entry.state.id does not match did",
         )),
-        None => Err(AppError::invalid_param("log_entry.state.id is required")),
+        None => Err(AppError::param_invalid("log_entry.state.id is required")),
     }
 }
 
@@ -830,10 +830,10 @@ pub(crate) async fn identity_document(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
+        return Err(AppError::param_invalid("invalid did"));
     }
     let typed_did =
-        DidFullId::new(did.clone()).map_err(|_| AppError::invalid_param("invalid did"))?;
+        DidFullId::new(did.clone()).map_err(|_| AppError::param_invalid("invalid did"))?;
     let record = identity_document_record(state, &did).await;
     let head_event_digest = key_log_head_hash(record.key_log_head.clone())?;
     let mut did_document = serde_json::from_value::<BTreeMap<String, Value>>(record.did_document)
@@ -898,9 +898,9 @@ pub(crate) async fn identity_did_document(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did = req
         .param::<String>("did")
-        .ok_or_else(|| AppError::missing_param("did path segment required"))?;
+        .ok_or_else(|| AppError::param_missing("did path segment required"))?;
     if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
+        return Err(AppError::param_invalid("invalid did"));
     }
     if let Some(document) =
         crate::routing::extensions::applet_bridge::did_document_for_extension_actor(state, &did)
@@ -921,7 +921,7 @@ pub(crate) async fn identity_log(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
+        return Err(AppError::param_invalid("invalid did"));
     }
     let method = did_method_token(&did)?;
     let (method, native_history, entries) = match method.as_str() {
@@ -947,7 +947,7 @@ pub(crate) async fn identity_log(
             Vec::new(),
         ),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "DID method does not expose a supported native history",
             ));
         }
@@ -966,7 +966,7 @@ fn did_method_token(did: &str) -> Result<String, AppError> {
     let method_name = did
         .strip_prefix("did:")
         .and_then(|value| value.split(':').next())
-        .ok_or_else(|| AppError::invalid_param("invalid did method"))?;
+        .ok_or_else(|| AppError::param_invalid("invalid did method"))?;
     Ok(format!("did:{method_name}"))
 }
 
@@ -995,7 +995,7 @@ pub(crate) async fn identity_receipts(
 ) -> JsonResult<IdentityReceiptListOutcome> {
     let did = did.into_inner();
     if validate_did(&did).is_err() {
-        return Err(AppError::invalid_param("invalid did"));
+        return Err(AppError::param_invalid("invalid did"));
     }
     json_ok(IdentityReceiptListOutcome {
         receipts: Vec::new(),
@@ -1019,22 +1019,22 @@ pub(crate) async fn identity_submit_did_operation(
     let did_method = did
         .strip_prefix("did:")
         .and_then(|value| value.split(':').next())
-        .ok_or_else(|| AppError::invalid_param("invalid did"))?;
+        .ok_or_else(|| AppError::param_invalid("invalid did"))?;
     if body.did_method.as_str() != did_method {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "did_method must exactly match the DID method discriminator",
         ));
     }
     if did_method != "webvh" {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "DID method is not supported by this operation adapter",
         ));
     }
     let next_seq = body
         .seq
-        .ok_or_else(|| AppError::invalid_param("seq is required for did:webvh submission"))?;
+        .ok_or_else(|| AppError::param_invalid("seq is required for did:webvh submission"))?;
     if next_seq > i64::MAX as u64 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "seq exceeds the supported persistence range",
         ));
     }
@@ -1046,13 +1046,13 @@ pub(crate) async fn identity_submit_did_operation(
     let version_id = operation
         .get("versionId")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("operation.versionId is required"))?
+        .ok_or_else(|| AppError::param_invalid("operation.versionId is required"))?
         .to_owned();
     let operation_seq = version_id
         .split_once('-')
         .and_then(|(sequence, hash)| (!hash.is_empty()).then_some(sequence))
         .and_then(|sequence| sequence.parse::<u64>().ok())
-        .ok_or_else(|| AppError::invalid_param("operation.versionId must be <seq>-<hash>"))?;
+        .ok_or_else(|| AppError::param_invalid("operation.versionId must be <seq>-<hash>"))?;
     if operation_seq != next_seq {
         return Err(AppError::new(
             ErrorCode::CasConflict,
@@ -1063,7 +1063,7 @@ pub(crate) async fn identity_submit_did_operation(
         .get("state")
         .filter(|document| document.is_object())
         .cloned()
-        .ok_or_else(|| AppError::invalid_param("operation.state is required"))?;
+        .ok_or_else(|| AppError::param_invalid("operation.state is required"))?;
     ensure_webvh_document_id(&did, &document)?;
     let event_digest = did_log_event_digest(&operation)?;
     let existing = state
@@ -1141,7 +1141,7 @@ pub(crate) async fn identity_submit_did_operation(
         .collect();
     candidate.push(WebvhLogEntry::new(operation.clone()));
     if let Err(message) = verify_webvh_log_proof(&operation) {
-        return Err(AppError::new(ErrorCode::InvalidSignature, message)
+        return Err(AppError::new(ErrorCode::SignatureInvalid, message)
             .with_status(StatusCode::UNAUTHORIZED));
     }
     validate_log_chain(&candidate)?;

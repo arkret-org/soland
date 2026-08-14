@@ -20,7 +20,7 @@ pub(crate) fn validate_event_critical_features(
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "critical features must be strings",
             )
         })?;
@@ -148,7 +148,7 @@ pub(crate) fn validate_event_time_fields(
     if created_at_value.is_some_and(|value| !value.is_string()) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "created_at must be a string",
         ));
     }
@@ -156,14 +156,14 @@ pub(crate) fn validate_event_time_fields(
         Some(value) => canonical::validate_timestamp_canonical(value).map_err(|_| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "created_at must use canonical RFC3339 UTC millisecond form",
             )
         })?,
         None if !state.config().development_mode => {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "missing_param",
+                "param_missing",
                 "created_at is required in production mode",
             ));
         }
@@ -174,7 +174,7 @@ pub(crate) fn validate_event_time_fields(
     if hlc_value.is_some_and(|value| !value.is_string()) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "hlc must be a string",
         ));
     }
@@ -183,7 +183,7 @@ pub(crate) fn validate_event_time_fields(
             Hlc::new(value).map_err(|_| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "hlc must use canonical lower-hex HLC form",
                 )
             })?;
@@ -191,7 +191,7 @@ pub(crate) fn validate_event_time_fields(
         None if !state.config().development_mode => {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "missing_param",
+                "param_missing",
                 "hlc is required in production mode",
             ));
         }
@@ -231,7 +231,7 @@ pub(crate) fn validate_event_schema_and_payload(
     let payload = object.get("payload").ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "event payload is required",
         )
     })?;
@@ -415,7 +415,7 @@ pub(crate) fn event_requirements_schema_id(
     if !state.config().development_mode && canonical_schema_id.is_none() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "requirements.schema[] is required in production mode",
         ));
     }

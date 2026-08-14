@@ -314,7 +314,7 @@ struct StoreForwardOperationBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     realm_id: String,
-    #[serde(default = "unknown_did")]
+    #[serde(default = "did_unknown")]
     actor: String,
     #[serde(default)]
     content: Value,
@@ -373,7 +373,7 @@ struct DeploymentAuditResponseBody {
     entries: Vec<AuditEntryBody>,
 }
 
-fn unknown_did() -> String {
+fn did_unknown() -> String {
     // Reserved placeholder for an unknown principal. did:webvh-only red line:
     // never emit a did:web literal, even as a sentinel.
     "did:webvh:unknown".to_owned()
@@ -462,7 +462,7 @@ async fn configure_deployment(
     let mut guard = state.federation().sovereign_state();
     if let Some(profile) = body.profile {
         if !matches!(profile.as_str(), "sovereign_main" | "enclave") {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "deployment profile must be sovereign_main or enclave",
             ));
         }
@@ -503,7 +503,7 @@ async fn register_enclave(
     require_admin_principal(state, session)?;
     let body = body.into_inner();
     if body.server_id.trim().is_empty() || body.base_url.trim().is_empty() {
-        return Err(AppError::missing_param(
+        return Err(AppError::param_missing(
             "server_id and base_url are required",
         ));
     }
@@ -550,7 +550,7 @@ async fn realm_create(
     // not exist and never would. Requiring the caller to state it fails closed
     // instead, and the id it states is the one its signed create Event derives.
     let realm_id = body.realm_id.ok_or_else(|| {
-        AppError::invalid_param(
+        AppError::param_invalid(
             "realm_id is required: it is derived from the Realm's create Event, not minted by the service",
         )
     })?;
@@ -705,7 +705,7 @@ async fn accept_external_invite(
         .map(|invite| invite.target_realm.clone())
         .or(body.target_realm)
         .ok_or_else(|| {
-            AppError::missing_param("target_realm is required for unknown invite token")
+            AppError::param_missing("target_realm is required for unknown invite token")
         })?;
     let target_host = invite
         .as_ref()

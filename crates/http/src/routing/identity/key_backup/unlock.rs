@@ -2,7 +2,7 @@ use super::*;
 
 fn key_backup_untrusted_signature() -> AppError {
     AppError::new(
-        ErrorCode::InvalidSignature,
+        ErrorCode::SignatureInvalid,
         "key backup auth_data.signature is not anchored to the actor device trust root",
     )
     .with_status(StatusCode::UNAUTHORIZED)
@@ -74,7 +74,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         verification_method,
     ) {
         return Err(AppError::new(
-            ErrorCode::InvalidSignature,
+            ErrorCode::SignatureInvalid,
             "key backup verification method does not match the authorized device key",
         )
         .with_status(StatusCode::UNAUTHORIZED)

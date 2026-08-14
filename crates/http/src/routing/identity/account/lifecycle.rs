@@ -38,9 +38,9 @@ pub(crate) async fn set_account_lifecycle_state(
     reason: Option<String>,
 ) -> Result<AccountLifecycleChange, AppError> {
     let did = arkret_wire::DidCoreId::new(did.to_owned())
-        .map_err(|_| AppError::invalid_param("invalid account identity core"))?;
+        .map_err(|_| AppError::param_invalid("invalid account identity core"))?;
     let changed_by = arkret_wire::DidCoreId::new(changed_by.to_owned())
-        .map_err(|_| AppError::invalid_param("invalid state-change actor identity core"))?;
+        .map_err(|_| AppError::param_invalid("invalid state-change actor identity core"))?;
     let did = did.as_str();
     let changed_by = changed_by.as_str();
     let next_status = parse_account_lifecycle_target_state(next_state)?;
@@ -162,12 +162,12 @@ pub(crate) async fn set_account_lifecycle_state(
 
 fn parse_account_lifecycle_target_state(next_state: &str) -> Result<AccountStatus, AppError> {
     let Some(status) = AccountStatus::from_wire(next_state) else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "state must be active, soft_logged_out, locked, suspended, or deactivated",
         ));
     };
     if matches!(status, AccountStatus::ErasurePending) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "erasure_pending must use the account erasure flow",
         ));
     }

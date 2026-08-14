@@ -119,7 +119,7 @@ pub(crate) async fn get_invite_receive_policy(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
     let policy = state
         .contacts()
         .invite_policy(&session.actor)

@@ -214,7 +214,7 @@ pub(super) async fn embedded_webvh_record_for_request(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "local_id is required",
         );
         return None;
@@ -223,7 +223,7 @@ pub(super) async fn embedded_webvh_record_for_request(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "invalid local_id",
         );
         return None;

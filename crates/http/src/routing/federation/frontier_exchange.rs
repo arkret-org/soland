@@ -165,7 +165,7 @@ impl FrontierExchangeWorker {
             return Err(format!("http_status:{}", status.as_u16()));
         }
         let state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
-            serde_json::from_str(&body).map_err(|_| "bad_json".to_owned())?;
+            serde_json::from_str(&body).map_err(|_| "json_invalid".to_owned())?;
         validate_frontier_response(&state, peer_did, realm_id)
     }
 
@@ -191,7 +191,7 @@ impl FrontierExchangeWorker {
                 reason,
                 remote_frontier_root = remote_root.unwrap_or(""),
                 worker = "federation_frontier_exchange",
-                "federation peer marked stale_peer; inbound push will fail closed"
+                "federation peer marked peer_stale; inbound push will fail closed"
             );
         } else {
             tracing::warn!(

@@ -210,9 +210,9 @@ async fn install_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let idempotency_key = idempotency_key(req)
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
@@ -284,17 +284,17 @@ async fn revoke_install_endpoint(
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;
     let idempotency_key = idempotency_key(req)
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
     let revoke = body.into_inner();
     let request_value = serde_json::to_value(&revoke)
-        .map_err(|error| AppError::invalid_param(format!("revoke request invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("revoke request invalid: {error}")))?;
     let request_digest = arkret_canonical::canonical_sha256(&request_value)
-        .map_err(|error| AppError::invalid_param(format!("revoke request invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("revoke request invalid: {error}")))?;
     let mut record = applet_record(state, &applet_id)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
@@ -673,7 +673,7 @@ fn validate_revoke_submissions(
             || event.actor_id.as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "capability revoke Event kind, actor, or scope does not match the plan",
             ));
         }
@@ -681,14 +681,14 @@ fn validate_revoke_submissions(
         let grant_id = payload
             .get("grant_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("capability revoke payload lacks grant_id"))?;
+            .ok_or_else(|| AppError::param_invalid("capability revoke payload lacks grant_id"))?;
         if payload.get("reason").and_then(Value::as_str) != Some(plan.reason_code.as_str()) {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "capability revoke reason does not match the plan",
             ));
         }
         if !submitted_grants.insert(grant_id.to_owned()) {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "duplicate capability revoke target",
             ));
         }
@@ -721,7 +721,7 @@ fn validate_revoke_submissions(
             || event.actor_id.as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "membership Event kind, actor, or scope does not match the plan",
             ));
         }
@@ -729,20 +729,20 @@ fn validate_revoke_submissions(
         let member_id = payload
             .get("actor_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("membership payload lacks actor_id"))?;
+            .ok_or_else(|| AppError::param_invalid("membership payload lacks actor_id"))?;
         let membership = payload
             .get("membership")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("membership payload lacks membership"))?;
+            .ok_or_else(|| AppError::param_invalid("membership payload lacks membership"))?;
         if !matches!(membership, "leave" | "remove")
             || payload.get("reason").and_then(Value::as_str) != Some(plan.reason_code.as_str())
         {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "membership transition or reason does not match the plan",
             ));
         }
         if !submitted_members.insert((member_id.to_owned(), membership.to_owned())) {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "duplicate membership revoke target",
             ));
         }
@@ -800,16 +800,16 @@ async fn provision_ghost_actor_endpoint(
         .with_wire_code("applet_registration_unauthorized"));
     }
     let idempotency_key = idempotency_key(req)
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
     let request_value = serde_json::to_value(&provision)
-        .map_err(|error| AppError::invalid_param(format!("provision request invalid: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?;
     let request_digest = arkret_canonical::canonical_sha256(&request_value)
-        .map_err(|error| AppError::invalid_param(format!("provision request invalid: {error}")))?
+        .map_err(|error| AppError::param_invalid(format!("provision request invalid: {error}")))?
         .to_string();
     if let Some(replay) = state
         .jobs()
@@ -944,7 +944,7 @@ async fn provision_ghost_actor_endpoint(
         }
         return Err(AppError::new(
             soland_http::error::ErrorCode::from_wire(&error.code)
-                .unwrap_or(soland_http::error::ErrorCode::InvalidParam),
+                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
             error.message,
         )
         .with_status(error.status)
@@ -987,15 +987,15 @@ async fn transaction_endpoint(
         .expect("state injected")
         .clone();
     let idempotency_key = idempotency_key(req)
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?;
     if idempotency_key.len() > 128 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key length exceeds 128 bytes",
         ));
     }
     let transaction = body.into_inner();
     if transaction.events.is_empty() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "events must contain at least one event",
         ));
     }
@@ -1019,10 +1019,10 @@ async fn resolve_actor_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let actor_id = req
         .param::<String>("actor_id")
-        .ok_or_else(|| AppError::missing_param("actor_id path segment required"))?;
+        .ok_or_else(|| AppError::param_missing("actor_id path segment required"))?;
     if let Some(doc) = super::ghost::did_document_for_extension_actor(state, &actor_id).await? {
         let actor_id = arkret_identifiers::DidCoreId::new(actor_id)
-            .map_err(|error| AppError::invalid_param(format!("actor_id is invalid: {error}")))?;
+            .map_err(|error| AppError::param_invalid(format!("actor_id is invalid: {error}")))?;
         return json_ok(AppletActorView {
             exists: true,
             actor_id: Some(actor_id),
@@ -1050,7 +1050,7 @@ async fn resolve_realm_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id_or_alias = req
         .param::<String>("realm_id_or_alias")
-        .ok_or_else(|| AppError::missing_param("realm_id_or_alias path segment required"))?;
+        .ok_or_else(|| AppError::param_missing("realm_id_or_alias path segment required"))?;
     let record = applet_records(state).await?.into_iter().find(|record| {
         record.portal_realm_id == realm_id_or_alias
             || record.namespace == realm_id_or_alias
@@ -1097,7 +1097,7 @@ async fn protocol_metadata_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let protocol = req
         .param::<String>("protocol")
-        .ok_or_else(|| AppError::missing_param("protocol path segment required"))?;
+        .ok_or_else(|| AppError::param_missing("protocol path segment required"))?;
     let instances = applet_records(state)
         .await?
         .into_iter()
@@ -1270,7 +1270,7 @@ async fn register_endpoint(
         .unwrap_or(manifest.signer_did.as_str())
         .to_owned();
     let verified = verify_manifest(&manifest, &trusted_registry_did).map_err(|err| {
-        AppError::invalid_param(format!("applet manifest verification failed: {err}"))
+        AppError::param_invalid(format!("applet manifest verification failed: {err}"))
             .with_wire_code(err.code())
     })?;
     let idempotency_key = idempotency_key(req);
@@ -1372,7 +1372,7 @@ async fn bot_message_endpoint(
             .with_wire_code("bot_actor_revoked")
     })?;
     let content = portal_message_payload(&body.payload)?.ok_or_else(|| {
-        AppError::invalid_param("payload.kind must be \"message\" and payload.text is required")
+        AppError::param_invalid("payload.kind must be \"message\" and payload.text is required")
     })?;
     let synthetic_ghost = GhostActorRecord {
         ghost_actor_id: record.bot_actor_id.clone(),

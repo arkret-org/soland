@@ -108,7 +108,7 @@ async fn verify_franking_proof(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("proof_digest is required"))?;
+        .ok_or_else(|| AppError::param_invalid("proof_digest is required"))?;
     let expected = franking_proof_digest(&proof);
     if declared != expected {
         return Err(AppError::conflict("franking proof digest mismatch")

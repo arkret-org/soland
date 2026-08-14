@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_crypto::{
     MaterializedMlsGovernanceProofBundle, MlsGovernanceControlStateLeaf,
-    MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequestBodyBody,
+    MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequestBody,
     build_mls_governance_proof_chunks, is_mls_membership_frontier_component,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -26,17 +26,17 @@ pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MlsGovernanceProofRequestBodyBody>,
+    body: JsonBody<MlsGovernanceProofRequestBody>,
 ) -> JsonResult<MlsGovernanceProofBundle> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
     request
         .validate()
-        .map_err(|error| AppError::invalid_param(format!("invalid proof request: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid proof request: {error}")))?;
     if request.reducer_profile != CORE_REDUCER_PROFILE {
         return Err(AppError::new(
-            ErrorCode::ProfileUnsupported,
+            ErrorCode::UnsupportedProfile,
             "requested MLS governance reducer profile is unsupported",
         ));
     }
@@ -78,7 +78,7 @@ pub(super) async fn mls_governance_proof(
     let chunk = chunks
         .get(request.chunk_index as usize)
         .cloned()
-        .ok_or_else(|| AppError::invalid_param("chunk_index is outside chunk_manifest"))?;
+        .ok_or_else(|| AppError::param_invalid("chunk_index is outside chunk_manifest"))?;
     json_ok(chunk)
 }
 
@@ -376,7 +376,7 @@ async fn apply_authoritative_event_seal_path(
             NotarySig::Multi(multi) => multi.signatures.as_slice(),
             NotarySig::Threshold(_) => {
                 return Err(AppError::new(
-                    ErrorCode::ProfileUnsupported,
+                    ErrorCode::UnsupportedProfile,
                     "threshold authoritative Event Seal backfill is unsupported",
                 ));
             }
@@ -474,7 +474,7 @@ pub(crate) async fn verify_authoritative_event_seal_signature(
     };
     result.map_err(|error| {
         AppError::new(
-            ErrorCode::SignatureInvalid,
+            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
             format!("verify authoritative Event Seal signature: {error}"),
         )
     })
@@ -761,7 +761,7 @@ async fn materialize_realm_control_with_transported_seals(
                         .resolve_cell(realm_id, &member_cell)
                         .map_err(|error| {
                             AppError::new(
-                                ErrorCode::ProfileUnsupported,
+                                ErrorCode::UnsupportedProfile,
                                 format!(
                                     "no lattice registered for governance cell \
                                          {member_cell}: {error}"
@@ -1026,7 +1026,7 @@ pub(crate) async fn accept_federated_event_seal_path(
 
 async fn materialize_governance_proof(
     state: &AppState,
-    request: &MlsGovernanceProofRequestBodyBody,
+    request: &MlsGovernanceProofRequestBody,
 ) -> Result<MaterializedMlsGovernanceProofBundle, AppError> {
     let MaterializedRealmControl {
         events,
@@ -1390,7 +1390,7 @@ fn join_control_state_batches(
             .resolve_cell(realm_id, cell)
             .map_err(|error| {
                 AppError::new(
-                    ErrorCode::ProfileUnsupported,
+                    ErrorCode::UnsupportedProfile,
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;
@@ -1471,7 +1471,7 @@ fn frozen_governance_pre_state(
             .resolve_cell(realm_id, cell)
             .map_err(|error| {
                 AppError::new(
-                    ErrorCode::ProfileUnsupported,
+                    ErrorCode::UnsupportedProfile,
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;

@@ -136,7 +136,7 @@ pub(crate) async fn admin_list_realm_bottom(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let _ = RealmId::new(realm_id.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
+        app_error!(ParamInvalid, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     json_ok(collect_bottom_entries_for_realm(state, &realm_id))
 }
@@ -211,10 +211,10 @@ pub(crate) async fn admin_repair_bottom(
     let realm_id = realm_id.into_inner();
     let cell_id_str = cell_id.into_inner();
     let realm = RealmId::new(realm_id.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
+        app_error!(ParamInvalid, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
-        app_error!(InvalidParam, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
+        app_error!(ParamInvalid, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
     let strategy = body.into_inner().strategy;
 
@@ -227,18 +227,18 @@ pub(crate) async fn admin_repair_bottom(
         } => {
             if head.event_id.is_empty() {
                 return Err(
-                    app_error!(InvalidParam, "winning head must carry an event_id")
+                    app_error!(ParamInvalid, "winning head must carry an event_id")
                         .with_status(StatusCode::BAD_REQUEST),
                 );
             }
             if recovery_capability_ref.trim().is_empty() {
                 return Err(
-                    app_error!(InvalidParam, "recovery_capability_ref is required")
+                    app_error!(ParamInvalid, "recovery_capability_ref is required")
                         .with_status(StatusCode::BAD_REQUEST),
                 );
             }
             let state_witness_seal = SealId::new(state_witness_ref.clone()).map_err(|e| {
-                app_error!(InvalidParam, "invalid state_witness_ref: {e}")
+                app_error!(ParamInvalid, "invalid state_witness_ref: {e}")
                     .with_status(StatusCode::BAD_REQUEST)
             })?;
             let witness_seal = state

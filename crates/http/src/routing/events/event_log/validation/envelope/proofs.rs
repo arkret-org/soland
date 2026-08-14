@@ -61,14 +61,14 @@ pub(crate) async fn validate_event_proofs(
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "missing_param",
+                "param_missing",
                 "proofs are required",
             )
         })?;
     if proofs.is_empty() {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "proofs must contain at least one proof",
         ));
     }

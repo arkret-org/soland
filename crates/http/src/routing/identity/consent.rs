@@ -169,12 +169,12 @@ async fn get_consent_cell(
     let session = aa.authenticated_session(state, req).await?;
     let holder = holder_principal_id.into_inner();
     if DidCoreId::new(holder.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid holder principal id"));
+        return Err(AppError::param_invalid("invalid holder principal id"));
     }
     let peer =
-        query_param(req, "peer").ok_or_else(|| AppError::missing_param("peer is required"))?;
+        query_param(req, "peer").ok_or_else(|| AppError::param_missing("peer is required"))?;
     if DidCoreId::new(peer.clone()).is_err() {
-        return Err(AppError::invalid_param("invalid peer principal id"));
+        return Err(AppError::param_invalid("invalid peer principal id"));
     }
     authorize_reader(&session.actor, &holder, &peer)?;
     // Accept both `consent_scope` (canonical) and the shorter `scope` alias so
@@ -312,12 +312,12 @@ fn caller_signed_consent_target(
     expected_kind: &str,
 ) -> Result<ConsentTarget, AppError> {
     if event.kind.as_str() != expected_kind {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "submitted Event kind must be {expected_kind}"
         )));
     }
     if event.actor_id.as_str() != holder {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "the submitted Event must be authored by the path holder",
         ));
     }
@@ -378,7 +378,7 @@ async fn request_consent_cell(
     let peer = match body.peer_principal_id {
         Some(peer) => peer,
         None => arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .map_err(|e| AppError::invalid_param(format!("peer_principal_id: {e}")))?,
+            .map_err(|e| AppError::param_invalid(format!("peer_principal_id: {e}")))?,
     };
     if peer.as_str() != session.actor {
         return Err(AppError::capability_denied(
@@ -409,7 +409,7 @@ pub(super) fn normalize_scope(input: Option<&str>) -> Result<String, AppError> {
         "video_call" => Ok("video_call".to_owned()),
         "presence" => Ok("presence".to_owned()),
         "any" => Ok("any".to_owned()),
-        _ => Err(AppError::invalid_param(
+        _ => Err(AppError::param_invalid(
             "scope must be invite, direct_message, voice_call, video_call, presence, or any",
         )),
     }
@@ -702,10 +702,10 @@ fn revoke_cell_with_dots(
 
 fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {
     if DidCoreId::new(holder.to_owned()).is_err() {
-        return Err(AppError::invalid_param("invalid holder principal id"));
+        return Err(AppError::param_invalid("invalid holder principal id"));
     }
     if DidCoreId::new(peer.to_owned()).is_err() {
-        return Err(AppError::invalid_param("invalid peer principal id"));
+        return Err(AppError::param_invalid("invalid peer principal id"));
     }
     if session_actor != holder {
         return Err(AppError::capability_denied(
@@ -713,7 +713,7 @@ fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Resu
         ));
     }
     if peer == holder {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "peer DID must differ from holder DID",
         ));
     }
@@ -742,11 +742,11 @@ fn consent_id(payload: &Value) -> Result<String, AppError> {
     let consent_id = payload
         .get("consent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("consent_id is required"))?;
+        .ok_or_else(|| AppError::param_missing("consent_id is required"))?;
     ConsentId::new(consent_id.to_owned())
         .map(ConsentId::into_string)
         .map_err(|_| {
-            AppError::invalid_param("consent_id must be an ak:consent:<UUIDv7> identifier")
+            AppError::param_invalid("consent_id must be an ak:consent:<UUIDv7> identifier")
         })
 }
 
@@ -787,7 +787,7 @@ fn consent_peer(payload: &Value) -> Result<String, AppError> {
             })
             .map(ToOwned::to_owned)
     })
-    .ok_or_else(|| AppError::missing_param("peer is required"))
+    .ok_or_else(|| AppError::param_missing("peer is required"))
 }
 
 fn consent_scope(payload: &Value) -> Result<String, AppError> {
@@ -821,7 +821,7 @@ fn consent_revoke_target(
         .as_ref()
         .map(|cell| (cell.peer.clone(), cell.scope.clone()))
         .ok_or_else(|| {
-            AppError::missing_param("revoke requires peer/scope or an existing consent_id cell")
+            AppError::param_missing("revoke requires peer/scope or an existing consent_id cell")
         })
 }
 
@@ -842,7 +842,7 @@ fn optional_timestamp(payload: &Value, keys: &[&str]) -> Result<Option<DateTime<
     };
     DateTime::parse_from_rfc3339(value)
         .map(|value| Some(value.with_timezone(&Utc)))
-        .map_err(|_| AppError::invalid_param("timestamp must be RFC3339"))
+        .map_err(|_| AppError::param_invalid("timestamp must be RFC3339"))
 }
 
 fn first_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
@@ -862,15 +862,15 @@ fn observed_dots(payload: &Value) -> Result<Vec<String>, AppError> {
     let observed = payload
         .get("observed_dots")
         .and_then(Value::as_array)
-        .ok_or_else(|| AppError::missing_param("observed_dots is required"))?;
+        .ok_or_else(|| AppError::param_missing("observed_dots is required"))?;
     let dots = observed
         .iter()
         .map(|value| {
             let dot = value
                 .as_str()
-                .ok_or_else(|| AppError::invalid_param("observed_dots entries must be strings"))?;
+                .ok_or_else(|| AppError::param_invalid("observed_dots entries must be strings"))?;
             if !is_event_derived_consent_dot(dot) {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "observed_dots entries must be Event-derived consent dots",
                 ));
             }
@@ -878,7 +878,7 @@ fn observed_dots(payload: &Value) -> Result<Vec<String>, AppError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     if dots.is_empty() {
-        return Err(AppError::invalid_param("observed_dots must not be empty"));
+        return Err(AppError::param_invalid("observed_dots must not be empty"));
     }
     Ok(dots)
 }

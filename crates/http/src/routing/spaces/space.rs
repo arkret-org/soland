@@ -169,17 +169,17 @@ fn caller_signed_realm_lifecycle_target(
     event: &arkret_wire::Event,
 ) -> Result<(), AppError> {
     if &event.kind != kind {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "lifecycle_event.event.kind must be {kind}"
         )));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event.event.actor_id must be the authenticated caller",
         ));
     }
     if event.realm_id.as_str() != realm_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event.event.realm_id must equal the path realm_id",
         ));
     }
@@ -291,7 +291,7 @@ async fn get_realm_effective_moderation_policy(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
@@ -319,7 +319,7 @@ async fn upsert_realm_moderation_policy(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     let submission = body.into_inner().moderation_policy_event;
     let policy =
         caller_signed_realm_moderation_policy(&session.actor, &realm_id, &submission.event)?;
@@ -353,17 +353,17 @@ fn caller_signed_realm_moderation_policy(
     event: &arkret_wire::Event,
 ) -> Result<serde_json::Value, AppError> {
     if event.kind != arkret_wire::EventKind::RealmModerationPolicy {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "moderation_policy_event.event.kind must be ak.realm.moderation_policy",
         ));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "moderation_policy_event.event.actor_id must be the authenticated caller",
         ));
     }
     if event.realm_id.as_str() != realm_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "moderation_policy_event.event.realm_id must equal the path realm_id",
         ));
     }
@@ -372,15 +372,15 @@ fn caller_signed_realm_moderation_policy(
             serde_json::Value::Object(event.payload.clone().into_iter().collect()),
         )
         .map_err(|error| {
-            AppError::invalid_param(format!("moderation_policy_event payload: {error}"))
+            AppError::param_invalid(format!("moderation_policy_event payload: {error}"))
         })?;
     if payload.state.is_some() || payload.reason.is_some() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "moderation_policy_event payload must carry only value",
         ));
     }
     let Some(policy @ serde_json::Value::Object(_)) = payload.value else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "moderation_policy_event payload.value must be a policy object",
         ));
     };
@@ -470,7 +470,7 @@ async fn export_realm(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+    RealmId::new(realm_id.clone()).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
@@ -517,7 +517,7 @@ async fn export_realm(
 }
 
 fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
-    SpaceId::new(space_id.to_owned()).map_err(|_| AppError::invalid_param("invalid space_id"))?;
+    SpaceId::new(space_id.to_owned()).map_err(|_| AppError::param_invalid("invalid space_id"))?;
     Ok(())
 }
 
@@ -531,7 +531,7 @@ pub async fn realm_lifecycle_response(
     realm_id: &str,
 ) -> Result<RealmLifecycleView, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
+        .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
     let members: Vec<DidCoreId> = {

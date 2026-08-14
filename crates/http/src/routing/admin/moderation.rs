@@ -187,7 +187,7 @@ async fn assign_queue_item(
 ) -> JsonResult<ModerationQueueItemOutcome> {
     let item_id = req
         .param::<String>("id")
-        .ok_or_else(|| AppError::invalid_param("id required"))?;
+        .ok_or_else(|| AppError::param_invalid("id required"))?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -244,13 +244,13 @@ async fn prioritise_queue_item(
 ) -> JsonResult<ModerationQueueItemOutcome> {
     let item_id = req
         .param::<String>("id")
-        .ok_or_else(|| AppError::invalid_param("id required"))?;
+        .ok_or_else(|| AppError::param_invalid("id required"))?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let priority = body.into_inner().priority;
     if !matches!(priority.as_str(), "low" | "normal" | "high" | "urgent") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "priority must be one of low|normal|high|urgent",
         ));
     }
@@ -328,7 +328,7 @@ async fn get_appeal(
 ) -> JsonResult<ModerationAppealHistoryOutcome> {
     let appeal_id = req
         .param::<String>("appeal_id")
-        .ok_or_else(|| AppError::invalid_param("appeal_id required"))?;
+        .ok_or_else(|| AppError::param_invalid("appeal_id required"))?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;

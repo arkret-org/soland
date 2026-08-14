@@ -12,7 +12,7 @@ use arkret_models_identity::agent_signer_evidence::{
     AgentEvidenceOuterAttestation, AgentKeyCellEntry, AgentLifecycleProvenance,
     AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence, AgentSignerEvidenceBundle,
     AgentSignerEvidenceQueryFailure, AgentSignerEvidenceQueryFailureReason,
-    AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBodyBody,
+    AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBody,
     AgentSignerEvidenceQuerySelector, AgentSnapshotLease, ControllerAccountGateAttestation,
     CurrentAgentSignerEvidence,
 };
@@ -28,7 +28,7 @@ use super::*;
 #[salvo::oapi::endpoint(operation_id = "ak.self.agent_signer_evidence.query", tags("identity"))]
 pub(super) async fn query_agent_signer_evidence(
     aa: AuthArgs,
-    body: JsonBody<AgentSignerEvidenceQueryRequestBodyBody>,
+    body: JsonBody<AgentSignerEvidenceQueryRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentSignerEvidenceQueryOutcome> {

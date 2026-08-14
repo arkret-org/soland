@@ -21,7 +21,7 @@ pub(super) fn recovery_store_error(error: PersistenceError) -> AppError {
             error.detail()
         )),
         soland_services::ServiceErrorKind::SchemaViolation => {
-            AppError::invalid_param(error.detail()).with_wire_code("schema_violation")
+            AppError::param_invalid(error.detail()).with_wire_code("schema_violation")
         }
         soland_services::ServiceErrorKind::Internal => AppError::internal(error.detail()),
     }

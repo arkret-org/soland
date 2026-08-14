@@ -450,7 +450,7 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 fn protocol_violation(error: impl std::fmt::Display) -> AppError {
-    AppError::invalid_param(error.to_string())
+    AppError::param_invalid(error.to_string())
         .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation")
 }

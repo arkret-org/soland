@@ -150,7 +150,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
             }
             Err(SyncCursorError::Invalid(message)) => {
                 soland_http::error::render_error_code(
-                    soland_http::error::ErrorCode::InvalidParam,
+                    soland_http::error::ErrorCode::ParamInvalid,
                     res,
                     message,
                 );
@@ -484,7 +484,7 @@ fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barri
             &format!("{context} cursor has expired"),
         ),
         SyncCursorError::Invalid(message) => soland_http::error::render_error_code(
-            soland_http::error::ErrorCode::InvalidParam,
+            soland_http::error::ErrorCode::ParamInvalid,
             res,
             message,
         ),

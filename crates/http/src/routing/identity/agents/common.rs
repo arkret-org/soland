@@ -46,7 +46,7 @@ pub(super) fn delegated_agent_session(
 pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {
     arkret_wire::DidCoreId::new(value.to_owned())
         .map(|_| ())
-        .map_err(|_| AppError::invalid_param("agent_id must be a Core DidCoreId"))
+        .map_err(|_| AppError::param_invalid("agent_id must be a Core DidCoreId"))
 }
 
 pub(super) fn ensure_agent_record_controller(

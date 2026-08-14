@@ -502,7 +502,7 @@ pub(crate) async fn post_recovery_policy(
     )
     .unwrap();
 
-    let lease_request = arkret_wire::AuthorizationLeaseIssueRequest {
+    let lease_request = arkret_wire::AuthorizationLeaseIssueRequestBody {
         events: vec![event.clone()],
         intents: Vec::new(),
     };

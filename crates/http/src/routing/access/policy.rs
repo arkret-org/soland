@@ -164,19 +164,19 @@ async fn upsert_policy_document(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if !is_valid_policy_scope(&body.scope) {
-        return Err(AppError::invalid_param("invalid policy scope"));
+        return Err(AppError::param_invalid("invalid policy scope"));
     }
     let subject_ref = canonical_policy_subject_ref(&body.subject_ref)
-        .ok_or_else(|| AppError::invalid_param("invalid policy subject_ref"))?;
+        .ok_or_else(|| AppError::param_invalid("invalid policy subject_ref"))?;
     if !is_valid_policy_kind(&body.policy_kind) || !is_supported_policy_effect(&body.effect) {
-        return Err(AppError::invalid_param("invalid policy type or effect"));
+        return Err(AppError::param_invalid("invalid policy type or effect"));
     }
     if let Err(message) = validate_canonical_json_value(&body.resource) {
-        return Err(AppError::invalid_param(message));
+        return Err(AppError::param_invalid(message));
     }
     for obligation in &body.obligations {
         if let Err(message) = validate_canonical_json_value(obligation) {
-            return Err(AppError::invalid_param(message));
+            return Err(AppError::param_invalid(message));
         }
     }
     let actions = if body.actions.is_empty() {
@@ -188,11 +188,11 @@ async fn upsert_policy_document(
         .iter()
         .any(|action| action.trim().is_empty() || action.len() > 128)
     {
-        return Err(AppError::invalid_param("invalid policy action"));
+        return Err(AppError::param_invalid("invalid policy action"));
     }
     let policy_id = body.policy_id.unwrap_or_else(|| ids::generate("policy"));
     if !is_valid_generated_or_custom_id(&policy_id, "policy") {
-        return Err(AppError::invalid_param("invalid policy_id"));
+        return Err(AppError::param_invalid("invalid policy_id"));
     }
     let service = state.governance();
     if let Ok(Some(existing)) = service.policy_document(&policy_id).await

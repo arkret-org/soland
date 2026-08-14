@@ -258,7 +258,7 @@ async fn validate_request_acceptance_receipt(
     receipt: &RequestAcceptanceReceipt,
 ) -> Result<(), AppError> {
     receipt.core.validate().map_err(|error| {
-        AppError::invalid_param(format!("invalid Contact request receipt: {error}"))
+        AppError::param_invalid(format!("invalid Contact request receipt: {error}"))
     })?;
     if &receipt.core.peer != responder {
         return Err(AppError::capability_denied(
@@ -354,7 +354,7 @@ async fn holder_peer(state: &AppState, holder: &str) -> Result<ContactPeer, AppE
 
 fn validate_distinct_peer(holder: &ContactPeer, peer: &ContactPeer) -> Result<(), AppError> {
     if holder.contact_actor_id() == peer.contact_actor_id() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Contact peer must differ from holder",
         ));
     }
@@ -761,18 +761,18 @@ fn validate_signed_event(event: &Event, draft: &ContactPreparedEventDraft) -> Re
     let actual = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()
-            .map_err(|error| AppError::invalid_param(format!("signed Contact Event: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("signed Contact Event: {error}")))?,
     )
-    .map_err(|error| AppError::invalid_param(format!("signed Contact Event bytes: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("signed Contact Event bytes: {error}")))?;
     let expected = URL_SAFE_NO_PAD
         .decode(draft.unsigned_event_bytes.as_str())
         .map_err(|_| AppError::internal("stored Contact draft bytes are invalid"))?;
     let digest = Hash::new(
         event
             .event_digest()
-            .map_err(|error| AppError::invalid_param(format!("signed Contact Event: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("signed Contact Event: {error}")))?,
     )
-    .map_err(|error| AppError::invalid_param(format!("signed Contact digest: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("signed Contact digest: {error}")))?;
     if event.event_id != draft.event_id
         || event.kind != draft.kind
         || actual != expected
@@ -862,7 +862,7 @@ fn sign_request_receipt(
             .map(|value| Hash::new(value.to_owned()))
             .transpose()
             .map_err(|error| {
-                AppError::invalid_param(format!("previous terminal contact_round: {error}"))
+                AppError::param_invalid(format!("previous terminal contact_round: {error}"))
             })?,
         request_event_ref: event.event_id.clone(),
         request_digest: request_digest.clone(),
@@ -939,7 +939,7 @@ fn signed_current_proof(
             .then_some(full_id)
         })
         .ok_or_else(|| {
-            AppError::invalid_param("Contact Event has no actor-bound proof controller")
+            AppError::param_invalid("Contact Event has no actor-bound proof controller")
         })?;
     let issuer = event.actor_id.clone();
     let terminal = event.kind == arkret_wire::EventKind::ContactTombstoned;
@@ -1331,7 +1331,7 @@ async fn plan_contact_commit(
                 AppError::internal(format!("Contact response digest: {error}"))
             })?)
             .map_err(|error| AppError::internal(format!("response digest invalid: {error}")))?;
-            let no_outgoing_slot_proof = contact_hash(
+            let outgoing_slot_absence_digest = contact_hash(
                 "ak.contact.no-outgoing-slot.v1",
                 &json!({"holder": holder, "peer": peer, "observed_at": event.created_at}),
             )?;
@@ -1343,7 +1343,7 @@ async fn plan_contact_commit(
                 "request_receipt": request_receipt,
                 "response_event_ref": event.event_id,
                 "response_digest": response_digest,
-                "no_outgoing_slot_proof": no_outgoing_slot_proof,
+                "outgoing_slot_absence_digest": outgoing_slot_absence_digest,
                 "accepted_at": arkret_canonical::format_timestamp_canonical(accepted_at),
                 "issuer": issuer,
             });
@@ -1352,7 +1352,7 @@ async fn plan_contact_commit(
                 request_receipt: request_receipt.clone(),
                 response_event_ref: event.event_id.clone(),
                 response_digest,
-                no_outgoing_slot_proof,
+                outgoing_slot_absence_digest,
                 accepted_at,
                 issuer,
                 signature: service_signature(state, &unsigned_receipt)?,
@@ -2126,7 +2126,7 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
     }
     let normalized = arkret_canonical::to_nfc(trimmed);
     if normalized.chars().count() > 2_000 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Contact request message must be at most 2000 characters",
         ));
     }

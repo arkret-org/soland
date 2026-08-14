@@ -153,7 +153,7 @@ pub fn query_matches(value: &Value, query: Option<&str>) -> bool {
 pub fn checked_limit(limit: Option<usize>) -> Result<usize, AppError> {
     let limit = limit.unwrap_or(20);
     if !(1..=100).contains(&limit) {
-        return Err(AppError::invalid_param("limit must be between 1 and 100"));
+        return Err(AppError::param_invalid("limit must be between 1 and 100"));
     }
     Ok(limit)
 }

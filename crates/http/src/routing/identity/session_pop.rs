@@ -107,7 +107,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         .await
         .map_err(|error| {
             AppError::new(
-                ErrorCode::BadJson,
+                ErrorCode::JsonInvalid,
                 format!("unable to read request body for PoP verification: {error}"),
             )
         })?

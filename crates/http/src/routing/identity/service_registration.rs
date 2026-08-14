@@ -113,11 +113,11 @@ pub(crate) async fn get(
     require_embedded_webvh_registration_bearer(state, req)?;
     let service_kind =
         serde_json::from_value::<ServiceKind>(Value::String(service_kind.into_inner()))
-            .map_err(|error| AppError::invalid_param(format!("invalid service_kind: {error}")))?;
+            .map_err(|error| AppError::param_invalid(format!("invalid service_kind: {error}")))?;
     let public_base = CanonicalServiceUrl::new(public_base.into_inner())
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let key = ServiceRegistrationKey::new(service_kind, public_base)
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let outcome = state
         .dids()
         .service_registration(&key)
@@ -221,7 +221,7 @@ async fn sign_registration_receipt(
 
 fn registration_rejected(error: impl std::fmt::Display) -> AppError {
     AppError::new(
-        ErrorCode::ServiceRegistrationRejected,
+        ErrorCode::ServiceRegistrationDenied,
         format!("service registration rejected: {error}"),
     )
 }

@@ -211,7 +211,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     assert_eq!(
         unsupported_scope_body.pointer("/error/code"),
         Some(&serde_json::Value::String(
-            "organization_registration_scope_unsupported".to_owned()
+            "unsupported_organization_registration_scope".to_owned()
         ))
     );
 

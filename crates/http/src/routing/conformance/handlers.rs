@@ -305,7 +305,10 @@ struct ProjectionEventDiagnostic {
 /// `reject_malformed_json.v1` style vectors to their documented codes.
 fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     if vector.contains("reject_malformed_json") {
-        Some((ErrorCode::BadJson, "vector requests malformed-JSON reject"))
+        Some((
+            ErrorCode::JsonInvalid,
+            "vector requests malformed-JSON reject",
+        ))
     } else if vector.contains("reject_noncanonical_numbers") {
         Some((
             ErrorCode::SchemaViolation,
@@ -355,13 +358,13 @@ pub async fn realm_basis(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut body = body.into_inner();
     let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
-        .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
+        .map_err(|_| AppError::param_invalid("realm_id must be a canonical Realm id"))?;
     let subject = arkret_identifiers::DidFullId::new(body.subject.clone())
-        .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
+        .map_err(|_| AppError::param_invalid("subject must be a canonical DID"))?;
     let subject_actor_id = arkret_wire::project_full_id_to_core_id(&subject)
-        .map_err(|_| AppError::invalid_param("subject DID must project to a canonical core id"))?;
+        .map_err(|_| AppError::param_invalid("subject DID must project to a canonical core id"))?;
     if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "data_plane_actions must contain between 1 and 32 actions",
         ));
     }
@@ -369,10 +372,10 @@ pub async fn realm_basis(
     body.data_plane_actions.dedup();
     for action in &body.data_plane_actions {
         let descriptor = arkret_schema::capability_action(action).ok_or_else(|| {
-            AppError::invalid_param(format!("unregistered data-plane action {action}"))
+            AppError::param_invalid(format!("unregistered data-plane action {action}"))
         })?;
         if descriptor.event_mapping_kind == "non_event_surface" {
-            return Err(AppError::invalid_param(format!(
+            return Err(AppError::param_invalid(format!(
                 "data-plane fixture action {action} is not an Event action"
             )));
         }
@@ -459,14 +462,14 @@ pub async fn device_signing_key(
     if arkret_wire::DidCoreId::new(body.actor_id.clone()).is_err()
         && arkret_identifiers::DidCoreId::new(body.actor_id.clone()).is_err()
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "actor_id must be a canonical full_id or core_id",
         ));
     }
     arkret_identifiers::DeviceId::new(body.device_id.clone())
-        .map_err(|_| AppError::invalid_param("device_id must be canonical"))?;
+        .map_err(|_| AppError::param_invalid("device_id must be canonical"))?;
     arkret_canonical::decode_ed25519_multibase(&body.public_key_multibase)
-        .map_err(|_| AppError::invalid_param("public_key_multibase must encode Ed25519"))?;
+        .map_err(|_| AppError::param_invalid("public_key_multibase must encode Ed25519"))?;
     let now = chrono::Utc::now();
     let payload = json!({
         "device_id": body.device_id,
@@ -657,7 +660,7 @@ pub async fn envelope(
     let digest = if let Some(ciphertext) = body.ciphertext_base64url.as_deref() {
         let ciphertext_bytes = URL_SAFE_NO_PAD
             .decode(ciphertext)
-            .map_err(|err| AppError::invalid_param(format!("ciphertext_base64url: {err}")))?;
+            .map_err(|err| AppError::param_invalid(format!("ciphertext_base64url: {err}")))?;
         let mut material = Vec::with_capacity(canonical.len() + ciphertext_bytes.len());
         material.extend_from_slice(canonical.as_bytes());
         material.extend_from_slice(&ciphertext_bytes);
@@ -971,7 +974,7 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
         .unwrap_or(0);
     if offset > rows.len() {
         return Err(
-            AppError::invalid_param("query cursor offset is beyond the result set")
+            AppError::param_invalid("query cursor offset is beyond the result set")
                 .with_wire_code("invalid_cursor"),
         );
     }
@@ -1019,9 +1022,9 @@ pub async fn chaos_operation(
         ));
     }
     let operation_id = query_param(req, "operation_id")
-        .ok_or_else(|| AppError::missing_param("missing operation_id"))?;
+        .ok_or_else(|| AppError::param_missing("missing operation_id"))?;
     if !operation_id.starts_with("ak:operation:") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "operation_id must use ak:operation:",
         ));
     }
@@ -1374,21 +1377,21 @@ fn query_digest_value(query_value: &Value) -> Value {
 fn decode_query_cursor(cursor_token: &str, query_digest: &str) -> Result<usize, AppError> {
     let payload = cursor_token
         .strip_prefix("ak:cursor:")
-        .ok_or_else(|| AppError::invalid_param("query cursor must start with ak:cursor:"))?;
+        .ok_or_else(|| AppError::param_invalid("query cursor must start with ak:cursor:"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(payload)
-        .map_err(|_| AppError::invalid_param("query cursor is not base64url"))?;
+        .map_err(|_| AppError::param_invalid("query cursor is not base64url"))?;
     let shape: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| AppError::invalid_param("query cursor payload is not JSON"))?;
+        .map_err(|_| AppError::param_invalid("query cursor payload is not JSON"))?;
     if shape.get("query_digest").and_then(Value::as_str) != Some(query_digest) {
-        return Err(AppError::invalid_param("query cursor digest mismatch")
+        return Err(AppError::param_invalid("query cursor digest mismatch")
             .with_wire_code("invalid_cursor"));
     }
     shape
         .get("offset")
         .and_then(Value::as_u64)
         .map(|offset| offset as usize)
-        .ok_or_else(|| AppError::invalid_param("query cursor offset missing"))
+        .ok_or_else(|| AppError::param_invalid("query cursor offset missing"))
 }
 
 fn digest_json(value: &Value) -> String {

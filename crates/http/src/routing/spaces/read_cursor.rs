@@ -94,37 +94,37 @@ fn validate_caller_signed_read_cursor(
     event: &Event,
 ) -> Result<ReadCursor, AppError> {
     if event.kind != arkret_wire::EventKind::ReadCursorAdvance {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event.event.kind must be ak.read_cursor.advance",
         ));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event.event.actor_id must be the authenticated caller",
         ));
     }
     let cursor: ReadCursor = serde_json::from_value(
         serde_json::to_value(&event.payload)
-            .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("cursor payload: {error}")))?,
     )
-    .map_err(|error| AppError::invalid_param(format!("cursor payload: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("cursor payload: {error}")))?;
     if cursor.actor_id != event.actor_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event payload.actor_id must equal event.actor_id",
         ));
     }
     if cursor.realm_id != event.realm_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event payload.realm_id must equal event.realm_id",
         ));
     }
     if cursor.device_id.as_str() != session_device_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event payload.device_id must equal the authenticated session device",
         ));
     }
     if cursor.updated_at != event.created_at {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "advance_event payload.updated_at must equal event.created_at",
         ));
     }
@@ -168,14 +168,14 @@ fn validate_read_scope(scope: &ReadCursorScope) -> Result<(), AppError> {
     // view/message/morph are receipt-only and MUST be rejected here so Circle and
     // Space read isolation can be expressed without admitting receipt-only kinds.
     if !scope.kind.valid_for_read_cursor() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "read_scope.kind must be one of realm/circle/space/strand/thread for a read cursor",
         ));
     }
     match &scope.kind {
         ReadScopeKind::Realm => {
             if scope.container_ref.is_some() || scope.track.is_some() {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "read_scope.container_ref/track_name must be omitted when kind is realm",
                 ));
             }
@@ -187,13 +187,13 @@ fn validate_read_scope(scope: &ReadCursorScope) -> Result<(), AppError> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             else {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "read_scope.container_ref is required when kind is not realm",
                 ));
             };
             validate_scope_ref(&scope.kind, container_ref)?;
             if !matches!(scope.kind, ReadScopeKind::Strand) && scope.track.is_some() {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "read_scope.track_name is only valid when kind is strand",
                 ));
             }
@@ -217,13 +217,13 @@ fn validate_scope_ref(kind: &ReadScopeKind, object_ref: &str) -> Result<(), AppE
         ReadScopeKind::Thread => "ak:message:",
         ReadScopeKind::Realm => return Ok(()),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "read_scope.kind must be one of realm/circle/space/strand/thread for a read cursor",
             ));
         }
     };
     if !object_ref.starts_with(expected_prefix) {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "read_scope.ref must use {expected_prefix} for this kind"
         )));
     }
@@ -233,7 +233,7 @@ fn validate_scope_ref(kind: &ReadScopeKind, object_ref: &str) -> Result<(), AppE
 fn validate_track(track: &str) -> Result<(), AppError> {
     let mut bytes = track.bytes();
     let Some(first) = bytes.next() else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "read_scope.track_name must not be empty",
         ));
     };
@@ -241,14 +241,14 @@ fn validate_track(track: &str) -> Result<(), AppError> {
         || track.len() > 64
         || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(AppError::invalid_param("invalid read_scope.track_name"));
+        return Err(AppError::param_invalid("invalid read_scope.track_name"));
     }
     Ok(())
 }
 
 fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
     if !position.event_id.as_str().starts_with("ak:event:") {
-        return Err(AppError::invalid_param("invalid position.event_id"));
+        return Err(AppError::param_invalid("invalid position.event_id"));
     }
     let parts = position.hlc.as_str().split('-').collect::<Vec<_>>();
     if parts.len() != 3
@@ -260,7 +260,7 @@ fn validate_position(position: &ReadCursorPosition) -> Result<(), AppError> {
                 .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         })
     {
-        return Err(AppError::invalid_param("invalid position.hlc"));
+        return Err(AppError::param_invalid("invalid position.hlc"));
     }
     Ok(())
 }

@@ -95,7 +95,7 @@ impl ControlMoveRejection {
     fn from_verifier(reject: &ControlMoveReject) -> Result<Self, NotaryError> {
         let reason = match reject {
             ControlMoveReject::SchemaViolation(_)
-            | ControlMoveReject::InvalidSignature(_)
+            | ControlMoveReject::SignatureInvalid(_)
             | ControlMoveReject::ProjectionFailed(_) => {
                 ControlProposalRejectReason::SchemaViolation
             }

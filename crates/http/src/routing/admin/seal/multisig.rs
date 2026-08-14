@@ -23,7 +23,7 @@ pub(crate) async fn admin_list_multisig_pending(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let _realm_id = RealmId::new(realm_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
+        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
 

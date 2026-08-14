@@ -59,7 +59,7 @@ pub(super) async fn process_verified_transaction(
             Ok(value) => value,
             Err(error) => {
                 tracing::warn!(%error, %event_id, "applet transaction event serialization failed");
-                rejected.push(rejected_event(&event_id, "bad_json"));
+                rejected.push(rejected_event(&event_id, "json_invalid"));
                 continue;
             }
         };

@@ -134,7 +134,7 @@ async fn issue_authorization_leases(
         !events.is_empty() && events.iter().all(|event| event.seal_basis.is_some()),
         "standard initial submissions require non-empty sealed Events"
     );
-    let lease_request = arkret_wire::AuthorizationLeaseIssueRequest {
+    let lease_request = arkret_wire::AuthorizationLeaseIssueRequestBody {
         events: events.to_vec(),
         intents: Vec::new(),
     };

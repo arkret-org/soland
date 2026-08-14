@@ -20,7 +20,7 @@ pub(super) async fn verify_federation_actor_signature(
 
 fn actor_signature_error(message: impl Into<String>) -> AppError {
     AppError::new(
-        soland_http::error::ErrorCode::InvalidSignature,
+        soland_http::error::ErrorCode::SignatureInvalid,
         message.into(),
     )
     .with_status(StatusCode::UNAUTHORIZED)

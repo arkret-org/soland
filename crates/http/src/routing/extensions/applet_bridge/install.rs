@@ -55,7 +55,7 @@ pub(super) fn approved_scopes_from_formal_install_events(
             circle_id,
         } => (realm_id.clone(), Some(vec![circle_id.clone()])),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "unsupported applet effective scope",
             ));
         }
@@ -81,7 +81,7 @@ fn validate_formal_install_events(
         || registration.scope_ref != commit.effective_scope
         || registration.proofs.is_empty()
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "registration_event must be a caller-signed Applet registration in the exact effective scope",
         )
         .with_wire_code("applet_install_plan_mismatch"));
@@ -99,7 +99,7 @@ fn validate_formal_install_events(
         .with_wire_code("applet_install_plan_mismatch"));
     }
     if commit.capability_grant_events.is_empty() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "capability_grant_events must contain at least one caller-signed Event",
         )
         .with_wire_code("applet_install_plan_mismatch"));
@@ -118,14 +118,14 @@ fn validate_formal_install_events(
             match_scope: ProtocolResourceSelectorScope::Exact,
         },
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "unsupported applet effective scope",
             ));
         }
     }
     .to_spec_value();
     let expected_applet_id = AppletId::new(package.applet_id.clone())
-        .map_err(|error| AppError::invalid_param(format!("invalid applet_id: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid applet_id: {error}")))?;
     let requested = package
         .requested_scopes
         .iter()
@@ -143,7 +143,7 @@ fn validate_formal_install_events(
             || event.proofs.is_empty()
             || !event_ids.insert(event.event_id.clone())
         {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "every capability_grant_event must be unique, caller-signed, and use the exact effective scope",
             )
             .with_wire_code("applet_install_plan_mismatch"));
@@ -155,7 +155,7 @@ fn validate_formal_install_events(
                 ))
             })?)
             .map_err(|error| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "capability_grant_event payload is invalid: {error}"
                 ))
                 .with_wire_code("applet_install_plan_mismatch")
@@ -171,7 +171,7 @@ fn validate_formal_install_events(
             || grant.resources.len() != 1
             || serde_json::to_value(&grant.resources[0]).ok().as_ref() != Some(&expected_resource)
         {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "capability grant issuer, subject, resource, or id does not match the install",
             )
             .with_wire_code("applet_install_plan_mismatch"));
@@ -189,14 +189,14 @@ fn validate_formal_install_events(
             })
             .count();
         if binding_count != 1 || grant.actions.is_empty() {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "capability grant must carry one exact applet_authority binding and at least one action",
             )
             .with_wire_code("applet_install_plan_mismatch"));
         }
         for action in &grant.actions {
             if !requested.contains(action) || !approved_actions.insert(action.clone()) {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "capability grant actions must be unique and requested by the Applet package",
                 )
                 .with_wire_code("applet_install_plan_mismatch"));
@@ -460,7 +460,7 @@ async fn submit_formal_install_event(
         .await
         .map_err(|error| {
             AppError::new(
-                soland_http::error::ErrorCode::InvalidParam,
+                soland_http::error::ErrorCode::ParamInvalid,
                 format!("applet fan-out Event admission failed: {}", error.message),
             )
             .with_status(error.status)
@@ -722,7 +722,7 @@ pub(super) fn parse_manifest(
         .as_ref()
         .or(body.manifest_json.as_ref())
         .cloned()
-        .ok_or_else(|| AppError::missing_param("manifest is required"))?;
+        .ok_or_else(|| AppError::param_missing("manifest is required"))?;
     if let Some(signature) = body
         .signature
         .as_deref()
@@ -737,7 +737,7 @@ pub(super) fn parse_manifest(
         object.insert("signature".to_owned(), Value::String(signature.to_owned()));
     }
     serde_json::from_value(manifest_value)
-        .map_err(|err| AppError::bad_json(format!("manifest parse: {err}")))
+        .map_err(|err| AppError::json_invalid(format!("manifest parse: {err}")))
 }
 
 pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, AppError> {
@@ -756,7 +756,7 @@ pub(super) fn portal_message_payload(payload: &Value) -> Result<Option<Value>, A
         .or_else(|| payload.get("body"))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| AppError::invalid_param("payload.text is required"))?;
+        .ok_or_else(|| AppError::param_invalid("payload.text is required"))?;
     arkret_models_collaboration::events_payloads::message::ContentBlock::text(text)
         .to_value()
         .map(Some)
@@ -792,7 +792,7 @@ pub(super) fn validate_applet_package(
     let evidence = validated_registration_epoch_evidence(state, package)?;
     package.registration_epoch_evidence = Some(evidence);
     package.validate().map_err(|error| {
-        AppError::invalid_param(format!("applet package invalid: {error}"))
+        AppError::param_invalid(format!("applet package invalid: {error}"))
             .with_wire_code("schema_violation")
     })?;
     if let Some(expires_at) = package.expires_at
@@ -806,16 +806,16 @@ pub(super) fn validate_applet_package(
         .map_err(|error| AppError::internal(format!("package digest failed: {error}")))?;
     if package.package_digest.as_ref() != Some(&expected_digest) {
         return Err(
-            AppError::invalid_param("applet package_digest does not match package body")
+            AppError::param_invalid("applet package_digest does not match package body")
                 .with_wire_code("schema_violation"),
         );
     }
     let proof = package
         .proof
         .as_ref()
-        .ok_or_else(|| AppError::invalid_param("applet package proof is required"))?;
+        .ok_or_else(|| AppError::param_invalid("applet package proof is required"))?;
     proof.validate().map_err(|error| {
-        AppError::invalid_param(format!("applet package proof invalid: {error}"))
+        AppError::param_invalid(format!("applet package proof invalid: {error}"))
     })?;
     let mut unsigned = package.clone();
     unsigned.proof = None;
@@ -828,7 +828,7 @@ pub(super) fn validate_applet_package(
             .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
     if proof.event_digest != expected_payload_digest {
         return Err(
-            AppError::invalid_param("applet package proof payload_digest mismatch")
+            AppError::param_invalid("applet package proof payload_digest mismatch")
                 .with_wire_code("proof_invalid"),
         );
     }
@@ -850,7 +850,7 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
         match arkret_schema::embedded_capability_action(action) {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Err(AppError::invalid_param(format!(
+                return Err(AppError::param_invalid(format!(
                     "applet package requested_scopes contains unknown capability action: {action}"
                 ))
                 .with_wire_code("schema_violation")
@@ -888,14 +888,14 @@ fn validate_controller_proof(
     let proof = package
         .proof
         .as_ref()
-        .ok_or_else(|| AppError::invalid_param("applet package proof is required"))?;
+        .ok_or_else(|| AppError::param_invalid("applet package proof is required"))?;
     let controller_id = package.controller_id.as_str();
     crate::jws_verify::validate_verification_method_controller(
         controller_id,
         &proof.verification_method,
     )
     .map_err(|reason| {
-        AppError::invalid_param("applet package proof is not anchored to controller_id")
+        AppError::param_invalid("applet package proof is not anchored to controller_id")
             .with_wire_code("proof_invalid")
             .with_reason_detail(reason)
     })?;
@@ -916,7 +916,7 @@ fn validate_controller_proof(
         )
     };
     verify_result.map_err(|reason| {
-        AppError::invalid_param("applet package controller proof signature is invalid")
+        AppError::param_invalid("applet package controller proof signature is invalid")
             .with_wire_code("proof_invalid")
             .with_reason_detail(reason)
     })
@@ -930,9 +930,9 @@ fn validated_registration_epoch_evidence(
         .registration_epoch_evidence
         .as_ref()
         .map(|evidence| &evidence.full_id)
-        .ok_or_else(|| AppError::invalid_param("applet registration epoch evidence is required"))?;
+        .ok_or_else(|| AppError::param_invalid("applet registration epoch evidence is required"))?;
     let document = crate::jws_verify::resolve_did_document(state, full_id).map_err(|reason| {
-        AppError::invalid_param("applet service DID document could not be resolved")
+        AppError::param_invalid("applet service DID document could not be resolved")
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
             .with_reason_detail(reason)
     })?;
@@ -944,20 +944,20 @@ fn validate_registration_epoch_evidence_for_document(
     document: &DidDocument,
 ) -> Result<arkret_models_integration::AppletRegistrationEpochEvidence, AppError> {
     let evidence = package.registration_epoch_evidence.clone().ok_or_else(|| {
-        AppError::invalid_param("applet package registration_epoch evidence is required")
+        AppError::param_invalid("applet package registration_epoch evidence is required")
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
     })?;
     evidence
         .validate_against_did_document(document)
         .map_err(|reason| {
-            AppError::invalid_param(
+            AppError::param_invalid(
                 "applet registration_epoch evidence does not match service DID document",
             )
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
             .with_reason_detail(reason.to_string())
         })?;
     if !evidence.contains_signing_key(&package.webhook_auth.key_ref) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "applet webhook_auth key_ref is outside registration_epoch evidence",
         )
         .with_wire_code("applet_registration_epoch_signing_key_mismatch"));
@@ -991,7 +991,7 @@ pub(super) fn approved_scopes_from_approval_request(
             circle_id,
         } => (realm_id.clone(), Some(vec![circle_id.clone()])),
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "unsupported applet effective scope",
             ));
         }
@@ -1034,7 +1034,7 @@ pub(super) async fn build_install_plan(
     let package_digest = package
         .package_digest
         .clone()
-        .ok_or_else(|| AppError::missing_param("applet_package.package_digest is required"))?;
+        .ok_or_else(|| AppError::param_missing("applet_package.package_digest is required"))?;
     let seed = json!({
         "schema": "ak.schema.applet_install_plan.v1",
         "applet_id": package.applet_id,
@@ -1095,7 +1095,7 @@ fn applet_install_plan_applet_id(value: &str) -> Result<AppletInstallAppletId, A
     }
     AppletId::new(value.to_owned())
         .map(AppletInstallAppletId::AppletId)
-        .map_err(|error| AppError::invalid_param(format!("invalid applet_id: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("invalid applet_id: {error}")))
 }
 
 pub(super) fn registration_payload_from_package(

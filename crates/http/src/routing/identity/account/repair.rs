@@ -52,7 +52,7 @@ pub(super) async fn dispatch(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     body.validate_shape()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let requester = session_actor_core_id(&session.actor)?;
     if requester != body.content.requester_principal_id {
         return Err(AppError::capability_denied(
@@ -109,7 +109,7 @@ pub(super) async fn dispatch(
             frozen
                 .relay
                 .validate_shape()
-                .map_err(|error| AppError::invalid_param(error.to_string()))?;
+                .map_err(|error| AppError::param_invalid(error.to_string()))?;
             store_source_record(
                 state,
                 requester.as_str(),
@@ -445,7 +445,7 @@ pub(in crate::routing) async fn accept_peer_relay(
 ) -> Result<DirectConversationRepairEnqueueOutcome, AppError> {
     request
         .validate_shape()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request_digest = canonical_digest(&request, "repair relay")?;
     let request_key = target_request_key(source_service_id, request.request_id.as_str())?;
     let inspection = state
@@ -637,7 +637,7 @@ async fn verify_peer_requester(
     let signing_input = request
         .dispatch_request()
         .signing_input()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     match &request.requester_authorization {
         DirectConversationRepairAuthorization::Device {
             requester_device_id,
@@ -816,7 +816,7 @@ fn repair_agent_evidence_selector(
         ..
     } = &request.requester_authorization
     else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Agent evidence selector requires Native Agent authorization",
         ));
     };
@@ -967,7 +967,7 @@ fn domain_hash(domain: &[u8], value: &impl Serialize) -> Result<Hash, AppError> 
 
 fn canonical_digest(value: &impl Serialize, label: &str) -> Result<String, AppError> {
     arkret_canonical::canonical_sha256(value)
-        .map_err(|error| AppError::invalid_param(format!("{label} is not canonical: {error}")))
+        .map_err(|error| AppError::param_invalid(format!("{label} is not canonical: {error}")))
 }
 
 fn local_service_core(state: &AppState) -> Result<DidCoreId, AppError> {

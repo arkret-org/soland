@@ -51,7 +51,7 @@ pub(super) async fn require_inbound_transaction_signature(
             .payload()
             .await
             .map_err(|error| {
-                AppError::bad_json(format!("unable to read applet transaction body: {error}"))
+                AppError::json_invalid(format!("unable to read applet transaction body: {error}"))
             })?
             .to_vec();
         verify_inbound_transaction_signature(&state, req, &payload, &idempotency_key).await

@@ -236,7 +236,7 @@ fn required_string(value: Option<&str>, field: &str) -> Result<String, AppError>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| AppError::missing_param(format!("{field} is required")))
+        .ok_or_else(|| AppError::param_missing(format!("{field} is required")))
 }
 
 fn ttl_seconds_from_configure_body(
@@ -253,7 +253,7 @@ fn ttl_seconds_from_configure_body(
         "ttl": body.ttl.as_deref(),
     });
     retention_ttl_seconds_from_value(&body_value)
-        .ok_or_else(|| AppError::missing_param("retention ttl is required"))
+        .ok_or_else(|| AppError::param_missing("retention ttl is required"))
 }
 
 fn optional_now(value: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError> {
@@ -261,7 +261,7 @@ fn optional_now(value: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError> 
         return Ok(None);
     };
     let parsed = arkret_canonical::parse_timestamp_canonical(value)
-        .map_err(|_| AppError::invalid_param("now must be a canonical Arkret timestamp"))?;
+        .map_err(|_| AppError::param_invalid("now must be a canonical Arkret timestamp"))?;
     Ok(Some(parsed))
 }
 

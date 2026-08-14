@@ -214,7 +214,7 @@ pub(super) async fn admin_list_actors(
     let status_filter = match query_param(req, "filter[status]") {
         Some(raw) => {
             let status = AccountStatus::from_wire(&raw).ok_or_else(|| {
-                AppError::invalid_param(format!("unknown account status filter: {raw}"))
+                AppError::param_invalid(format!("unknown account status filter: {raw}"))
             })?;
             filters.insert("status".to_owned(), raw);
             Some(status)
@@ -315,7 +315,7 @@ fn audit_matches_kind(entry: &AdminAuditEntry, kind: &str) -> bool {
 fn parse_time_bound(raw: &str, name: &str) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
     chrono::DateTime::parse_from_rfc3339(raw)
         .map(|ts| ts.with_timezone(&chrono::Utc))
-        .map_err(|_| AppError::invalid_param(format!("{name} must be an RFC3339 timestamp")))
+        .map_err(|_| AppError::param_invalid(format!("{name} must be an RFC3339 timestamp")))
 }
 
 #[salvo::oapi::endpoint(
@@ -516,7 +516,7 @@ pub(super) async fn admin_list_capabilities(
     let state_filter = match query_param(req, "filter[state]") {
         Some(raw) => {
             let parsed = CapabilityGrantState::from_wire(&raw).ok_or_else(|| {
-                AppError::invalid_param(format!(
+                AppError::param_invalid(format!(
                     "unknown capability state filter: {raw} (expected active|revoked|all)"
                 ))
             })?;
@@ -547,7 +547,7 @@ pub(super) async fn admin_list_capabilities(
         // `CapabilityGrantState` is #[non_exhaustive]; fail closed on any
         // future variant instead of silently widening visibility.
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "unsupported capability state filter",
             ));
         }

@@ -978,8 +978,8 @@ impl FederationDispatcher {
             ) => {
                 if !matches!(
                     event_outcome.status,
-                    arkret_models_collaboration::contact_operations::PeerContactDisposition::Accepted
-                        | arkret_models_collaboration::contact_operations::PeerContactDisposition::Duplicate
+                    arkret_models_collaboration::contact_operations::PeerContactOutcome::Accepted
+                        | arkret_models_collaboration::contact_operations::PeerContactOutcome::Duplicate
                 ) || event_outcome.mirror_receipt.signed_event_ref
                     != request_receipt.core.request_event_ref
                     || event_outcome.mirror_receipt.signed_event_digest

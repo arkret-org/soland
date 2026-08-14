@@ -355,7 +355,7 @@ async fn list_circles(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+        .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     let projection = state.projections().snapshot();
     let circles = projection
         .circles_for_realm(realm_id.as_str())
@@ -438,12 +438,12 @@ async fn post_circle(
 /// reducer owns and an actor therefore MUST NOT supply.
 fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId, AppError> {
     if event.kind != arkret_wire::EventKind::CircleCreate {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "create_event.event.kind must be ak.circle.create",
         ));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "create_event.event.actor_id must be the authenticated caller",
         ));
     }
@@ -470,9 +470,9 @@ fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId
         .with_status(StatusCode::UNPROCESSABLE_ENTITY));
     }
     let derived = arkret_schema::derived_object_id(event).ok_or_else(|| {
-        AppError::invalid_param("create_event derives no Circle id from its event_id")
+        AppError::param_invalid("create_event derives no Circle id from its event_id")
     })?;
-    CircleId::new(derived).map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))
+    CircleId::new(derived).map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))
 }
 
 /// Submit the caller's exact Event bytes through ordinary Event admission.
@@ -527,7 +527,7 @@ async fn post_circle_member(
     submit_caller_signed_circle_event(state, &session, submission).await?;
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
-            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+            .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
         actor_id: target.actor_id,
         membership: target.membership,
     })
@@ -548,12 +548,12 @@ fn caller_signed_circle_member_target(
     event: &Event,
 ) -> Result<CircleMemberTarget, AppError> {
     if event.kind != arkret_wire::EventKind::CircleMemberState {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event.event.kind must be ak.circle.member.state",
         ));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event.event.actor_id must be the authenticated caller",
         ));
     }
@@ -561,9 +561,9 @@ fn caller_signed_circle_member_target(
         .payload
         .get("circle_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("member_event payload.circle_id is required"))?;
+        .ok_or_else(|| AppError::param_missing("member_event payload.circle_id is required"))?;
     if payload_circle != circle_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event payload.circle_id must equal the path circle_id",
         ));
     }
@@ -571,12 +571,12 @@ fn caller_signed_circle_member_target(
         .payload
         .get("actor_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("member_event payload.actor_id is required"))?;
+        .ok_or_else(|| AppError::param_missing("member_event payload.actor_id is required"))?;
     let membership = event
         .payload
         .get("membership")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("member_event payload.membership is required"))?;
+        .ok_or_else(|| AppError::param_missing("member_event payload.membership is required"))?;
     Ok(CircleMemberTarget {
         actor_id: parse_sdk_field("actor_id", target_actor)?,
         membership: parse_sdk_field("membership", membership)?,
@@ -594,17 +594,17 @@ fn caller_signed_circle_member_delete_target(
 ) -> Result<CircleMemberTarget, AppError> {
     let target = caller_signed_circle_member_target(actor, circle_id, event)?;
     if event.realm_id.as_str() != realm_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event.event.realm_id must equal the path Circle's parent Realm",
         ));
     }
     if target.actor_id.as_str() != actor_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event payload.actor_id must equal the path actor_id",
         ));
     }
     if target.membership != CircleMembership::Leave {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "member_event payload.membership must be leave",
         ));
     }
@@ -614,7 +614,7 @@ fn caller_signed_circle_member_delete_target(
         .and_then(Value::as_str)
         .is_none()
     {
-        return Err(AppError::missing_param(
+        return Err(AppError::param_missing(
             "member_event payload.expected_membership must carry the current membership",
         ));
     }
@@ -651,7 +651,7 @@ async fn delete_circle_member(
     submit_caller_signed_circle_event(state, &session, submission).await?;
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
-            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+            .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
         actor_id: target.actor_id,
         membership: target.membership,
     })
@@ -686,11 +686,11 @@ async fn post_scope_rotate(
         let event_id = event.event_id.clone();
         let envelope = serde_json::to_value(event).map_err(|e| {
             AppError::new(
-                ErrorCode::InvalidParam,
+                ErrorCode::ParamInvalid,
                 format!("event envelope cannot be encoded: {e}"),
             )
             .with_status(StatusCode::BAD_REQUEST)
-            .with_wire_code("bad_json")
+            .with_wire_code("json_invalid")
         })?;
         match submit_event_value(state, &session, envelope).await {
             Ok(response) => {
@@ -718,7 +718,7 @@ async fn post_scope_rotate(
     }
 
     if !rejected.is_empty() || !quarantine.is_empty() {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "mls scope rotation rejected {} event(s) and quarantined {} event(s)",
             rejected.len(),
             quarantine.len()
@@ -736,7 +736,7 @@ async fn post_scope_rotate(
 
     json_ok(CircleScopeRotateOutcome {
         circle_id: CircleId::new(circle_id)
-            .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?,
+            .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
         mls_group_ref,
         note: Some("mls scope rotation accepted via canonical ak.mls events".to_owned()),
     })
@@ -851,12 +851,12 @@ fn caller_signed_circle_lifecycle_target(
     event: &Event,
 ) -> Result<(), AppError> {
     if &event.kind != kind {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "lifecycle_event.event.kind must be {kind}"
         )));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event.event.actor_id must be the authenticated caller",
         ));
     }
@@ -864,9 +864,9 @@ fn caller_signed_circle_lifecycle_target(
         .payload
         .get("target_ref")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::missing_param("lifecycle_event payload.target_ref is required"))?;
+        .ok_or_else(|| AppError::param_missing("lifecycle_event payload.target_ref is required"))?;
     if target_ref != circle_id {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "lifecycle_event payload.target_ref must equal the path circle_id",
         ));
     }

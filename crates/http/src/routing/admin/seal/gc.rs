@@ -32,7 +32,7 @@ pub(crate) async fn admin_list_gc_candidates(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
     let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
+        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let candidates = crate::gc::scan_gc_candidates(state, &realm);

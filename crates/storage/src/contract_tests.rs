@@ -18,12 +18,13 @@ use super::{
     FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
     FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
     FederationOutboxState, FederationOutboxStore, FederationOutboxTransition, IdempotencyRecord,
-    IdempotencyStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
-    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
-    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
-    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
+    IdempotencyStore, InviteReceivePolicyStore, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
+    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
+    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
+    ProjectionEventStore,
 };
 
 pub async fn assert_device_message_snapshot_guard_contract(
@@ -892,6 +893,7 @@ pub struct EventCommitContractStores<'a> {
     pub outbox: &'a dyn FederationOutboxStore,
     pub device_pairings: &'a dyn DevicePairingStore,
     pub contacts: &'a dyn ContactStore,
+    pub invite_policies: &'a dyn InviteReceivePolicyStore,
 }
 
 fn contract_realm_id(seed: &str) -> String {

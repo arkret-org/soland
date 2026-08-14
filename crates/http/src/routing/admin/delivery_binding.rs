@@ -97,7 +97,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
         return Err(app_error!(
-            InvalidParam,
+            ParamInvalid,
             "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )
         .with_status(StatusCode::BAD_REQUEST));
@@ -147,7 +147,7 @@ pub(super) async fn admin_list_member_routability(
     let realm_id = realm_id.into_inner();
     let realm_scope = RealmId::new(realm_id.clone()).map_err(|_| {
         app_error!(
-            InvalidParam,
+            ParamInvalid,
             "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -262,7 +262,7 @@ pub(super) async fn admin_list_delivery_binding_handovers(
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
         return Err(app_error!(
-            InvalidParam,
+            ParamInvalid,
             "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
         )
         .with_status(StatusCode::BAD_REQUEST));

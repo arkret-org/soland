@@ -360,7 +360,7 @@ pub(crate) async fn websocket_subscribe(depot: &mut Depot, req: &mut Request, re
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "the Arkret WebSocket subprotocol was not offered",
         );
         return;
@@ -2208,7 +2208,7 @@ fn protocol_rejection(message: &str) -> WebSocketRejection {
     WebSocketRejection {
         close_code: Some(WebSocketCloseCode::ProtocolError),
         channel_id: None,
-        error: WebSocketTransportError::new(WireErrorCode::InvalidParam, message),
+        error: WebSocketTransportError::new(WireErrorCode::ParamInvalid, message),
     }
 }
 
@@ -2216,7 +2216,7 @@ fn channel_rejection(channel_id: &str, message: &str) -> WebSocketRejection {
     WebSocketRejection {
         close_code: None,
         channel_id: Some(channel_id.to_owned()),
-        error: WebSocketTransportError::new(WireErrorCode::InvalidParam, message),
+        error: WebSocketTransportError::new(WireErrorCode::ParamInvalid, message),
     }
 }
 

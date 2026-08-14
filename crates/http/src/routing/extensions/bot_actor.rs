@@ -32,7 +32,7 @@ use soland_http::error::AppError;
 /// paths (G3.S9).
 pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
     if did.contains('#') {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "bot and ghost actor DID must be a DID scalar without fragment",
         )
         .with_wire_code("schema_violation"));
@@ -41,7 +41,7 @@ pub(super) fn validate_extension_actor_did(did: &str) -> Result<(), AppError> {
         return Ok(());
     }
     Err(
-        AppError::invalid_param("bot or ghost actor identity is neither a Core DID nor a Full DID")
+        AppError::param_invalid("bot or ghost actor identity is neither a Core DID nor a Full DID")
             .with_wire_code("schema_violation"),
     )
 }

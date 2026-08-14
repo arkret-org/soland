@@ -71,7 +71,7 @@ async fn signal_requires_active_authorized_device_signature() {
     .await;
     assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
     let rejected_body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(rejected_body["error"]["code"], "invalid_param");
+    assert_eq!(rejected_body["error"]["code"], "param_invalid");
     assert_eq!(
         rejected_body["error"]["details"]["reason_code"],
         "proof_invalid"
@@ -851,7 +851,7 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
     let denied_body: Value = denied.take_json().await.unwrap();
-    assert_eq!(denied_body["error"]["code"], "signal_class_not_permitted");
+    assert_eq!(denied_body["error"]["code"], "signal_class_denied");
     assert!(
         state
             .test_persistence()
@@ -1133,7 +1133,7 @@ async fn signal_envelope_structural_contract_is_enforced() {
     let mut reserved = post_signal(state.clone(), &token, &reserved_suite).await;
     assert_eq!(reserved.status_code, Some(StatusCode::BAD_REQUEST));
     let reserved_body: Value = reserved.take_json().await.unwrap();
-    assert_eq!(reserved_body["error"]["code"], "invalid_param");
+    assert_eq!(reserved_body["error"]["code"], "param_invalid");
 
     // §1 — `aad_digest` is recomputed from the immutable header, never trusted.
     let mut forged_aad = envelope(arkret_wire::SignalClass::Session, 30);
@@ -1183,7 +1183,7 @@ async fn signal_envelope_structural_contract_is_enforced() {
         Some(StatusCode::BAD_REQUEST)
     );
     let unknown_seal_body: Value = unknown_seal_response.take_json().await.unwrap();
-    assert_eq!(unknown_seal_body["error"]["code"], "invalid_param");
+    assert_eq!(unknown_seal_body["error"]["code"], "param_invalid");
 
     // Only the one accepted `setup` frame ever reached the relay.
     let relayed = state

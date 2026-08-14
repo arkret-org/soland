@@ -1367,7 +1367,7 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         .notary_value_for_seal(state, seal)
         .map_err(|error| {
             AppError::new(
-                ErrorCode::SignatureInvalid,
+                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                 format!("resolve Seal notary authority: {error}"),
             )
         })?;
@@ -1389,16 +1389,21 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             let signer = arkret_identity::verification_method_did(&signature.verification_method)
                 .map_err(|error| {
                 AppError::new(
-                    ErrorCode::SignatureInvalid,
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                     format!("Seal signer DID is invalid: {error}"),
                 )
             })?;
             let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
                 .map(arkret_wire::DidCoreId::from)
-                .map_err(|error| AppError::new(ErrorCode::SignatureInvalid, error.to_string()))?;
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                        error.to_string(),
+                    )
+                })?;
             if signer_core != *actor_id {
                 return Err(AppError::new(
-                    ErrorCode::SignatureInvalid,
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                     "Seal signer is not the current primary notary".to_owned(),
                 ));
             }
@@ -1408,16 +1413,21 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             let signer = arkret_identity::verification_method_did(&signature.verification_method)
                 .map_err(|error| {
                 AppError::new(
-                    ErrorCode::SignatureInvalid,
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                     format!("Seal signer DID is invalid: {error}"),
                 )
             })?;
             let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
                 .map(arkret_wire::DidCoreId::from)
-                .map_err(|error| AppError::new(ErrorCode::SignatureInvalid, error.to_string()))?;
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                        error.to_string(),
+                    )
+                })?;
             if !members.contains(&signer_core) {
                 return Err(AppError::new(
-                    ErrorCode::SignatureInvalid,
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                     "Seal signer is outside the current open notary set".to_owned(),
                 ));
             }
@@ -1430,18 +1440,21 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                     arkret_identity::verification_method_did(&signature.verification_method)
                         .map_err(|error| {
                             AppError::new(
-                                ErrorCode::SignatureInvalid,
+                                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                                 format!("Seal signer DID is invalid: {error}"),
                             )
                         })?;
                 let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
                     .map(arkret_wire::DidCoreId::from)
                     .map_err(|error| {
-                        AppError::new(ErrorCode::SignatureInvalid, error.to_string())
+                        AppError::new(
+                            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                            error.to_string(),
+                        )
                     })?;
                 if !members.contains(&signer_core) {
                     return Err(AppError::new(
-                        ErrorCode::SignatureInvalid,
+                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                         "Seal signer is outside the current open notary set".to_owned(),
                     ));
                 }
@@ -1462,24 +1475,27 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                     arkret_identity::verification_method_did(&signature.verification_method)
                         .map_err(|error| {
                             AppError::new(
-                                ErrorCode::SignatureInvalid,
+                                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                                 format!("Seal signer DID is invalid: {error}"),
                             )
                         })?;
                 let signer_core = arkret_wire::project_full_id_to_core_id(&signer)
                     .map(arkret_wire::DidCoreId::from)
                     .map_err(|error| {
-                        AppError::new(ErrorCode::SignatureInvalid, error.to_string())
+                        AppError::new(
+                            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                            error.to_string(),
+                        )
                     })?;
                 if !members.contains(&signer_core) {
                     return Err(AppError::new(
-                        ErrorCode::SignatureInvalid,
+                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                         "threshold Seal signer is outside the current committee".to_owned(),
                     ));
                 }
                 if !distinct_signers.insert(signer.clone()) {
                     return Err(AppError::new(
-                        ErrorCode::SignatureInvalid,
+                        ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                         "threshold Seal repeats a committee signer".to_owned(),
                     ));
                 }
@@ -1487,7 +1503,7 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             }
             if distinct_signers.len() < usize::try_from(*threshold).unwrap_or(usize::MAX) {
                 return Err(AppError::new(
-                    ErrorCode::SignatureInvalid,
+                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                     "threshold Seal does not carry enough distinct committee signatures".to_owned(),
                 ));
             }
@@ -1495,13 +1511,13 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         }
         (arkret_wire::notary::NotaryValue::Threshold { .. }, NotarySig::Threshold(_)) => {
             return Err(AppError::new(
-                ErrorCode::ProfileUnsupported,
+                ErrorCode::UnsupportedProfile,
                 "opaque threshold Seal proofs have no configured verifier".to_owned(),
             ));
         }
         _ => {
             return Err(AppError::new(
-                ErrorCode::SignatureInvalid,
+                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
                 "Seal signature shape does not match the current notary profile".to_owned(),
             ));
         }

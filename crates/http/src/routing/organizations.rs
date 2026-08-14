@@ -251,7 +251,7 @@ async fn upsert_organization(
     ensure_organization_registry_admin(state, &session.actor)?;
     let body = body.into_inner();
     validate_did(&body.organization_principal_id)
-        .map_err(|_| AppError::invalid_param("organization_principal_id must be a DID"))?;
+        .map_err(|_| AppError::param_invalid("organization_principal_id must be a DID"))?;
     let now = Utc::now();
     let organization_id = normalized_organization_id(
         body.organization_id
@@ -369,7 +369,7 @@ async fn upsert_organization_policy(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut payload = Value::from(body.into_inner());
     if !payload.is_object() {
-        return Err(AppError::bad_json(
+        return Err(AppError::json_invalid(
             "organization moderation policy must be a JSON object",
         ));
     }
@@ -1048,13 +1048,13 @@ fn target_did(value: &Value) -> Option<&str> {
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err(AppError::invalid_param("organization_id is required"));
+        return Err(AppError::param_invalid("organization_id is required"));
     }
     if value.starts_with("did:") {
         validate_did(value)
-            .map_err(|_| AppError::invalid_param("organization_id DID is invalid"))?;
+            .map_err(|_| AppError::param_invalid("organization_id DID is invalid"))?;
     } else if !value.starts_with("ak:org:") {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "organization_id must be a DID or ak:org: identifier",
         ));
     }

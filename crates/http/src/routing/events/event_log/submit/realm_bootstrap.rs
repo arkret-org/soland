@@ -75,7 +75,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             .map_err(|_| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
-                    "bad_json",
+                    "json_invalid",
                     "Realm bootstrap Event cannot be encoded",
                 )
             })?
@@ -255,7 +255,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         })?;
 
     let bootstrap_realm_id = RealmId::new(unit.realm_id.clone()).map_err(|error| {
-        SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "param_invalid", error.to_string())
     })?;
     let control_proposal_acks = crate::control_proposal::mint_control_proposal_acks(
         state,

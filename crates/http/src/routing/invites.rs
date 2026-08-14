@@ -7,7 +7,7 @@ use arkret_canonical as canonical;
 use arkret_identifiers::{DidCoreId, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
-    InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody, InviteLocatorIssueOutcome,
+    InviteDeliveryOutcomeStatus, InviteDeliveryRequestBody, InviteLocatorIssueOutcome,
     InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody, InviteLocatorRevokeOutcome,
     InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody, InviteLocatorStatus,
     InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
@@ -82,7 +82,7 @@ fn new_invite_locator(
 ) -> Result<(InviteLocatorRecord, String), AppError> {
     options
         .validate_minimal()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(i64::from(options.effective_ttl_seconds()));
     let (token, token_digest) = new_invite_locator_secret();
@@ -169,7 +169,7 @@ async fn rotate_invite_locator(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     body.validate_minimal()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let (token, token_digest) = new_invite_locator_secret();
     let mutation = InviteLocatorRotateMutation {
         locator_id: format!("ak:invite_locator:{}", uuid::Uuid::now_v7()),
@@ -202,7 +202,7 @@ async fn revoke_invite_locator(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     body.validate_minimal()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let revoked_at = now();
     let Some(record) = state
         .realm_invites()
@@ -233,9 +233,11 @@ async fn peer_invites_submit(
     let state = depot.get_typed::<AppState>().expect("state injected");
     super::events::peer::validate_peer_request(state, req, true).await?;
     let delivery = req
-        .parse_json::<InviteDeliveryRequestBodyBody>()
+        .parse_json::<InviteDeliveryRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid ak.peer.invites.command.submit request body"))?;
+        .map_err(|_| {
+            AppError::json_invalid("invalid ak.peer.invites.command.submit request body")
+        })?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
         AppError::internal(format!("invite delivery request serialize: {error}"))
     })?;
@@ -515,7 +517,7 @@ async fn resolve_invite_locator(
 ) -> JsonResult<PrincipalLocator> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if locator_token_appears_in_url(req) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "locator_token must be sent in the JSON body, never in URL path or query",
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -524,7 +526,7 @@ async fn resolve_invite_locator(
     let body = req
         .parse_json::<InviteLocatorResolveRequestBody>()
         .await
-        .map_err(|_| AppError::bad_json("invalid invite locator resolve request body"))?;
+        .map_err(|_| AppError::json_invalid("invalid invite locator resolve request body"))?;
     body.validate_minimal()
         .map_err(|_| invite_locator_not_found())?;
     let locator_token = body.locator_token.trim();
@@ -645,7 +647,7 @@ async fn persist_invite_quarantine_entry(
     subject: &str,
     source_service_id: &str,
     inviter: &str,
-    delivery: &InviteDeliveryRequestBodyBody,
+    delivery: &InviteDeliveryRequestBody,
     body: &Value,
     decision: &ReceiveDecision,
 ) -> Result<bool, AppError> {
@@ -1569,7 +1571,7 @@ fn member_delivery_candidate_valid(
 
 fn validate_invite_delivery_consistency(
     body: &Value,
-    delivery: &InviteDeliveryRequestBodyBody,
+    delivery: &InviteDeliveryRequestBody,
     state: &AppState,
 ) -> Result<(), AppError> {
     if delivery.invite_address.recipient_service_id.as_str() != state.service_id() {

@@ -30,7 +30,7 @@ pub(crate) async fn admin_get_seal_dag(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let realm = RealmId::new(realm_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
+        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let leaf_ids = state.projections().realm_seal_leaves(&realm).map_err(|e| {
@@ -123,13 +123,13 @@ pub(crate) async fn admin_prune_seal_dag(
     .await?;
     let realm_id_str = realm_id.into_inner();
     let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
+        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
     let body = body.into_inner();
     let candidate_id = SealId::new(body.seal_id.clone()).map_err(|e| {
         AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!("invalid seal_id `{}`: {e}", body.seal_id),
         )
         .with_status(StatusCode::BAD_REQUEST)
@@ -157,7 +157,7 @@ pub(crate) async fn admin_prune_seal_dag(
         })?;
     if candidate.realm_id.as_str() != realm.as_str() {
         return Err(AppError::new(
-            ErrorCode::InvalidParam,
+            ErrorCode::ParamInvalid,
             format!(
                 "seal `{}` belongs to realm `{}`, not `{}`",
                 candidate_id,

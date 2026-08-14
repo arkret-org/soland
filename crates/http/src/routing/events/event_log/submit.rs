@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
-use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
+use arkret_models_collaboration::http_bodies::EventsSubmitRejectedRow;
 use arkret_wire::ReasonCode;
 use ed25519_dalek::Signer as _;
 use soland_storage::ConflictCode;
@@ -46,8 +46,8 @@ fn rejected_item(
     id: String,
     reason_code: ReasonCode,
     detail: Option<String>,
-) -> EventsSubmitRejectedItem {
-    EventsSubmitRejectedItem {
+) -> EventsSubmitRejectedRow {
+    EventsSubmitRejectedRow {
         index: None,
         id,
         reason_code,
@@ -660,7 +660,7 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
         StatusCode::CONFLICT => ErrorCode::Conflict,
         StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
         StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
-        StatusCode::BAD_REQUEST => ErrorCode::InvalidParam,
+        StatusCode::BAD_REQUEST => ErrorCode::ParamInvalid,
         StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
         _ => ErrorCode::InternalError,
     };
@@ -1259,7 +1259,7 @@ async fn submit_event_batch_outcome_with_leases(
     if envelopes.is_empty() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "events submit batch must contain at least one envelope",
         ));
     }
@@ -1748,7 +1748,7 @@ async fn accept_federated_seal_prerequisite(
     if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
         roots.push(
             arkret_identifiers::SealId::new(seal_ref.to_owned())
-                .map_err(|error| AppError::invalid_param(format!("invalid seal_ref: {error}")))?,
+                .map_err(|error| AppError::param_invalid(format!("invalid seal_ref: {error}")))?,
         );
     }
     if let Some(leaves) = envelope
@@ -1758,11 +1758,11 @@ async fn accept_federated_seal_prerequisite(
     {
         for leaf in leaves {
             let leaf = leaf.as_str().ok_or_else(|| {
-                AppError::invalid_param("seal_basis.leaves must contain Seal ids")
+                AppError::param_invalid("seal_basis.leaves must contain Seal ids")
             })?;
             roots.push(
                 arkret_identifiers::SealId::new(leaf.to_owned()).map_err(|error| {
-                    AppError::invalid_param(format!("invalid seal_basis leaf: {error}"))
+                    AppError::param_invalid(format!("invalid seal_basis leaf: {error}"))
                 })?,
             );
         }
@@ -1979,7 +1979,7 @@ pub(crate) async fn submit_federation_events(
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "bad_json",
+                "json_invalid",
                 &format!("invalid ak.peer.events.command.submit request body: {error}"),
             );
             return;
@@ -2164,7 +2164,7 @@ pub(crate) async fn submit_federation_events(
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "ak.peer.events.command.submit must contain at least one event",
         );
         return;
@@ -2218,7 +2218,7 @@ pub(crate) async fn submit_federation_events(
                 json!({
                     "realm_id": binding_realm,
                     "source_service_id": source_service_id,
-                    "reason": "stale_peer",
+                    "reason": "peer_stale",
                     "quarantine_count": quarantine.len()
                 }),
                 "quarantine",
@@ -2243,7 +2243,7 @@ pub(crate) async fn submit_federation_events(
                 json!({
                     "realm_id": binding_realm,
                     "source_service_id": source_service_id,
-                    "reason": "stale_peer_state_unavailable",
+                    "reason": "peer_state_stale_unavailable",
                     "error": error
                 }),
                 "reject",
@@ -2252,8 +2252,8 @@ pub(crate) async fn submit_federation_events(
             render_error(
                 res,
                 StatusCode::SERVICE_UNAVAILABLE,
-                "stale_peer_state_unavailable",
-                "federation stale_peer state is unavailable",
+                "peer_state_stale_unavailable",
+                "federation peer_stale state is unavailable",
             );
             return;
         }
@@ -2355,7 +2355,7 @@ pub(crate) async fn submit_federation_events(
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
-                "missing_param",
+                "param_missing",
                 "actor_id is required",
             );
             return;
@@ -2479,7 +2479,7 @@ pub(crate) async fn submit_federation_events(
         let Some(actor) = event_string_field_from_value(&envelope, "actor_id") else {
             rejected.push(rejected_item(
                 id,
-                ReasonCode::from_wire("missing_param"),
+                ReasonCode::from_wire("param_missing"),
                 Some("actor_id is required".to_owned()),
             ));
             continue;
@@ -2487,7 +2487,7 @@ pub(crate) async fn submit_federation_events(
         if validate_did(&actor).is_err() {
             rejected.push(rejected_item(
                 id,
-                ReasonCode::from_wire("invalid_param"),
+                ReasonCode::from_wire("param_invalid"),
                 Some("actor_id must be a DID".to_owned()),
             ));
             continue;

@@ -18,16 +18,16 @@ pub struct ErrorExposure {
 ///
 /// ```ignore
 /// // Plain (or captured-interpolation) message:
-/// return Err(app_error!(InvalidParam, "bad space_id"));
-/// return Err(app_error!(InvalidParam, "invalid space_id: {err}"));
+/// return Err(app_error!(ParamInvalid, "bad space_id"));
+/// return Err(app_error!(ParamInvalid, "invalid space_id: {err}"));
 ///
 /// // Explicit-args `format!` variant:
-/// return Err(app_error!(InvalidParam, "invalid space_id: {}", err));
+/// return Err(app_error!(ParamInvalid, "invalid space_id: {}", err));
 /// ```
 ///
 /// The first argument is a bare variant identifier resolved against
-/// [`crate::error::ErrorCode`] (i.e. `InvalidParam`, not
-/// `ErrorCode::InvalidParam`). When the message argument is a string
+/// [`crate::error::ErrorCode`] (i.e. `ParamInvalid`, not
+/// `ErrorCode::ParamInvalid`). When the message argument is a string
 /// literal it is forwarded through `format!` so captured-arg
 /// interpolation (`{var}`) works in the single-arg form as well.
 /// Non-literal `String`/`&str` expressions are passed through unchanged.
@@ -169,17 +169,20 @@ mod tests {
                     .all(|code| ErrorCode::from_wire(code.as_str()) == Some(*code)),
             "every SDK registry entry must round-trip through its wire code",
         );
-        assert_eq!(ErrorCode::from_wire("bad_json"), Some(ErrorCode::BadJson));
         assert_eq!(
-            ErrorCode::from_wire("directory_not_authorized"),
-            Some(ErrorCode::DirectoryNotAuthorized),
+            ErrorCode::from_wire("json_invalid"),
+            Some(ErrorCode::JsonInvalid)
         );
         assert_eq!(
-            error_http_status(ErrorCode::BadJson),
+            ErrorCode::from_wire("directory_unauthorized"),
+            Some(ErrorCode::DirectoryUnauthorized),
+        );
+        assert_eq!(
+            error_http_status(ErrorCode::JsonInvalid),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            error_http_status(ErrorCode::DirectoryNotAuthorized),
+            error_http_status(ErrorCode::DirectoryUnauthorized),
             StatusCode::FORBIDDEN,
         );
     }
@@ -336,14 +339,14 @@ impl AppError {
     // ── Convenience constructors for the most-used codes. The full
     // `ErrorCode` set is always available via `AppError::new(code, msg)`.
 
-    pub fn bad_json(message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::BadJson, message)
+    pub fn json_invalid(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::JsonInvalid, message)
     }
-    pub fn missing_param(message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::MissingParam, message)
+    pub fn param_missing(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ParamMissing, message)
     }
-    pub fn invalid_param(message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::InvalidParam, message)
+    pub fn param_invalid(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ParamInvalid, message)
     }
     pub fn unauthenticated(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Unauthenticated, message)

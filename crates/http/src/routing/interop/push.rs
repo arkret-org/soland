@@ -125,7 +125,7 @@ pub(super) async fn push_register(
         },
     };
     if body.device_id.as_str().trim().is_empty() {
-        return Err(AppError::invalid_param("invalid device_id"));
+        return Err(AppError::param_invalid("invalid device_id"));
     }
     let principal_id = session.actor.clone();
     let device_id = body.device_id.as_str().to_owned();
@@ -139,7 +139,7 @@ pub(super) async fn push_register(
         .map(|did| did.as_str())
         .unwrap_or(state.service_id().as_str());
     if recipient_service_id != state.service_id() {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "recipient_service_id must match this service",
         ));
     }
@@ -219,7 +219,7 @@ fn canonical_error_code(wire: &str) -> soland_http::error::ErrorCode {
     use soland_http::error::ErrorCode;
     match wire {
         "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
-        "invalid_param" | "missing_param" => ErrorCode::InvalidParam,
+        "param_invalid" | "param_missing" => ErrorCode::ParamInvalid,
         "session_expired" => ErrorCode::CursorExpired,
         _ => ErrorCode::InternalError,
     }
@@ -337,7 +337,7 @@ pub(super) async fn push_unregister(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     if body.device_id.as_str().trim().is_empty() {
-        return Err(AppError::invalid_param("invalid device_id"));
+        return Err(AppError::param_invalid("invalid device_id"));
     }
     let removed = state
         .deliveries()
@@ -379,19 +379,19 @@ pub(super) async fn push_notify(
     // was accepted, because the field is Option on the wire type and nothing
     // here checked it.
     arkret_models_integration::models_push::validate_push_notify_contract_shape(&body)
-        .map_err(AppError::invalid_param)?;
+        .map_err(AppError::param_invalid)?;
     let push_target_id = body
         .notification
         .push_target_id
         .as_deref()
         .filter(|value| arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(value))
-        .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
+        .ok_or_else(|| AppError::param_invalid("notification.push_target_id is required"))?;
     let devices = body.notification.devices.clone();
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
     })?;
     if push_notification_leaks_private_payload(&notification, None) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "push notification must not include plaintext content or stable identifiers",
         ));
     }
@@ -531,14 +531,14 @@ async fn push_register_session_grant_bridge(
     let grant = grant.to_str().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "X-Arkret-Session-Grant must be ASCII",
         )
     })?;
     if grant.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "X-Arkret-Session-Grant must not be empty",
         ));
     }
@@ -549,7 +549,7 @@ async fn push_register_session_grant_bridge(
     else {
         return Err((
             StatusCode::BAD_REQUEST,
-            "invalid_param",
+            "param_invalid",
             "X-Arkret-Principal-Id is required when using X-Arkret-Session-Grant",
         ));
     };
@@ -557,7 +557,7 @@ async fn push_register_session_grant_bridge(
         arkret_wire::DidCoreId::new(principal_identity.to_owned()).map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "principal_id must be a core id",
             )
         })?;
@@ -580,7 +580,7 @@ async fn push_register_session_grant_bridge(
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "invalid_param",
+                "param_invalid",
                 "session grant challenge and proof headers must be supplied together",
             ));
         }
@@ -634,7 +634,7 @@ fn optional_ascii_header<'a>(
         .map(|value| {
             value
                 .to_str()
-                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid_param", display_name))
+                .map_err(|_| (StatusCode::BAD_REQUEST, "param_invalid", display_name))
         })
         .transpose()
 }

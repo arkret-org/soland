@@ -1753,7 +1753,7 @@ mod tests {
                         "organization_registration_quorum_not_met"
                     }
                     OrganizationRegistrationErrorCode::ScopeUnsupported => {
-                        "organization_registration_scope_unsupported"
+                        "unsupported_organization_registration_scope"
                     }
                     OrganizationRegistrationErrorCode::Revoked => {
                         "organization_registration_revoked"
@@ -2440,7 +2440,7 @@ mod tests {
             "unregistered_scope_is_invalid",
             observe_schema_case(
                 case_named("unregistered_scope_is_invalid"),
-                "organization_registration_scope_unsupported",
+                "unsupported_organization_registration_scope",
             ),
         );
         actual.insert(

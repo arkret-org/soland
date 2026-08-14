@@ -41,7 +41,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         render_error(
             res,
             StatusCode::BAD_REQUEST,
-            "missing_param",
+            "param_missing",
             "realms is required",
         );
         return;
@@ -50,7 +50,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Ok(realms) => realms,
         Err(error) => {
             let message = error.to_string();
-            render_error(res, StatusCode::BAD_REQUEST, "invalid_param", &message);
+            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", &message);
             return;
         }
     };
@@ -86,7 +86,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "catchup must be a boolean",
                 );
                 return;
@@ -560,7 +560,7 @@ struct EventsQueryParts {
 fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::AppError> {
     match order {
         "default" | "ascending" | "descending" => Ok(()),
-        _ => Err(soland_http::error::AppError::invalid_param(
+        _ => Err(soland_http::error::AppError::param_invalid(
             "order must be default, ascending, or descending",
         )),
     }
@@ -570,7 +570,7 @@ fn reject_events_query_filter_digest_pseudo_fields(
     filters: Option<&Value>,
 ) -> Result<(), soland_http::error::AppError> {
     if filters.is_some_and(value_contains_filter_digest_pseudo_field) {
-        return Err(soland_http::error::AppError::invalid_param(
+        return Err(soland_http::error::AppError::param_invalid(
             "filters must not contain cursor filter_digest fields",
         ));
     }
@@ -625,7 +625,7 @@ fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppE
             soland_http::error::ErrorCode::CursorExpired,
             "cursor has expired",
         ),
-        SyncCursorError::Invalid(message) => soland_http::error::AppError::invalid_param(message),
+        SyncCursorError::Invalid(message) => soland_http::error::AppError::param_invalid(message),
         SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
             soland_http::error::AppError::new(
                 soland_http::error::ErrorCode::CursorIntegrityInvalid,
@@ -741,14 +741,14 @@ async fn events_query_impl(
     validate_events_query_order(&parts.order)?;
     reject_events_query_filter_digest_pseudo_fields(parts.filters.as_ref())?;
     if parts.realms.is_empty() && parts.actors.is_empty() {
-        return Err(soland_http::error::AppError::missing_param(
+        return Err(soland_http::error::AppError::param_missing(
             "events.read requires at least one of realms[] / actors[]",
         ));
     }
     let realms = normalize_scope_selectors(parts.realms.clone())?;
     for actor in &parts.actors {
         if arkret_wire::DidCoreId::new(actor.clone()).is_err() {
-            return Err(soland_http::error::AppError::invalid_param(format!(
+            return Err(soland_http::error::AppError::param_invalid(format!(
                 "invalid actor: {actor}"
             )));
         }
@@ -758,7 +758,7 @@ async fn events_query_impl(
             authenticated_session(state, req)
                 .await
                 .map_err(|(status, code, message)| {
-                    soland_http::error::AppError::invalid_param(message)
+                    soland_http::error::AppError::param_invalid(message)
                         .with_status(status)
                         .with_wire_code(code)
                 })?,
@@ -771,7 +771,7 @@ async fn events_query_impl(
             Ok(session) => Some(session),
             Err((status, code, message)) => {
                 if request_presents_auth_material(req) {
-                    return Err(soland_http::error::AppError::invalid_param(message)
+                    return Err(soland_http::error::AppError::param_invalid(message)
                         .with_status(status)
                         .with_wire_code(code));
                 }
@@ -925,7 +925,7 @@ async fn events_query_impl(
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
                     return Err(
-                        soland_http::error::AppError::invalid_param("cursor not found")
+                        soland_http::error::AppError::param_invalid("cursor not found")
                             .with_wire_code("invalid_cursor"),
                     );
                 }
@@ -972,7 +972,7 @@ async fn events_query_impl(
             Err(error) => {
                 if error.to_string().contains("invalid_cursor") {
                     return Err(
-                        soland_http::error::AppError::invalid_param("cursor not found")
+                        soland_http::error::AppError::param_invalid("cursor not found")
                             .with_wire_code("invalid_cursor"),
                     );
                 }
@@ -1835,12 +1835,12 @@ pub(super) async fn snapshot_head(
 ) -> soland_http::result::JsonResult<arkret_state::SnapshotManifest> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
-        .ok_or_else(|| soland_http::error::AppError::missing_param("realm_id is required"))?;
+        .ok_or_else(|| soland_http::error::AppError::param_missing("realm_id is required"))?;
     let realm_id = scope_selector_to_realm_id(&realm_id)?;
     let session = authenticated_session(state, req)
         .await
         .map_err(|(status, code, message)| {
-            soland_http::error::AppError::invalid_param(message)
+            soland_http::error::AppError::param_invalid(message)
                 .with_status(status)
                 .with_wire_code(code)
         })?;

@@ -347,14 +347,14 @@ fn event_refs_with_role(
             let id = reference.get("id").and_then(Value::as_str).ok_or_else(|| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "refs entries require id",
                 )
             })?;
             if !is_valid_event_id(id) {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    "invalid_param",
+                    "param_invalid",
                     "audit_pair refs must use ak:event: typed ids",
                 ));
             }

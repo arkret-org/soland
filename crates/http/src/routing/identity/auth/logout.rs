@@ -122,7 +122,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
         }
         StatusCode::INTERNAL_SERVER_ERROR => AppError::internal(message),
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            AppError::invalid_param(message)
+            AppError::param_invalid(message)
         }
         _ => AppError::unauthenticated(message),
     }
@@ -348,8 +348,9 @@ pub(super) async fn session_revoke(
     // The empty-body form is valid, so parse by hand instead of `JsonBody`
     // (which answers a missing body with a 400 before the handler runs).
     let body: SessionRevokeRequestBody = match req.payload().await {
-        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes)
-            .map_err(|error| AppError::bad_json(format!("invalid session-revoke body: {error}")))?,
+        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(bytes).map_err(|error| {
+            AppError::json_invalid(format!("invalid session-revoke body: {error}"))
+        })?,
         _ => SessionRevokeRequestBody {
             target_grant_id: None,
             target_device_id: None,
@@ -364,7 +365,7 @@ pub(super) async fn session_revoke(
     };
     if body.all_sessions == Some(false) {
         // Schema pins `all_sessions` to `const true`; `false` is a shape error.
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "all_sessions must be true when present",
         ));
     }
@@ -480,13 +481,13 @@ async fn verify_cross_session_revoke_proof(
     }
 
     let actor = arkret_identifiers::DidCoreId::new(session.actor.clone())
-        .map_err(|_| AppError::invalid_param("session actor is not a valid DID"))?;
+        .map_err(|_| AppError::param_invalid("session actor is not a valid DID"))?;
     let service_id =
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!("configured service_id is not a valid DID: {error}"))
         })?;
     let session_device = DeviceId::new(session.device_id.clone())
-        .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
+        .map_err(|_| AppError::param_invalid("session device_id is not a valid DeviceId"))?;
     let expected_digest = arkret_models_collaboration::account_lifecycle::AccountLifecycleProof::session_revoke_request_digest(
         &actor,
         &service_id,
@@ -535,7 +536,7 @@ async fn verify_cross_session_revoke_proof(
 }
 
 fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::InvalidSignature, message)
+    AppError::new(ErrorCode::SignatureInvalid, message)
         .with_status(StatusCode::UNAUTHORIZED)
         .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }

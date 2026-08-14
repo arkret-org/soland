@@ -88,7 +88,7 @@ async fn put_realm_policy_server(
     let submission = body.into_inner().policy_server_event;
 
     let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+        .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
     let payload = caller_signed_policy_server_payload(
         "policy_server_event",
@@ -97,14 +97,14 @@ async fn put_realm_policy_server(
         &submission.event,
     )?;
     let RealmPolicyServerPayload::Declaration(declaration) = payload else {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "policy_server_event payload must be a declaration; the value tombstone goes through \
              DELETE",
         ));
     };
     validate_https_policy_server_url(&declaration.policy_server_url)?;
     if declaration.timeout_ms == Some(0) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "policy server timeout_ms must be greater than zero",
         ));
     }
@@ -145,7 +145,7 @@ async fn delete_realm_policy_server(
     let realm_id = realm_id.into_inner();
     let submission = body.into_inner().policy_server_event;
     let realm_scope = RealmId::new(realm_id.clone())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+        .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
 
     let cell_key = policy_server_cell_key(&realm_id);
@@ -172,7 +172,7 @@ async fn delete_realm_policy_server(
     )?;
     if !matches!(payload, RealmPolicyServerPayload::Tombstone(tombstone) if tombstone.validate().is_ok())
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "policy_server_event payload must be exactly {\"tombstone\":true} on this operation",
         ));
     }
@@ -207,24 +207,24 @@ fn caller_signed_policy_server_payload(
     event: &arkret_wire::Event,
 ) -> Result<RealmPolicyServerPayload, AppError> {
     if event.kind != arkret_wire::EventKind::RealmPolicyServer {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "{field}.event.kind must be ak.realm.policy_server"
         )));
     }
     if event.actor_id.as_str() != actor {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "{field}.event.actor_id must be the authenticated caller"
         )));
     }
     if event.realm_id.as_str() != realm_id {
-        return Err(AppError::invalid_param(format!(
+        return Err(AppError::param_invalid(format!(
             "{field}.event.realm_id must equal the path realm_id"
         )));
     }
     serde_json::from_value(serde_json::Value::Object(
         event.payload.clone().into_iter().collect(),
     ))
-    .map_err(|error| AppError::invalid_param(format!("{field} payload: {error}")))
+    .map_err(|error| AppError::param_invalid(format!("{field} payload: {error}")))
 }
 
 /// Require the caller's own `head_eq` guard on the policy-server cell.
@@ -316,21 +316,21 @@ fn policy_server_view(
 
 fn validate_https_policy_server_url(raw_url: &str) -> Result<(), AppError> {
     let url = url::Url::parse(raw_url)
-        .map_err(|error| AppError::invalid_param(format!("policy_server_url: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("policy_server_url: {error}")))?;
     if url.scheme() != "https" {
-        return Err(AppError::invalid_param("policy_server_url must use https"));
+        return Err(AppError::param_invalid("policy_server_url must use https"));
     }
     if !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "policy_server_url must not contain credentials, query, or fragment",
         ));
     }
     if url.host_str().is_none() || url.path() != "/_arkret/self/policy/check" {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "policy_server_url must target /_arkret/self/policy/check",
         ));
     }

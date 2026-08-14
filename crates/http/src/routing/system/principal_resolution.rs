@@ -27,7 +27,7 @@ async fn open_principal_resolution(
     let principal_id = DidCoreId::new(principal_id.into_inner())
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
     let principal_server_id = DidCoreId::new(principal_server_id.into_inner())
-        .map_err(|_| AppError::invalid_param("invalid principal_server_id"))?;
+        .map_err(|_| AppError::param_invalid("invalid principal_server_id"))?;
     let authority = PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
     let record = state
         .persistence()

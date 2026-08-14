@@ -120,10 +120,10 @@ impl AccountProjectionRegisterRequestBody {
     fn validate_verified_projection(&self) -> Result<(), AppError> {
         let projected =
             arkret_identifiers::project_full_id_to_core_id(&self.full_id).map_err(|error| {
-                AppError::invalid_param(format!("full_id cannot be projected: {error}"))
+                AppError::param_invalid(format!("full_id cannot be projected: {error}"))
             })?;
         if projected != self.principal_id {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "full_id must project to principal_id",
             ));
         }
@@ -328,18 +328,18 @@ fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, Ap
     let localpart = localpart.trim();
     let localpart = localpart.strip_prefix('@').unwrap_or(localpart);
     if localpart.is_empty() || localpart.contains(':') || localpart.contains('@') {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "localpart must be a bare handle localpart",
         ));
     }
     arkret_wire::string_profiles::prepare_handle_localpart(localpart)
-        .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))
+        .map_err(|_| AppError::param_invalid("localpart is not a valid handle localpart"))
 }
 
 fn account_core_id_from_path(value: String) -> Result<String, AppError> {
     DidCoreId::new(value)
         .map(|account_id| account_id.to_string())
-        .map_err(|_| AppError::invalid_param("invalid account core id"))
+        .map_err(|_| AppError::param_invalid("invalid account core id"))
 }
 
 fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError {
@@ -773,13 +773,13 @@ async fn local_account_register(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let full_id =
-        validate_did(&body.did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
+        validate_did(&body.did).map_err(|_| AppError::param_invalid("invalid account DID"))?;
     crate::routing::extensions::sovereign::validate_sovereign_did_registration(
         state,
         full_id.as_str(),
     )?;
     let did = arkret_wire::project_full_id_to_core_id(&full_id)
-        .map_err(|error| AppError::invalid_param(format!("invalid account DID: {error}")))?
+        .map_err(|error| AppError::param_invalid(format!("invalid account DID: {error}")))?
         .to_string();
 
     let localpart = normalize_account_localpart_for_request(&body.handle)?;
@@ -827,7 +827,7 @@ async fn local_account_register(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
-            .map_err(|_| AppError::invalid_param("invalid device_id"))?;
+            .map_err(|_| AppError::param_invalid("invalid device_id"))?;
         put_account_device_placeholder(
             state,
             &did,
@@ -961,7 +961,7 @@ async fn update_account_localpart(
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let body = body.into_inner();
     if body.is_primary != Some(true) {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "only setting is_primary=true is supported",
         ));
     }
@@ -1272,19 +1272,19 @@ async fn update_profile(
     let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id).await?;
     let profile_id = body
         .profile_id()
-        .map_err(|error| AppError::invalid_param(format!("profile_event: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
     let accepted_basis = profile_context_validation_basis(
         accepted.as_ref().map(|accepted| &accepted.basis),
         &event.kind,
         &profile_id,
     );
     body.validate_authoring_context(&principal_id, &pcr_realm_id, accepted_basis)
-        .map_err(|error| AppError::invalid_param(format!("profile_event: {error}")))?;
+        .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
     let event_digest = Hash::new(event.event_digest().map_err(|error| {
-        AppError::invalid_param(format!("profile_event: invalid Event digest: {error}"))
+        AppError::param_invalid(format!("profile_event: invalid Event digest: {error}"))
     })?)
     .map_err(|error| {
-        AppError::invalid_param(format!("profile_event: invalid Event digest: {error}"))
+        AppError::param_invalid(format!("profile_event: invalid Event digest: {error}"))
     })?;
     let submission = body.profile_event;
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
@@ -1526,7 +1526,7 @@ async fn direct_conversation_resolve(
     let body = body.into_inner();
     let peer_descriptor = &body.peer;
     if peer_descriptor.contact_actor_id().as_str() == session.actor {
-        return Err(AppError::invalid_param("invalid direct conversation peer"));
+        return Err(AppError::param_invalid("invalid direct conversation peer"));
     }
     let peer = peer_descriptor.contact_actor_id().as_str().to_owned();
     if let ContactPeer::Agent { controller_id, .. } = peer_descriptor {
@@ -1719,7 +1719,7 @@ async fn direct_conversation_resolve(
             .as_deref()
             != Some(arkret_wire::CORE_REDUCER_PROFILE)
         {
-            send_blockers.push(DirectConversationSendBlocker::ProfileUnsupported);
+            send_blockers.push(DirectConversationSendBlocker::UnsupportedProfile);
         }
         send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
         send_blockers.dedup();
@@ -1815,7 +1815,7 @@ async fn direct_conversation_repair_dispatch(
 
 fn session_actor_core_id(actor: &str) -> Result<DidCoreId, AppError> {
     DidCoreId::new(actor.to_owned()).map_err(|error| {
-        AppError::invalid_param(format!("session principal core id is invalid: {error}"))
+        AppError::param_invalid(format!("session principal core id is invalid: {error}"))
     })
 }
 
@@ -1907,7 +1907,7 @@ async fn validate_direct_conversation_repair_signature(
 ) -> Result<(), AppError> {
     let signing_input = request
         .signing_input()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     match (&request.requester_authorization, &request.content.requester) {
         (
             DirectConversationRepairAuthorization::Device {
@@ -2022,7 +2022,7 @@ async fn validate_direct_conversation_repair_signature(
             }
         }
         _ => {
-            return Err(AppError::invalid_param(
+            return Err(AppError::param_invalid(
                 "repair requester branch is inconsistent",
             ));
         }

@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::join_policy::{
-    JoinApplicationAuditOutcome, JoinApplicationCancelRequestBodyBody, JoinApplicationEntry,
+    JoinApplicationAuditOutcome, JoinApplicationCancelRequestBody, JoinApplicationEntry,
     JoinApplicationGetOutcome, JoinApplicationListOutcome, JoinApplicationMutationOutcome,
-    JoinApplicationPrivateBody, JoinApplicationReviewRequestBodyBody, JoinApplicationStatus,
-    JoinApplicationSubmitRequestBodyBody, join_application_revision_digest,
+    JoinApplicationPrivateBody, JoinApplicationReviewRequestBody, JoinApplicationStatus,
+    JoinApplicationSubmitRequestBody, join_application_revision_digest,
 };
 use arkret_wire::{CapabilityActionId, Hash};
 use chrono::{Duration, Utc};
@@ -62,10 +62,10 @@ fn idempotency_key(req: &Request) -> Result<String, AppError> {
         .headers()
         .get("Idempotency-Key")
         .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?
+        .ok_or_else(|| AppError::param_missing("Idempotency-Key header is required"))?
         .trim();
     if value.is_empty() || value.len() > MAX_IDEMPOTENCY_KEY_LEN {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "Idempotency-Key must contain 1 to 255 characters",
         ));
     }
@@ -73,7 +73,7 @@ fn idempotency_key(req: &Request) -> Result<String, AppError> {
 }
 
 fn parse_application_ref(value: String) -> Result<Hash, AppError> {
-    Hash::new(value).map_err(|error| AppError::invalid_param(error.to_string()))
+    Hash::new(value).map_err(|error| AppError::param_invalid(error.to_string()))
 }
 
 fn schema_error(error: impl std::fmt::Display) -> AppError {
@@ -195,7 +195,7 @@ fn response_from_value(
 async fn submit_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
-    body: JsonBody<JoinApplicationSubmitRequestBodyBody>,
+    body: JsonBody<JoinApplicationSubmitRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {
@@ -335,7 +335,7 @@ async fn review_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
     application_ref: PathParam<String>,
-    body: JsonBody<JoinApplicationReviewRequestBodyBody>,
+    body: JsonBody<JoinApplicationReviewRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {
@@ -410,7 +410,7 @@ async fn cancel_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
     application_ref: PathParam<String>,
-    body: JsonBody<JoinApplicationCancelRequestBodyBody>,
+    body: JsonBody<JoinApplicationCancelRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {
@@ -591,7 +591,7 @@ async fn list_join_applications(
     let cursor = cursor.into_inner();
     let limit = limit.into_inner().unwrap_or(50);
     if !(1..=200).contains(&limit) {
-        return Err(AppError::invalid_param("limit must be in 1..=200"));
+        return Err(AppError::param_invalid("limit must be in 1..=200"));
     }
     let (reviewer, _, member) = viewer_context(state, &realm_id, &session.actor);
     let mut records = state

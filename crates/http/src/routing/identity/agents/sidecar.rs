@@ -900,18 +900,18 @@ fn validate_signed_sidecar_draft(
     let actual_unsigned = arkret_canonical::canonical_json_bytes(
         &signed_event
             .digest_payload()
-            .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event: {error}")))?,
     )
-    .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event: {error}")))?;
     let expected_unsigned = URL_SAFE_NO_PAD
         .decode(draft.unsigned_event_bytes.as_str())
         .map_err(|_| AppError::internal("stored Sidecar draft bytes are invalid"))?;
     let digest = Hash::new(
         signed_event
             .event_digest()
-            .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event: {error}")))?,
     )
-    .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event digest: {error}")))?;
+    .map_err(|error| AppError::param_invalid(format!("signed Sidecar Event digest: {error}")))?;
     if signed_event.event_id != draft.event_id
         || signed_event.kind != draft.kind
         || actual_unsigned != expected_unsigned
@@ -923,7 +923,7 @@ fn validate_signed_sidecar_draft(
             .filter_map(arkret_wire::EventProof::as_producer)
             .any(|proof| proof.event_digest != draft.event_digest)
     {
-        return Err(AppError::invalid_param(
+        return Err(AppError::param_invalid(
             "signed Sidecar Event does not exactly match its reservation draft",
         ));
     }
@@ -966,12 +966,12 @@ async fn validate_sidecar_commit_reservation(
             ..
         } => {
             if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "Sidecar reservation binding mismatch",
                 ));
             }
             let create_event = create_event.ok_or_else(|| {
-                AppError::invalid_param("new Sidecar commit requires create_event")
+                AppError::param_invalid("new Sidecar commit requires create_event")
             })?;
             validate_signed_sidecar_draft(create_event, create_event_draft)?;
             validate_signed_sidecar_draft(context_attach_event, context_attach_event_draft)?;
@@ -983,12 +983,12 @@ async fn validate_sidecar_commit_reservation(
             ..
         } => {
             if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "Sidecar reservation binding mismatch",
                 ));
             }
             if create_event.is_some() {
-                return Err(AppError::invalid_param(
+                return Err(AppError::param_invalid(
                     "existing Sidecar attach must not carry create_event",
                 ));
             }

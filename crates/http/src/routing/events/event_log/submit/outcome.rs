@@ -4,7 +4,7 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
     status: EventsSubmitStatus,
     accepted: Vec<String>,
     duplicate: Vec<String>,
-    rejected: Vec<EventsSubmitRejectedItem>,
+    rejected: Vec<EventsSubmitRejectedRow>,
     quarantine: Vec<String>,
     cursor: Option<String>,
 ) -> EventsSubmitOutcome {
