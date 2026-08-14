@@ -273,27 +273,18 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         "project_membership_operation"
     );
 
-    let cascaded_agent_ids = if matches!(membership, Some("leave" | "ban")) {
-        let agent_ids = state
-            .agent_pairings()
-            .agents_for_controller(member)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|record| record.id)
-            .collect::<Vec<_>>();
-        let membership_frontier = operation.context.event_id.to_string();
+    let invalidated_agent_ids = if matches!(membership, Some("leave" | "ban")) {
         state
             .projections()
             .snapshot()
-            .cascade_controller_agent_memberships(
-                operation.realm_id.as_str(),
-                member,
-                &agent_ids,
-                origin,
-                vec![membership_frontier],
-                operation.created_at,
-            )
+            .agent_membership_bindings
+            .iter()
+            .filter(|((bound_realm_id, _), binding)| {
+                bound_realm_id == operation.realm_id.as_str()
+                    && binding.controller_authority.principal_id.as_str() == member
+            })
+            .map(|((_, agent_id), _)| agent_id.clone())
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -302,7 +293,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         if let Ok(member) = DidCoreId::new(member) {
             if matches!(membership, Some("leave" | "ban")) {
                 entry.members.remove(&member);
-                for agent_id in &cascaded_agent_ids {
+                for agent_id in &invalidated_agent_ids {
                     if let Ok(agent_id) = DidCoreId::new(agent_id.clone()) {
                         entry.members.remove(&agent_id);
                     }

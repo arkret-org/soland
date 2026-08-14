@@ -2112,6 +2112,24 @@ pub(crate) async fn submit_federation_events(
             submit_direct_conversation_federation(state, req, founding, request_hash, res).await;
             return;
         }
+        EventsSubmitFederationRequestBody::AgentMembershipCascade(cascade) => {
+            if let Err(error) = cascade.validate() {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    &format!("invalid agent membership cascade: {error}"),
+                );
+                return;
+            }
+            render_error(
+                res,
+                StatusCode::NOT_IMPLEMENTED,
+                "not_implemented",
+                "agent membership cascade federation admission is not active",
+            );
+            return;
+        }
     };
     if let Err(error) = submit.validate_federation_transport() {
         tracing::debug!(%error, "federation transport contract rejected");

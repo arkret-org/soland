@@ -211,8 +211,39 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
 }
 
 #[test]
-fn controller_removal_cascades_owned_agent_membership() {
+fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let (mut state, _hlc, base) = seed_state("joined");
+    let controller_generation =
+        arkret_identifiers::EventId::new("ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim")
+            .unwrap();
+    let controller_authority = arkret_wire::PrincipalAuthorityKey {
+        principal_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
+        principal_server_id: arkret_identifiers::DidCoreId::new(
+            "ak:did_core:web:principal.example",
+        )
+        .unwrap(),
+    };
+    state
+        .members
+        .get_mut(&(REALM.to_owned(), ALICE.to_owned()))
+        .unwrap()
+        .membership_event_ref = Some(controller_generation.to_string());
+    state.membership_authorities.insert(
+        (REALM.to_owned(), ALICE.to_owned()),
+        controller_authority.clone(),
+    );
+    state.agent_membership_bindings.insert(
+        (REALM.to_owned(), BOB.to_owned()),
+        arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
+            controller_authority,
+            controller_membership_generation_ref: controller_generation,
+            controller_terminal_event_ref: None,
+        },
+    );
+    state.agent_lifecycles.insert(
+        BOB.to_owned(),
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
+    );
     state
         .circles
         .get_mut(CIRCLE)
@@ -231,26 +262,24 @@ fn controller_removal_cascades_owned_agent_membership() {
         },
     );
 
-    let removed = state.cascade_controller_agent_memberships(
-        REALM,
-        ALICE,
-        &[BOB.to_owned()],
-        ALICE,
-        vec!["ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".to_owned()],
-        base + Duration::minutes(30),
-    );
+    assert!(state.effective_agent_membership_base(REALM, BOB));
+    state
+        .members
+        .get_mut(&(REALM.to_owned(), ALICE.to_owned()))
+        .unwrap()
+        .state = "leave".to_owned();
 
-    assert_eq!(removed, vec![BOB.to_owned()]);
+    assert!(!state.effective_agent_membership_base(REALM, BOB));
     assert_eq!(
         state.members[&(REALM.to_owned(), BOB.to_owned())].state,
-        "leave"
+        "join"
     );
-    assert!(!state.circles[CIRCLE].members.contains(BOB));
+    assert!(state.circles[CIRCLE].members.contains(BOB));
     assert_eq!(
         state
             .circle_membership(CIRCLE, BOB)
             .map(|membership| membership.state.as_str()),
-        Some("leave")
+        Some("join")
     );
 }
 

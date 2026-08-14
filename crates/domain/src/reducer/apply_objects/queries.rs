@@ -240,6 +240,54 @@ impl ProjectionState {
             .get(&(realm_id.to_owned(), actor_id.to_owned()))
     }
 
+    pub fn membership_authority(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+    ) -> Option<&arkret_wire::PrincipalAuthorityKey> {
+        self.membership_authorities
+            .get(&(realm_id.to_owned(), actor_id.to_owned()))
+    }
+
+    pub fn agent_membership_binding(
+        &self,
+        realm_id: &str,
+        agent_id: &str,
+    ) -> Option<
+        &arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding,
+    >{
+        self.agent_membership_bindings
+            .get(&(realm_id.to_owned(), agent_id.to_owned()))
+    }
+
+    /// Deterministic membership/lifecycle half of Native Personal Agent
+    /// effective membership. Callers that authorize Agent activity must also
+    /// verify the durable provision/accountability binding owned by the
+    /// identity service.
+    pub fn effective_agent_membership_base(&self, realm_id: &str, agent_id: &str) -> bool {
+        let Some(agent) = self.member(realm_id, agent_id) else {
+            return false;
+        };
+        if agent.state != "join"
+            || self.agent_lifecycles.get(agent_id)
+                != Some(&arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
+        {
+            return false;
+        }
+        let Some(binding) = self.agent_membership_binding(realm_id, agent_id) else {
+            return false;
+        };
+        let controller_id = binding.controller_authority.principal_id.as_str();
+        let Some(controller) = self.member(realm_id, controller_id) else {
+            return false;
+        };
+        controller.state == "join"
+            && controller.membership_event_ref.as_deref()
+                == Some(binding.controller_membership_generation_ref.as_str())
+            && self.membership_authority(realm_id, controller_id)
+                == Some(&binding.controller_authority)
+    }
+
     /// Read the FSM state of a member directly from the cells map.
     /// Returns `None` if the cell hasn't been written or is in `Bottom`
     /// state. The cell_subject is the actor_id per spec

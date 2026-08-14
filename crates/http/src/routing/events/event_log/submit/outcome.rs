@@ -33,6 +33,7 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
         realm_frontiers: Vec::new(),
         cursor,
         original_outcome: None,
+        agent_membership_cascade: None,
     }
 }
 

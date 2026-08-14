@@ -189,6 +189,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
 ) -> Result<(), &'static str> {
     for operation in operations {
         validate_realm_lifecycle_write_gate(state, operation)?;
+        validate_agent_operation_membership(state, operation).await?;
         if kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::SidecarCreate)
         {
@@ -262,6 +263,38 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_aad_visibility_policy(state, operation).await?;
     }
     Ok(())
+}
+
+async fn validate_agent_operation_membership(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let actor_id = operation.context.sender.as_str();
+    let record = state
+        .agent_pairings()
+        .agent(actor_id)
+        .await
+        .map_err(|_| "agent_membership_lookup_failed")?;
+    let Some(record) = record else {
+        return Ok(());
+    };
+    let result = if operation.realm_id.as_str() == record.principal_control_realm_id {
+        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            state,
+            &record,
+            operation.created_at,
+        )
+        .await
+    } else {
+        crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+            state,
+            &record,
+            operation.realm_id.as_str(),
+            operation.created_at,
+        )
+        .await
+    };
+    result.map_err(|_| "agent_membership_inactive")
 }
 
 #[cfg(test)]
@@ -354,9 +387,10 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(record) = record else {
         return Ok(());
     };
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
         state,
         &record,
+        operation.realm_id.as_str(),
         chrono::Utc::now(),
     )
     .await
