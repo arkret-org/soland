@@ -705,6 +705,106 @@ fn with_ingress_receipt(
     response
 }
 
+fn apply_delivery_summary_from_intents(
+    response: &mut SubmittedEventOutcome,
+    intents: &[soland_services::federation::FederationDeliveryRecord],
+) {
+    let pending_targets = intents
+        .iter()
+        .filter(|intent| {
+            intent.realm_fanout.as_ref().is_some_and(|binding| {
+                binding
+                    .source_event_ids
+                    .iter()
+                    .any(|event_id| event_id == &response.event_id)
+            })
+        })
+        .map(|intent| intent.peer_did.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as u32;
+    response.outcome.pending_delivery_count = pending_targets;
+    response.outcome.delivery_state = if pending_targets == 0 {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
+    } else {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
+    };
+}
+
+async fn apply_durable_delivery_summary(
+    state: &AppState,
+    response: &mut SubmittedEventOutcome,
+) -> Result<(), SubmitOneError> {
+    let pending_targets =
+        durable_pending_delivery_count(state, std::slice::from_ref(&response.event_id)).await?;
+    response.outcome.pending_delivery_count = pending_targets;
+    response.outcome.delivery_state = if pending_targets == 0 {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
+    } else {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
+    };
+    Ok(())
+}
+
+pub(super) async fn durable_pending_delivery_count(
+    state: &AppState,
+    event_ids: &[String],
+) -> Result<u32, SubmitOneError> {
+    let mut targets = BTreeMap::new();
+    for event_id in event_ids {
+        let deliveries = state
+            .federation()
+            .deliveries_for_event(event_id)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Event delivery status unavailable: {error}"),
+                )
+            })?;
+        for delivery in deliveries {
+            let Some(binding) = delivery.delivery.realm_fanout.as_ref() else {
+                continue;
+            };
+            if !binding
+                .source_event_ids
+                .iter()
+                .any(|source_event_id| source_event_id == event_id)
+            {
+                continue;
+            }
+            let pending = match delivery.state {
+                soland_services::federation::FederationDeliveryState::Pending
+                | soland_services::federation::FederationDeliveryState::PendingRoute
+                | soland_services::federation::FederationDeliveryState::Leased => true,
+                soland_services::federation::FederationDeliveryState::Delivered
+                | soland_services::federation::FederationDeliveryState::CancelledAuthorityLost => {
+                    false
+                }
+                soland_services::federation::FederationDeliveryState::PolicySuppressed
+                | soland_services::federation::FederationDeliveryState::DeadLettered
+                | soland_services::federation::FederationDeliveryState::Superseded => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        "Realm fanout row entered a state forbidden by the delivery contract",
+                    ));
+                }
+            };
+            if let Some(existing) = targets.insert(delivery.delivery.id, pending)
+                && existing != pending
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "Realm fanout target has inconsistent durable states",
+                ));
+            }
+        }
+    }
+    Ok(targets.values().filter(|pending| **pending).count() as u32)
+}
+
 async fn stored_control_proposal_ack(
     state: &AppState,
     existing: &soland_services::events::CanonicalEventRecord,
@@ -1478,6 +1578,7 @@ pub(super) async fn submit_event_value_with_context(
                 .await?;
                 response.outcome.control_proposal_acks.push(ack);
             }
+            apply_durable_delivery_summary(state, &mut response).await?;
             return Ok(response);
         }
         append_audit_log(
@@ -2459,6 +2560,7 @@ pub(super) async fn submit_event_value_with_context(
             .control_proposal_acks
             .push(ack.clone());
     }
+    apply_delivery_summary_from_intents(&mut accepted_response, &outbox);
     if commit_idempotency.is_some() && additional_idempotency.is_some() {
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2757,6 +2859,7 @@ pub(super) async fn submit_event_value_with_context(
                         .await?;
                         response.outcome.control_proposal_acks.push(ack);
                     }
+                    apply_durable_delivery_summary(state, &mut response).await?;
                     return Ok(response);
                 }
                 return Err(SubmitOneError::new(

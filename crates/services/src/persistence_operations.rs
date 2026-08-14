@@ -19,15 +19,29 @@ struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
 fn federation_delivery_record(
     record: crate::federation::FederationDeliveryRecord,
 ) -> FederationOutboxRecord {
-    FederationOutboxRecord::pending(
-        record.id,
-        record.peer_did,
-        record.peer_url,
-        record.endpoint,
-        record.idempotency_key,
-        record.payload_json,
-        record.created_at,
-    )
+    match record.realm_fanout {
+        Some(binding) => FederationOutboxRecord::realm_fanout(
+            record.id,
+            record.peer_did,
+            record.peer_url,
+            record.endpoint,
+            record.idempotency_key,
+            record.payload_json,
+            binding,
+            record.created_at,
+        ),
+        None => FederationOutboxRecord::pending(
+            record.id,
+            record.peer_did,
+            record
+                .peer_url
+                .expect("generic federation delivery requires a route"),
+            record.endpoint,
+            record.idempotency_key,
+            record.payload_json,
+            record.created_at,
+        ),
+    }
 }
 
 fn application_delivery_record(
@@ -40,6 +54,7 @@ fn application_delivery_record(
         endpoint: record.endpoint.clone(),
         idempotency_key: record.idempotency_key.clone(),
         payload_json: record.payload_json.clone(),
+        realm_fanout: record.realm_fanout.clone(),
         created_at: record.created_at,
     }
 }
@@ -50,6 +65,7 @@ fn application_pending_delivery(
     crate::federation::PendingFederationDelivery {
         delivery: application_delivery_record(&record),
         state: record.state,
+        leased_from_state: record.leased_from_state,
         attempts: record.attempts,
         semantic_attempts: record.semantic_attempts,
         next_attempt_at: record.next_attempt_at,
@@ -183,8 +199,16 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
                     next_attempt_at: *next_attempt_at,
                 }
             }
+            crate::federation::FederationDeliveryOutcome::RouteUnavailable { next_attempt_at } => {
+                FederationOutboxOutcome::RouteUnavailable {
+                    next_attempt_at: *next_attempt_at,
+                }
+            }
             crate::federation::FederationDeliveryOutcome::Delivered => {
                 FederationOutboxOutcome::Delivered
+            }
+            crate::federation::FederationDeliveryOutcome::CancelledAuthorityLost => {
+                FederationOutboxOutcome::CancelledAuthorityLost
             }
             crate::federation::FederationDeliveryOutcome::PolicySuppressed { policy_version } => {
                 FederationOutboxOutcome::PolicySuppressed {
@@ -259,6 +283,20 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
             .get(id)
             .await?
             .map(application_pending_delivery))
+    }
+
+    async fn deliveries_for_event(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
+            .events()
+            .federation_outbox_for_event(event_id)
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
     }
 
     async fn deliveries_by_state(

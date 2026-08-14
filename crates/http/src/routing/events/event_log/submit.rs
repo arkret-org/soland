@@ -1408,6 +1408,7 @@ async fn submit_event_batch_outcome_with_leases(
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
     let mut ingress_receipts = Vec::new();
+    let mut pending_delivery_count = 0_u32;
     let mut realm_actor_frontiers = BTreeMap::new();
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
     // `event-auth-state-resolution.md` §5(1) — the managed Agent PCR genesis is
@@ -1478,6 +1479,8 @@ async fn submit_event_batch_outcome_with_leases(
                     );
                 }
                 ingress_receipts.extend(response.outcome.ingress_receipts.iter().cloned());
+                pending_delivery_count =
+                    pending_delivery_count.saturating_add(response.outcome.pending_delivery_count);
                 accepted.push(response.event_id.clone());
                 if response.duplicate {
                     duplicate.push(response.event_id);
@@ -1528,6 +1531,12 @@ async fn submit_event_batch_outcome_with_leases(
     let mut outcome =
         events_submit_outcome(status, accepted, duplicate, rejected, quarantine, cursor);
     outcome.ingress_receipts = ingress_receipts;
+    outcome.pending_delivery_count = pending_delivery_count;
+    outcome.delivery_state = if pending_delivery_count == 0 {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Complete
+    } else {
+        arkret_models_collaboration::http_bodies::EventDeliveryState::Pending
+    };
     outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
 }

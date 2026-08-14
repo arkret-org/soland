@@ -439,6 +439,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
+        let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
         let mut staged_invite_policies = invite_policies.clone();
@@ -567,18 +568,29 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut outbox_inserted = 0;
 
         for record in request.outbox {
-            let already_present = staged_outbox.values().any(|existing| {
-                existing.peer_did == record.peer_did
-                    && existing.idempotency_key == record.idempotency_key
+            record.validate_shape().map_err(|error| {
+                PersistenceError::Conflict(format!("schema_violation: {error}"))
+            })?;
+            let existing_id = staged_outbox.values().find_map(|existing| {
+                (existing.peer_did == record.peer_did
+                    && existing.idempotency_key == record.idempotency_key)
+                    .then(|| existing.id.clone())
             });
-            if !already_present {
-                event_outbox_ids
-                    .entry(event_id.clone())
-                    .or_default()
-                    .insert(record.id.clone());
-                staged_outbox.insert(record.id.clone(), record);
+            let outbox_id = if let Some(existing_id) = existing_id {
+                existing_id
+            } else {
+                if staged_outbox.contains_key(&record.id) {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+                }
+                let outbox_id = record.id.clone();
+                staged_outbox.insert(outbox_id.clone(), record);
                 outbox_inserted += 1;
-            }
+                outbox_id
+            };
+            staged_event_outbox_ids
+                .entry(event_id.clone())
+                .or_default()
+                .insert(outbox_id);
         }
 
         *events = staged_events;
@@ -586,6 +598,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;
+        *event_outbox_ids = staged_event_outbox_ids;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
         *invite_policies = staged_invite_policies;
@@ -775,15 +788,24 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 staged_idempotency.insert(key, record);
             }
             for record in event_request.outbox {
-                let already_present = staged_outbox.values().any(|existing| {
-                    existing.peer_did == record.peer_did
-                        && existing.idempotency_key == record.idempotency_key
+                record.validate_shape().map_err(|error| {
+                    PersistenceError::Conflict(format!("schema_violation: {error}"))
+                })?;
+                let existing_id = staged_outbox.values().find_map(|existing| {
+                    (existing.peer_did == record.peer_did
+                        && existing.idempotency_key == record.idempotency_key)
+                        .then(|| existing.id.clone())
                 });
+                let already_present = existing_id.is_some();
+                let outbox_id = existing_id.unwrap_or_else(|| record.id.clone());
+                staged_event_outbox_ids
+                    .entry(event_id.clone())
+                    .or_default()
+                    .insert(outbox_id.clone());
                 if !already_present {
-                    staged_event_outbox_ids
-                        .entry(event_id.clone())
-                        .or_default()
-                        .insert(record.id.clone());
+                    if staged_outbox.contains_key(&record.id) {
+                        return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+                    }
                     staged_outbox.insert(record.id.clone(), record);
                     outbox_inserted += 1;
                 }

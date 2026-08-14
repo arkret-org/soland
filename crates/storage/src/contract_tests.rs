@@ -24,7 +24,7 @@ use super::{
     OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
     OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
-    ProjectionEventStore,
+    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding,
 };
 
 pub async fn assert_device_message_snapshot_guard_contract(
@@ -1037,11 +1037,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
         outbox: vec![FederationOutboxRecord {
             id: outbox_id.clone(),
             peer_did: format!("did:web:peer-{namespace}.example"),
-            peer_url: "https://peer.example".to_owned(),
+            peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{event_uuid}"),
             payload_json: "{}".to_owned(),
             state: FederationOutboxState::Pending,
+            leased_from_state: None,
+            realm_fanout: None,
             attempts: 0,
             semantic_attempts: 0,
             next_attempt_at: now.timestamp(),
@@ -1067,6 +1069,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert_eq!(outcome.projections_inserted, 1);
     assert_eq!(outcome.outbox_inserted, 1);
     assert!(stores.events.contains(&event_id).await.expect("read event"));
+    let event_outbox = stores
+        .events
+        .federation_outbox_for_event(&event_id)
+        .await
+        .expect("read Event delivery intents");
+    assert_eq!(event_outbox.len(), 1);
+    assert_eq!(event_outbox[0].id, outbox_id);
     assert!(
         stores
             .projections
@@ -1399,11 +1408,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
         outbox: vec![FederationOutboxRecord {
             id: rollback_outbox_id.clone(),
             peer_did: format!("did:web:peer-{namespace}.example"),
-            peer_url: "https://peer.example".to_owned(),
+            peer_url: Some("https://peer.example".to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{rollback_uuid}"),
             payload_json: "{}".to_owned(),
             state: FederationOutboxState::Pending,
+            leased_from_state: None,
+            realm_fanout: None,
             attempts: 0,
             semantic_attempts: 0,
             next_attempt_at: now.timestamp(),
@@ -1844,6 +1855,154 @@ pub async fn assert_federation_outbox_store_contract(
     assert_eq!(released.state, FederationOutboxState::Pending);
     assert_eq!(released.next_attempt_at, 900);
     assert!(released.policy_version.is_none());
+
+    // (8) Realm fanout route misses remain durable without entering the
+    // generic dead-letter lifecycle, and authority loss is terminal.
+    let realm_id = contract_realm_id(&format!("fanout:{namespace}"));
+    let source_event = canonical_wire_event_record(
+        "",
+        "did:web:alice.example",
+        &realm_id,
+        0,
+        database_timestamp_now(),
+    );
+    let route_missing = FederationOutboxRecord::realm_fanout(
+        format!("outbox:{namespace}:pending-route"),
+        "ak:did_core:web:peer.example".to_owned(),
+        None,
+        "/_arkret/peer/events".to_owned(),
+        format!("ak:outbox:event:{namespace}:pending-route"),
+        "{}".to_owned(),
+        RealmFanoutBinding {
+            realm_id,
+            source_event_ids: vec![source_event.event_id.clone()],
+            authority_witnesses: vec![RealmFanoutAuthorityWitness {
+                member_id: "ak:did_core:web:alice.example".to_owned(),
+                membership_event_ref: source_event.event_id.clone(),
+                delivery_binding_frontier: source_event.event_id,
+            }],
+        },
+        1_000,
+    );
+    assert!(
+        store
+            .enqueue(&route_missing)
+            .await
+            .expect("enqueue missing-route fanout")
+    );
+    let claimed = store
+        .claim_due(&claim("token-route-a", "worker-a", 1_000, 60))
+        .await
+        .expect("claim missing-route fanout");
+    let claimed = claimed
+        .iter()
+        .find(|row| row.id == route_missing.id)
+        .expect("missing-route row claimed");
+    assert_eq!(
+        claimed.leased_from_state,
+        Some(FederationOutboxState::PendingRoute)
+    );
+    assert!(
+        store
+            .complete(&FederationOutboxTransition {
+                id: route_missing.id.clone(),
+                lease_token: "token-route-a".to_owned(),
+                attempts: 1,
+                semantic_attempts: 0,
+                last_http_status: None,
+                last_error_code: Some("service_route_unavailable".to_owned()),
+                last_response_excerpt: None,
+                observed_at: 1_001,
+                outcome: FederationOutboxOutcome::RouteUnavailable {
+                    next_attempt_at: 1_100,
+                },
+            })
+            .await
+            .expect("preserve missing-route fanout")
+    );
+    assert_eq!(
+        store
+            .get(&route_missing.id)
+            .await
+            .expect("read missing-route fanout")
+            .expect("missing-route fanout present")
+            .state,
+        FederationOutboxState::PendingRoute
+    );
+    let claimed = store
+        .claim_due(&claim("token-route-b", "worker-b", 1_100, 60))
+        .await
+        .expect("reclaim missing-route fanout");
+    assert!(claimed.iter().any(|row| row.id == route_missing.id));
+    let forbidden = store
+        .complete(&FederationOutboxTransition {
+            id: route_missing.id.clone(),
+            lease_token: "token-route-b".to_owned(),
+            attempts: 2,
+            semantic_attempts: 0,
+            last_http_status: Some(404),
+            last_error_code: Some("terminal_http_status".to_owned()),
+            last_response_excerpt: None,
+            observed_at: 1_101,
+            outcome: FederationOutboxOutcome::DeadLettered(Box::new(
+                FederationOutboxDeadLetterRecord {
+                    id: format!("dead-letter:{namespace}:realm"),
+                    outbox_id: route_missing.id.clone(),
+                    peer_did: route_missing.peer_did.clone(),
+                    endpoint: route_missing.endpoint.clone(),
+                    idempotency_key: route_missing.idempotency_key.clone(),
+                    last_http_status: Some(404),
+                    attempts: 2,
+                    response_excerpt: None,
+                    reason: "terminal_http_status".to_owned(),
+                    failed_at: 1_101,
+                    requeued_outbox_id: None,
+                    requeued_by: None,
+                    requeue_reason: None,
+                    requeue_request_digest: None,
+                    requeued_at: None,
+                },
+            )),
+        })
+        .await;
+    assert!(
+        forbidden.is_err(),
+        "Realm fanout must never enter the generic dead-letter lifecycle"
+    );
+    assert!(
+        store
+            .complete(&FederationOutboxTransition {
+                id: route_missing.id.clone(),
+                lease_token: "token-route-b".to_owned(),
+                attempts: 2,
+                semantic_attempts: 0,
+                last_http_status: None,
+                last_error_code: Some("fanout_authority_lost".to_owned()),
+                last_response_excerpt: None,
+                observed_at: 1_102,
+                outcome: FederationOutboxOutcome::CancelledAuthorityLost,
+            })
+            .await
+            .expect("cancel authority-lost fanout")
+    );
+    assert_eq!(
+        store
+            .get(&route_missing.id)
+            .await
+            .expect("read cancelled fanout")
+            .expect("cancelled fanout present")
+            .state,
+        FederationOutboxState::CancelledAuthorityLost
+    );
+    assert!(
+        store
+            .claim_due(&claim("token-route-c", "worker-c", 100_000, 60))
+            .await
+            .expect("claim after cancellation")
+            .iter()
+            .all(|row| row.id != route_missing.id),
+        "later route or authority changes must not revive a cancelled intent"
+    );
 
     let depth = store.state_depth().await.expect("state depth");
     assert!(

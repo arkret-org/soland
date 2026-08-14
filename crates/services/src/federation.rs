@@ -109,21 +109,24 @@ pub struct SovereignStoreForwardRecord {
 pub struct FederationDeliveryRecord {
     pub id: String,
     pub peer_did: String,
-    pub peer_url: String,
+    pub peer_url: Option<String>,
     pub endpoint: String,
     pub idempotency_key: String,
     pub payload_json: String,
+    pub realm_fanout: Option<RealmFanoutBinding>,
     pub created_at: i64,
 }
 
 /// One outbox row with its full explicit lifecycle. Re-exported storage state
 /// so the dispatcher and the operator surfaces speak one vocabulary.
 pub use soland_storage::FederationOutboxState as FederationDeliveryState;
+pub use soland_storage::{RealmFanoutAuthorityWitness, RealmFanoutBinding};
 
 #[derive(Clone, Debug)]
 pub struct PendingFederationDelivery {
     pub delivery: FederationDeliveryRecord,
     pub state: FederationDeliveryState,
+    pub leased_from_state: Option<FederationDeliveryState>,
     pub attempts: i32,
     pub semantic_attempts: i32,
     pub next_attempt_at: i64,
@@ -179,7 +182,11 @@ pub enum FederationDeliveryOutcome {
     Retry {
         next_attempt_at: i64,
     },
+    RouteUnavailable {
+        next_attempt_at: i64,
+    },
     Delivered,
+    CancelledAuthorityLost,
     PolicySuppressed {
         policy_version: String,
     },
@@ -250,6 +257,10 @@ pub trait FederationOutboxPort: Send + Sync {
         resolution: &FederationPolicyResolution,
     ) -> ServiceResult<bool>;
     async fn delivery(&self, id: &str) -> ServiceResult<Option<PendingFederationDelivery>>;
+    async fn deliveries_for_event(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Vec<PendingFederationDelivery>>;
     async fn deliveries_by_state(
         &self,
         state: FederationDeliveryState,
@@ -369,6 +380,13 @@ impl FederationService {
 
     pub async fn delivery(&self, id: &str) -> ServiceResult<Option<PendingFederationDelivery>> {
         self.outbox.delivery(id).await
+    }
+
+    pub async fn deliveries_for_event(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Vec<PendingFederationDelivery>> {
+        self.outbox.deliveries_for_event(event_id).await
     }
 
     pub async fn deliveries_by_state(
@@ -505,6 +523,7 @@ mod tests {
         PendingFederationDelivery {
             delivery: delivery.clone(),
             state: FederationDeliveryState::Pending,
+            leased_from_state: None,
             attempts: 0,
             semantic_attempts: 0,
             next_attempt_at: delivery.created_at,
@@ -558,7 +577,9 @@ mod tests {
                     break;
                 }
                 let claimable = match entry.state {
-                    FederationDeliveryState::Pending => true,
+                    FederationDeliveryState::Pending | FederationDeliveryState::PendingRoute => {
+                        true
+                    }
                     FederationDeliveryState::Leased => {
                         entry.lease_expires_at.unwrap_or(0) <= command.now
                     }
@@ -567,6 +588,7 @@ mod tests {
                 if !claimable || entry.next_attempt_at > command.now {
                     continue;
                 }
+                entry.leased_from_state = Some(entry.state);
                 entry.state = FederationDeliveryState::Leased;
                 entry.lease_owner = Some(command.lease_owner.clone());
                 entry.lease_token = Some(command.lease_token.clone());
@@ -592,12 +614,20 @@ mod tests {
             }
             entry.attempts = command.attempts;
             entry.lease_token = None;
+            entry.leased_from_state = None;
             entry.state = match &command.outcome {
                 FederationDeliveryOutcome::Retry { next_attempt_at } => {
                     entry.next_attempt_at = *next_attempt_at;
                     FederationDeliveryState::Pending
                 }
+                FederationDeliveryOutcome::RouteUnavailable { next_attempt_at } => {
+                    entry.next_attempt_at = *next_attempt_at;
+                    FederationDeliveryState::PendingRoute
+                }
                 FederationDeliveryOutcome::Delivered => FederationDeliveryState::Delivered,
+                FederationDeliveryOutcome::CancelledAuthorityLost => {
+                    FederationDeliveryState::CancelledAuthorityLost
+                }
                 FederationDeliveryOutcome::PolicySuppressed { .. } => {
                     FederationDeliveryState::PolicySuppressed
                 }
@@ -637,6 +667,27 @@ mod tests {
                 .iter()
                 .find(|entry| entry.delivery.id == id)
                 .cloned())
+        }
+
+        async fn deliveries_for_event(
+            &self,
+            event_id: &str,
+        ) -> ServiceResult<Vec<PendingFederationDelivery>> {
+            Ok(self
+                .deliveries
+                .lock()
+                .expect("delivery lock")
+                .iter()
+                .filter(|entry| {
+                    entry.delivery.realm_fanout.as_ref().is_some_and(|binding| {
+                        binding
+                            .source_event_ids
+                            .iter()
+                            .any(|source| source == event_id)
+                    })
+                })
+                .cloned()
+                .collect())
         }
 
         async fn deliveries_by_state(
@@ -709,10 +760,11 @@ mod tests {
                 delivery: FederationDeliveryRecord {
                     id: "delivery:1".to_owned(),
                     peer_did: "did:web:peer.example".to_owned(),
-                    peer_url: "https://peer.example".to_owned(),
+                    peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/federation/v1/events".to_owned(),
                     idempotency_key: "key:1".to_owned(),
                     payload_json: "{}".to_owned(),
+                    realm_fanout: None,
                     created_at: 10,
                 },
             })

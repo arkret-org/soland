@@ -32,8 +32,9 @@ use arkret_models_collaboration::event_sync::{
 };
 use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
 use arkret_models_collaboration::http_bodies::{
-    EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
-    EventsSubmitOutcome, EventsSubmitStatus,
+    EventDeliveryState, EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody,
+    EventDeliveryTargetState, EventDeliveryTargetStatus, EventSealSubmitOutcome, EventView,
+    EventsResolveOutcome, EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_wire::{
     Audience, Event, EventRef, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,

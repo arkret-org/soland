@@ -564,13 +564,14 @@ diesel::table! {
 diesel::table! {
     federation_outbox (id) {
         id -> Text,
-        event_pk -> Nullable<Int8>,
         peer_id -> Text,
-        peer_url -> Text,
+        peer_url -> Nullable<Text>,
         endpoint -> Text,
         idempotency_key -> Text,
         payload_json -> Text,
         state -> Text,
+        leased_from_state -> Nullable<Text>,
+        realm_fanout -> Nullable<Jsonb>,
         attempts -> Int4,
         semantic_attempts -> Int4,
         next_attempt_at -> Int8,

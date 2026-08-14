@@ -11,8 +11,8 @@ use super::{
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
-const OUTBOX_COLUMNS: &str = "id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, \
-     payload_json, state, attempts, semantic_attempts, next_attempt_at, last_http_status, \
+pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_id AS peer_did, peer_url, endpoint, idempotency_key, \
+     payload_json, state, leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
      last_error_code, last_response_excerpt, lease_owner, lease_token, lease_expires_at, \
      policy_version, supersedes_outbox_id, created_at, completed_at";
 
@@ -36,23 +36,41 @@ pub(crate) async fn insert_federation_outbox_row(
     conn: &mut AsyncPgConnection,
     record: &FederationOutboxRecord,
 ) -> PersistenceResult<usize> {
+    record
+        .validate_shape()
+        .map_err(|error| PersistenceError::Conflict(format!("schema_violation: {error}")))?;
     sql_query(
         "INSERT INTO federation_outbox \
-         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, attempts, \
+         (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, leased_from_state, realm_fanout, attempts, \
           semantic_attempts, next_attempt_at, last_http_status, last_error_code, \
           last_response_excerpt, lease_owner, lease_token, lease_expires_at, policy_version, \
           supersedes_outbox_id, created_at, completed_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-          $19, $20) \
+          $19, $20, $21, $22) \
          ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
     )
     .bind::<Text, _>(&record.id)
     .bind::<Text, _>(&record.peer_did)
-    .bind::<Text, _>(&record.peer_url)
+    .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
     .bind::<Text, _>(&record.endpoint)
     .bind::<Text, _>(&record.idempotency_key)
     .bind::<Text, _>(&record.payload_json)
     .bind::<Text, _>(record.state.as_str())
+    .bind::<Nullable<Text>, _>(
+        record
+            .leased_from_state
+            .map(FederationOutboxState::as_str),
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        record
+            .realm_fanout
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!("realm fanout encode: {error}"))
+            })?,
+    )
     .bind::<Integer, _>(record.attempts)
     .bind::<Integer, _>(record.semantic_attempts)
     .bind::<BigInt, _>(record.next_attempt_at)
@@ -97,13 +115,14 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             "WITH claimed AS ( \
                  SELECT id AS claim_id FROM federation_outbox \
                  WHERE next_attempt_at <= $1 \
-                   AND (state = 'pending' \
+                   AND (state IN ('pending', 'pending_route') \
                         OR (state = 'leased' AND COALESCE(lease_expires_at, 0) <= $1)) \
                  ORDER BY next_attempt_at ASC, id ASC \
                  LIMIT $2 \
                  FOR UPDATE SKIP LOCKED \
              ) \
              UPDATE federation_outbox AS outbox SET \
+                 leased_from_state = CASE WHEN outbox.state = 'leased' THEN outbox.leased_from_state ELSE outbox.state END, \
                  state = 'leased', \
                  lease_owner = $3, \
                  lease_token = $4, \
@@ -122,8 +141,8 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .map_err(PersistenceError::database)?;
         let mut records = rows
             .into_iter()
-            .map(FederationOutboxRecord::from)
-            .collect::<Vec<_>>();
+            .map(FederationOutboxRecord::try_from)
+            .collect::<PersistenceResult<Vec<_>>>()?;
         records.sort_by(|left, right| {
             (left.next_attempt_at, left.id.as_str())
                 .cmp(&(right.next_attempt_at, right.id.as_str()))
@@ -137,12 +156,57 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let row_kind = sql_query(
+                "SELECT realm_fanout IS NOT NULL AS exists FROM federation_outbox \
+                 WHERE id = $1 AND lease_token = $2 FOR UPDATE",
+            )
+            .bind::<Text, _>(&transition.id)
+            .bind::<Text, _>(&transition.lease_token)
+            .get_result::<ExistsRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            let Some(row_kind) = row_kind else {
+                return Ok(false);
+            };
+            if (row_kind.present
+                && matches!(
+                    &transition.outcome,
+                    FederationOutboxOutcome::PolicySuppressed { .. }
+                        | FederationOutboxOutcome::DeadLettered(_)
+                        | FederationOutboxOutcome::Superseded(_)
+                ))
+                || (!row_kind.present
+                    && matches!(
+                        &transition.outcome,
+                        FederationOutboxOutcome::RouteUnavailable { .. }
+                            | FederationOutboxOutcome::CancelledAuthorityLost
+                    ))
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: federation transition does not match the row lifecycle"
+                        .to_owned(),
+                )
+                .into());
+            }
             let (state, next_attempt_at, completed_at, policy_version) = match &transition.outcome {
                 FederationOutboxOutcome::Retry { next_attempt_at } => {
                     (FederationOutboxState::Pending, *next_attempt_at, None, None)
                 }
+                FederationOutboxOutcome::RouteUnavailable { next_attempt_at } => (
+                    FederationOutboxState::PendingRoute,
+                    *next_attempt_at,
+                    None,
+                    None,
+                ),
                 FederationOutboxOutcome::Delivered => (
                     FederationOutboxState::Delivered,
+                    transition.observed_at,
+                    Some(transition.observed_at),
+                    None,
+                ),
+                FederationOutboxOutcome::CancelledAuthorityLost => (
+                    FederationOutboxState::CancelledAuthorityLost,
                     transition.observed_at,
                     Some(transition.observed_at),
                     None,
@@ -172,7 +236,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
                 "UPDATE federation_outbox SET \
                  state = $3, attempts = $4, semantic_attempts = $5, next_attempt_at = $6, \
                  last_http_status = $7, last_error_code = $8, last_response_excerpt = $9, \
-                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, \
+                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, leased_from_state = NULL, \
                  policy_version = $10, completed_at = $11 \
                  WHERE id = $1 AND lease_token = $2",
             )
@@ -227,7 +291,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .load::<FederationOutboxRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
+        rows.into_iter()
+            .map(FederationOutboxRecord::try_from)
+            .collect()
     }
 
     async fn resolve_policy_suppressed(
@@ -277,8 +343,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .get_result::<FederationOutboxRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(FederationOutboxRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(FederationOutboxRecord::try_from)
+        .transpose()
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>> {
@@ -291,7 +358,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .load::<FederationOutboxRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
+        rows.into_iter()
+            .map(FederationOutboxRecord::try_from)
+            .collect()
     }
 
     async fn list_by_state(
@@ -311,7 +380,9 @@ impl FederationOutboxStore for PgFederationOutboxStore {
         .load::<FederationOutboxRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(FederationOutboxRecord::from).collect())
+        rows.into_iter()
+            .map(FederationOutboxRecord::try_from)
+            .collect()
     }
 
     async fn state_depth(&self) -> PersistenceResult<Vec<FederationOutboxStateDepth>> {
@@ -720,13 +791,13 @@ impl From<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
     }
 }
 #[derive(QueryableByName)]
-struct FederationOutboxRow {
+pub(crate) struct FederationOutboxRow {
     #[diesel(sql_type = Text)]
     id: String,
     #[diesel(sql_type = Text)]
     peer_did: String,
-    #[diesel(sql_type = Text)]
-    peer_url: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    peer_url: Option<String>,
     #[diesel(sql_type = Text)]
     endpoint: String,
     #[diesel(sql_type = Text)]
@@ -735,6 +806,10 @@ struct FederationOutboxRow {
     payload_json: String,
     #[diesel(sql_type = Text)]
     state: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    leased_from_state: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    realm_fanout: Option<serde_json::Value>,
     #[diesel(sql_type = Integer)]
     attempts: i32,
     #[diesel(sql_type = Integer)]
@@ -762,19 +837,46 @@ struct FederationOutboxRow {
     #[diesel(sql_type = Nullable<BigInt>)]
     completed_at: Option<i64>,
 }
-impl From<FederationOutboxRow> for FederationOutboxRecord {
-    fn from(row: FederationOutboxRow) -> Self {
-        Self {
+impl TryFrom<FederationOutboxRow> for FederationOutboxRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: FederationOutboxRow) -> Result<Self, Self::Error> {
+        let state = FederationOutboxState::parse(&row.state).ok_or_else(|| {
+            PersistenceError::Internal(format!(
+                "stored federation outbox state is invalid: {:?}",
+                row.state
+            ))
+        })?;
+        let leased_from_state = row
+            .leased_from_state
+            .as_deref()
+            .map(|state| {
+                FederationOutboxState::parse(state).ok_or_else(|| {
+                    PersistenceError::Internal(format!(
+                        "stored federation outbox leased_from_state is invalid: {state:?}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let realm_fanout = row
+            .realm_fanout
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "stored Realm fanout binding is invalid: {error}"
+                ))
+            })?;
+        let record = Self {
             id: row.id,
             peer_did: row.peer_did,
             peer_url: row.peer_url,
             endpoint: row.endpoint,
             idempotency_key: row.idempotency_key,
             payload_json: row.payload_json,
-            // The `federation_outbox_state_check` CHECK constraint is what
-            // makes this total; an unparseable value means the schema drifted.
-            state: FederationOutboxState::parse(&row.state)
-                .unwrap_or(FederationOutboxState::Pending),
+            state,
+            leased_from_state,
+            realm_fanout,
             attempts: row.attempts,
             semantic_attempts: row.semantic_attempts,
             next_attempt_at: row.next_attempt_at,
@@ -788,7 +890,11 @@ impl From<FederationOutboxRow> for FederationOutboxRecord {
             supersedes_outbox_id: row.supersedes_outbox_id,
             created_at: row.created_at,
             completed_at: row.completed_at,
-        }
+        };
+        record.validate_shape().map_err(|error| {
+            PersistenceError::Internal(format!("stored federation outbox row is invalid: {error}"))
+        })?;
+        Ok(record)
     }
 }
 #[derive(QueryableByName)]

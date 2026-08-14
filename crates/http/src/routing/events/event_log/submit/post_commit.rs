@@ -385,7 +385,8 @@ pub(super) async fn peer_event_batch_fanout_records(
     // depends on projection-install visibility or on the first Realm-create
     // envelope carrying a destination of its own.
     for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
-        let Some(service_id) = routable_member_delivery_service(&parsed.kind, envelope) else {
+        let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope)
+        else {
             continue;
         };
         if service_id == state.service_id()
@@ -400,14 +401,17 @@ pub(super) async fn peer_event_batch_fanout_records(
             false,
         )
         .await
-        .map_err(|error| {
-            format!("bootstrap peer member {service_id} has no verified service route: {error}")
-        })?;
+        .ok();
         peers.push(DynamicPeerEventTarget {
             url,
             service_id: service_id.to_owned(),
             membership_frontier: vec![parsed.event_id.clone()],
             delivery_binding_frontier: vec![parsed.event_id.clone()],
+            authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
+                member_id: member_id.to_owned(),
+                membership_event_ref: parsed.event_id.clone(),
+                delivery_binding_frontier: parsed.event_id.clone(),
+            }],
         });
     }
     if peers.is_empty() {
@@ -473,10 +477,21 @@ pub(super) async fn peer_event_batch_fanout_records(
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
-            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            peer_url: peer
+                .url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json,
+            realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
+                realm_id: first.realm_id.clone(),
+                source_event_ids: parsed_events
+                    .iter()
+                    .map(|event| event.event_id.clone())
+                    .collect(),
+                authority_witnesses: peer.authority_witnesses,
+            }),
             created_at: now,
         });
     }
@@ -496,7 +511,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     }
     let mut peers = Vec::new();
     for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
-        let Some(service_id) = routable_member_delivery_service(&parsed.kind, envelope) else {
+        let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope)
+        else {
             continue;
         };
         if service_id == state.service_id()
@@ -513,16 +529,17 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             false,
         )
         .await
-        .map_err(|error| {
-            format!(
-                "Direct Conversation founding destination {service_id} has no verified service route: {error}"
-            )
-        })?;
+        .ok();
         peers.push(DynamicPeerEventTarget {
             url,
             service_id: service_id.to_owned(),
             membership_frontier: Vec::new(),
             delivery_binding_frontier: Vec::new(),
+            authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
+                member_id: member_id.to_owned(),
+                membership_event_ref: parsed.event_id.clone(),
+                delivery_binding_frontier: parsed.event_id.clone(),
+            }],
         });
     }
     let events = envelopes
@@ -562,20 +579,34 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id.clone(),
-            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            peer_url: peer
+                .url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!(
                 "ak:outbox:direct-conversation-founding:{}:{}",
                 receipt.pair_key, receipt.founding_unit_digest
             ),
             payload_json,
+            realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
+                realm_id: parsed_events[0].realm_id.clone(),
+                source_event_ids: parsed_events
+                    .iter()
+                    .map(|event| event.event_id.clone())
+                    .collect(),
+                authority_witnesses: peer.authority_witnesses,
+            }),
             created_at: now,
         });
     }
     Ok(records)
 }
 
-fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Option<&'a str> {
+fn routable_member_delivery_target<'a>(
+    kind: &str,
+    envelope: &'a Value,
+) -> Option<(&'a str, &'a str)> {
     if kind != arkret_wire::EventKind::MemberState.as_str() {
         return None;
     }
@@ -585,13 +616,15 @@ fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Opti
     {
         return None;
     }
-    payload
+    let member_id = payload.get("actor_id").and_then(Value::as_str)?;
+    let service_id = payload
         .get("delivery_binding")
         .and_then(Value::as_object)
         .and_then(|binding| binding.get("recipient_service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|service_id| !service_id.is_empty())
+        .filter(|service_id| !service_id.is_empty())?;
+    Some((member_id, service_id))
 }
 
 /// Federation delivery intents for one accepted Event, built **before** its
@@ -725,10 +758,18 @@ pub(super) async fn peer_event_fanout_records(
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
-            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            peer_url: peer
+                .url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json: payload,
+            realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
+                realm_id: parsed.realm_id.clone(),
+                source_event_ids: vec![parsed.event_id.clone()],
+                authority_witnesses: peer.authority_witnesses.clone(),
+            }),
             created_at: now,
         });
     }
@@ -959,20 +1000,32 @@ async fn realm_bootstrap_fanout_record(
         soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id.clone(),
-            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            peer_url: peer
+                .url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key,
             payload_json,
+            realm_fanout: Some(soland_services::federation::RealmFanoutBinding {
+                realm_id: parsed.realm_id.clone(),
+                source_event_ids: bootstrap_records
+                    .iter()
+                    .map(|record| record.event_id.clone())
+                    .collect(),
+                authority_witnesses: peer.authority_witnesses.clone(),
+            }),
             created_at,
         },
     ))
 }
 
 struct DynamicPeerEventTarget {
-    url: String,
+    url: Option<String>,
     service_id: String,
     membership_frontier: Vec<String>,
     delivery_binding_frontier: Vec<String>,
+    authority_witnesses: Vec<soland_services::federation::RealmFanoutAuthorityWitness>,
 }
 
 async fn dynamic_peer_event_targets(
@@ -998,10 +1051,16 @@ async fn dynamic_peer_event_targets(
         } else {
             projection.federation_delivery_revoked_peers(&parsed.realm_id)
         };
-        let mut service_frontiers: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> =
-            BTreeMap::new();
+        let mut service_frontiers: BTreeMap<
+            String,
+            (
+                BTreeSet<String>,
+                BTreeSet<String>,
+                Vec<soland_services::federation::RealmFanoutAuthorityWitness>,
+            ),
+        > = BTreeMap::new();
         for member in projection.members_of_realm(&parsed.realm_id) {
-            if member.delivery_status.as_deref() != Some("routable") {
+            if member.state != "join" || member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
             let Some(service_id) = member.recipient_service_id.as_deref() else {
@@ -1019,24 +1078,38 @@ async fn dynamic_peer_event_targets(
                 );
                 continue;
             }
+            let membership_event_ref = member.membership_event_ref.as_deref().ok_or_else(|| {
+                format!(
+                    "routable member {} lacks a membership Event reference",
+                    member.member
+                )
+            })?;
+            let delivery_binding_frontier =
+                member.delivery_binding_frontier.as_deref().ok_or_else(|| {
+                    format!(
+                        "routable member {} lacks a delivery-binding frontier",
+                        member.member
+                    )
+                })?;
             let entry = service_frontiers.entry(service_id.to_owned()).or_default();
-            if let Some(frontier) = member.membership_event_ref.as_deref() {
-                entry.0.insert(frontier.to_owned());
-            }
-            if let Some(frontier) = member
-                .delivery_binding_frontier
-                .as_deref()
-                .or(member.membership_event_ref.as_deref())
-            {
-                entry.1.insert(frontier.to_owned());
-            }
+            entry.0.insert(membership_event_ref.to_owned());
+            entry.1.insert(delivery_binding_frontier.to_owned());
+            entry
+                .2
+                .push(soland_services::federation::RealmFanoutAuthorityWitness {
+                    member_id: member.member.clone(),
+                    membership_event_ref: membership_event_ref.to_owned(),
+                    delivery_binding_frontier: delivery_binding_frontier.to_owned(),
+                });
         }
 
         service_frontiers
     };
 
     let mut targets = Vec::new();
-    for (service_id, (membership_frontier, delivery_binding_frontier)) in service_frontiers {
+    for (service_id, (membership_frontier, delivery_binding_frontier, authority_witnesses)) in
+        service_frontiers
+    {
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             &service_id,
@@ -1044,16 +1117,13 @@ async fn dynamic_peer_event_targets(
             false,
         )
         .await
-        .map_err(|error| {
-            format!(
-                "dynamic peer Event fanout target {service_id} has no verified service route: {error}"
-            )
-        })?;
+        .ok();
         targets.push(DynamicPeerEventTarget {
             url,
             service_id,
             membership_frontier: membership_frontier.into_iter().collect(),
             delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
+            authority_witnesses,
         });
     }
     Ok(targets)
@@ -1111,7 +1181,7 @@ pub(super) fn typed_frontier_or_fallback(
 mod tests {
     use serde_json::json;
 
-    use super::routable_member_delivery_service;
+    use super::routable_member_delivery_target;
 
     #[test]
     fn bootstrap_fanout_reads_routable_peer_service_from_member_join() {
@@ -1127,21 +1197,21 @@ mod tests {
             }
         });
         assert_eq!(
-            routable_member_delivery_service(
+            routable_member_delivery_target(
                 arkret_wire::EventKind::MemberState.as_str(),
                 &envelope,
             ),
-            Some("did:web:soland-beta.example")
+            Some(("did:web:bob.example", "did:web:soland-beta.example"))
         );
         assert_eq!(
-            routable_member_delivery_service(
+            routable_member_delivery_target(
                 arkret_wire::EventKind::RealmCreate.as_str(),
                 &envelope,
             ),
             None
         );
         assert_eq!(
-            routable_member_delivery_service(
+            routable_member_delivery_target(
                 arkret_wire::EventKind::MemberState.as_str(),
                 &json!({
                     "payload": {

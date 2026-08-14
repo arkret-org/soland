@@ -1,7 +1,7 @@
 //! Operator CLI for the durable federation outbox.
 //!
 //! ```text
-//! soland-federation-outbox list [--state pending|leased|delivered|policy_suppressed|dead_lettered|superseded] [--limit N]
+//! soland-federation-outbox list [--state pending|pending_route|leased|delivered|cancelled_authority_lost|policy_suppressed|dead_lettered|superseded] [--limit N]
 //! soland-federation-outbox list --dead-letters [--limit N]
 //! soland-federation-outbox inspect <outbox-id|dead-letter-id>
 //! soland-federation-outbox requeue <dead-letter-id> --operator <did> --reason <text>
@@ -114,8 +114,8 @@ async fn main() -> anyhow::Result<()> {
 fn parse_state(value: &str) -> anyhow::Result<FederationDeliveryState> {
     FederationDeliveryState::parse(value.trim()).ok_or_else(|| {
         anyhow::anyhow!(
-            "unknown --state {value}; expected pending, leased, delivered, policy_suppressed, \
-             dead_lettered or superseded"
+            "unknown --state {value}; expected pending, pending_route, leased, delivered, \
+             cancelled_authority_lost, policy_suppressed, dead_lettered or superseded"
         )
     })
 }

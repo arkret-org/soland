@@ -875,24 +875,44 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             for record in request.outbox {
-                outbox_inserted += sql_query(
+                record.validate_shape().map_err(|error| {
+                    PersistenceError::Conflict(format!("schema_violation: {error}"))
+                })?;
+                let inserted = sql_query(
                     "INSERT INTO federation_outbox \
                      (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, \
-                      attempts, semantic_attempts, next_attempt_at, last_http_status, \
-                      last_error_code, last_response_excerpt, lease_owner, lease_token, \
-                      lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
-                      completed_at, event_pk) \
+                     leased_from_state, realm_fanout, attempts, semantic_attempts, next_attempt_at, last_http_status, \
+                     last_error_code, last_response_excerpt, lease_owner, lease_token, \
+                     lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
+                      completed_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                      $16, $17, $18, $19, $20, $21) \
+                      $16, $17, $18, $19, $20, $21, $22) \
                      ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
                 .bind::<Text, _>(&record.peer_did)
-                .bind::<Text, _>(&record.peer_url)
+                .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
                 .bind::<Text, _>(&record.endpoint)
                 .bind::<Text, _>(&record.idempotency_key)
                 .bind::<Text, _>(&record.payload_json)
                 .bind::<Text, _>(record.state.as_str())
+                .bind::<Nullable<Text>, _>(
+                    record
+                        .leased_from_state
+                        .map(soland_storage::FederationOutboxState::as_str),
+                )
+                .bind::<Nullable<Jsonb>, _>(
+                    record
+                        .realm_fanout
+                        .as_ref()
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "realm fanout encode: {error}"
+                            ))
+                        })?,
+                )
                 .bind::<Integer, _>(record.attempts)
                 .bind::<Integer, _>(record.semantic_attempts)
                 .bind::<BigInt, _>(record.next_attempt_at)
@@ -906,10 +926,11 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .bind::<Nullable<Text>, _>(record.supersedes_outbox_id.as_deref())
                 .bind::<BigInt, _>(record.created_at)
                 .bind::<Nullable<BigInt>, _>(record.completed_at)
-                .bind::<Nullable<BigInt>, _>(Some(event_pk))
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;
+                outbox_inserted += inserted;
+                crate::events::bind_event_outbox_rows(conn, &[event_pk], &record).await?;
             }
             }
 

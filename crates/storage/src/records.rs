@@ -6,8 +6,8 @@ use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceSealFrontier, FreshnessState, LeaseBasisRef, NonEmptyString,
-    PlaintextDataClassKind,
+    DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
+    NonEmptyString, PlaintextDataClassKind, RealmId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -529,8 +529,10 @@ pub struct BlobRecord {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum FederationOutboxState {
     Pending,
+    PendingRoute,
     Leased,
     Delivered,
+    CancelledAuthorityLost,
     PolicySuppressed,
     DeadLettered,
     Superseded,
@@ -540,8 +542,10 @@ impl FederationOutboxState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::PendingRoute => "pending_route",
             Self::Leased => "leased",
             Self::Delivered => "delivered",
+            Self::CancelledAuthorityLost => "cancelled_authority_lost",
             Self::PolicySuppressed => "policy_suppressed",
             Self::DeadLettered => "dead_lettered",
             Self::Superseded => "superseded",
@@ -551,8 +555,10 @@ impl FederationOutboxState {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
+            "pending_route" => Some(Self::PendingRoute),
             "leased" => Some(Self::Leased),
             "delivered" => Some(Self::Delivered),
+            "cancelled_authority_lost" => Some(Self::CancelledAuthorityLost),
             "policy_suppressed" => Some(Self::PolicySuppressed),
             "dead_lettered" => Some(Self::DeadLettered),
             "superseded" => Some(Self::Superseded),
@@ -566,7 +572,11 @@ impl FederationOutboxState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Delivered | Self::PolicySuppressed | Self::DeadLettered | Self::Superseded
+            Self::Delivered
+                | Self::CancelledAuthorityLost
+                | Self::PolicySuppressed
+                | Self::DeadLettered
+                | Self::Superseded
         )
     }
 }
@@ -574,6 +584,67 @@ impl FederationOutboxState {
 impl std::fmt::Display for FederationOutboxState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// One exact accepted member/delivery-binding generation that authorized a
+/// distinct Realm fanout target when the local Event was accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RealmFanoutAuthorityWitness {
+    pub member_id: String,
+    pub membership_event_ref: String,
+    pub delivery_binding_frontier: String,
+}
+
+/// Durable metadata that distinguishes a Realm Event fanout obligation from
+/// the generic federation outbox. It is frozen in the Event transaction and
+/// never rewritten when membership later changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RealmFanoutBinding {
+    pub realm_id: String,
+    pub source_event_ids: Vec<String>,
+    pub authority_witnesses: Vec<RealmFanoutAuthorityWitness>,
+}
+
+impl RealmFanoutBinding {
+    pub fn validate_for_target(&self, recipient_service_id: &str) -> Result<(), String> {
+        RealmId::new(self.realm_id.clone())
+            .map_err(|error| format!("invalid Realm fanout Realm id: {error}"))?;
+        DidCoreId::new(recipient_service_id.to_owned())
+            .map_err(|error| format!("invalid Realm fanout recipient service id: {error}"))?;
+        if self.source_event_ids.is_empty() || self.authority_witnesses.is_empty() {
+            return Err(
+                "Realm fanout binding requires source Events and authority witnesses".to_owned(),
+            );
+        }
+        let mut source_events = BTreeSet::new();
+        for source_event_id in &self.source_event_ids {
+            EventId::new(source_event_id.clone())
+                .map_err(|error| format!("invalid Realm fanout source Event id: {error}"))?;
+            if !source_events.insert(source_event_id) {
+                return Err("Realm fanout source Event ids must be unique".to_owned());
+            }
+        }
+        let mut witnesses = BTreeSet::new();
+        for witness in &self.authority_witnesses {
+            DidCoreId::new(witness.member_id.clone())
+                .map_err(|error| format!("invalid Realm fanout member id: {error}"))?;
+            EventId::new(witness.membership_event_ref.clone())
+                .map_err(|error| format!("invalid Realm fanout membership Event ref: {error}"))?;
+            EventId::new(witness.delivery_binding_frontier.clone()).map_err(|error| {
+                format!("invalid Realm fanout delivery-binding frontier: {error}")
+            })?;
+            if !witnesses.insert((
+                witness.member_id.as_str(),
+                witness.membership_event_ref.as_str(),
+                witness.delivery_binding_frontier.as_str(),
+            )) {
+                return Err("Realm fanout authority witnesses must be unique".to_owned());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -596,7 +667,7 @@ pub struct FederationOutboxRecord {
     pub peer_did: String,
     /// Fully-qualified peer base URL (no trailing slash) the dispatcher
     /// concatenates with `endpoint` to form the POST target.
-    pub peer_url: String,
+    pub peer_url: Option<String>,
     /// Endpoint path on the peer, e.g. `/_arkret/peer/events`.
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
@@ -609,6 +680,11 @@ pub struct FederationOutboxRecord {
     /// Explicit lifecycle state — the single source of truth for whether this
     /// intent is still owed to the peer.
     pub state: FederationOutboxState,
+    /// State replaced by `leased` while a worker owns the row. Required for
+    /// exact read projection of pending_route versus pending_delivery.
+    pub leased_from_state: Option<FederationOutboxState>,
+    /// Present only for locally orchestrated Realm Event fanout.
+    pub realm_fanout: Option<RealmFanoutBinding>,
     /// Number of completed transport attempts (excluding the next one).
     pub attempts: i32,
     /// Number of semantic resubmissions that produced this row. Bounded
@@ -647,6 +723,52 @@ pub struct FederationOutboxRecord {
 }
 
 impl FederationOutboxRecord {
+    pub fn validate_shape(&self) -> Result<(), String> {
+        match self.realm_fanout.as_ref() {
+            Some(binding) => {
+                binding.validate_for_target(&self.peer_did)?;
+                if matches!(
+                    self.state,
+                    FederationOutboxState::PolicySuppressed
+                        | FederationOutboxState::DeadLettered
+                        | FederationOutboxState::Superseded
+                ) {
+                    return Err(
+                        "Realm fanout row entered a lifecycle outside the closed target state"
+                            .to_owned(),
+                    );
+                }
+            }
+            None => {
+                if self.peer_url.is_none() {
+                    return Err("generic federation row is missing its peer URL".to_owned());
+                }
+                if matches!(
+                    self.state,
+                    FederationOutboxState::PendingRoute
+                        | FederationOutboxState::CancelledAuthorityLost
+                ) || self.leased_from_state == Some(FederationOutboxState::PendingRoute)
+                {
+                    return Err(
+                        "generic federation row carries a Realm-only lifecycle state".to_owned(),
+                    );
+                }
+            }
+        }
+        if self.state == FederationOutboxState::Leased {
+            if self.leased_from_state.is_none()
+                || self.lease_owner.is_none()
+                || self.lease_token.is_none()
+                || self.lease_expires_at.is_none()
+            {
+                return Err("leased federation row is missing lease state".to_owned());
+            }
+        } else if self.leased_from_state.is_some() {
+            return Err("non-leased federation row carries leased_from_state".to_owned());
+        }
+        Ok(())
+    }
+
     /// A freshly enqueued, never-attempted delivery intent.
     pub fn pending(
         id: String,
@@ -660,11 +782,53 @@ impl FederationOutboxRecord {
         Self {
             id,
             peer_did,
-            peer_url,
+            peer_url: Some(peer_url),
             endpoint,
             idempotency_key,
             payload_json,
             state: FederationOutboxState::Pending,
+            leased_from_state: None,
+            realm_fanout: None,
+            attempts: 0,
+            semantic_attempts: 0,
+            next_attempt_at: created_at,
+            last_http_status: None,
+            last_error_code: None,
+            last_response_excerpt: None,
+            lease_owner: None,
+            lease_token: None,
+            lease_expires_at: None,
+            policy_version: None,
+            supersedes_outbox_id: None,
+            created_at,
+            completed_at: None,
+        }
+    }
+
+    pub fn realm_fanout(
+        id: String,
+        peer_did: String,
+        peer_url: Option<String>,
+        endpoint: String,
+        idempotency_key: String,
+        payload_json: String,
+        binding: RealmFanoutBinding,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id,
+            peer_did,
+            state: if peer_url.is_some() {
+                FederationOutboxState::Pending
+            } else {
+                FederationOutboxState::PendingRoute
+            },
+            peer_url,
+            endpoint,
+            idempotency_key,
+            payload_json,
+            leased_from_state: None,
+            realm_fanout: Some(binding),
             attempts: 0,
             semantic_attempts: 0,
             next_attempt_at: created_at,
