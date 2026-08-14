@@ -1358,6 +1358,7 @@ async fn submit_event_batch_outcome_with_leases(
             None,
             &[],
             None,
+            None,
         )
         .await
         {
@@ -2784,6 +2785,7 @@ pub(crate) async fn submit_federation_events(
             false,
             None,
             &[],
+            None,
             None,
         )
         .await

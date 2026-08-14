@@ -1,5 +1,16 @@
 use super::*;
 
+pub(super) struct PreparedAgentMembershipEvent {
+    pub(super) command: soland_services::events::CommitAcceptedEventCommand,
+    pub(super) control_event: Event,
+    pub(super) operation: arkret_event_draft::ProjectedEventOperation,
+    pub(super) projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
+    pub(super) projected_event: soland_services::events::ProjectedEvent,
+    pub(super) actor_id: String,
+    pub(super) device_id: String,
+    pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
+}
+
 pub(super) fn stored_prev_frontier_digest(
     record: &CanonicalEventRecord,
 ) -> Result<String, SubmitOneError> {
@@ -244,6 +255,7 @@ pub(in crate::routing) async fn submit_event_value(
         None,
         &[],
         None,
+        None,
     )
     .await
 }
@@ -417,8 +429,111 @@ async fn submit_initial_event_submission_with_commit_extensions(
         contact_projection.as_ref(),
         &additional_deliveries,
         additional_idempotency.as_ref(),
+        None,
     )
     .await
+}
+
+pub(super) async fn prepare_agent_membership_initial_event(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<PreparedAgentMembershipEvent, SubmitOneError> {
+    validate_initial_submission_in_context(&submission, arkret_wire::EventSubmitContext::Standard)?;
+    if submission.membership_compensation_evidence.is_some() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "agent membership cascade forbids membership compensation evidence",
+        ));
+    }
+    if let Some(lease) = &submission.authorization_lease {
+        validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
+            .await?;
+    }
+    let arkret_wire::EventInitialSubmission {
+        event,
+        authorization_lease,
+        cba_proof_bundles: _,
+        control_proposal_ack,
+        membership_compensation_evidence: _,
+    } = submission;
+    let envelope = typed_event_to_canonical_value(event)?;
+    let mut prepared = None;
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        None,
+        authorization_lease.as_ref(),
+        control_proposal_ack.as_ref(),
+        None,
+        None,
+        false,
+        None,
+        &[],
+        None,
+        Some(&mut prepared),
+    )
+    .await?;
+    prepared.ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "agent membership cascade preparation encountered an already accepted Event",
+        )
+    })
+}
+
+pub(super) async fn prepare_agent_membership_federated_event(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: &arkret_wire::EventFederationSubmission,
+    admission: &InternalEventAdmission,
+) -> Result<PreparedAgentMembershipEvent, SubmitOneError> {
+    submission.validate_structural().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("federated agent membership transition is invalid: {error}"),
+        )
+    })?;
+    if submission.membership_compensation_evidence.is_some() {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "agent membership cascade forbids membership compensation evidence",
+        ));
+    }
+    let envelope = typed_event_to_canonical_value(submission.event.clone())?;
+    let mut prepared = None;
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        Some(admission),
+        None,
+        submission.control_proposal_ack.as_ref(),
+        None,
+        None,
+        false,
+        None,
+        &[],
+        None,
+        Some(&mut prepared),
+    )
+    .await?;
+    prepared.ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "agent membership cascade preparation encountered an already accepted Event",
+        )
+    })
 }
 
 pub(in crate::routing) async fn submit_mimi_event_value(
@@ -444,6 +559,7 @@ pub(in crate::routing) async fn submit_mimi_event_value(
         false,
         None,
         &[],
+        None,
         None,
     )
     .await
@@ -485,6 +601,7 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         None,
         &[],
         None,
+        None,
     )
     .await
 }
@@ -517,6 +634,7 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
         false,
         None,
         &[],
+        None,
         None,
     )
     .await
@@ -555,6 +673,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         false,
         None,
         &[],
+        None,
         None,
     )
     .await
@@ -1061,6 +1180,7 @@ pub(super) async fn submit_event_value_with_context(
     contact_projection: Option<&soland_services::events::CommitContactProjection>,
     additional_deliveries: &[soland_services::events::FederationDelivery],
     additional_idempotency: Option<&soland_services::events::IdempotentResponse>,
+    deferred_agent_membership: Option<&mut Option<PreparedAgentMembershipEvent>>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
@@ -1610,13 +1730,22 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        if let Err(message) = validate_operation_policy_with_plaintext_service_binding(
-            state,
-            std::slice::from_ref(operation),
-            has_internal_plaintext_service_binding,
-        )
-        .await
-        {
+        let policy_result = if deferred_agent_membership.is_some() {
+            crate::routing::events::operations::validate_operation_policy_for_agent_membership_cascade(
+                state,
+                std::slice::from_ref(operation),
+                has_internal_plaintext_service_binding,
+            )
+            .await
+        } else {
+            validate_operation_policy_with_plaintext_service_binding(
+                state,
+                std::slice::from_ref(operation),
+                has_internal_plaintext_service_binding,
+            )
+            .await
+        };
+        if let Err(message) = policy_result {
             let (status, code) =
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
@@ -2276,7 +2405,20 @@ pub(super) async fn submit_event_value_with_context(
             format!("post-submit frontier unavailable: {error}"),
         )
     })?;
-    let mut accepted_response = with_ingress_receipt(
+    let mut accepted_response = if deferred_agent_membership.is_some() {
+        SubmittedEventOutcome {
+            event_id: parsed.event_id.clone(),
+            duplicate: false,
+            outcome: events_submit_outcome(
+                EventsSubmitStatus::Accepted,
+                vec![parsed.event_id.clone()],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+        }
+    } else {
         event_submit_response(
             state,
             session,
@@ -2284,9 +2426,9 @@ pub(super) async fn submit_event_value_with_context(
             parsed.event_id.clone(),
             prospective_frontier,
         )
-        .await,
-        ingress_receipt.as_ref(),
-    );
+        .await
+    };
+    accepted_response = with_ingress_receipt(accepted_response, ingress_receipt.as_ref());
     if let Some(ack) = control_proposal_ack.as_ref() {
         accepted_response
             .outcome
@@ -2391,6 +2533,59 @@ pub(super) async fn submit_event_value_with_context(
         }),
         deliveries: outbox,
     };
+    if let Some(slot) = deferred_agent_membership {
+        if parsed.kind != arkret_wire::EventKind::MemberState.as_str()
+            || command.device_pairing_authorization.is_some()
+            || command.contact_projection.is_some()
+            || command.device_revocation_transition.is_some()
+            || command.idempotency.is_some()
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "agent membership cascade may prepare only plain ak.member.state Events",
+            ));
+        }
+        let control_event = control_event_for_proposal.ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "agent membership cascade transition must be a Control Move",
+            )
+        })?;
+        if command.control_proposal_ack.is_none() {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "agent membership cascade transition requires a canonical Control Proposal Ack",
+            ));
+        }
+        let operation = projection_operation.ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "agent membership cascade transition has no reducer operation",
+            )
+        })?;
+        let projected_event = projected_event.ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "agent membership cascade transition has no projection event",
+            )
+        })?;
+        *slot = Some(PreparedAgentMembershipEvent {
+            command,
+            control_event,
+            operation,
+            projected_cell_writes,
+            projected_event,
+            actor_id: parsed.actor_id,
+            device_id: parsed.device_id,
+            ingress_receipts: accepted_response.outcome.ingress_receipts.clone(),
+        });
+        return Ok(accepted_response);
+    }
     if let Err(error) = state.events().commit_accepted_event(command).await {
         if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && error.is_realm_already_exists()

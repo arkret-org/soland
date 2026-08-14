@@ -63,6 +63,7 @@ pub(super) fn operation_is_space_container(operation: &Operation) -> bool {
 pub(super) async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
+    agent_membership_cascade: bool,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::MemberState) {
         return Ok(());
@@ -72,6 +73,36 @@ pub(super) async fn validate_member_state_policy(
     }
     if let Some(reason) = direct_conversation_member_state_guard(state, operation) {
         return Err(reason);
+    }
+    let carries_cascade_cause = operation.payload.get("membership_cause").is_some()
+        || operation
+            .payload
+            .pointer("/agent_controller_binding/controller_terminal_event_ref")
+            .is_some();
+    if carries_cascade_cause
+        && (!agent_membership_cascade
+            || operation.payload.get("membership").and_then(Value::as_str) != Some("leave")
+            || operation
+                .payload
+                .get("membership_cause")
+                .and_then(Value::as_str)
+                != Some("controller_membership_ended")
+            || operation
+                .payload
+                .pointer("/agent_controller_binding/controller_terminal_event_ref")
+                .and_then(Value::as_str)
+                .is_none())
+    {
+        return Err("agent_membership_cascade_required");
+    }
+    if !agent_membership_cascade
+        && matches!(
+            operation.payload.get("membership").and_then(Value::as_str),
+            Some("leave" | "ban")
+        )
+        && controller_has_bound_agent_memberships(state, operation)
+    {
+        return Err("agent_membership_cascade_required");
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
         let target = membership_target(operation);
@@ -204,6 +235,33 @@ pub(super) async fn validate_member_state_policy(
         return Ok(());
     }
     Err("missing_capability")
+}
+
+fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operation) -> bool {
+    let Some(controller_id) = membership_target(operation) else {
+        return false;
+    };
+    let projection = state.projections().snapshot();
+    let Some(controller) = projection.member(operation.realm_id.as_str(), controller_id) else {
+        return false;
+    };
+    let Some(generation) = controller.membership_event_ref.as_deref() else {
+        return false;
+    };
+    let Some(authority) =
+        projection.membership_authority(operation.realm_id.as_str(), controller_id)
+    else {
+        return false;
+    };
+    projection
+        .agent_membership_bindings
+        .iter()
+        .any(|((realm_id, agent_id), binding)| {
+            realm_id == operation.realm_id.as_str()
+                && binding.controller_authority == *authority
+                && binding.controller_membership_generation_ref.as_str() == generation
+                && projection.effective_agent_membership_base(realm_id, agent_id)
+        })
 }
 
 /// A stable Direct Conversation repairs a departed participant in place.  The

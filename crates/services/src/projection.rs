@@ -1849,6 +1849,14 @@ impl ProjectionService {
         operations: &[(&Operation, &[ProjectedCellWrite])],
         hlc: &ServerHlc,
     ) -> Result<(), String> {
+        self.apply_operations_atomic(operations, hlc)
+    }
+
+    pub fn apply_operations_atomic(
+        &self,
+        operations: &[(&Operation, &[ProjectedCellWrite])],
+        hlc: &ServerHlc,
+    ) -> Result<(), String> {
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         let mut state = self.state.lock();
         let mut staged = state.clone();
