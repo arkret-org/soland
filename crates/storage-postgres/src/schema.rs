@@ -1350,50 +1350,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    space_members (id) {
-        id -> Uuid,
-        realm_id -> Text,
-        actor_id -> Text,
-        membership -> Text,
-        payload -> Jsonb,
-        joined_at -> Nullable<Timestamptz>,
-        left_at -> Nullable<Timestamptz>,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    space_state_events (id) {
-        id -> Uuid,
-        realm_id -> Text,
-        event_type -> Text,
-        subject -> Text,
-        sender_id -> Nullable<Text>,
-        operation_id -> Nullable<Uuid>,
-        payload -> Jsonb,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    spaces (pk) {
-        pk -> Int8,
-        realm_pk -> Int8,
-        realm_id -> Text,
-        title -> Text,
-        summary -> Nullable<Text>,
-        owner_id -> Nullable<Text>,
-        discoverability -> Text,
-        payload -> Jsonb,
-        history_visibility -> Text,
-        preview_policy -> Nullable<Jsonb>,
-        encryption_profile -> Text,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     state_cell_cache (realm_id, cell_id, view_hash) {
         realm_id -> Text,
         cell_id -> Text,
@@ -1511,7 +1467,6 @@ diesel::joinable!(event_collision_variants -> canonical_events (event_pk));
 diesel::joinable!(event_federation_outbox -> canonical_events (event_pk));
 diesel::joinable!(canonical_events -> canonical_realms (realm_pk));
 diesel::joinable!(projection_events -> canonical_realms (realm_pk));
-diesel::joinable!(spaces -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
@@ -1607,9 +1562,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     signal_relay,
     signal_relay_position,
     signal_relay_watermark,
-    space_members,
-    space_state_events,
-    spaces,
     state_cell_cache,
     state_cell_ops,
     state_control_events,

@@ -23,12 +23,17 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_contracts::admin::{
+    AdminFederationOperation, AdminMediaRow, AdminRealmItem, AdminRealmMemberItem, AdminSpaceRow,
+    RealmClass, SpaceHealth,
+};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
 };
 use soland_services::operation_semantics as kinds;
+use soland_services::projection::SpaceContainerLifecycle as SpaceContainerLifecycleState;
 
 use super::{
     append_audit_log, discussion_track_for_projection_event, policy_document_to_response,
@@ -49,42 +54,6 @@ pub(super) struct AdminCollectionOutcome {
     total: usize,
     next_cursor: Option<String>,
     production_gap: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminRealmItem {
-    kind: String,
-    id: String,
-    strand: Value,
-    strand_id: String,
-    realm_id: String,
-    title: String,
-    topic: Option<String>,
-    category: Option<String>,
-    realm_class: Option<String>,
-    #[salvo(schema(value_type = serde_json::Value))]
-    default_join_rule: Option<JoinRule>,
-    tags: Vec<String>,
-    public: bool,
-    member_count: usize,
-    members: Vec<String>,
-    created_by: Option<String>,
-    discoverability: Option<String>,
-    history_visibility: Option<String>,
-    is_encrypted: bool,
-    is_blocked: bool,
-    plaintext_visible_services: Vec<String>,
-    deleted: bool,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-    updated_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub(super) struct AdminRealmMemberItem {
-    actor_id: String,
-    membership: String,
-    role: String,
-    joined_at: Option<String>,
 }
 
 #[salvo::oapi::endpoint(
@@ -401,7 +370,14 @@ async fn admin_realm_item_value(
         title: realm.title,
         topic: realm.description,
         category: realm.category,
-        realm_class: realm.realm_class,
+        // Both classifiers are closed registry values held as free-form
+        // strings by the directory entry / metadata record. An unrecognised
+        // stored value projects as `None` — emitting it raw would make the
+        // whole admin page unparsable for every consumer of this contract.
+        realm_class: realm.realm_class.as_deref().and_then(RealmClass::from_wire),
+        discoverability: realm_meta.as_ref().and_then(|meta| {
+            serde_json::from_value(Value::String(meta.discoverability.clone())).ok()
+        }),
         default_join_rule: realm
             .default_join_rule
             .and_then(|value| serde_json::from_value(Value::String(value)).ok()),
@@ -410,7 +386,6 @@ async fn admin_realm_item_value(
         member_count: realm.members.len(),
         members: realm.members.iter().map(ToString::to_string).collect(),
         created_by: realm_meta.as_ref().map(|meta| meta.owner.clone()),
-        discoverability: realm_meta.as_ref().map(|meta| meta.discoverability.clone()),
         history_visibility: realm_meta
             .as_ref()
             .map(|meta| meta.history_visibility.clone()),
@@ -448,18 +423,32 @@ fn admin_space_container_items(state: &AppState) -> Vec<Value> {
         .space_containers
         .values()
         .map(|container| {
-            json!({
-                "id": container.container_space_id,
-                "name": container.title,
-                "realm_id": container.realm_id,
-                "kind": container.kind,
-                "member_count": member_counts.get(&container.realm_id).copied().unwrap_or_default(),
-                "health": container.state.as_str(),
-                "created_at": container.created_at,
-                "parent_space_id": container.parent_ref,
+            json!(AdminSpaceRow {
+                id: container.container_space_id.clone(),
+                name: container.title.clone(),
+                realm_id: container.realm_id.clone(),
+                kind: container.kind.clone(),
+                member_count: member_counts
+                    .get(&container.realm_id)
+                    .copied()
+                    .unwrap_or_default(),
+                health: space_health(container.state),
+                created_at: container.created_at,
+                parent_space_id: container.parent_ref.clone(),
             })
         })
         .collect()
+}
+
+/// Project the reducer lifecycle onto the admin contract's closed set. The
+/// match is exhaustive on purpose: a new reducer state must be classified
+/// here rather than degrade to a default badge in the console.
+fn space_health(state: SpaceContainerLifecycleState) -> SpaceHealth {
+    match state {
+        SpaceContainerLifecycleState::Active => SpaceHealth::Active,
+        SpaceContainerLifecycleState::Archived => SpaceHealth::Archived,
+        SpaceContainerLifecycleState::Tombstoned => SpaceHealth::Tombstoned,
+    }
 }
 
 async fn admin_federation_items(state: &AppState) -> Vec<Value> {
@@ -471,19 +460,21 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
         .into_iter()
         .map(|operation| {
             let projected = projection_event_from_operation(&operation, None);
-            json!({
-                "kind": "federation_operation",
-                "operation_id": operation.operation_id,
-                "realm_id": operation.realm_id,
-                "operation_kind": operation.operation_kind,
-                "canonical_kind": kinds::canonical_kind(&operation),
-                "strand_id": strand_id_for_projection_event(&projected),
-                "track": discussion_track_for_projection_event(
-                    &projected,
-                    strand_id_for_projection_event(&projected).as_deref(),
-                ),
-                "digest": operation.operation_digest().ok(),
-                "created_at": operation.created_at,
+            let strand_id = strand_id_for_projection_event(&projected);
+            let track = discussion_track_for_projection_event(&projected, strand_id.as_deref())
+                .and_then(|value| value.as_str().map(ToOwned::to_owned));
+            let canonical_kind = kinds::canonical_kind(&operation);
+            let digest = operation.operation_digest().ok();
+            json!(AdminFederationOperation {
+                kind: "federation_operation".to_owned(),
+                operation_id: operation.operation_id,
+                realm_id: operation.realm_id,
+                operation_kind: operation.operation_kind,
+                canonical_kind,
+                strand_id,
+                track,
+                digest,
+                created_at: operation.created_at,
             })
         })
         .collect()
@@ -560,7 +551,8 @@ async fn admin_policy_items(state: &AppState) -> Vec<Value> {
         .await
         .unwrap_or_default()
         .iter()
-        .map(|policy| json!(policy_document_to_response(policy)))
+        .filter_map(|policy| policy_document_to_response(policy).ok())
+        .map(|policy| json!(policy))
         .collect()
 }
 
@@ -572,15 +564,19 @@ pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
         .unwrap_or_default()
         .iter()
         .map(|blob| {
-            json!({
-                "kind": "media",
-                "media_type": blob.media_type,
-                "filename": blob.filename,
-                "realm_id": blob.realm_id,
-                "encrypted": blob.encryption.is_some(),
-                "uploaded_by": blob.uploaded_by,
-                "size_bytes": blob.size_bytes,
-                "created_at": blob.created_at,
+            json!(AdminMediaRow {
+                kind: "media".to_owned(),
+                sha256: blob.sha256.clone(),
+                media_type: blob.media_type.clone(),
+                filename: blob.filename.clone(),
+                realm_id: blob.realm_id.clone(),
+                encrypted: blob.encryption.is_some(),
+                uploaded_by: blob.uploaded_by.clone(),
+                // The blob store keeps the byte count signed; the wire
+                // contract does not, so a corrupt negative row reports 0
+                // rather than wrapping to 18 exabytes.
+                size_bytes: blob.size_bytes.max(0) as u64,
+                created_at: blob.created_at,
             })
         })
         .collect()

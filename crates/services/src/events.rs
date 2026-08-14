@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::events_payloads::agent::{
     AgentProvisionAccountabilityScope, AgentProvisionPayload,
@@ -964,23 +963,7 @@ pub trait EventReadPort: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait ProjectedOperationPersistencePort: Send + Sync {
-    async fn persist_projected_operation(
-        &self,
-        origin: &str,
-        operation: &Operation,
-        event_type: &str,
-        is_membership_or_realm_lifecycle: bool,
-    ) -> Result<(), String>;
-}
-
-#[async_trait::async_trait]
 pub trait ProjectionWritePort: Send + Sync {
-    async fn persist_projected_operation(
-        &self,
-        origin: &str,
-        operation: &Operation,
-    ) -> ServiceResult<()>;
     async fn store_space_container_projection(
         &self,
         record: &SpaceContainerProjectionRecord,
@@ -1186,15 +1169,6 @@ impl EventQueryService {
         Ok(active_agent_accountability(&original_event, &events, query))
     }
 
-    pub async fn persist_projected_operation(
-        &self,
-        origin: &str,
-        operation: &Operation,
-    ) -> ServiceResult<()> {
-        self.projections
-            .persist_projected_operation(origin, operation)
-            .await
-    }
     pub async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()> {
         self.events.store_canonical_event(record).await
     }

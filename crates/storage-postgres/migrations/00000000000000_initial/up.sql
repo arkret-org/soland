@@ -1911,59 +1911,6 @@ CREATE TABLE public.sessions (
 
 CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id, device_id, expires_at) WHERE (revoked_at IS NULL);
 
-CREATE TABLE public.space_members (
-    id uuid PRIMARY KEY,
-    realm_id text NOT NULL,
-    actor_id text NOT NULL,
-    membership text NOT NULL,
-    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
-    joined_at timestamp with time zone,
-    left_at timestamp with time zone,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-ALTER TABLE ONLY public.space_members
-    ADD CONSTRAINT space_members_realm_id_actor_key UNIQUE (realm_id, actor_id);
-
-CREATE INDEX space_members_actor_idx ON public.space_members USING btree (actor_id, membership, realm_id);
-
-CREATE TABLE public.space_state_events (
-    id uuid PRIMARY KEY,
-    realm_id text NOT NULL,
-    event_type text NOT NULL,
-    subject text DEFAULT ''::text NOT NULL,
-    sender_id text,
-    operation_id uuid,
-    payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-CREATE INDEX space_state_events_lookup_idx ON public.space_state_events USING btree (realm_id, event_type, subject, created_at);
-
-CREATE TABLE public.spaces (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    realm_pk bigint NOT NULL REFERENCES public.canonical_realms(pk) ON DELETE RESTRICT,
-    realm_id text NOT NULL,
-    title text NOT NULL,
-    summary text,
-    owner_id text,
-    discoverability text DEFAULT 'invite_only'::text NOT NULL,
-    payload jsonb NOT NULL,
-    history_visibility text DEFAULT 'joined'::text NOT NULL,
-    preview_policy jsonb,
-    encryption_profile text DEFAULT 'mls_rfc9420'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT spaces_encryption_profile_check CHECK ((encryption_profile = ANY (ARRAY['none'::text, 'plaintext'::text, 'mls_rfc9420'::text]))),
-    CONSTRAINT spaces_history_visibility_check CHECK ((history_visibility = ANY (ARRAY['world_readable'::text, 'shared'::text, 'invited'::text, 'joined'::text, 'restricted'::text]))),
-    CONSTRAINT spaces_realm_pk_key UNIQUE (realm_pk),
-    CONSTRAINT spaces_realm_id_key UNIQUE (realm_id)
-);
-
-CREATE INDEX spaces_discoverability_updated_idx ON public.spaces USING btree (discoverability, updated_at, pk);
-
-CREATE INDEX spaces_history_visibility_updated_idx ON public.spaces USING btree (history_visibility, updated_at, pk);
-
 CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,
     principal_id text,

@@ -73,12 +73,11 @@ pub(crate) use soland_storage::{
     fresh_device_message_ack_token, frontier_exchange_failure_record,
     frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_effective_scope_parts,
     operation_uuid_index, optional_audit_uuid_index, optional_record_str,
-    optional_record_timestamp, optional_record_value, partials_to_jsonb,
-    projected_operation_realm_discoverability, projected_operation_realm_summary,
-    projected_operation_realm_title, registration_as_existing, registrations_match,
-    required_record_str, required_record_timestamp, valid_new_service_registration_records,
-    validate_backup_erase_progress_initial, validate_backup_erase_progress_update,
-    validate_security_transaction_update, webvh_freshness_on_put,
+    optional_record_timestamp, optional_record_value, partials_to_jsonb, registration_as_existing,
+    registrations_match, required_record_str, required_record_timestamp,
+    valid_new_service_registration_records, validate_backup_erase_progress_initial,
+    validate_backup_erase_progress_update, validate_security_transaction_update,
+    webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;
 

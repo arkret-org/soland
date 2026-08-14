@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use soland_http::config::AppConfig;
 use soland_http::state::{AppState, AppStateRuntime, EventBroadcast};
 use soland_services::delivery::ObjectStoragePort;
-use soland_services::events::{ProjectedOperationPersistencePort, RealmDirectoryIndex};
+use soland_services::events::RealmDirectoryIndex;
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
@@ -198,7 +198,6 @@ pub fn app_state_with_identity(
             persistence: PersistenceHandle::from_shared(persistence.clone()),
             projections,
             realm_directory,
-            projected_operation_persistence: Arc::new(NoProjectedOperationPersistence),
             object_storage: Arc::new(MemoryObjectStorage::default()),
             settings_persistence: Arc::new(NoRuntimeSettings),
             runtime_health: Arc::new(MemoryRuntimeHealth),
@@ -534,21 +533,6 @@ impl ObjectStoragePort for MemoryObjectStorage {
 
     async fn delete(&self, key: &str) -> Result<(), String> {
         self.objects.lock().remove(key);
-        Ok(())
-    }
-}
-
-struct NoProjectedOperationPersistence;
-
-#[async_trait]
-impl ProjectedOperationPersistencePort for NoProjectedOperationPersistence {
-    async fn persist_projected_operation(
-        &self,
-        _origin: &str,
-        _operation: &arkret_event_draft::ProjectedEventOperation,
-        _event_type: &str,
-        _is_membership_or_realm_lifecycle: bool,
-    ) -> Result<(), String> {
         Ok(())
     }
 }

@@ -96,7 +96,7 @@ async fn outbound_push_bridge_describe(
             bridge_describe_path: "/_floria/push/bridge/describe".to_owned(),
             notify_path: "/_arkret/edge/push/notify".to_owned(),
             accepted_contracts: vec![
-                "ak.push.bridge.describe".to_owned(),
+                "ak.push.bridge.v1".to_owned(),
                 "ak.profile.push_gateway.v1".to_owned(),
             ],
             fetch_mode: "live_http_fetch_with_durable_cache_fallback".to_owned(),
@@ -140,7 +140,7 @@ async fn outbound_push_bridge_describe(
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "fetched_at": now(),
                     "remote_contract": {
-                        "contract": "ak.push.bridge.describe",
+                        "contract": "ak.push.bridge.v1",
                         "delivery": {
                             "notify_path": "/_arkret/edge/push/notify",
                             "operation_id": "ak.edge.push.command.notify"
@@ -157,7 +157,7 @@ async fn outbound_push_bridge_describe(
                     "cache_state": "memory_cached",
                     "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
                     "remote_contract": {
-                        "contract": "ak.push.bridge.describe"
+                        "contract": "ak.push.bridge.v1"
                     }
                 }],
                 "snapshot_store_kind": "durable_push_bridge_cache"
@@ -590,7 +590,7 @@ pub(super) fn join_push_gateway_url(base: &str, path: &str) -> String {
 
 fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
     OutboundPushResolvedContract {
-        contract: "ak.push.bridge.describe".to_owned(),
+        contract: "ak.push.bridge.v1".to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
         expected_operation_id: "ak.edge.push.command.notify".to_owned(),
         expected_source_service_id_header: "Source-Service-ID".to_owned(),

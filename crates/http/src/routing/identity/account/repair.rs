@@ -511,13 +511,14 @@ pub(in crate::routing) async fn accept_peer_relay(
         | DirectConversationRepairAuthorization::NativeAgent { signed_at, .. } => *signed_at,
     };
     let expires_at = signed_at + chrono::Duration::days(30);
+    // `device-message.schema.json` types `sender_device_id` as a device id, so a
+    // Native Agent requester — which has no human device identity — contributes
+    // no sender device rather than a principal id in that slot.
     let sender_device_id = match &request.content.requester {
         MemberRepairRequester::Device {
             requester_device_id,
-        } => requester_device_id.as_str(),
-        MemberRepairRequester::NativeAgent {
-            requester_agent_id, ..
-        } => requester_agent_id.as_str(),
+        } => Some(requester_device_id.clone()),
+        MemberRepairRequester::NativeAgent { .. } => None,
     };
     let accepted_at_text = arkret_canonical::format_timestamp_canonical(accepted_at);
     let mut items = Vec::with_capacity(devices.len());
@@ -537,13 +538,12 @@ pub(in crate::routing) async fn accept_peer_relay(
                 .map_err(|error| AppError::internal(error.to_string()))?,
         )
         .map_err(|error| AppError::internal(error.to_string()))?;
-        let content = json!({
-            "message_id": message_id,
-            "kind": "ak.member.repair.request",
-            "sender_device_id": sender_device_id,
-            "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-            "content": request.content,
-        });
+        let content = queued_repair_request_body(
+            &message_id,
+            sender_device_id.clone(),
+            expires_at,
+            &request.content,
+        )?;
         let intent_digest = canonical_digest(&content, "repair target message")?;
         items.push(DeviceMessageBatchItemRecord {
             message_key,
@@ -755,12 +755,9 @@ async fn accept_agent_relay(
         request.request_id.as_str(),
         agent.id.as_str(),
     );
-    let content = json!({
-        "message_id": message_id,
-        "kind": "ak.member.repair.request",
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "content": request.content,
-    });
+    // The Agent runtime endpoint is addressed by the accepted runtime binding,
+    // not by a human device, so the queued body carries no sender device.
+    let content = queued_repair_request_body(&message_id, None, expires_at, &request.content)?;
     let outcome = state
         .agent_pairings()
         .enqueue_runtime_message_if_current(&soland_storage::EnqueueAgentRuntimeMessage {
@@ -900,6 +897,30 @@ fn stable_message_id(source_service_id: &str, request_id: &str, device_id: &str)
     bytes[6] = (bytes[6] & 0x0f) | 0x70;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     format!("ak:device_message:{}", uuid::Uuid::from_bytes(bytes))
+}
+
+/// Build the queued `ak.member.repair.request` to-device body.
+///
+/// The kind is derived from the SDK device-message marker and the content is
+/// validated as [`MemberRepairRequestPayload`], so the enqueued body cannot
+/// pair the repair kind with a foreign content shape.
+fn queued_repair_request_body(
+    message_id: &str,
+    sender_device_id: Option<arkret_wire::DeviceId>,
+    expires_at: DateTime<Utc>,
+    content: &arkret_models_collaboration::events_payloads::MemberRepairRequestPayload,
+) -> Result<Value, AppError> {
+    let message_id = arkret_wire::DeviceMessageId::new(message_id.to_owned())
+        .map_err(|error| AppError::internal(format!("repair message id is invalid: {error}")))?;
+    let body = arkret_event_draft::TypedDeviceMessageTarget::<
+        arkret_event_draft::device_message_spec::MemberRepairRequest,
+    >::new(message_id, expires_at, content.clone())
+    .map_err(|error| AppError::internal(format!("repair to-device content is invalid: {error}")))?
+    .queued_body(sender_device_id)
+    .map_err(|error| AppError::internal(format!("repair to-device body is invalid: {error}")))?;
+    serde_json::to_value(&body).map_err(|error| {
+        AppError::internal(format!("repair to-device body encode failed: {error}"))
+    })
 }
 
 fn target_request_key(source_service_id: &str, request_id: &str) -> Result<String, AppError> {

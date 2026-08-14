@@ -530,11 +530,8 @@ impl PersistenceHandle {
         Self { persistence }
     }
 
-    pub fn event_services(
-        &self,
-        projected_operations: Arc<dyn crate::events::ProjectedOperationPersistencePort>,
-    ) -> PersistenceEventServices {
-        build_persistence_event_services(self.persistence.clone(), projected_operations)
+    pub fn event_services(&self) -> PersistenceEventServices {
+        build_persistence_event_services(self.persistence.clone())
     }
 
     pub fn delivery_service(

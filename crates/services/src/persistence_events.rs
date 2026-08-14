@@ -10,7 +10,6 @@ struct PersistenceEventCommitter(Arc<dyn PersistenceStore>);
 struct PersistenceEventReader(Arc<dyn PersistenceStore>);
 struct PersistenceProjectionWriter {
     persistence: Arc<dyn PersistenceStore>,
-    projected_operations: Arc<dyn ProjectedOperationPersistencePort>,
 }
 struct PersistenceMlsCommitReader(Arc<dyn PersistenceStore>);
 struct PersistenceMlsKeyPackageMaintenance(Arc<dyn PersistenceStore>);
@@ -724,27 +723,6 @@ impl crate::events::AppletPort for PersistenceEventReader {
 
 #[async_trait::async_trait]
 impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
-    async fn persist_projected_operation(
-        &self,
-        origin: &str,
-        operation: &arkret_event_draft::ProjectedEventOperation,
-    ) -> crate::ServiceResult<()> {
-        let event_type = soland_domain::kinds::canonical_kind(operation);
-        let is_membership_or_realm_lifecycle =
-            soland_domain::kinds::operation_is_membership(operation)
-                || soland_domain::kinds::operation_is_realm_lifecycle(operation);
-        self.projected_operations
-            .persist_projected_operation(
-                origin,
-                operation,
-                event_type.as_str(),
-                is_membership_or_realm_lifecycle,
-            )
-            .await
-            .map_err(soland_storage::PersistenceError::Internal)
-            .map_err(Into::into)
-    }
-
     async fn store_space_container_projection(
         &self,
         record: &crate::events::SpaceContainerProjectionRecord,
@@ -1704,7 +1682,6 @@ pub struct PersistenceEventServices {
 
 pub fn build_persistence_event_services(
     persistence: Arc<dyn PersistenceStore>,
-    projected_operations: Arc<dyn ProjectedOperationPersistencePort>,
 ) -> PersistenceEventServices {
     let reader = || Arc::new(PersistenceEventReader(persistence.clone()));
     PersistenceEventServices {
@@ -1715,7 +1692,6 @@ pub fn build_persistence_event_services(
             reader(),
             Arc::new(PersistenceProjectionWriter {
                 persistence: persistence.clone(),
-                projected_operations,
             }),
             Arc::new(PersistencePublicationEvidence(persistence.clone())),
         ),

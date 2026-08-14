@@ -5,22 +5,6 @@ use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 
 use super::*;
 
-#[cfg(feature = "openmls-keypackage-validation")]
-fn author_leaf_from_key_package_bytes(
-    bytes: &[u8],
-    leaf_index: u32,
-) -> std::result::Result<AuthorLeaf, arkret_mls::MlsError> {
-    arkret_mls::author_leaf_from_key_package_bytes(bytes, leaf_index)
-}
-
-#[cfg(not(feature = "openmls-keypackage-validation"))]
-fn author_leaf_from_key_package_bytes(
-    _bytes: &[u8],
-    _leaf_index: u32,
-) -> std::result::Result<AuthorLeaf, &'static str> {
-    Err("OpenMLS KeyPackage validation is not enabled")
-}
-
 // SPI-SOL-002 — minimal-metadata content author admission
 // (encryption-and-audit.md §2.10.3).
 //
@@ -254,7 +238,8 @@ async fn active_author_leaves(
         .filter(|row| !removed_actors.contains(&row.actor_id))
         .enumerate()
         .filter_map(|(index, row)| {
-            author_leaf_from_key_package_bytes(&row.key_package_bytes, index as u32).ok()
+            arkret_mls::author_leaf_from_key_package_bytes(&row.key_package_bytes, index as u32)
+                .ok()
         })
         .collect())
 }

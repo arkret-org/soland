@@ -656,14 +656,6 @@ async fn project_accepted_operations_inner(
                 tracing::warn!(%error, "failed to persist projection event before publish");
             }
         }
-        if let Err(error) = persist_projected_operation(state, origin, operation).await {
-            tracing::warn!(
-                error = %error,
-                operation_id = %operation.operation_id,
-                event_kind = %operation.event_kind,
-                "failed to persist accepted operation projection"
-            );
-        }
     }
 }
 

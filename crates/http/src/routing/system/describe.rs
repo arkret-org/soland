@@ -743,7 +743,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
             IntegrationDependencyDescriptor {
                 service: "floria".to_owned(),
                 purpose: "push_gateway_delivery".to_owned(),
-                required_contract: "ak.push.bridge.describe".to_owned(),
+                required_contract: "ak.push.bridge.v1".to_owned(),
                 discovery_path: "/_floria/push/bridge/describe".to_owned(),
                 mode: "remote_gateway_contract".to_owned(),
             },

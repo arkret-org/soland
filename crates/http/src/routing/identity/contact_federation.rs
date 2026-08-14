@@ -414,10 +414,9 @@ async fn peer_contacts_submit(
             "contact_address.recipient_service_id does not match this service",
         ));
     }
-    let payload = signed_event.payload.clone();
-    let payload_value = serde_json::to_value(&payload)
+    let payload_value = serde_json::to_value(&signed_event.payload)
         .map_err(|error| AppError::internal(format!("contact payload encode failed: {error}")))?;
-    let subject_core_id = contact_event_subject_core_id(fact_kind, &payload_value)?;
+    let subject_core_id = contact_event_subject_core_id(signed_event)?;
     if !core_id_matches_actor(&subject_core_id, &contact_address.subject_id) {
         return Err(super::super::events::peer::cross_domain_replay(
             "contact_address.subject_id does not match the signed Contact recipient",
@@ -619,25 +618,34 @@ fn contact_event_issuer_core_id(
     }
 }
 
-fn contact_event_subject_core_id(
-    fact_kind: &str,
-    payload: &Value,
-) -> Result<arkret_wire::DidCoreId, AppError> {
-    let subject = match fact_kind {
-        "ak.contact.requested" => {
-            serde_json::from_value::<ContactRequestedPayload>(payload.clone())
+/// Resolve the Contact subject from the signed carrier Event itself.
+///
+/// The Event Envelope binds its own `kind` to its own `payload`, so the
+/// closed Contact fact type is selected by the same signed value that carries
+/// the payload bytes; a caller cannot pair one fact kind with another fact's
+/// payload.
+fn contact_event_subject_core_id(signed_event: &Event) -> Result<arkret_wire::DidCoreId, AppError> {
+    let payload = serde_json::to_value(&signed_event.payload)
+        .map_err(|error| AppError::internal(format!("contact payload encode failed: {error}")))?;
+    let subject = match signed_event.kind {
+        arkret_wire::EventKind::ContactRequested => {
+            serde_json::from_value::<ContactRequestedPayload>(payload)
                 .map(|payload| payload.peer.contact_actor_id().clone())
         }
-        "ak.contact.accepted" => serde_json::from_value::<ContactAcceptedPayload>(payload.clone())
-            .map(|payload| payload.peer.contact_actor_id().clone()),
-        "ak.contact.rejected" => serde_json::from_value::<ContactRejectedPayload>(payload.clone())
-            .map(|payload| payload.peer.contact_actor_id().clone()),
-        "ak.contact.scope.update" => {
-            serde_json::from_value::<ContactScopeUpdatePayload>(payload.clone())
+        arkret_wire::EventKind::ContactAccepted => {
+            serde_json::from_value::<ContactAcceptedPayload>(payload)
                 .map(|payload| payload.peer.contact_actor_id().clone())
         }
-        "ak.contact.tombstone" => {
-            serde_json::from_value::<ContactTombstonedPayload>(payload.clone())
+        arkret_wire::EventKind::ContactRejected => {
+            serde_json::from_value::<ContactRejectedPayload>(payload)
+                .map(|payload| payload.peer.contact_actor_id().clone())
+        }
+        arkret_wire::EventKind::ContactScopeUpdate => {
+            serde_json::from_value::<ContactScopeUpdatePayload>(payload)
+                .map(|payload| payload.peer.contact_actor_id().clone())
+        }
+        arkret_wire::EventKind::ContactTombstone => {
+            serde_json::from_value::<ContactTombstonedPayload>(payload)
                 .map(|payload| payload.peer.contact_actor_id().clone())
         }
         _ => unreachable!("caller admits only Contact fact kinds"),

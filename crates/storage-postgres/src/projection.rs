@@ -1,13 +1,12 @@
 use super::{
     AsyncConnection, BigInt, Binary, Bool, CircleMemberProjectionRecord, CircleProjectionRecord,
-    CircleProjectionStore, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable, Operation,
+    CircleProjectionStore, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
     RunQueryDsl, SpaceContainerProjectionRecord, SpaceContainerProjectionStore, SqlUuid,
     StrandProjectionRecord, StrandProjectionStore, StrandWatchProjectionRecord,
     StrandWatchProjectionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
-    projected_operation_realm_discoverability, projected_operation_realm_summary,
-    projected_operation_realm_title, sql_query,
+    sql_query,
 };
 
 /// Space, Strand, Morph and Circle are Event-derived kinds: their protocol id is
@@ -648,113 +647,6 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
             received_at: row.received_at,
         }
     }
-}
-pub async fn persist_projected_operation_to_pg(
-    pool: &PgPool,
-    origin: &str,
-    operation: &Operation,
-    event_type: &str,
-    is_membership_or_realm_lifecycle: bool,
-) -> PersistenceResult<()> {
-    let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
-    if is_membership_or_realm_lifecycle {
-        let title = projected_operation_realm_title(operation);
-        let title_for_insert = title.unwrap_or_else(|| operation.realm_id.as_str());
-        let summary = projected_operation_realm_summary(operation);
-        let discoverability =
-            projected_operation_realm_discoverability(operation).unwrap_or_else(|| {
-                if operation
-                    .payload
-                    .get("public")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    "public"
-                } else {
-                    "invite_only"
-                }
-            });
-        let realm_pk =
-            crate::realm_identity::ensure_realm_pk(&mut conn, operation.realm_id.as_str()).await?;
-        let operation_id_uuid =
-            ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
-        if title.is_some() {
-            sql_query(
-                "INSERT INTO spaces (realm_pk, realm_id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) \
-                 ON CONFLICT (realm_pk) DO UPDATE SET title = EXCLUDED.title, summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
-            )
-            .bind::<BigInt, _>(realm_pk)
-            .bind::<Text, _>(operation.realm_id.as_str())
-            .bind::<Text, _>(title_for_insert)
-            .bind::<Nullable<Text>, _>(summary)
-            .bind::<Nullable<Text>, _>(Some(origin))
-            .bind::<Text, _>(discoverability)
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut *conn)
-            .await.map_err(PersistenceError::database)?;
-        } else {
-            sql_query(
-                "INSERT INTO spaces (realm_pk, realm_id, title, summary, owner_id, discoverability, payload, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) \
-                 ON CONFLICT (realm_pk) DO UPDATE SET summary = COALESCE(EXCLUDED.summary, spaces.summary), updated_at = EXCLUDED.updated_at",
-            )
-            .bind::<BigInt, _>(realm_pk)
-            .bind::<Text, _>(operation.realm_id.as_str())
-            .bind::<Text, _>(title_for_insert)
-            .bind::<Nullable<Text>, _>(summary)
-            .bind::<Nullable<Text>, _>(Some(origin))
-            .bind::<Text, _>(discoverability)
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut *conn)
-            .await.map_err(PersistenceError::database)?;
-        }
-
-        if let Some(member) = operation.payload.get("actor_id").and_then(Value::as_str) {
-            let membership = operation
-                .payload
-                .get("membership")
-                .and_then(Value::as_str)
-                .unwrap_or("join");
-            sql_query(
-                "INSERT INTO space_members (id, realm_id, actor_id, membership, payload, joined_at, left_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 = 'join' THEN $6 ELSE NULL END, CASE WHEN $4 <> 'join' THEN $6 ELSE NULL END, $6) \
-                 ON CONFLICT (realm_id, actor_id) DO UPDATE SET membership = EXCLUDED.membership, payload = EXCLUDED.payload, left_at = EXCLUDED.left_at, updated_at = EXCLUDED.updated_at",
-            )
-            .bind::<SqlUuid, _>(Uuid::now_v7())
-            .bind::<Text, _>(operation.realm_id.as_str())
-            .bind::<Text, _>(member)
-            .bind::<Text, _>(membership)
-            .bind::<Jsonb, _>(&operation.payload)
-            .bind::<Timestamptz, _>(operation.created_at)
-            .execute(&mut *conn)
-            .await.map_err(PersistenceError::database)?;
-        }
-
-        sql_query(
-            "INSERT INTO space_state_events (id, realm_id, event_type, subject, sender_id, operation_id, payload, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $1, $6, $7) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind::<SqlUuid, _>(operation_id_uuid)
-        .bind::<Text, _>(operation.realm_id.as_str())
-        .bind::<Text, _>(event_type)
-        .bind::<Text, _>(
-            operation
-                .payload
-                .get("member")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-        )
-        .bind::<Nullable<Text>, _>(Some(origin))
-        .bind::<Jsonb, _>(&operation.payload)
-        .bind::<Timestamptz, _>(operation.created_at)
-        .execute(&mut *conn)
-        .await.map_err(PersistenceError::database)?;
-    }
-    Ok(())
 }
 #[async_trait]
 impl ProjectionEventStore for PgProjectionEventStore {

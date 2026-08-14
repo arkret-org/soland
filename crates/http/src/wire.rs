@@ -403,47 +403,13 @@ pub use arkret_models_collaboration::sync_frames::client_sync::SyncRequestBody;
 pub use arkret_models_integration::{
     PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody,
 };
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(salvo::oapi::ToSchema, Debug, Deserialize)]
-pub struct UpsertPolicyDocumentRequestBody {
-    #[serde(default)]
-    pub policy_id: Option<String>,
-    pub scope: String,
-    pub subject_ref: String,
-    pub policy_kind: String,
-    pub effect: String,
-    #[serde(default)]
-    pub actions: Vec<String>,
-    #[serde(default)]
-    pub resource: Value,
-    #[serde(default)]
-    pub obligations: Vec<Value>,
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
-pub struct PolicyDocumentOutcome {
-    pub policy_id: String,
-    pub owner: String,
-    pub scope: String,
-    pub subject_ref: String,
-    pub policy_kind: String,
-    pub payload: Value,
-    pub active: bool,
-    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
-pub struct PolicyDocumentsOutcome {
-    pub policies: Vec<PolicyDocumentOutcome>,
-    pub next_cursor: Option<String>,
-}
+// The policy document surface is one definition shared with the operator
+// console (`soland-contracts::admin::policy`); see that module for why.
+pub use soland_contracts::admin::policy::{
+    AdminPolicyDocument as PolicyDocumentOutcome,
+    AdminPolicyDocumentPage as PolicyDocumentsOutcome, AdminPolicyPayload, PolicyEffect,
+    UpsertPolicyDocumentRequestBody,
+};
 
 #[derive(salvo::oapi::ToSchema, Debug, Deserialize)]
 pub struct DevLoginRequestBody {

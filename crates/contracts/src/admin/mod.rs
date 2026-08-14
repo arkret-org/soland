@@ -1,14 +1,22 @@
 pub mod account_localparts;
+pub mod collection;
 pub mod delivery_binding;
 pub mod device_signing_directory;
 pub mod handles;
 pub mod invite_tokens;
+pub mod media;
+pub mod policy;
 pub mod queries;
 pub mod seal;
+pub mod server;
 pub mod service_routes;
 
 pub use account_localparts::*;
+pub use collection::*;
 pub use delivery_binding::*;
 pub use device_signing_directory::*;
+pub use media::*;
+pub use policy::*;
 pub use queries::*;
+pub use server::*;
 pub use service_routes::*;

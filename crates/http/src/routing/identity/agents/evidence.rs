@@ -25,7 +25,10 @@ use salvo::prelude::*;
 
 use super::*;
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.agent_signer_evidence.query", tags("identity"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.agent_signer_evidence.read.resolve",
+    tags("identity")
+)]
 pub(super) async fn query_agent_signer_evidence(
     aa: AuthArgs,
     body: JsonBody<AgentSignerEvidenceQueryRequestBody>,

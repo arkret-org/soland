@@ -6,46 +6,17 @@ use arkret_identifiers::{CellRef, RealmId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_contracts::admin::{
+    AdminMediaBucket, AdminMediaByActorList, AdminMediaByActorRow, AdminMediaServiceFocus,
+    AdminMediaStatistics, AdminRealmMediaService,
+};
 use soland_http::error::AppError;
 use soland_services::delivery::BlobState as BlobRecord;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct MediaBucket {
-    count: u64,
-    total_size: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct MediaByActorRow {
-    actor_id: String,
-    display_name: Option<String>,
-    blob_count: u64,
-    total_size: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct MediaStatisticsOutcome {
-    total_blobs: u64,
-    total_size: u64,
-    encrypted_count: u64,
-    quarantined_count: u64,
-    by_media_type: BTreeMap<String, MediaBucket>,
-    by_realm: BTreeMap<String, MediaBucket>,
-    by_actor: Vec<MediaByActorRow>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct MediaByActorOutcome {
-    data: Vec<MediaByActorRow>,
-    total: usize,
-    next_cursor: Option<String>,
-}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -56,41 +27,39 @@ pub(super) fn router() -> Router {
         )
 }
 
-/// Effective `ak.component.realm.media_service.v1` cell, surfaced read-only
-/// for sodmin. Mirrors the projected media_service epoch shape: the service
-/// DID plus the declared multi-focus set (`bindings/livekit.md` §2 /
+/// Project the stored `ak.component.realm.media_service.v1` cell onto the
+/// shared admin contract (`bindings/livekit.md` §2 /
 /// `media-service-binding.md` §2).
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct RealmMediaServiceOutcome {
-    realm_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    service_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    foci: Vec<Value>,
-}
-
-fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMediaServiceOutcome {
+///
+/// A focus that does not satisfy the binding shape is a reducer bug, not an
+/// operator condition: it is surfaced as an internal error instead of being
+/// dropped, so a misconfigured Realm cannot look healthy in the console.
+fn response_from_media_cell(
+    realm_id: &str,
+    value: Option<&Value>,
+) -> Result<AdminRealmMediaService, AppError> {
     let Some(value) = value else {
-        return RealmMediaServiceOutcome {
+        return Ok(AdminRealmMediaService {
             realm_id: realm_id.to_owned(),
             service_id: None,
             foci: Vec::new(),
-        };
+        });
     };
     let service_id = value
         .get("service_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let foci = value
-        .get("foci")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    RealmMediaServiceOutcome {
+    let foci = match value.get("foci") {
+        Some(foci) => serde_json::from_value::<Vec<AdminMediaServiceFocus>>(foci.clone()).map_err(
+            |error| AppError::internal(format!("invalid media_service foci projection: {error}")),
+        )?,
+        None => Vec::new(),
+    };
+    Ok(AdminRealmMediaService {
         realm_id: realm_id.to_owned(),
         service_id,
         foci,
-    }
+    })
 }
 
 #[salvo::oapi::endpoint(
@@ -106,7 +75,7 @@ async fn admin_get_realm_media_service(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<RealmMediaServiceOutcome> {
+) -> JsonResult<AdminRealmMediaService> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -139,7 +108,7 @@ async fn admin_get_realm_media_service(
     )
     .await;
 
-    json_ok(response_from_media_cell(&realm_id, value.as_ref()))
+    json_ok(response_from_media_cell(&realm_id, value.as_ref())?)
 }
 
 #[salvo::oapi::endpoint(
@@ -151,14 +120,14 @@ async fn get_media_statistics(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<MediaStatisticsOutcome> {
+) -> JsonResult<AdminMediaStatistics> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let blobs = media_snapshot(state).await;
     let by_actor = media_by_actor_rows(state, &blobs).await;
-    let mut by_media_type: BTreeMap<String, MediaBucket> = BTreeMap::new();
-    let mut by_realm: BTreeMap<String, MediaBucket> = BTreeMap::new();
+    let mut by_media_type: BTreeMap<String, AdminMediaBucket> = BTreeMap::new();
+    let mut by_realm: BTreeMap<String, AdminMediaBucket> = BTreeMap::new();
     let mut total_size = 0_u64;
     let mut encrypted_count = 0_u64;
 
@@ -186,7 +155,7 @@ async fn get_media_statistics(
     )
     .await;
 
-    json_ok(MediaStatisticsOutcome {
+    json_ok(AdminMediaStatistics {
         total_blobs: blobs.len() as u64,
         total_size,
         encrypted_count,
@@ -206,7 +175,7 @@ async fn get_media_by_actor(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<MediaByActorOutcome> {
+) -> JsonResult<AdminMediaByActorList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -226,7 +195,7 @@ async fn get_media_by_actor(
     .await;
 
     let total = rows.len();
-    json_ok(MediaByActorOutcome {
+    json_ok(AdminMediaByActorList {
         data: rows,
         total,
         next_cursor: None,
@@ -237,7 +206,7 @@ async fn media_snapshot(state: &AppState) -> Vec<BlobRecord> {
     state.deliveries().blobs().await.unwrap_or_default()
 }
 
-async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<MediaByActorRow> {
+async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<AdminMediaByActorRow> {
     let accounts: BTreeMap<String, _> = state
         .identities()
         .accounts()
@@ -258,7 +227,7 @@ async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<Medi
             let display_name = accounts
                 .get(&actor_id)
                 .and_then(|account| account.display_name.clone());
-            MediaByActorRow {
+            AdminMediaByActorRow {
                 actor_id,
                 display_name,
                 blob_count,
@@ -268,7 +237,7 @@ async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<Medi
         .collect()
 }
 
-fn add_bucket(buckets: &mut BTreeMap<String, MediaBucket>, key: &str, size: u64) {
+fn add_bucket(buckets: &mut BTreeMap<String, AdminMediaBucket>, key: &str, size: u64) {
     let entry = buckets.entry(key.to_owned()).or_default();
     entry.count += 1;
     entry.total_size = entry.total_size.saturating_add(size);

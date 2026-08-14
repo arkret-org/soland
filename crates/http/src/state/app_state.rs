@@ -238,8 +238,6 @@ pub struct AppStateRuntime {
     pub persistence: PersistenceHandle,
     pub projections: ProjectionService,
     pub realm_directory: RealmDirectoryService,
-    pub projected_operation_persistence:
-        Arc<dyn soland_services::events::ProjectedOperationPersistencePort>,
     pub object_storage: Arc<dyn ObjectStoragePort>,
     pub settings_persistence: Arc<dyn RuntimeSettingsPort>,
     pub runtime_health: Arc<dyn RuntimeHealthPort>,
@@ -338,7 +336,6 @@ mod test_construction {
     use bytes::Bytes;
     use futures_util::stream::{self, BoxStream, StreamExt};
     use parking_lot::Mutex;
-    use soland_services::events::ProjectedOperationPersistencePort;
     use soland_services::governance::RuntimeSettingsPort;
     use soland_services::jobs::RuntimeHealthPort;
     use soland_services::projection::EventSealCommitPort;
@@ -416,7 +413,6 @@ mod test_construction {
                     persistence: PersistenceHandle::from_shared(persistence),
                     projections,
                     realm_directory,
-                    projected_operation_persistence: Arc::new(NoProjectedOperationPersistence),
                     object_storage: Arc::new(MemoryObjectStorage::default()),
                     settings_persistence: Arc::new(NoRuntimeSettings),
                     runtime_health: Arc::new(TestRuntimeHealth(db)),
@@ -517,21 +513,6 @@ mod test_construction {
 
         async fn delete(&self, key: &str) -> Result<(), String> {
             self.objects.lock().remove(key);
-            Ok(())
-        }
-    }
-
-    struct NoProjectedOperationPersistence;
-
-    #[async_trait]
-    impl ProjectedOperationPersistencePort for NoProjectedOperationPersistence {
-        async fn persist_projected_operation(
-            &self,
-            _origin: &str,
-            _operation: &arkret_event_draft::ProjectedEventOperation,
-            _event_type: &str,
-            _is_membership_or_realm_lifecycle: bool,
-        ) -> Result<(), String> {
             Ok(())
         }
     }
@@ -801,7 +782,6 @@ impl AppState {
             persistence,
             projections,
             realm_directory,
-            projected_operation_persistence,
             object_storage,
             settings_persistence,
             runtime_health,
@@ -883,7 +863,7 @@ impl AppState {
             mls_key_packages,
             realm_queries: realms,
             realm_invites,
-        } = persistence.event_services(projected_operation_persistence);
+        } = persistence.event_services();
         let deliveries = persistence.delivery_service(object_storage, push_target_hmac_key);
         let PersistenceIdentityServices {
             identity: identities,

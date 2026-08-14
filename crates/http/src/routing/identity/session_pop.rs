@@ -32,7 +32,6 @@ use arkret_signatures::http_signature::{
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use salvo::prelude::*;
-use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::bearer_token;
 
@@ -363,13 +362,21 @@ fn parse_session_jwk(jwk: &str) -> Result<(Ed25519PublicKey, Option<String>, Str
         .and_then(|value| value.as_str())
         .filter(|kid| !kid.is_empty())
         .map(ToOwned::to_owned);
-    Ok((public_key, explicit_kid, jwk_thumbprint(x)))
+    Ok((public_key, explicit_kid, jwk_thumbprint(x)?))
 }
 
 /// RFC 7638 JWK thumbprint for an Ed25519 OKP key with base64url `x`.
-fn jwk_thumbprint(x: &str) -> String {
-    let canonical = format!("{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{x}\"}}");
-    URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
+///
+/// Delegates to the SDK's JCS-based `dpop_jwk_thumbprint` instead of
+/// interpolating `x` into a JSON string template. The template was only safe
+/// because every caller happened to validate `x` as base64url first — an
+/// implicit call-order invariant that any reuse would have broken, producing
+/// illegal JSON and a silently wrong thumbprint.
+fn jwk_thumbprint(x: &str) -> Result<String, AppError> {
+    let x = arkret_wire::Base64UrlString::new(x.to_owned())
+        .map_err(|_| AppError::unauthenticated("session signing key JWK x is not base64url"))?;
+    arkret_signatures::dpop_jwk_thumbprint(&arkret_signatures::JsonWebKey::ed25519(x))
+        .map_err(|_| AppError::unauthenticated("session signing key JWK has no thumbprint"))
 }
 
 #[cfg(test)]
@@ -383,7 +390,7 @@ mod tests {
 
     #[test]
     fn thumbprint_matches_rfc8037_vector() {
-        assert_eq!(jwk_thumbprint(RFC8037_X), RFC8037_THUMBPRINT);
+        assert_eq!(jwk_thumbprint(RFC8037_X).unwrap(), RFC8037_THUMBPRINT);
     }
 
     #[test]

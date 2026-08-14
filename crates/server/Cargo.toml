@@ -15,7 +15,6 @@ authors.workspace = true
 
 [features]
 default = []
-openmls-keypackage-validation = ["soland-http/openmls-keypackage-validation"]
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",

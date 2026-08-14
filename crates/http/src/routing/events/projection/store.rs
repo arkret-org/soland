@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use arkret_event_draft::ProjectedEventOperation as Operation;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
 use super::*;
@@ -159,16 +158,4 @@ async fn ordered_projected_events_for_realms(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     Ok(events)
-}
-
-pub async fn persist_projected_operation(
-    state: &AppState,
-    origin: &str,
-    operation: &Operation,
-) -> anyhow::Result<()> {
-    state
-        .event_queries()
-        .persist_projected_operation(origin, operation)
-        .await
-        .map_err(Into::into)
 }

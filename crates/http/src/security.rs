@@ -4,9 +4,11 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use arkret_egress_reqwest::{EgressGuard, LockedEgressUrl};
 use reqwest::Url;
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_HTTPS_PORT: u16 = 443;
 
 /// Every input that can change an egress or federation verdict, parsed once.
 ///
@@ -267,23 +269,20 @@ pub fn validate_http_url_for_egress_with_pinned_client_allow_private(
     request_timeout: Duration,
 ) -> Result<(Url, reqwest::Client), String> {
     let url = Url::parse(raw_url).map_err(|error| format!("{purpose}: invalid URL: {error}"))?;
-    let socket_addrs =
-        match resolve_and_validate_url_for_egress(&url, purpose, allow_private_networks) {
-            Ok(addrs) => addrs,
-            Err(error) => {
-                record_egress_denial(&url, purpose, &error);
-                return Err(error);
-            }
-        };
-    let host = url
-        .host_str()
-        .ok_or_else(|| format!("{purpose}: URL host is required"))?;
-    let client = reqwest::Client::builder()
+    let target = match resolve_and_validate_url_for_egress(&url, purpose, allow_private_networks) {
+        Ok(target) => target,
+        Err(error) => {
+            record_egress_denial(&url, purpose, &error);
+            return Err(error);
+        }
+    };
+    let builder = reqwest::Client::builder()
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT.min(request_timeout))
         .timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .resolve_to_addrs(host, &socket_addrs)
+        .no_proxy();
+    let client = target
+        .apply_to_client_builder(builder)
         .build()
         .map_err(|error| format!("failed to build pinned egress HTTP client: {error}"))?;
     Ok((url, client))
@@ -313,34 +312,35 @@ pub fn validate_url_for_egress_with_resolved_ips(
     })
 }
 
-fn resolve_and_validate_url_for_egress(
-    url: &Url,
-    purpose: &str,
-    allow_private_networks: bool,
-) -> Result<Vec<SocketAddr>, String> {
-    let policy = outbound_policy(allow_private_networks);
-    policy
-        .validate_url(url)
-        .map_err(|error| format!("{purpose}: {error}"))?;
+/// Judge the host through soland's deployment layers, which the shared guard
+/// knows nothing about: the sovereign-enclave outbound allowlist and the
+/// operator host deny/allow lists.
+///
+/// Runs *after* the shared guard's scheme/host judgment so the reported denial
+/// reason keeps its existing precedence.
+fn validate_soland_host_layers(url: &Url, purpose: &str) -> Result<String, String> {
     let host = url
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
     validate_sovereign_enclave_host_policy(host, purpose)?;
     validate_host_policy(host, purpose)?;
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
-        vec![SocketAddr::new(ip, port)]
-    } else {
-        (host, port)
-            .to_socket_addrs()
-            .map_err(|error| format!("{purpose}: DNS resolution for {host} failed: {error}"))?
-            .collect()
-    };
-    policy
-        .validate_resolved_addresses(&addrs)
-        .map_err(|error| format!("{purpose}: {error}"))?;
-    Ok(addrs)
+    Ok(host.to_owned())
+}
+
+fn resolve_and_validate_url_for_egress(
+    url: &Url,
+    purpose: &str,
+    allow_private_networks: bool,
+) -> Result<LockedEgressUrl, String> {
+    let guard = egress_guard(allow_private_networks);
+    guard
+        .validate_url(url, purpose)
+        .map_err(|error| error.to_string())?;
+    validate_soland_host_layers(url, purpose)?;
+    guard
+        .lock_url(url, purpose)
+        .map_err(|error| error.to_string())
 }
 
 fn validate_url_for_egress_with_resolver<F>(
@@ -352,28 +352,22 @@ fn validate_url_for_egress_with_resolver<F>(
 where
     F: FnMut(&str, u16) -> Result<Vec<IpAddr>, String>,
 {
-    let policy = outbound_policy(allow_private_networks);
-    policy
-        .validate_url(url)
-        .map_err(|error| format!("{purpose}: {error}"))?;
-    let host = url
-        .host_str()
-        .filter(|host| !host.trim().is_empty())
-        .ok_or_else(|| format!("{purpose}: URL host is required"))?;
-    validate_sovereign_enclave_host_policy(host, purpose)?;
-    validate_host_policy(host, purpose)?;
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return validate_ip_for_egress(ip, purpose, allow_private_networks);
-    }
-
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addresses = resolve_host(host, port)?
-        .into_iter()
-        .map(|ip| SocketAddr::new(ip, port))
-        .collect::<Vec<_>>();
-    policy
-        .validate_resolved_addresses(&addresses)
-        .map_err(|error| format!("{purpose}: {error}"))
+    let guard = egress_guard(allow_private_networks);
+    guard
+        .validate_url(url, purpose)
+        .map_err(|error| error.to_string())?;
+    let host = validate_soland_host_layers(url, purpose)?;
+    let port = url.port_or_known_default().unwrap_or(DEFAULT_HTTPS_PORT);
+    let addresses = match arkret_egress_reqwest::literal_host_ip(url) {
+        Some(ip) => vec![SocketAddr::new(ip, port)],
+        None => resolve_host(&host, port)?
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, port))
+            .collect::<Vec<_>>(),
+    };
+    guard
+        .validate_addresses(&host, &addresses, purpose)
+        .map_err(|error| error.to_string())
 }
 
 fn record_egress_denial(url: &Url, purpose: &str, error: &str) {
@@ -476,21 +470,16 @@ fn federation_target_denied_with_entries(
     })
 }
 
-fn validate_ip_for_egress(
-    ip: IpAddr,
-    purpose: &str,
-    allow_private_networks: bool,
-) -> Result<(), String> {
-    outbound_policy(allow_private_networks)
-        .validate_ip(ip)
-        .map_err(|error| format!("{purpose}: {error}"))
-}
-
-fn outbound_policy(allow_private_networks: bool) -> arkret_egress_policy::OutboundPolicy {
+/// soland's outbound posture. A controlled-network deployment additionally
+/// admits private and CGNAT destinations; metadata / link-local destinations
+/// stay impossible in both postures.
+fn egress_guard(allow_private_networks: bool) -> EgressGuard {
     if allow_private_networks {
-        arkret_egress_policy::OutboundPolicy::controlled_network(true)
+        EgressGuard::new(arkret_egress_policy::OutboundPolicy::controlled_network(
+            true,
+        ))
     } else {
-        arkret_egress_policy::OutboundPolicy::public_https()
+        EgressGuard::public_https()
     }
 }
 

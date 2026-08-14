@@ -203,6 +203,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkret-egress-reqwest"
+version = "0.3.0"
+dependencies = [
+ "arkret-egress-policy",
+ "reqwest",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "arkret-event-draft"
 version = "0.3.0"
 dependencies = [
@@ -237,6 +248,7 @@ version = "0.3.0"
 dependencies = [
  "arkret-canonical",
  "arkret-egress-policy",
+ "arkret-egress-reqwest",
  "arkret-identity",
  "arkret-models-collaboration",
  "arkret-models-crypto",
@@ -5261,6 +5273,7 @@ dependencies = [
  "arkret-canonical",
  "arkret-crypto",
  "arkret-egress-policy",
+ "arkret-egress-reqwest",
  "arkret-event-draft",
  "arkret-hlc",
  "arkret-http-client",

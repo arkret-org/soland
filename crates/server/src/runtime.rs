@@ -9,7 +9,6 @@ use soland_http::config::AppConfig;
 use soland_http::state::{
     AppState, AppStateRuntime, EventBroadcast, EventNotification, EventNotificationRelay,
 };
-use soland_services::events::ProjectedOperationPersistencePort;
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
@@ -64,9 +63,6 @@ pub fn build_app_state(
             persistence,
             projections,
             realm_directory,
-            projected_operation_persistence: Arc::new(RuntimeProjectedOperationPersistence(
-                pool.clone(),
-            )),
             object_storage,
             settings_persistence: Arc::new(RuntimeSettingsPersistence { pool: pool.clone() }),
             runtime_health: Arc::new(RuntimeDatabaseHealth(db)),
@@ -85,7 +81,6 @@ struct RuntimeSettingsPersistence {
 
 struct RuntimeDatabaseHealth(Db);
 struct RuntimeEventSealCommitter(Arc<dyn soland_storage_postgres::EventSealCommitStore>);
-struct RuntimeProjectedOperationPersistence(Option<PgPool>);
 
 impl EventSealCommitPort for RuntimeEventSealCommitter {
     fn commit_if_frontier(
@@ -149,30 +144,6 @@ impl RuntimeHealthPort for RuntimeDatabaseHealth {
 
     fn database_pool_in_use(&self) -> u32 {
         self.0.pool_in_use()
-    }
-}
-
-#[async_trait::async_trait]
-impl ProjectedOperationPersistencePort for RuntimeProjectedOperationPersistence {
-    async fn persist_projected_operation(
-        &self,
-        origin: &str,
-        operation: &arkret_event_draft::ProjectedEventOperation,
-        event_type: &str,
-        is_membership_or_realm_lifecycle: bool,
-    ) -> Result<(), String> {
-        let Some(pool) = self.0.as_ref() else {
-            return Ok(());
-        };
-        soland_storage_postgres::persist_projected_operation_to_pg(
-            pool,
-            origin,
-            operation,
-            event_type,
-            is_membership_or_realm_lifecycle,
-        )
-        .await
-        .map_err(|error| error.to_string())
     }
 }
 

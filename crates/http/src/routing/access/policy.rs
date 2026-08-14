@@ -45,7 +45,8 @@ use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
-    OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, UpsertPolicyDocumentRequestBody,
+    AdminPolicyPayload, OkOutcome, PolicyDocumentOutcome, PolicyDocumentsOutcome, PolicyEffect,
+    UpsertPolicyDocumentRequestBody,
 };
 
 const POLICY_FRESHNESS_HIGH_REQUIRED_MS: i64 = 180_000;
@@ -111,7 +112,7 @@ async fn list_policy_documents(
                 .is_none_or(|subject_ref| policy.subject_ref == subject_ref)
         })
         .map(|policy| policy_document_to_response(&policy))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     json_ok(PolicyDocumentsOutcome {
         policies,
         next_cursor: None,
@@ -142,7 +143,7 @@ async fn get_policy_document(
         .ok()
         .flatten()
         .filter(|policy| policy.owner == session.actor)
-        .map(|policy| json_ok(policy_document_to_response(&policy)))
+        .map(|policy| policy_document_to_response(&policy).and_then(json_ok))
         .unwrap_or_else(|| Err(AppError::not_found("policy not found")))
 }
 
@@ -168,8 +169,8 @@ async fn upsert_policy_document(
     }
     let subject_ref = canonical_policy_subject_ref(&body.subject_ref)
         .ok_or_else(|| AppError::param_invalid("invalid policy subject_ref"))?;
-    if !is_valid_policy_kind(&body.policy_kind) || !is_supported_policy_effect(&body.effect) {
-        return Err(AppError::param_invalid("invalid policy type or effect"));
+    if !is_valid_policy_kind(&body.policy_kind) {
+        return Err(AppError::param_invalid("invalid policy type"));
     }
     if let Err(message) = validate_canonical_json_value(&body.resource) {
         return Err(AppError::param_invalid(message));
@@ -202,18 +203,20 @@ async fn upsert_policy_document(
             "policy is owned by another actor",
         ));
     }
+    let payload = AdminPolicyPayload {
+        effect: body.effect,
+        actions,
+        resource: body.resource,
+        obligations: body.obligations,
+    };
     let record = PolicyDocumentRecord {
         policy_id: policy_id.clone(),
         owner: session.actor,
         scope: body.scope,
         subject_ref,
         policy_kind: body.policy_kind,
-        payload: json!({
-            "effect": body.effect,
-            "actions": actions,
-            "resource": body.resource,
-            "obligations": body.obligations,
-        }),
+        payload: serde_json::to_value(&payload)
+            .map_err(|error| AppError::internal(error.to_string()))?,
         active: body.active,
         updated_at: now(),
     };
@@ -221,7 +224,7 @@ async fn upsert_policy_document(
         .store_policy_document(record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(policy_document_to_response(&record))
+    json_ok(policy_document_to_response(&record)?)
 }
 
 #[salvo::oapi::endpoint(
@@ -548,17 +551,30 @@ fn policy_action_risk_tier(action: &str) -> Option<CapabilityRiskTier> {
         .map(|descriptor| descriptor.risk_tier)
 }
 
-pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocumentOutcome {
-    PolicyDocumentOutcome {
+/// The stored payload was written by [`upsert_policy_document`] through the
+/// same type, so a decode failure is corruption rather than an older shape;
+/// it fails loudly instead of rendering the document with a silently wrong
+/// effect.
+pub fn policy_document_to_response(
+    policy: &PolicyDocumentRecord,
+) -> Result<PolicyDocumentOutcome, AppError> {
+    let payload: AdminPolicyPayload =
+        serde_json::from_value(policy.payload.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "policy document {} has an undecodable payload: {error}",
+                policy.policy_id
+            ))
+        })?;
+    Ok(PolicyDocumentOutcome {
         policy_id: policy.policy_id.clone(),
         owner: policy.owner.clone(),
         scope: policy.scope.clone(),
         subject_ref: policy.subject_ref.clone(),
         policy_kind: policy.policy_kind.clone(),
-        payload: policy.payload.clone(),
+        payload,
         active: policy.active,
         updated_at: policy.updated_at,
-    }
+    })
 }
 
 struct MatchedPolicyDecision {
@@ -750,13 +766,14 @@ fn any_nonempty_string_field(object: &serde_json::Map<String, Value>, fields: &[
 }
 
 fn policy_effect_decision(value: &str) -> Option<AuthzDecision> {
-    match value {
-        "allow" => Some(AuthzDecision::Allow),
-        "soft_deny" => Some(AuthzDecision::SoftDeny),
-        "hard_deny" => Some(AuthzDecision::HardDeny),
-        "require_review" => Some(AuthzDecision::RequireReview),
-        "quarantine" => Some(AuthzDecision::Quarantine),
-        _ => None,
+    // The stored payload carries the effect as a string; the accepted set is
+    // the one the request body is typed against, spelled once in the contract.
+    match PolicyEffect::from_wire(value)? {
+        PolicyEffect::Allow => Some(AuthzDecision::Allow),
+        PolicyEffect::SoftDeny => Some(AuthzDecision::SoftDeny),
+        PolicyEffect::HardDeny => Some(AuthzDecision::HardDeny),
+        PolicyEffect::RequireReview => Some(AuthzDecision::RequireReview),
+        PolicyEffect::Quarantine => Some(AuthzDecision::Quarantine),
     }
 }
 
@@ -771,17 +788,6 @@ pub fn is_valid_policy_kind(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '*'))
-}
-
-pub fn is_supported_policy_effect(value: &str) -> bool {
-    // v1 policy decision enum (service-http-binding.md §577 /
-    // service-operation-dtos.schema.json#PolicyCheckOutcome.decision):
-    // `allow`, `soft_deny`, `hard_deny`, `quarantine`, `require_review`.
-    // The legacy `deny` value is no longer a valid wire decision.
-    matches!(
-        value,
-        "allow" | "soft_deny" | "hard_deny" | "require_review" | "quarantine"
-    )
 }
 
 pub fn is_valid_generated_or_custom_id(value: &str, kind: &str) -> bool {

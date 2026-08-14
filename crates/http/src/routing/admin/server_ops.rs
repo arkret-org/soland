@@ -14,6 +14,9 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use soland_contracts::admin::{
+    AdminServerInfo, AdminServerStats, AdminServerStatus, AdminServerStatusCounts,
+};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -22,58 +25,6 @@ use super::require_admin_principal;
 use crate::routing::identity::account::{AccountLifecycleChange, set_account_lifecycle_state};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminServerStatusCounts {
-    accounts: Option<usize>,
-    devices: Option<usize>,
-    realms: usize,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminServerStatusOutcome {
-    status: String,
-    service_id: String,
-    storage: String,
-    development_mode: bool,
-    checked_by: String,
-    generated_at: String,
-    counts: AdminServerStatusCounts,
-}
-
-/// `GET /_soland/admin/server/info` response. Mirrors sodmin's
-/// `ServerInfo` DTO (`sodmin/src/types/server.rs`). Node version / build /
-/// key config the operator dashboard surfaces at a glance.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminServerInfoOutcome {
-    server_version: String,
-    protocol_version: Option<String>,
-    server_name: Option<String>,
-    uptime: Option<u64>,
-    service_id: String,
-    trust_domain: String,
-    development_mode: bool,
-    /// Whether the deployment accepts public self-registration according to
-    /// the canonical account registration policy DTO.
-    allow_public_registration: bool,
-}
-
-/// `GET /_soland/admin/server/stats` response. Mirrors sodmin's
-/// `ServerStats` DTO. Counts are best-effort snapshots off the live
-/// persistence / projection stores; unavailable counters fall back to 0.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AdminServerStatsOutcome {
-    actor_count: u64,
-    active_actor_count: u64,
-    realm_count: u64,
-    device_count: u64,
-    report_count: u64,
-    federation_peer_count: u64,
-    applet_count: u64,
-    blob_count: u64,
-    blob_total_size: u64,
-    generated_at: String,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct SolandAdminAccountStatusRequestBody {
@@ -142,7 +93,7 @@ async fn get_server_status(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminServerStatusOutcome> {
+) -> JsonResult<AdminServerStatus> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
@@ -163,8 +114,8 @@ async fn get_server_status(
         .snapshot()
         .search(Default::default())
         .len();
-    json_ok(AdminServerStatusOutcome {
-        status: "ok".to_owned(),
+    json_ok(AdminServerStatus {
+        status: AdminServerStatus::OK.to_owned(),
         service_id: state.service_id().clone(),
         storage: state.jobs().storage_mode().to_owned(),
         development_mode: state.config().development_mode,
@@ -187,11 +138,11 @@ async fn get_server_info(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminServerInfoOutcome> {
+) -> JsonResult<AdminServerInfo> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
-    json_ok(AdminServerInfoOutcome {
+    json_ok(AdminServerInfo {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol_version: Some(arkret_wire::constants::PROTOCOL_VERSION.to_owned()),
         server_name: Some(state.service_id().clone()),
@@ -212,7 +163,7 @@ async fn get_server_stats(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AdminServerStatsOutcome> {
+) -> JsonResult<AdminServerStats> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
@@ -249,7 +200,7 @@ async fn get_server_stats(
     let blob_count = blobs.len() as u64;
     let blob_total_size = blobs.iter().map(|blob| blob.size_bytes as u64).sum();
 
-    json_ok(AdminServerStatsOutcome {
+    json_ok(AdminServerStats {
         actor_count,
         active_actor_count,
         realm_count,
