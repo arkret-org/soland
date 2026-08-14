@@ -496,7 +496,7 @@ async fn mls_lifecycle_end_to_end() {
     let publish_json: Value = serde_json::from_str(&publish_body).unwrap();
     assert_eq!(publish_json["accepted"], json!(2));
     assert_eq!(
-        publish_json["key_package_refs"],
+        publish_json["keypackage_refs"],
         json!([uploaded_keypackage_ref, mismatch_keypackage_ref])
     );
     assert!(
