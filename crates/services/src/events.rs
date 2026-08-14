@@ -812,6 +812,7 @@ pub struct CommitAppletGhosts {
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
     pub applet_ghosts: Option<CommitAppletGhosts>,
+    pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

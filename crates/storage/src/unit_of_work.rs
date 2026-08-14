@@ -206,6 +206,7 @@ pub struct AppletGhostCommit {
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
     pub applet_ghosts: Option<AppletGhostCommit>,
+    pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

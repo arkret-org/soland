@@ -9,6 +9,138 @@ use crate::events::quarantine_memory_event;
 use crate::{FaultPoint, FaultTiming};
 use crate::{MemoryDeviceRevocationState, SolandMemoryPersistenceStore};
 
+fn stage_agent_membership_cascade(
+    records: &mut std::collections::BTreeMap<
+        String,
+        arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupPendingRecord,
+    >,
+    transition: Option<&soland_storage::AgentMembershipCascadeCommit>,
+    events: &[EventCommitRequest],
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::governance::agent_membership_cascade::{
+        AgentCleanupStatus, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
+    };
+    use soland_storage::AgentMembershipCascadeCommit;
+
+    let Some(transition) = transition else {
+        return Ok(());
+    };
+    let event_ids = events
+        .iter()
+        .map(|request| request.event.event_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    match transition {
+        AgentMembershipCascadeCommit::AtomicSelfLeave {
+            controller_transition_event_id,
+            agent_transition_event_ids,
+        } => {
+            if agent_transition_event_ids.is_empty()
+                || agent_transition_event_ids.len() > MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: invalid atomic Agent cleanup cardinality".to_owned(),
+                ));
+            }
+            let mut expected = agent_transition_event_ids
+                .iter()
+                .map(arkret_wire::EventId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if expected.len() != agent_transition_event_ids.len()
+                || !expected.insert(controller_transition_event_id.as_str())
+                || expected != event_ids
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: atomic Agent cascade Event set mismatch".to_owned(),
+                ));
+            }
+        }
+        AgentMembershipCascadeCommit::EmergencyTerminal { record } => {
+            record.validate().map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: invalid Agent cleanup intent: {error}"
+                ))
+            })?;
+            if event_ids
+                != std::collections::BTreeSet::from([record.controller_terminal_event_id.as_str()])
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency terminal Event set mismatch".to_owned(),
+                ));
+            }
+            match records.get(record.cleanup_intent_digest.as_str()) {
+                Some(existing) if existing == record => {}
+                Some(_) => {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: cleanup intent digest names different content"
+                            .to_owned(),
+                    ));
+                }
+                None => {
+                    records.insert(record.cleanup_intent_digest.to_string(), record.clone());
+                }
+            }
+        }
+        AgentMembershipCascadeCommit::EmergencyCleanup {
+            cleanup_intent_digest,
+            controller_terminal_event_id,
+            agent_transition_event_ids,
+            completed_at,
+        } => {
+            let record = records
+                .get_mut(cleanup_intent_digest.as_str())
+                .ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "failed_precondition: Agent cleanup intent is unavailable".to_owned(),
+                    )
+                })?;
+            if record.controller_terminal_event_id != *controller_terminal_event_id
+                || event_ids
+                    != agent_transition_event_ids
+                        .iter()
+                        .map(arkret_wire::EventId::as_str)
+                        .collect()
+                || agent_transition_event_ids.len() != record.expected_agent_ids.len()
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency Agent cleanup does not match frozen intent"
+                        .to_owned(),
+                ));
+            }
+            let actor_ids = events
+                .iter()
+                .map(|request| request.event.actor_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_actor_ids = record
+                .expected_agent_ids
+                .iter()
+                .map(arkret_wire::DidCoreId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if actor_ids != expected_actor_ids {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency Agent cleanup actor set mismatch".to_owned(),
+                ));
+            }
+            if record.status == AgentCleanupStatus::AgentCleanupCompleted {
+                if record.agent_transition_event_ids.as_ref() != Some(agent_transition_event_ids) {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: completed Agent cleanup replay differs".to_owned(),
+                    ));
+                }
+                return Ok(());
+            }
+            record.status = AgentCleanupStatus::AgentCleanupCompleted;
+            record.completed_at = Some(*completed_at);
+            record.agent_transition_event_ids = Some(agent_transition_event_ids.clone());
+            record.validate().map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: completed Agent cleanup is invalid: {error}"
+                ))
+            })?;
+        }
+    }
+    Ok(())
+}
+
 fn stage_control_proposal_ack(
     staged: &mut std::collections::BTreeMap<String, arkret_wire::ControlProposalAck>,
     request: &EventCommitRequest,
@@ -386,6 +518,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         let mut outbox_inserted = 0;
+
         for record in request.outbox {
             let already_present = staged_outbox.values().any(|existing| {
                 existing.peer_did == record.peer_did
@@ -447,6 +580,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut contacts = self.contacts.data.lock();
         let mut invite_policies = self.invite_receive_policies.data.lock();
         let mut device_revocations = self.device_revocations.state.lock();
+        let mut agent_membership_cascades = self.agent_membership_cascades.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -459,9 +593,16 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_contacts = contacts.clone();
         let mut staged_invite_policies = invite_policies.clone();
         let mut staged_device_revocations = device_revocations.clone();
+        let mut staged_agent_membership_cascades = agent_membership_cascades.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
+
+        stage_agent_membership_cascade(
+            &mut staged_agent_membership_cascades,
+            request.agent_membership_cascade.as_ref(),
+            &request.events,
+        )?;
 
         for event_request in request.events {
             stage_device_pairing_authorization(
@@ -647,6 +788,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *contacts = staged_contacts;
         *invite_policies = staged_invite_policies;
         *device_revocations = staged_device_revocations;
+        *agent_membership_cascades = staged_agent_membership_cascades;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
@@ -1253,6 +1395,7 @@ mod tests {
                     "external_id": "one",
                 }),
             }),
+            agent_membership_cascade: None,
         };
 
         assert!(store.commit_event_batch(request).await.is_err());
@@ -1292,6 +1435,7 @@ mod tests {
                     "external_id": "second",
                 }),
             }),
+            agent_membership_cascade: None,
         };
 
         store.commit_event_batch(request).await.unwrap();

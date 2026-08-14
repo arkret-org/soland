@@ -16,8 +16,10 @@ pub use soland_domain::identity::{
 };
 pub(crate) use uuid::Uuid;
 
+mod agent_membership_cascades;
 mod agent_principal;
 mod records;
+pub use agent_membership_cascades::*;
 pub use agent_principal::{
     AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
     ConfirmAgentProvisioningAbandonment, IssueAgentProvisioningAbandonmentChallenge,
@@ -403,6 +405,7 @@ pub trait MlsAgentStoreRegistry: Send + Sync {
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
     // AKP-0008 — native personal agent principals.
     fn agents(&self) -> &dyn AgentStore;
+    fn agent_membership_cascades(&self) -> &dyn AgentMembershipCascadeStore;
     /// First-class Agent Sidecar aggregates and context bindings.
     fn sidecars(&self) -> &dyn SidecarStore;
     // AKP-0016 — per-recipient notification projection.

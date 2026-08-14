@@ -3,7 +3,7 @@ use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, SmallInt, Text, Timestamptz, Uuid,
 };
 use diesel::{OptionalExtension, sql_query};
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     CanonicalEventRecord, EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest,
     EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
@@ -31,6 +31,201 @@ struct DevicePairingCasRow {
 #[derive(Clone)]
 pub struct PgEventCommitUnitOfWork {
     pool: PgPool,
+}
+
+#[derive(diesel::QueryableByName)]
+struct AgentCleanupIntentJsonRow {
+    #[diesel(sql_type = Jsonb)]
+    record_json: serde_json::Value,
+}
+
+async fn stage_agent_membership_cascade(
+    conn: &mut AsyncPgConnection,
+    transition: Option<&soland_storage::AgentMembershipCascadeCommit>,
+    events: &[EventCommitRequest],
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::governance::agent_membership_cascade::{
+        AgentCleanupPendingRecord, AgentCleanupStatus, MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS,
+    };
+    use soland_storage::AgentMembershipCascadeCommit;
+
+    let Some(transition) = transition else {
+        return Ok(());
+    };
+    let event_ids = events
+        .iter()
+        .map(|request| request.event.event_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    match transition {
+        AgentMembershipCascadeCommit::AtomicSelfLeave {
+            controller_transition_event_id,
+            agent_transition_event_ids,
+        } => {
+            if agent_transition_event_ids.is_empty()
+                || agent_transition_event_ids.len() > MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: invalid atomic Agent cleanup cardinality".to_owned(),
+                ));
+            }
+            let mut expected = agent_transition_event_ids
+                .iter()
+                .map(arkret_wire::EventId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if expected.len() != agent_transition_event_ids.len()
+                || !expected.insert(controller_transition_event_id.as_str())
+                || expected != event_ids
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: atomic Agent cascade Event set mismatch".to_owned(),
+                ));
+            }
+        }
+        AgentMembershipCascadeCommit::EmergencyTerminal { record } => {
+            record.validate().map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: invalid Agent cleanup intent: {error}"
+                ))
+            })?;
+            if event_ids
+                != std::collections::BTreeSet::from([record.controller_terminal_event_id.as_str()])
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency terminal Event set mismatch".to_owned(),
+                ));
+            }
+            let existing = sql_query(
+                "SELECT record_json FROM agent_membership_cleanup_intents \
+                 WHERE cleanup_intent_digest = $1 FOR UPDATE",
+            )
+            .bind::<Text, _>(record.cleanup_intent_digest.as_str())
+            .get_result::<AgentCleanupIntentJsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+            if let Some(existing) = existing {
+                let existing =
+                    serde_json::from_value::<AgentCleanupPendingRecord>(existing.record_json)
+                        .map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored Agent cleanup intent is invalid: {error}"
+                            ))
+                        })?;
+                if existing != *record {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: cleanup intent digest names different content"
+                            .to_owned(),
+                    ));
+                }
+            } else {
+                let record_json = serde_json::to_value(record).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "Agent cleanup intent encoding failed: {error}"
+                    ))
+                })?;
+                sql_query(
+                    "INSERT INTO agent_membership_cleanup_intents \
+                     (cleanup_intent_digest, realm_id, controller_terminal_event_id, status, \
+                      record_json, accepted_at, cleanup_due_at, completed_at, created_at, updated_at) \
+                     VALUES ($1, $2, $3, 'agent_cleanup_pending', $4, $5, $6, NULL, $5, $5)",
+                )
+                .bind::<Text, _>(record.cleanup_intent_digest.as_str())
+                .bind::<Text, _>(record.realm_id.as_str())
+                .bind::<Text, _>(record.controller_terminal_event_id.as_str())
+                .bind::<Jsonb, _>(record_json)
+                .bind::<Timestamptz, _>(record.accepted_at)
+                .bind::<Timestamptz, _>(record.cleanup_due_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            }
+        }
+        AgentMembershipCascadeCommit::EmergencyCleanup {
+            cleanup_intent_digest,
+            controller_terminal_event_id,
+            agent_transition_event_ids,
+            completed_at,
+        } => {
+            let existing = sql_query(
+                "SELECT record_json FROM agent_membership_cleanup_intents \
+                 WHERE cleanup_intent_digest = $1 FOR UPDATE",
+            )
+            .bind::<Text, _>(cleanup_intent_digest.as_str())
+            .get_result::<AgentCleanupIntentJsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "failed_precondition: Agent cleanup intent is unavailable".to_owned(),
+                )
+            })?;
+            let mut record = serde_json::from_value::<AgentCleanupPendingRecord>(
+                existing.record_json,
+            )
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "stored Agent cleanup intent is invalid: {error}"
+                ))
+            })?;
+            let submitted_event_ids = agent_transition_event_ids
+                .iter()
+                .map(arkret_wire::EventId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            let actor_ids = events
+                .iter()
+                .map(|request| request.event.actor_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_actor_ids = record
+                .expected_agent_ids
+                .iter()
+                .map(arkret_wire::DidCoreId::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if record.controller_terminal_event_id != *controller_terminal_event_id
+                || event_ids != submitted_event_ids
+                || agent_transition_event_ids.len() != record.expected_agent_ids.len()
+                || actor_ids != expected_actor_ids
+            {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: emergency Agent cleanup does not match frozen intent"
+                        .to_owned(),
+                ));
+            }
+            if record.status == AgentCleanupStatus::AgentCleanupCompleted {
+                if record.agent_transition_event_ids.as_ref() != Some(agent_transition_event_ids) {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: completed Agent cleanup replay differs".to_owned(),
+                    ));
+                }
+                return Ok(());
+            }
+            record.status = AgentCleanupStatus::AgentCleanupCompleted;
+            record.completed_at = Some(*completed_at);
+            record.agent_transition_event_ids = Some(agent_transition_event_ids.clone());
+            record.validate().map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: completed Agent cleanup is invalid: {error}"
+                ))
+            })?;
+            let record_json = serde_json::to_value(&record).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "completed Agent cleanup encoding failed: {error}"
+                ))
+            })?;
+            sql_query(
+                "UPDATE agent_membership_cleanup_intents SET \
+                     status = 'agent_cleanup_completed', record_json = $2, completed_at = $3, \
+                     updated_at = $3 WHERE cleanup_intent_digest = $1",
+            )
+            .bind::<Text, _>(cleanup_intent_digest.as_str())
+            .bind::<Jsonb, _>(record_json)
+            .bind::<Timestamptz, _>(*completed_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        }
+    }
+    Ok(())
 }
 
 enum CommitTransactionOutcome {
@@ -198,6 +393,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
             applet_ghosts: None,
+            agent_membership_cascade: None,
         })
         .await
     }
@@ -274,6 +470,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let mut event_inserted = false;
             let mut projections_inserted = 0;
             let mut outbox_inserted = 0;
+            stage_agent_membership_cascade(
+                conn,
+                request.agent_membership_cascade.as_ref(),
+                &request.events,
+            )
+            .await?;
             for request in request.events {
             if let Some(commit) = request.device_pairing_authorization.as_ref() {
                 if commit.authorized_event_ref != request.event.event_id {

@@ -24,6 +24,9 @@ pub enum SolandEventsSubmitRequestBody {
     /// fields validated.
     Federation(EventsSubmitFederationBatchRequestBody),
     DirectConversationFounding(DirectConversationFoundingUnitSubmission),
+    AgentMembershipCascade(
+        arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeSubmission,
+    ),
     /// First durable publication of one Event
     /// (`authz/offline-publication.md` §2.1). The `authorization_lease` is the
     /// only thing that can make this service mint and store an
@@ -58,9 +61,27 @@ impl<'de> serde::Deserialize<'de> for SolandEventsSubmitRequestBody {
         // Dispatch it before the permissive ordinary carriers so a malformed
         // founding unit cannot silently degrade into InitialBatch/Batch/Single.
         if object.is_some_and(|object| object.contains_key("unit_kind")) {
-            return serde_json::from_value::<DirectConversationFoundingUnitSubmission>(value)
-                .map(Self::DirectConversationFounding)
-                .map_err(D::Error::custom);
+            return match object
+                .and_then(|object| object.get("unit_kind"))
+                .and_then(Value::as_str)
+            {
+                Some("direct_conversation_founding") => {
+                    serde_json::from_value::<DirectConversationFoundingUnitSubmission>(value)
+                        .map(Self::DirectConversationFounding)
+                        .map_err(D::Error::custom)
+                }
+                Some("agent_membership_cascade") => serde_json::from_value::<
+                    arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeSubmission,
+                >(value)
+                .map(Self::AgentMembershipCascade)
+                .map_err(D::Error::custom),
+                Some(kind) => Err(D::Error::custom(format!(
+                    "unknown registered Event unit_kind {kind:?}"
+                ))),
+                None => Err(D::Error::custom(
+                    "registered Event unit_kind must be a string",
+                )),
+            };
         }
         if object.is_some_and(|object| object.contains_key("service_binding_ref")) {
             return serde_json::from_value::<EventsSubmitFederationBatchRequestBody>(value)

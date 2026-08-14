@@ -1653,6 +1653,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                         ghost: mutation.ghost,
                     }
                 }),
+                agent_membership_cascade: command.agent_membership_cascade,
             })
             .await?;
         Ok(crate::events::CommitAcceptedEventResult {
