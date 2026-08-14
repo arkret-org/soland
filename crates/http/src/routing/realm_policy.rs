@@ -433,7 +433,8 @@ mod caller_signed_policy_server_tests {
 
     use super::*;
 
-    const ACTOR: &str = "did:web:alice.example";
+    const ACTOR: &str = "ak:did_core:web:alice.example";
+    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn policy_server_event(actor: &str, realm_id: &str, payload: Value) -> arkret_wire::Event {
@@ -443,6 +444,7 @@ mod caller_signed_policy_server_tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -491,7 +493,7 @@ mod caller_signed_policy_server_tests {
     fn an_event_signed_by_someone_else_is_rejected() {
         caller_signed_policy_server_payload(
             "policy_server_event",
-            "did:web:mallory.example",
+            "ak:did_core:web:mallory.example",
             REALM,
             &policy_server_event(ACTOR, REALM, declaration()),
         )

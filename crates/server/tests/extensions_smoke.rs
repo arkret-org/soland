@@ -33,11 +33,10 @@ use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 
-const DEMO_REALM_ID: &str = "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e";
-const SEEDED_DIRECTORY_DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
-// The shared demo directory and `new_with_demo_data` metadata still use two
-// historical fixture Realm ids. Clone both into the Realm derived from this
-// suite's current canonical genesis before exercising authenticated routes.
+const DEMO_REALM_ID: &str = soland_http::state::DEVELOPMENT_DEMO_REALM_ID;
+// `new_with_demo_data` metadata still uses a historical fixture Realm id.
+// Clone it into the Realm derived from the shared canonical development
+// genesis before exercising authenticated routes.
 const SEEDED_METADATA_DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
 const EXTENSION_TEST_SIGNING_SEED: [u8; 32] = [0x5a; 32];
 const ALICE_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -138,7 +137,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     {
         let mut realms = state.test_realms().lock();
         let mut realm = realms.get(&typed_realm_id).cloned().unwrap_or_else(|| {
-            let seeded_realm_id = RealmId::new(SEEDED_DIRECTORY_DEMO_REALM_ID.to_owned()).unwrap();
+            let seeded_realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
             let mut seeded = realms
                 .get(&seeded_realm_id)
                 .cloned()

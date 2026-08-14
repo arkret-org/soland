@@ -1426,7 +1426,9 @@ fn placeholder_contact_signature(
 ) -> Result<ProtocolSignature, AppError> {
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_full_id().as_str(),
+            ),
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
         created_at,
@@ -1444,7 +1446,9 @@ fn sign_contact_evidence_bytes(
     let signature = state.notary_signing_key().sign(signing_bytes);
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_full_id().as_str(),
+            ),
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
         created_at,
@@ -1609,7 +1613,9 @@ fn sign_contact_mirror_receipt(
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
-        crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_full_id().as_str(),
+        ),
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
     let signing_bytes = canonical::canonical_json_bytes(&json!({
@@ -2480,7 +2486,9 @@ fn sign_contact_control_receipt(
     let issuer = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let verification_method = DidUrl::new(
-        crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_full_id().as_str(),
+        ),
     )
     .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
     let mut signing_value = json!({
@@ -3334,6 +3342,18 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};
 
+    const ALICE: &str = "ak:did_core:web:alice.example";
+    const BOB: &str = "ak:did_core:web:bob.example";
+    const ALICE_SERVICE: &str = "ak:did_core:web:alice-service.example";
+    const BOB_SERVICE: &str = "ak:did_core:web:bob-service.example";
+
+    fn web_full_id(core_id: &str) -> String {
+        core_id
+            .strip_prefix("ak:did_core:web:")
+            .map(|authority| format!("did:web:{authority}"))
+            .expect("fixture uses a did:web Core identifier")
+    }
+
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
@@ -3372,7 +3392,7 @@ mod tests {
             },
             "receipt_digest": format!("sha256:{}", "d".repeat(64)),
             "signature": {
-                "verification_method": format!("{issuer}#federation-signing-key"),
+                "verification_method": format!("{}#federation-signing-key", web_full_id(issuer)),
                 "created_at": "2026-08-09T00:00:00.000Z",
                 "jws": "YWJj"
             }
@@ -3389,9 +3409,9 @@ mod tests {
     #[tokio::test]
     async fn delivered_request_records_originating_peer_service_id() {
         let state = AppState::new(test_config(), Db { pool: None });
-        let requester = "did:web:remote-alice.example"; // issuer, on source PS
-        let target = "did:web:local-bob.example"; // subject_id, this holder
-        let source_service_id = "did:web:remote.local"; // requester's home PS
+        let requester = "ak:did_core:web:remote-alice.example"; // issuer, on source PS
+        let target = "ak:did_core:web:local-bob.example"; // subject_id, this holder
+        let source_service_id = "ak:did_core:web:remote.local"; // requester's home PS
 
         let payload = json!({
             "peer": {"kind": "human", "principal_id": target},
@@ -3413,7 +3433,7 @@ mod tests {
             },
             "receipt_digest": format!("sha256:{}", "d".repeat(64)),
             "signature": {
-                "verification_method": format!("{source_service_id}#federation-signing-key"),
+                "verification_method": "did:web:remote.local#federation-signing-key",
                 "created_at": "2026-08-09T00:00:00.000Z",
                 "jws": "YWJj"
             }
@@ -3465,16 +3485,16 @@ mod tests {
     #[test]
     fn glare_basis_and_initiator_are_independent_of_arrival_order() {
         let alice = request_receipt(
-            "did:web:alice.example",
-            "did:web:bob.example",
-            "did:web:alice-service.example",
+            ALICE,
+            BOB,
+            ALICE_SERVICE,
             "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
             'a',
         );
         let bob = request_receipt(
-            "did:web:bob.example",
-            "did:web:alice.example",
-            "did:web:bob-service.example",
+            BOB,
+            ALICE,
+            BOB_SERVICE,
             "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             'b',
         );
@@ -3501,7 +3521,7 @@ mod tests {
         );
         assert_eq!(
             first_arrival[0].core.holder.contact_actor_id().as_str(),
-            "did:web:alice.example",
+            ALICE,
             "requests[0] issuer is the sole mechanical glare initiator"
         );
     }
@@ -3511,8 +3531,8 @@ mod tests {
         let state = AppState::new(test_config(), Db { pool: None });
         let now = chrono::Utc::now();
         let record = ContactRecord {
-            requester: "did:web:alice.example".to_owned(),
-            target: "did:web:bob.example".to_owned(),
+            requester: ALICE.to_owned(),
+            target: BOB.to_owned(),
             contact_round_id: None,
             version: None,
             granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -3527,7 +3547,7 @@ mod tests {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_service_id: Some("did:web:bob-service.example".to_owned()),
+            peer_service_id: Some(BOB_SERVICE.to_owned()),
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,
@@ -3562,16 +3582,16 @@ mod tests {
         let config = test_config();
         let state = AppState::new(config.clone(), Db { pool: None });
         let first = request_receipt(
-            "did:web:alice.example",
-            "did:web:bob.example",
-            "did:web:alice-service.example",
+            ALICE,
+            BOB,
+            ALICE_SERVICE,
             "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
             'a',
         );
         let second = request_receipt(
-            "did:web:bob.example",
-            "did:web:alice.example",
-            "did:web:bob-service.example",
+            BOB,
+            ALICE,
+            BOB_SERVICE,
             "ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
             'b',
         );
@@ -3591,8 +3611,8 @@ mod tests {
         state
             .contacts()
             .save_contact(ContactRecord {
-                requester: "did:web:alice.example".to_owned(),
-                target: "did:web:bob.example".to_owned(),
+                requester: ALICE.to_owned(),
+                target: BOB.to_owned(),
                 contact_round_id: None,
                 version: None,
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -3607,7 +3627,7 @@ mod tests {
                 response_event_ref: None,
                 tombstone_event_ref: None,
                 message: None,
-                peer_service_id: Some("did:web:bob-service.example".to_owned()),
+                peer_service_id: Some(BOB_SERVICE.to_owned()),
                 peer_service_resolution: None,
                 created_at: now,
                 updated_at: now,
@@ -3620,7 +3640,7 @@ mod tests {
         restarted.hydrate().await.unwrap();
         let row = restarted
             .contacts()
-            .contact_any("did:web:alice.example", "did:web:bob.example")
+            .contact_any(ALICE, BOB)
             .await
             .unwrap()
             .unwrap();
@@ -3638,10 +3658,7 @@ mod tests {
             serde_json::to_value(&row.request_receipts[1].core).unwrap(),
             serde_json::to_value(&second.core).unwrap()
         );
-        assert_eq!(
-            row.peer_service_id.as_deref(),
-            Some("did:web:bob-service.example")
-        );
+        assert_eq!(row.peer_service_id.as_deref(), Some(BOB_SERVICE));
     }
 
     #[test]
@@ -3656,9 +3673,9 @@ mod tests {
                 "request_digest": exact.clone(),
                 "outcome": "accepted",
                 "result_digest": format!("sha256:{}", "8".repeat(64)),
-                "recipient_service_id": "did:web:bob-service.example",
+                "recipient_service_id": BOB_SERVICE,
                 "received_at": "2026-08-09T00:00:00.000Z",
-                "issuer": "did:web:bob-service.example",
+                "issuer": BOB_SERVICE,
                 "signature": {
                     "verification_method": "did:web:bob-service.example#federation-signing-key",
                     "created_at": "2026-08-09T00:00:00.000Z",
@@ -3667,13 +3684,13 @@ mod tests {
             },
             "current_proof": {
                 "contact_round_id": format!("sha256:{}", "9".repeat(64)),
-                "issuer": "did:web:alice.example",
+                "issuer": ALICE,
                 "terminal": false,
                 "head_event_ref": "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
                 "head_digest": format!("sha256:{}", "a".repeat(64)),
                 "accepted_frontier": ["ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"],
                 "complete_through": 1,
-                "fresh_until": "2026-08-09T00:10:00Z",
+                "fresh_until": "2026-08-09T00:10:00.000Z",
                 "signature": {
                     "verification_method": "did:web:alice-service.example#federation-signing-key",
                     "created_at": "2026-08-09T00:00:00.000Z",
@@ -3683,8 +3700,8 @@ mod tests {
         }))
         .unwrap();
         let record = ContactRecord {
-            requester: "did:web:alice.example".to_owned(),
-            target: "did:web:bob.example".to_owned(),
+            requester: ALICE.to_owned(),
+            target: BOB.to_owned(),
             contact_round_id: None,
             version: None,
             granted_to_target_scopes: Vec::new(),

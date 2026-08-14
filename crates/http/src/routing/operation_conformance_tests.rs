@@ -148,25 +148,25 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // membership_payload: membership=join additionally requires realm_id, actor_id,
             // delivery_status; delivery_status=routable would further require
             // delivery_binding, so use unroutable to stay minimal.
-            payload: json!({"realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K", "actor_id": "did:web:alice.example", "membership": "join", "delivery_status": "unroutable"}),
+            payload: json!({"realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K", "actor_id": "ak:did_core:web:alice.example", "membership": "join", "delivery_status": "unroutable"}),
             valid: true,
         },
         OperationVector {
             name: "member state leave",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "did:web:alice.example", "membership": "leave"}),
+            payload: json!({"actor_id": "ak:did_core:web:alice.example", "membership": "leave"}),
             valid: true,
         },
         OperationVector {
             name: "member state ban",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "did:web:bob.example", "membership": "ban"}),
+            payload: json!({"actor_id": "ak:did_core:web:bob.example", "membership": "ban"}),
             valid: true,
         },
         OperationVector {
             name: "member state knock",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "did:web:bob.example", "membership": "knock"}),
+            payload: json!({"actor_id": "ak:did_core:web:bob.example", "membership": "knock"}),
             valid: true,
         },
         OperationVector {
@@ -175,7 +175,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({
                 "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "read_scope": {"kind": "realm"},
@@ -190,7 +190,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({
                 "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "read_scope": {"kind": "realm"},
@@ -275,7 +275,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "schema": "ak.schema.strand.v1",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "tracks": {"discussion": {}},
-                "created_by": "did:web:alice.example",
+                "created_by": "ak:did_core:web:alice.example",
                 "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Launch"}
             }}),
@@ -352,7 +352,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "schema_refs": ["ak.schema.morph.v1"],
                 "morph_kind": "task",
                 "stage": "draft",
-                "created_by": "did:web:alice.example",
+                "created_by": "ak:did_core:web:alice.example",
                 "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Backfill"}
             }}),
@@ -391,10 +391,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // exact def exists in the current spec.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "service_id": "did:web:applet.example",
-                "controller_id": "did:web:applet.example",
+                "service_id": "ak:did_core:web:applet.example",
+                "controller_id": "ak:did_core:web:applet.example",
                 "base_url": "https://applet.example/runtime",
-                "bot_actor_id": "did:web:applet.bot.example",
+                "bot_actor_id": "ak:did_core:web:applet.bot.example",
                 "protocols": ["http_custom"],
                 "namespaces": {"realms": ["*"]},
                 "receive_events": true,
@@ -418,10 +418,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // Same closed class, but omits the required `namespaces` field.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
-                "service_id": "did:web:applet.example",
-                "controller_id": "did:web:applet.example",
+                "service_id": "ak:did_core:web:applet.example",
+                "controller_id": "ak:did_core:web:applet.example",
                 "base_url": "https://applet.example/runtime",
-                "bot_actor_id": "did:web:applet.bot.example",
+                "bot_actor_id": "ak:did_core:web:applet.bot.example",
                 "protocols": ["http_custom"],
                 "receive_events": true,
                 "receive_signals": false,

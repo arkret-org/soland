@@ -145,8 +145,7 @@ mod tests {
 
     #[test]
     fn plaintext_visible_services_projection_is_data_class_aware() {
-        let service =
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+        let service = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
         let operation = op(
             arkret_wire::EventKind::RealmPlaintextVisibleServices,
             json!({
@@ -171,8 +170,7 @@ mod tests {
 
     #[test]
     fn realm_create_projects_nested_plaintext_visible_services() {
-        let service =
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+        let service = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
         let operation = op(
             arkret_wire::EventKind::RealmCreate,
             json!({

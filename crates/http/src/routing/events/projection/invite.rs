@@ -768,7 +768,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         operation.realm_id.as_str(),
         invitee.as_str(),
     );
-    let delivery_pending = invite_delivery_target.is_some();
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
@@ -779,11 +778,11 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         third_party_id: None,
         join_rule_snapshot: None,
         invite_token,
-        status: if delivery_pending {
-            "delivery_pending".to_owned()
-        } else {
-            "pending".to_owned()
-        },
+        // The accepted create always initializes the reducer lifecycle at
+        // `pending`. A private delivery target is routing metadata, not a
+        // second lifecycle state; delivery failure requires its own signed
+        // transition to `send_failed`.
+        status: "pending".to_owned(),
         claim_nonces: std::collections::BTreeMap::new(),
         expires_at,
         created_at: operation.created_at,
@@ -1153,7 +1152,12 @@ mod tests {
                 realm_id: CANCEL_REALM.to_owned(),
                 inviter: CANCEL_INVITER.to_owned(),
                 invitee: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
-                invite_delivery_target: None,
+                invite_delivery_target: (!third_party).then(|| {
+                    json!({
+                        "recipient_service_id": "ak:did_core:web:soland.example",
+                        "recipient_service_kind": "principal_server"
+                    })
+                }),
                 introduction_evidence_digest: None,
                 third_party_id: third_party.then(|| {
                     json!({
@@ -1213,6 +1217,10 @@ mod tests {
             .unwrap();
         assert_eq!(record.status, "pending");
         assert_eq!(record.invitee.as_deref(), expected_invitee);
+        assert_eq!(
+            record.invite_delivery_target.is_some(),
+            expected_invitee.is_some()
+        );
         assert_eq!(record.invite_token, "private-token");
         assert_eq!(
             state.projections().cell_value(
@@ -1338,12 +1346,12 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:ATgPyXyxa7nHOBDf8wno4jWA7fVMO63Mba64ZIYHssA9").unwrap();
         let invite_id = "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg";
-        let inviter = "did:web:alice.example";
-        let invitee = "did:web:bob.example";
+        let inviter = "ak:did_core:web:alice.example";
+        let invitee = "ak:did_core:web:bob.example";
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         let expires_at = "2026-08-05T10:00:00Z".parse().unwrap();
         let delivery_target = json!({
-            "recipient_service_id": "did:web:beta.example",
+            "recipient_service_id": "ak:did_core:web:beta.example",
             "recipient_service_kind": "principal_server"
         });
         let evidence_digest = format!("sha256:{}", "a".repeat(64));
@@ -1378,7 +1386,7 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            crate::test_actor_id_str(inviter),
+            crate::test_actor_id_str("did:web:alice.example"),
             0,
             arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             json!({
@@ -1431,14 +1439,14 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:Ad-NSApg_uD02vD0do9fZZZJ1Zmt7NwwVBcwb04N9zN6").unwrap();
         let invite_id = "ak:invite:AdC0j3vbvw3GtVXF8ur0n33PvcSmEMMhI4ROVwQk3ypg";
-        let invitee = "did:web:bob.example";
+        let invitee = "ak:did_core:web:bob.example";
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         state
             .realm_invites()
             .put(RealmInviteRecord {
                 invite_id: invite_id.to_owned(),
                 realm_id: realm_id.to_string(),
-                inviter: "did:web:mallory.example".to_owned(),
+                inviter: "ak:did_core:web:mallory.example".to_owned(),
                 invitee: Some(invitee.to_owned()),
                 invite_delivery_target: None,
                 introduction_evidence_digest: None,

@@ -312,11 +312,13 @@ async fn protected_endpoints_reject_query_auth_material() {
 #[tokio::test]
 async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() {
     let state = soland_test_support::app_state(test_config());
-    let actor = "did:web:alice.example";
+    let actor_full_id = "did:web:alice.example";
+    let actor = "ak:did_core:web:alice.example";
     let device_a = "ak:device:01904100-0000-7000-8000-a11ce00000aa";
     let device_b = "ak:device:01904100-0000-7000-8000-a11ce00000bb";
-    let token_a = dev_token_for_device(state.clone(), actor, device_a, "Alice Phone").await;
-    let _token_b = dev_token_for_device(state.clone(), actor, device_b, "Alice Tablet").await;
+    let token_a = dev_token_for_device(state.clone(), actor_full_id, device_a, "Alice Phone").await;
+    let _token_b =
+        dev_token_for_device(state.clone(), actor_full_id, device_b, "Alice Tablet").await;
 
     state
         .test_persistence()
@@ -386,6 +388,36 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .await
         .unwrap();
 
+    let device_b_messages_before_logout = state
+        .test_persistence()
+        .device_messages()
+        .list_after(actor, device_b, 0)
+        .await
+        .unwrap();
+    assert!(
+        device_b_messages_before_logout
+            .iter()
+            .any(|message| message.idempotency_key == "logout-device-b"),
+        "the control device queue must contain the test message before logout"
+    );
+    let push_devices_before_logout = state
+        .test_persistence()
+        .push_devices()
+        .snapshot_all()
+        .await
+        .unwrap();
+    let device_b_push_devices_before_logout = push_devices_before_logout
+        .iter()
+        .filter(|registration| registration["device_id"] == device_b)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        device_b_push_devices_before_logout
+            .iter()
+            .any(|registration| registration["registration_id"] == "ak:push:device-b-main"),
+        "the control device must have the test push registration before logout"
+    );
+
     let mut response = TestClient::post("http://server/_arkret/gate/account/logout")
         .add_header("authorization", format!("Bearer {token_a}"), true)
         .send(&app_from_state(state.clone()))
@@ -401,8 +433,21 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .snapshot_all()
         .await
         .unwrap();
-    assert_eq!(push_devices.len(), 1);
-    assert_eq!(push_devices[0]["device_id"], device_b);
+    assert!(
+        push_devices
+            .iter()
+            .all(|registration| registration["device_id"] != device_a),
+        "hard logout must remove every push registration for the revoked device"
+    );
+    let device_b_push_devices = push_devices
+        .iter()
+        .filter(|registration| registration["device_id"] == device_b)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        device_b_push_devices, device_b_push_devices_before_logout,
+        "hard logout must preserve every push registration for other devices"
+    );
     let device_a_messages = state
         .test_persistence()
         .device_messages()
@@ -416,8 +461,23 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
         .list_after(actor, device_b, 0)
         .await
         .unwrap();
-    assert_eq!(device_b_messages.len(), 1);
-    assert_eq!(device_b_messages[0].device_id, device_b);
+    assert_eq!(
+        device_b_messages.len(),
+        device_b_messages_before_logout.len(),
+        "hard logout must preserve every queued message for other devices"
+    );
+    for (before, after) in device_b_messages_before_logout
+        .iter()
+        .zip(&device_b_messages)
+    {
+        assert_eq!(after.idempotency_key, before.idempotency_key);
+        assert_eq!(after.sender, before.sender);
+        assert_eq!(after.recipient, before.recipient);
+        assert_eq!(after.device_id, before.device_id);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.created_at, before.created_at);
+    }
 }
 
 #[tokio::test]

@@ -57,6 +57,18 @@ pub fn app_state(config: AppConfig) -> AppState {
     app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
 }
 
+pub fn app_state_with_service_full_id(config: AppConfig, full_id: DidFullId) -> AppState {
+    let identity = fixture_service_identity_for_full_id(&config, full_id);
+    let signing_seed = fixture_signing_seed(&config, &identity);
+    let persistence = if config.seed_demo_data {
+        SolandMemoryPersistenceStore::new_with_demo_data()
+    } else {
+        SolandMemoryPersistenceStore::new()
+    };
+    persistence.seed_service_identity(fixture_stored_service_identity(&identity, signing_seed));
+    app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
+}
+
 /// Scoped control-seal coordinator for integration tests that require Seal
 /// finality. Dropping the guard aborts the background worker so it cannot leak
 /// into another test runtime.
@@ -79,12 +91,24 @@ impl Drop for ControlSealCoordinatorGuard {
     }
 }
 
-pub fn app_state_with_persistence(
+pub async fn app_state_with_persistence(
     config: AppConfig,
     persistence: Arc<dyn PersistenceStore>,
 ) -> AppState {
     let identity = fixture_service_identity(&config);
     let signing_seed = fixture_signing_seed(&config, &identity);
+    let stored = persistence
+        .service_identity()
+        .get()
+        .await
+        .expect("fixture service identity lookup");
+    if stored.is_none() {
+        persistence
+            .service_identity()
+            .put(fixture_stored_service_identity(&identity, signing_seed))
+            .await
+            .expect("fixture service identity seed");
+    }
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
@@ -333,6 +357,19 @@ pub fn fixture_principal_server_id() -> DidCoreId {
 }
 
 pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
+    fixture_service_identity_for_full_id(
+        config,
+        DidFullId::new(
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        )
+        .expect("fixture service DID"),
+    )
+}
+
+fn fixture_service_identity_for_full_id(
+    config: &AppConfig,
+    full_id: DidFullId,
+) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
         ServiceKind::PrincipalServer,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
@@ -341,13 +378,12 @@ pub fn fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     .expect("principal-server registration key");
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
-    let full_id = DidFullId::new(
-        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-    )
-    .expect("fixture service DID");
+    let service_id = DidCoreId::from(
+        project_full_id_to_core_id(&full_id).expect("fixture service DID projects to a core id"),
+    );
     DidCoreIdentityState::Ready {
         identity: LocalDidCoreIdentity {
-            service_id: fixture_principal_server_id(),
+            service_id,
             full_id,
             registration_key,
             provider: None,
@@ -681,4 +717,117 @@ pub fn fixture_principal_control_realm(principal_id: &str) -> String {
     cba_basis::fixture_principal_control_realm_create(principal_id)
         .realm_id
         .into_string()
+}
+
+/// Project one accepted principal device together with the exact local account
+/// authority/PCR coordinate required by strict principal-device proof gates.
+pub async fn project_authorized_principal_device(
+    state: &AppState,
+    principal_full_id: &str,
+    device_id: &str,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> String {
+    let principal_full = DidFullId::new(principal_full_id.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_server_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let pcr_realm_id = RealmId::new(fixture_principal_control_realm(principal_full_id)).unwrap();
+    cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_full_id).await;
+    let genesis_record = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(pcr_realm_id.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .expect("PCR genesis Event");
+    let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
+    let now = chrono::Utc::now();
+    let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        signing_key.verifying_key().as_bytes(),
+    );
+    let mut authorize = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: pcr_realm_id.clone(),
+        },
+        principal_id.clone(),
+        principal_server_id.clone(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
+        serde_json::json!({
+            "principal_id": principal_id,
+            "device_id": device_id,
+            "device_public_key": device_public_key,
+            "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": principal_id,
+            "not_before": "2026-05-25T00:00:00.000Z",
+            "authorization_binding_kind": "registration_anchor",
+            "device_signature": "c2ln"
+        }),
+        now,
+    )
+    .unwrap();
+    authorize.prev_refs = vec![genesis.event_id.clone()];
+    authorize.refresh_content_bound_identity().unwrap();
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:operation:",
+        ))
+        .unwrap(),
+        arkret_wire::OperationKind::Create,
+        None,
+        &authorize,
+    )
+    .unwrap();
+    let authorize_event_id = authorize.event_id.to_string();
+    state
+        .test_persistence()
+        .events()
+        .put(signed_event::canonical_event_record(
+            &authorize,
+            Some(pcr_realm_id.as_str()),
+            now,
+        ))
+        .await
+        .unwrap();
+    let authority_key =
+        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    if state
+        .test_persistence()
+        .principal_resolutions()
+        .by_authority_key(&authority_key)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        let applied = state
+            .test_persistence()
+            .principal_resolutions()
+            .compare_and_set(
+                None,
+                soland_storage::PrincipalResolutionRecord {
+                    authority_key,
+                    pcr_realm_id: pcr_realm_id.clone(),
+                    genesis_event: genesis.clone(),
+                    current_event: genesis.clone(),
+                    projection: arkret_models_identity::PrincipalResolutionProjection {
+                        full_id: principal_full,
+                        method_history_head: format!("sha256:{}", "1".repeat(64)),
+                        version_id: "1-QmTestAuthority".to_owned(),
+                        resolution_event_ref: genesis.event_id.to_string(),
+                        updated_at: genesis.created_at,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            applied,
+            soland_storage::PrincipalResolutionCasResult::Applied(_)
+        ));
+    }
+    soland_http::project_accepted_operations(state, principal_id.as_str(), &[operation]).await;
+    authorize_event_id
 }

@@ -833,32 +833,32 @@ mod tests {
     #[test]
     fn federation_denylist_matches_did_domain_and_url_domain() {
         let entries = vec![
-            "did:web:blocked.example".to_owned(),
+            "ak:did_core:web:blocked.example".to_owned(),
             "domain:evil.example".to_owned(),
             "ak:trust_domain:bad.example".to_owned(),
         ];
         assert!(federation_target_denied_with_entries(
             &entries,
             None,
-            Some("did:web:blocked.example"),
+            Some("ak:did_core:web:blocked.example"),
             None,
         ));
         assert!(federation_target_denied_with_entries(
             &entries,
             Some("https://relay.evil.example"),
-            Some("did:web:other.example"),
+            Some("ak:did_core:web:other.example"),
             None,
         ));
         assert!(federation_target_denied_with_entries(
             &entries,
             None,
-            Some("did:web:bad.example"),
-            None,
+            Some("ak:did_core:web:other.example"),
+            Some("ak:trust_domain:bad.example"),
         ));
         assert!(!federation_target_denied_with_entries(
             &entries,
             Some("https://good.example"),
-            Some("did:web:good.example"),
+            Some("ak:did_core:web:good.example"),
             None,
         ));
     }

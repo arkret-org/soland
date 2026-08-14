@@ -312,10 +312,10 @@ mod requested_scope_tests {
 
     fn record_with_scope(scope: Value) -> AgentPrincipalRecord {
         let mut record = AgentPrincipalRecord::new(
-            "did:webvh:agent.example:agents:test".to_owned(),
-            "did:webvh:controller.example:users:test".to_owned(),
+            "ak:did_core:web:agent.example".to_owned(),
+            "ak:did_core:web:controller.example".to_owned(),
             "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX".to_owned(),
-            arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
+            arkret_wire::DidUrl::new("did:web:controller.example#controller").unwrap(),
             AgentLifecycleState::Active,
             chrono::Utc::now(),
         );

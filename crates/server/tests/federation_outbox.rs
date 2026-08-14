@@ -391,7 +391,11 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
             && lower.contains("\"@authority\"")
             && lower.contains(&format!(
                 "keyid=\"{}#federation-fanout-key\"",
-                captured.state.service_id().to_ascii_lowercase()
+                captured
+                    .state
+                    .service_full_id()
+                    .to_string()
+                    .to_ascii_lowercase()
             )),
         "captured request missing RFC 9421 Signature-Input; got: {}",
         captured.captured

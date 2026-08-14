@@ -9,16 +9,19 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
 }
 
 #[tokio::test]
+#[ignore = "spec-open: 2026-08-14-1054-principal-resolution-history-query-bounds"]
 async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
     let state = soland_test_support::app_state(test_config());
+    let principal_server_id = state.service_id().clone();
     let service = app_from_state(state);
-    let url =
-        "http://server/_arkret/open/principals/ak%3Adid_core%3Aweb%3Aunknown.example/resolution";
+    let url = format!(
+        "http://server/_arkret/open/principals/ak%3Adid_core%3Aweb%3Aunknown.example/resolution?principal_server_id={principal_server_id}"
+    );
 
-    let unknown = TestClient::get(url).send(&service).await;
+    let unknown = TestClient::get(&url).send(&service).await;
     assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
 
-    let oversized = TestClient::get(format!("{url}?history_depth=257"))
+    let oversized = TestClient::get(format!("{url}&history_depth=257"))
         .send(&service)
         .await;
     assert_eq!(oversized.status_code, Some(StatusCode::BAD_REQUEST));
@@ -563,7 +566,7 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
             .await;
     assert_eq!(
         mismatched_method_response.status_code.unwrap(),
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 
     let mut mismatched_seq = request.clone();

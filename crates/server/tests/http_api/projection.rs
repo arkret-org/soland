@@ -321,8 +321,32 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
         "ak:device:01904100-0000-7000-8000-b0b0b0002001",
     )
     .await;
-    let realm_id = DEMO_REALM_ID;
+    let seeded_realm = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Circle-scoped projection",
+        None,
+        "public",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = seeded_realm["realm_id"].as_str().unwrap();
     add_test_realm_member(&state, realm_id, "did:web:bob.example");
+    let mut realm_meta = state
+        .test_persistence()
+        .realm_meta()
+        .get(realm_id)
+        .await
+        .unwrap()
+        .expect("demo Realm metadata");
+    realm_meta.history_visibility = "world_readable".to_owned();
+    state
+        .test_persistence()
+        .realm_meta()
+        .put(realm_id, &realm_meta)
+        .await
+        .unwrap();
     let circle_id = "ak:circle:AaoI0eSDbNn9UbtaAcQ_nZHyPjZqsTaKjh-Qt69GL7AY";
     let public_morph_id = "ak:morph:AbL77hQgJqY_yxFrkREfxYWuYi5MMp_siievgaFRHul-";
     let scoped_morph_id = "ak:morph:AY3ZBaN9HyOPM0trqiqxgRF55LCqTq_vfDZwTVOegTLG";
@@ -351,11 +375,25 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
-                members: std::collections::BTreeSet::from(["did:web:alice.example".to_owned()]),
+                members: std::collections::BTreeSet::from([
+                    fixture_actor_core_id("did:web:alice.example").to_string(),
+                ]),
+            },
+        );
+        let alice_actor_id = fixture_actor_core_id("did:web:alice.example").to_string();
+        projection.circle_memberships.insert(
+            (circle_id.to_owned(), alice_actor_id.clone()),
+            soland_domain::reducer::CircleMembershipState {
+                circle_id: circle_id.to_owned(),
+                member: alice_actor_id,
+                state: "join".to_owned(),
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
             },
         );
         for (morph_id, scope_circle_id) in [
@@ -376,7 +414,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                     versions: Vec::new(),
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
-                    created_by: "did:web:alice.example".to_owned(),
+                    created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
                     created_at: now,
                     history_basis_seals: Vec::new(),
                     updated_by: None,
@@ -700,7 +738,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
             fields: Default::default(),
             state: soland_domain::reducer::ObjectLifecycleState::Active,
             state_changed_at: None,
-            created_by: "did:web:alice.example".to_owned(),
+            created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
             created_at: now,
             history_basis_seals: Vec::new(),
             updated_by: None,
@@ -758,7 +796,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
                 versions: Vec::new(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 updated_by: None,

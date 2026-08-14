@@ -314,8 +314,9 @@ async fn hydrate_canonical_realm_bootstraps(
 
     let mut records = persistence.events().snapshot_all().await?;
     records.sort_by(|left, right| {
-        left.actor_id
-            .cmp(&right.actor_id)
+        left.realm_id
+            .cmp(&right.realm_id)
+            .then_with(|| left.actor_id.cmp(&right.actor_id))
             .then_with(|| left.actor_seq.cmp(&right.actor_seq))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
@@ -357,14 +358,13 @@ async fn hydrate_canonical_realm_bootstraps(
         let mut previous_event_id = create.event_id.as_str();
         let mut expected_seq = create.actor_seq.saturating_add(1);
         for candidate in records.iter().skip(create_index + 1) {
-            if candidate.actor_id != create.actor_id {
+            if candidate.realm_id != create.realm_id || candidate.actor_id != create.actor_id {
                 break;
             }
             if candidate.actor_seq < expected_seq {
                 continue;
             }
             if candidate.actor_seq != expected_seq
-                || candidate.realm_id != create.realm_id
                 || !canonical_prev_refers_to(candidate, previous_event_id)
                 || !canonical_event_has_genesis_authority_exemption(candidate)
             {

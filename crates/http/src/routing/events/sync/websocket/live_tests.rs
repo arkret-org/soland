@@ -194,8 +194,8 @@ async fn run_introspection_mock(
             "one_time_use_consumed": false,
             "grant": {
                 "id": "ak:session_grant:ATLC-gY-xpE0kN3QXVYxo0Kh32EoNCTBQTSFuu_P57e6",
-                "issuer": "did:web:coauth.local",
-                "subject": "did:web:alice.example",
+                "issuer": "ak:did_core:web:coauth.local",
+                "subject": "ak:did_core:web:alice.example",
                 "service_account_id": "alice",
                 "device_id": ALICE_DEVICE,
                 "audience": audience,

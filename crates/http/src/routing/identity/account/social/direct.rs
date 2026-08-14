@@ -869,8 +869,8 @@ mod binding_digest_tests {
         let payload = serde_json::json!({
             "pair_key": "sha256:e8c24c1badc48eefa472a1700e87a6597a95aedfab8cbe3173f1622b9ad427b5",
             "participants_unordered": [
-                "did:webvh:z6mkfixture:bob.example",
-                "did:webvh:z6mkfixture:alice.example"
+                "ak:did_core:webvh:z6mkfixturebob",
+                "ak:did_core:webvh:z6mkfixturealice"
             ],
             "realm_id": "ak:realm:AVYxXzYx_KzaGx7X62doksaQR0ISkneyOwwF1k6ExHKy",
             "main_strand_id": "ak:strand:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
@@ -888,7 +888,7 @@ mod binding_digest_tests {
         let payload = serde_json::from_value(payload).unwrap();
         assert_eq!(
             direct_binding_endorsement_digest(&payload).unwrap(),
-            "sha256:bb50b66aa3a8e808ea61743efb278f1d55d0849f534ce2ee6ab01e893ce15a58"
+            "sha256:bbac7fb0e474a60aac7e5e9f486ef21356641d2d5c50f3a71cb88160398a490e"
         );
     }
 

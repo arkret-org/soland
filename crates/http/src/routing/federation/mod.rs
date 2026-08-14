@@ -31,8 +31,8 @@ pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
 /// DID verification method used by the service's persistent assertion key
 /// for federation HTTP Message Signatures. Service identity bootstrap
 /// publishes this method in the Provider-registered DID document.
-pub fn federation_service_signature_key_id(service_id: &str) -> String {
-    format!("{service_id}#federation-fanout-key")
+pub fn federation_service_signature_key_id(service_full_id: &str) -> String {
+    format!("{service_full_id}#federation-fanout-key")
 }
 
 /// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted

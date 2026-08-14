@@ -8,6 +8,8 @@ use super::common::*;
 async fn policy_check_and_validation_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let actor_id = fixture_actor_core_id("did:web:alice.example");
+    let source_service_id = state.service_id().to_owned();
 
     let policy: Value = TestClient::post("http://server/_arkret/self/policy/check")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -16,9 +18,9 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": actor_id,
             "source": {
-                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                "service_id": source_service_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }
@@ -34,7 +36,7 @@ async fn policy_check_and_validation_work() {
     // default decision.
     assert_eq!(policy["decision"], "require_review");
     assert_eq!(policy["request_id"], "req1");
-    assert_eq!(policy["bound_to"]["actor_id"], "did:web:alice.example");
+    assert_eq!(policy["bound_to"]["actor_id"], actor_id.as_str());
     assert_eq!(policy["bound_to"]["action"], "message.send");
     assert_eq!(policy["bound_to"]["realm_id"], DEMO_REALM_ID);
 
@@ -90,9 +92,9 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": actor_id,
             "source": {
-                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                "service_id": source_service_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }
@@ -106,7 +108,7 @@ async fn policy_check_and_validation_work() {
     // bound_to transcript; the matched policy id is not echoed.
     assert_eq!(denied["decision"], "hard_deny");
     assert_eq!(denied["reason_code"], "policy_denied");
-    assert_eq!(denied["bound_to"]["actor_id"], "did:web:alice.example");
+    assert_eq!(denied["bound_to"]["actor_id"], actor_id.as_str());
     assert_eq!(denied["bound_to"]["action"], "message.send");
     assert_eq!(denied["obligations"][0]["type"], "audit");
 
@@ -127,9 +129,9 @@ async fn policy_check_and_validation_work() {
             "realm_id": DEMO_REALM_ID,
             "request_canonical_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "action": "message.send",
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": actor_id,
             "source": {
-                "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                "service_id": source_service_id,
                 "service_kind": "soland",
                 "signed_transport": true
             }

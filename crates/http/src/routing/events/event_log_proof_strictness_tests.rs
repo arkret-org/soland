@@ -33,7 +33,7 @@ fn dev_proof_envelope() -> serde_json::Map<String, Value> {
 fn session() -> SessionRecord {
     SessionRecord {
         token_hash: "hash".to_owned(),
-        actor: "did:web:alice.example".to_owned(),
+        actor: "ak:did_core:web:alice.example".to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
         audience:
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
@@ -60,7 +60,7 @@ async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
             did_document: json!({
                 "id": did,
                 "verificationMethod": [{
-                    "id": format!("{did}#k1"),
+                    "id": format!("{did}#ak:device:01904100-0000-7000-8000-a11ce0000001"),
                     "type": "Multikey",
                     "controller": did,
                     "publicKeyMultibase": public_key_multibase,
@@ -772,7 +772,7 @@ async fn applet_registration_requires_realm_admin() {
             json!({
                 "sender": sender,
                 "applet_id": "ak:applet:01904100-0000-7000-8000-000000000a01",
-                "service_id": "did:web:slack-bridge.example",
+                "service_id": "ak:did_core:web:slack-bridge.example",
                 "namespace": "slack",
             }),
         )
@@ -791,7 +791,7 @@ async fn applet_registration_requires_realm_admin() {
             issuer: owner.to_owned(),
             issuer_principal_server_id: owner.to_owned(),
             subject: owner.to_owned(),
-            subject_principal_server_id: None,
+            subject_principal_server_id: Some(owner.to_owned()),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             capability_action_registry_digest: Some(
@@ -996,7 +996,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
             )
             .unwrap(),
         },
-        crate::test_actor_id_str(&session.actor),
+        arkret_wire::DidCoreId::new(session.actor.clone()).unwrap(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
         json!({"object": {"id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC"}}),
@@ -1093,7 +1093,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
     let state = make_state(true);
     let valid = json!({
         "payload": {
-            "actor_id": "did:web:bob.example",
+            "actor_id": "ak:did_core:web:bob.example",
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "membership": "join",
             "reason": "invite_accept",
@@ -1381,17 +1381,19 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
 async fn production_rejects_full_proof_without_valid_jws_signature() {
     let state = make_state(false);
     let session = session();
+    let actor_id = "ak:did_core:web:alice.example";
     // First ingest a fresh webvh document so the high-risk freshness gate
     // passes and this test focuses on JWS signature verification failure.
     ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
-    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
+    let canonical_bytes =
+        br#"{"actor_id":"ak:did_core:web:alice.example","event_id":"ak:event:test"}"#;
     let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
         json!([{
             "kind": "detached_jws",
-            "verification_method": "did:web:alice.example#k1",
+            "verification_method": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
@@ -1403,7 +1405,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         &object,
         &state,
         &session,
-        "did:web:alice.example",
+        actor_id,
         &arkret_canonical::sha256_digest(canonical_bytes),
         arkret_canonical::DigestSuite::Sha256,
         canonical_bytes,
@@ -1426,21 +1428,27 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
 #[tokio::test]
 async fn production_event_proof_fails_closed_when_did_document_stale() {
     let state = make_state(false);
-    let session = session();
+    let mut session = session();
+    let actor_id = "ak:did_core:web:stale-proof.example";
+    session.actor = actor_id.to_owned();
     // Deliberately ingest no webvh document: the actor has no freshness
     // evidence in persistence.
-    let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
+    let canonical_bytes = br#"{"actor_id":"ak:did_core:web:stale-proof.example","event_id":"ak:event:test","kind":"ak.identity.resolution.update"}"#;
     let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
         json!([{
             "kind": "detached_jws",
-            "verification_method": "did:web:alice.example#k1",
+            "verification_method": "did:web:stale-proof.example#k1",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
         }]),
+    );
+    object.insert(
+        "kind".to_owned(),
+        json!(arkret_wire::EventKind::IdentityResolutionUpdate.as_str()),
     );
     object.insert("payload".to_owned(), json!({"body": "hello"}));
 
@@ -1448,7 +1456,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         &object,
         &state,
         &session,
-        "did:web:alice.example",
+        actor_id,
         &arkret_canonical::sha256_digest(canonical_bytes),
         arkret_canonical::DigestSuite::Sha256,
         canonical_bytes,
@@ -1457,7 +1465,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     )
     .await
     .expect_err("stale/missing DID document must fail closed before JWS verify");
-    assert_eq!(err.code, "stale_did_document");
+    assert_eq!(err.code, "stale_did_document", "{}", err.message);
 }
 
 /// T5.3 (Round 22) — pin the SDK production-verifier surface used by
@@ -1528,8 +1536,8 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 }
 
 const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
-const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
-const DATA_EVENT_PRINCIPAL_SERVER: &str = "did:web:principal.example";
+const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
+const DATA_EVENT_PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
 const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
@@ -1600,7 +1608,7 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     crate::authz::Grant {
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
-        issuer: "did:web:owner.example".to_owned(),
+        issuer: "ak:did_core:web:owner.example".to_owned(),
         issuer_principal_server_id: DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
         subject: DATA_EVENT_ACTOR.to_owned(),
         subject_principal_server_id: Some(DATA_EVENT_PRINCIPAL_SERVER.to_owned()),
@@ -1668,6 +1676,7 @@ fn insert_historical_data_event_grant(
         grant_id,
         action,
         DATA_EVENT_ACTOR,
+        DATA_EVENT_PRINCIPAL_SERVER,
         revoked,
     )
 }
@@ -1677,6 +1686,7 @@ fn insert_historical_data_event_grant_for_subject(
     grant_id: &str,
     action: &str,
     subject: &str,
+    subject_principal_server_id: &str,
     revoked: bool,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
@@ -1686,14 +1696,15 @@ fn insert_historical_data_event_grant_for_subject(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();
-    let value = historical_data_event_grant_value(
+    let mut value = historical_data_event_grant_value(
         grant_id,
         action,
         subject,
-        "did:web:owner.example",
+        "ak:did_core:web:owner.example",
         revoked,
         None,
     );
+    value["subject_principal_server_id"] = json!(subject_principal_server_id);
     let op = arkret_wire::LatticeOp {
         op_type: arkret_wire::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000999".to_owned()),
@@ -1765,7 +1776,7 @@ fn insert_data_event_revocation_successor(
             grant_id,
             action,
             DATA_EVENT_ACTOR,
-            "did:web:owner.example",
+            "ak:did_core:web:owner.example",
             true,
             None,
         )),
@@ -1808,7 +1819,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
     let parent_value = historical_data_event_grant_value(
         authority_grant_id,
         action,
-        "did:web:authority.example",
+        "ak:did_core:web:authority.example",
         "did:web:owner.example",
         true,
         None,
@@ -1902,7 +1913,7 @@ fn insert_historical_data_event_grant_with_e2ee_state_covered_under(
             grant_id,
             "ak.message.create",
             DATA_EVENT_ACTOR,
-            "did:web:owner.example",
+            "ak:did_core:web:owner.example",
             false,
             None,
         )),
@@ -2162,13 +2173,14 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
 
 #[test]
 fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
-    const APPLET_SERVICE: &str = "did:web:bridge.example";
+    const APPLET_SERVICE: &str = "ak:did_core:web:bridge.example";
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
     let seal_ref = insert_historical_data_event_grant_for_subject(
         &state,
         grant_id,
         "ak.message.create",
+        APPLET_SERVICE,
         APPLET_SERVICE,
         false,
     );

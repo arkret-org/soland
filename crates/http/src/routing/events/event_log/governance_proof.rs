@@ -929,7 +929,8 @@ fn materialize_managed_agent_realm_control(
         // here. Managed PCR Events are closed over their own Realm; a stored
         // Event whose signed scope names another Realm is not proof material
         // for this one.
-        if event.scope_ref.realm_id() != realm_id {
+        let event_realm_id = event.scope_ref.realm_id_opt().unwrap_or(&event.realm_id);
+        if event_realm_id != realm_id {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 format!(
@@ -1048,7 +1049,18 @@ async fn materialize_governance_proof(
         .collect::<Vec<_>>();
     let mut frontier_events = events
         .into_iter()
-        .filter(|event| event.scope_ref == request.effective_scope)
+        .filter(|event| {
+            if event.scope_ref == request.effective_scope {
+                return true;
+            }
+            let arkret_wire::ScopeRef::Realm { realm_id } = &request.effective_scope else {
+                return false;
+            };
+            event.kind == arkret_wire::EventKind::RealmCreate
+                && event.scope_ref == arkret_wire::ScopeRef::RealmGenesis
+                && event.realm_id == *realm_id
+                && event.event_id == realm_id.event_id()
+        })
         .filter(|event| {
             // The touched cells come from the registered contract, not from a
             // producer array; only the cell targets matter here, so the
@@ -1820,8 +1832,11 @@ mod tests {
             }),
         )
         .unwrap();
-        let member_cell =
-            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}")).unwrap();
+        let member_cell = CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{}",
+            event.actor_id
+        ))
+        .unwrap();
 
         let projected = arkret_schema::project_registered_cell_writes(
             &event,

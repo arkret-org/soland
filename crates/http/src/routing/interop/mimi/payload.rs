@@ -380,7 +380,7 @@ pub(super) fn mimi_base_url(state: &AppState) -> String {
 }
 
 pub(super) fn mimi_provider_id(state: &AppState) -> String {
-    service_id_mimi_provider_id(state.service_id())
+    service_id_mimi_provider_id(state.service_full_id().as_str())
 }
 
 pub(super) fn service_id_mimi_provider_id(service_id: &str) -> String {

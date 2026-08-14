@@ -880,6 +880,7 @@ mod tests {
     const ACTOR: &str = "ak:did_core:web:alice.example";
     const BOB: &str = "ak:did_core:web:bob.example";
     const MALLORY: &str = "ak:did_core:web:mallory.example";
+    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal-server.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const CREATE_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
@@ -890,6 +891,7 @@ mod tests {
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": ACTOR,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -963,6 +965,7 @@ mod tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -980,6 +983,7 @@ mod tests {
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": actor,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],

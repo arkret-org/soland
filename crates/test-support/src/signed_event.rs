@@ -109,11 +109,18 @@ pub fn complete_realm_bootstrap_unit(
             .expect("genesis precedes bootstrap facets")
             .event_id
             .to_string();
-        let event = CallerSignedEvent::new(kind.as_str(), actor_id, device_id, &realm_id, payload)
-            .with_actor_seq(u64::try_from(offset + 1).expect("bootstrap actor sequence"))
-            .with_prev_refs(vec![previous_event_id.as_str()])
-            .with_basis(CallerSignedBasis::AnchorUnit)
-            .build();
+        let mut builder =
+            CallerSignedEvent::new(kind.as_str(), actor_id, device_id, &realm_id, payload)
+                .with_actor_seq(u64::try_from(offset + 1).expect("bootstrap actor sequence"))
+                .with_prev_refs(vec![previous_event_id.as_str()])
+                .with_basis(CallerSignedBasis::AnchorUnit);
+        if kind == arkret_wire::EventKind::MemberState {
+            builder = builder.with_preconditions(vec![head_eq_precondition(
+                &format!("ak:cell:ak.component.member.state.v1:{actor_core_id}"),
+                serde_json::Value::Null,
+            )]);
+        }
+        let event = builder.build();
         events.push(event);
     }
     arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
@@ -347,9 +354,6 @@ pub fn fixture_verification_method(actor_id: &str, device_id: &str) -> DidUrl {
     } else {
         format!("ak:device:{device_id}")
     };
-    DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
-        || format!("{actor_id}#{device_id}"),
-        |key| format!("{actor_id}#{key}"),
-    ))
-    .expect("fixture verification method is a DID URL")
+    DidUrl::new(format!("{actor_id}#{device_id}"))
+        .expect("fixture verification method is a DID URL")
 }

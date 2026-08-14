@@ -363,8 +363,10 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
 
 #[tokio::test]
 async fn runtime_service_id_is_used_across_public_metadata() {
-    let service_id = "did:web:configured.example";
-    let state = test_state_with_service_id(service_id);
+    let service_full_id =
+        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:configured.example";
+    let service_id = fixture_actor_core_id(service_full_id);
+    let state = test_state_with_service_id(service_full_id);
     let resolved_realm = seed_test_realm(
         &state,
         "did:web:alice.example",
@@ -385,7 +387,12 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(server["service_id"], service_id);
+    assert_eq!(
+        server["service_id"],
+        service_id.as_str(),
+        "server describe: {server}"
+    );
+    assert_eq!(server["service_resolution"]["full_id"], service_full_id);
 
     let identity: Value = TestClient::get("http://server/_arkret/root/identity/describe")
         .send(&service)
@@ -393,7 +400,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(identity["service_id"], service_id);
+    assert_eq!(identity["service_id"], service_id.as_str());
 
     let sync: Value = TestClient::get("http://server/_arkret/self/account/describe")
         .send(&service)
@@ -401,7 +408,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(sync["service_id"], service_id);
+    assert_eq!(sync["service_id"], service_id.as_str());
 
     let events: Value = TestClient::query("http://server/_arkret/self/events/describe")
         .json(&serde_json::json!({}))
@@ -410,7 +417,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(events["service_id"], service_id);
+    assert_eq!(events["service_id"], service_id.as_str());
 
     let directory: Value = TestClient::get("http://server/_arkret/find/directory/describe")
         .send(&service)
@@ -418,7 +425,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(directory["service_id"], service_id);
+    assert_eq!(directory["service_id"], service_id.as_str());
 
     let resolved: Value = TestClient::post("http://server/_arkret/find/directory/resolve-realm")
         .json(&serde_json::json!({"realm_id": resolved_realm_id}))
@@ -455,7 +462,10 @@ async fn runtime_service_id_is_used_across_public_metadata() {
     // signature_input is the fixed domain label `ak.media.ice_config.v1`; sig is
     // bare base64url; the signing input is
     // label || 0x00 || canonical_json(response without `signature`).
-    assert_eq!(ice["signature"]["kid"], format!("{service_id}#notary-key"));
+    assert_eq!(
+        ice["signature"]["kid"],
+        format!("{service_full_id}#notary-key")
+    );
     assert_eq!(
         ice["signature"]["signature_input"],
         "ak.media.ice_config.v1"

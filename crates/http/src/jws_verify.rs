@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{DidFullId, Hash};
-use arkret_identity::DidDocument;
+use arkret_identity::{DidDocument, DidResolver as _};
 use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
@@ -139,10 +139,7 @@ pub fn verify_did_controlled_jws(
 ) -> Result<(), String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let issuer_did = DidFullId::new(issuer.to_owned()).map_err(|error| error.to_string())?;
-    if did != issuer_did {
-        return Err("verification method controller does not match issuer".to_owned());
-    }
+    validate_verification_method_controller(issuer, verification_method)?;
     let document = document_for_verification_sync(state, &did, verification_method)?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
 }
@@ -160,10 +157,7 @@ pub async fn verify_did_controlled_jws_async(
 ) -> Result<(), String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let issuer_did = DidFullId::new(issuer.to_owned()).map_err(|error| error.to_string())?;
-    if did != issuer_did {
-        return Err("verification method controller does not match issuer".to_owned());
-    }
+    validate_verification_method_controller(issuer, verification_method)?;
     let document = document_for_verification(state, &did, verification_method).await?;
     verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
 }
@@ -181,10 +175,7 @@ pub async fn verify_did_controlled_ed25519_signature_async(
 ) -> Result<(), String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let issuer_did = DidFullId::new(issuer.to_owned()).map_err(|error| error.to_string())?;
-    if did != issuer_did {
-        return Err("verification method controller does not match issuer".to_owned());
-    }
+    validate_verification_method_controller(issuer, verification_method)?;
     let document = document_for_verification(state, &did, verification_method).await?;
     let public_key_multibase = document
         .verification_methods
@@ -250,6 +241,11 @@ fn document_for_verification_sync(
     did: &DidFullId,
     verification_method: &str,
 ) -> Result<DidDocument, String> {
+    if did.method() == "key" {
+        return arkret_identity::DidKeyResolver::new()
+            .resolve_did_document(did)
+            .map_err(|error| error.to_string());
+    }
     if is_local_service_notary_method(state, did, verification_method) {
         return Ok(DidDocument {
             id: did.clone(),
@@ -290,6 +286,11 @@ async fn document_for_verification(
     did: &DidFullId,
     verification_method: &str,
 ) -> Result<DidDocument, String> {
+    if did.method() == "key" {
+        return arkret_identity::DidKeyResolver::new()
+            .resolve_did_document(did)
+            .map_err(|error| error.to_string());
+    }
     if is_local_service_notary_method(state, did, verification_method) {
         return Ok(DidDocument {
             id: did.clone(),
@@ -349,7 +350,15 @@ pub fn verify_jws_with_pinned_document(
 ) -> Result<(), String> {
     let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
         .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
-    let issuer_did = DidFullId::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    // `issuer` may be the protocol's Core principal/service id while the
+    // resolved DID document and verification method necessarily retain the
+    // versioned Full DID. Validate that pair first, then hand the Full
+    // verification-method controller to the SDK verifier. Parsing `issuer`
+    // directly as `DidFullId` made every legitimate Core issuer fail before
+    // cryptographic verification.
+    validate_verification_method_controller(issuer, verification_method.as_str())?;
+    let issuer_did = arkret_identity::verification_method_did(verification_method.as_str())
+        .map_err(|error| error.to_string())?;
     let outcome = arkret_identity::verify_jws_with_document(
         canonical_bytes,
         jws,
@@ -446,6 +455,140 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     Err(PrincipalAuthorizedJwsError::Verification(
         "principal authorization requires an explicit account authority context".to_owned(),
     ))
+}
+
+/// Verify a principal-device detached JWS against an explicit local account
+/// authority coordinate and the accepted device authorization in that PCR.
+pub async fn verify_principal_authorized_jws_with_account_authority_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    authority: &arkret_wire::PrincipalAuthorityKey,
+    expected_device_id: &arkret_identifiers::DeviceId,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
+    if authority.principal_server_id.as_str() != state.service_id() {
+        return Err(fail(
+            "principal authorization is addressed to a different Principal Server".to_owned(),
+        ));
+    }
+    let (method_full_id, fragment) = verification_method
+        .rsplit_once('#')
+        .ok_or_else(|| fail("principal verification method has no device fragment".to_owned()))?;
+    let method_full_id =
+        arkret_wire::DidFullId::new(method_full_id.to_owned()).map_err(|error| {
+            fail(format!(
+                "principal verification method DID is invalid: {error}"
+            ))
+        })?;
+    let method_principal_id = arkret_wire::DidCoreId::from(
+        arkret_wire::project_full_id_to_core_id(&method_full_id).map_err(|error| {
+            fail(format!(
+                "principal verification method DID cannot be projected: {error}"
+            ))
+        })?,
+    );
+    if method_principal_id != authority.principal_id || fragment != expected_device_id.as_str() {
+        return Err(fail(
+            "principal verification method does not bind the session authority and device"
+                .to_owned(),
+        ));
+    }
+
+    let durable = state
+        .persistence()
+        .principal_resolution_by_authority_key(authority)
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal account authority lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal account authority is not durably accepted".to_owned()))?;
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: authority.principal_id.to_string(),
+            device_id: expected_device_id.to_string(),
+        })
+        .await
+        .map_err(|error| fail(format!("principal device state unavailable: {error}")))?
+        .ok_or_else(|| fail("principal signer device is unavailable".to_owned()))?;
+    if device.revoked_at.is_some() || device.verification_state != "verified" {
+        return Err(fail("principal signer device is not active".to_owned()));
+    }
+    let payload = serde_json::from_value::<
+        crate::routing::identity::device_signing::ProjectedDevicePayload,
+    >(device.payload)
+    .map_err(|error| fail(format!("principal device evidence is invalid: {error}")))?;
+    let signing_key = payload
+        .device_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| fail("principal signer key is unavailable".to_owned()))?;
+    crate::routing::identity::device_signing::decode_ed25519_key(signing_key, "multibase")
+        .map_err(|error| fail(format!("principal signer key is invalid: {error}")))?;
+    let authorize_event_id = payload
+        .device_authorize_event_id
+        .ok_or_else(|| fail("principal signer has no accepted authorization Event".to_owned()))?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(authorize_event_id.as_str())
+        .await
+        .map_err(|error| {
+            fail(format!(
+                "principal device authorization lookup failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| fail("principal device authorization Event is unavailable".to_owned()))?;
+    let authorize_principal_server_id = authorize_event
+        .envelope
+        .get("principal_server_id")
+        .and_then(Value::as_str);
+    if authorize_event.actor_id != authority.principal_id.as_str()
+        || authorize_principal_server_id != Some(authority.principal_server_id.as_str())
+        || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
+        || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
+    {
+        return Err(fail(
+            "principal device authorization is outside the selected PCR authority".to_owned(),
+        ));
+    }
+
+    let document = DidDocument {
+        id: method_full_id.clone(),
+        verification_methods: BTreeMap::from([(
+            verification_method.to_owned(),
+            signing_key
+                .strip_prefix("did:key:")
+                .unwrap_or(signing_key)
+                .to_owned(),
+        )]),
+        also_known_as: Vec::new(),
+        updated_at: None,
+        raw_properties: BTreeMap::new(),
+    };
+    let accepted =
+        principal_binding_acceptance(state, &method_full_id, verification_method, &document)
+            .ok_or_else(|| {
+                fail("principal device key cannot form an accepted binding".to_owned())
+            })?;
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| fail(format!("principal verification method is invalid: {error}")))?;
+    let outcome = arkret_identity::verify_jws_with_binding(
+        canonical_bytes,
+        jws,
+        &verification_method,
+        &accepted,
+    )
+    .map_err(|error| fail(error.to_string()));
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
+        outcome.is_ok(),
+    );
+    outcome
 }
 
 /// Verify a principal-device compact JWS when the signed Control Proposal Ack
@@ -1435,6 +1578,36 @@ mod did_binding_tests {
             &other_document,
         )
         .expect_err("a method rooted in another DID cannot control the issuer");
+    }
+
+    #[test]
+    fn pinned_document_accepts_exact_core_controller_but_rejects_another_core_controller() {
+        let issuer = DidFullId::new(PRINCIPAL.to_owned()).unwrap();
+        let issuer_core = arkret_wire::project_full_id_to_core_id(&issuer).unwrap();
+        let other_core =
+            arkret_wire::DidCoreId::new("ak:did_core:web:other.example".to_owned()).unwrap();
+        let verification_method = format!("{issuer}#control-1");
+        let key = SigningKey::from_bytes(&[12u8; 32]);
+        let document = document_for(&issuer, &verification_method, &key);
+        let payload = b"core-controller-bound-object";
+        let jws = signed(&key, payload);
+
+        verify_jws_with_pinned_document(
+            payload,
+            &jws,
+            &verification_method,
+            issuer_core.as_str(),
+            &document,
+        )
+        .expect("the exact Core controller selects the Full DID method document");
+        verify_jws_with_pinned_document(
+            payload,
+            &jws,
+            &verification_method,
+            other_core.as_str(),
+            &document,
+        )
+        .expect_err("a different Core controller cannot borrow the pinned method");
     }
 
     // ========================================================================

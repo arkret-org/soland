@@ -745,7 +745,8 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     let state = soland_test_support::app_state(test_config());
     let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
-    let token = dev_token_for_device(
+    let actor_core = fixture_actor_core_id(&actor);
+    let token = verified_dev_token_for_device(
         state.clone(),
         &actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -894,7 +895,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         state
             .test_projection()
             .lock()
-            .member(&realm_id, &actor)
+            .member(&realm_id, actor_core.as_str())
             .is_none(),
         "rejected bootstrap must leave no creator membership projection"
     );
@@ -929,7 +930,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         state
             .test_projection()
             .lock()
-            .member(&realm_id, &actor)
+            .member(&realm_id, actor_core.as_str())
             .is_some_and(|member| member.state == "join")
     );
     {
@@ -938,7 +939,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
             .realm_authority_root(&realm_id)
             .expect("accepted genesis must register the Realm authority-root cell");
         assert!(
-            authority_root.is_genesis_for(&actor),
+            authority_root.is_genesis_for(actor_core.as_str()),
             "the authority root's controller is the Realm creator at epoch/generation 0"
         );
         assert_eq!(
@@ -949,8 +950,8 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         assert!(
             projection.actor_holds_effective_realm_owner(
                 &realm_id,
-                &actor,
-                &actor,
+                actor_core.as_str(),
+                actor_core.as_str(),
                 chrono::Utc::now(),
             ),
             "the authority-root controller holds effective ak.realm.owner"
@@ -958,8 +959,8 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         assert!(
             !projection.actor_holds_effective_realm_owner(
                 &realm_id,
-                "did:web:mallory.example",
-                "did:web:mallory.example",
+                fixture_actor_core_id("did:web:mallory.example").as_str(),
+                fixture_actor_core_id("did:web:mallory.example").as_str(),
                 chrono::Utc::now()
             ),
             "nobody else does"
@@ -1009,6 +1010,19 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         "the canonical profile fixture leaves its optional summary absent"
     );
 
+    let mut describe_response = TestClient::get("http://server/_arkret/describe")
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        describe_response.status_code,
+        Some(StatusCode::OK),
+        "the local Principal Server must publish its current service resolution before it can be a join candidate"
+    );
+    let _: Value = describe_response
+        .take_json()
+        .await
+        .expect("service description response");
+
     let candidate_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let resolve_body = loop {
         let mut resolve_response =
@@ -1045,7 +1059,8 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     let restarted = soland_test_support::app_state_with_persistence(
         test_config(),
         state.test_persistence().clone(),
-    );
+    )
+    .await;
     restarted.hydrate().await.expect("restart hydration");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     assert_eq!(
@@ -1061,7 +1076,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         restarted
             .test_projection()
             .lock()
-            .member(&realm_id, &actor)
+            .member(&realm_id, actor_core.as_str())
             .is_some_and(|member| member.state == "join"),
         "restart must rebuild creator membership from canonical create"
     );
@@ -1070,7 +1085,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         assert!(
             restarted_projection
                 .realm_authority_root(&realm_id)
-                .is_some_and(|root| root.is_genesis_for(&actor)),
+                .is_some_and(|root| root.is_genesis_for(actor_core.as_str())),
             "restart must rebuild the Realm authority root from canonical create"
         );
         // The registered `effect_projection` for each initial facet is
@@ -1116,16 +1131,18 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
             .frontier_events
             .iter()
             .map(|event| event.event_id.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            bootstrap_unit
-                .iter()
-                .find(|event| event.kind == arkret_wire::EventKind::MemberState)
-                .expect("bootstrap unit has its creator membership frontier Event")
-                .event_id
-                .as_str()
-        ],
-        "the creator membership Event is the bootstrap Realm's only key-access frontier Event"
+            .collect::<std::collections::BTreeSet<_>>(),
+        bootstrap_unit
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind,
+                    arkret_wire::EventKind::RealmCreate | arkret_wire::EventKind::MemberState
+                )
+            })
+            .map(|event| event.event_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        "RealmCreate's derived creator membership and the explicit creator membership Event are both key-access frontier Events"
     );
     let request = arkret_models_crypto::MlsGovernanceProofRequestBody {
         realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
@@ -1213,8 +1230,10 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let state = soland_test_support::app_state(test_config());
     let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
+    let actor_core = fixture_actor_core_id(&actor);
     let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let token = dev_token_for_device(state.clone(), &actor, device_id, "Governance Founder").await;
+    let token =
+        verified_dev_token_for_device(state.clone(), &actor, device_id, "Governance Founder").await;
     let (realm_id, bootstrap_unit) =
         authored_ordinary_realm_bootstrap_unit(&state, &actor, device_id, "Governance proof Realm");
     let bootstrap_frontier_event_id = bootstrap_unit
@@ -1269,7 +1288,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         vec![&bootstrap_frontier_event_id],
         serde_json::json!({
             "realm_id": realm_id,
-            "actor_id": actor,
+            "actor_id": actor_core,
             "membership": "join",
             "delivery_status": "unroutable"
         }),
@@ -1278,7 +1297,9 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     resign_canonical_event(&mut envelope);
     assert_eq!(
         projected_cell_targets(&envelope),
-        std::collections::BTreeSet::from([format!("ak:cell:ak.component.member.state.v1:{actor}")]),
+        std::collections::BTreeSet::from([format!(
+            "ak:cell:ak.component.member.state.v1:{actor_core}"
+        )]),
         "ak.member.state must derive exactly the subject's membership cell"
     );
     let mut event_response = TestClient::post("http://server/_arkret/self/events")
@@ -1461,6 +1482,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
 async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let state = soland_test_support::app_state(test_config());
     let controller_id = "did:web:alice.example";
+    let controller_core_id = fixture_actor_core_id(controller_id);
     let token = "managed-agent-governance-session";
     super::agents::seed_controller_session(&state, token, controller_id).await;
     super::agents::seed_agent_provision_prerequisites(&state, controller_id).await;
@@ -1512,70 +1534,25 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let agent_record = state
         .test_persistence()
         .agents()
-        .list_for_controller(controller_id)
+        .list_for_controller(controller_core_id.as_str())
         .await
         .unwrap()
         .into_iter()
         .find(|record| record.id == agent_id)
         .expect("created managed Agent record");
     let realm_id = agent_record.principal_control_realm_id.clone();
-    let created_at = chrono::DateTime::parse_from_rfc3339(
-        &arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
-    )
-    .unwrap()
-    .with_timezone(&chrono::Utc);
-    let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
-        arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
-            agent_id: arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
-            initial_resolution: serde_json::from_value(
-                agent_record.provision_event_refs.as_ref().unwrap()["initial_resolution"].clone(),
-            )
-            .unwrap(),
-            controller_id: arkret_identifiers::DidCoreId::new(controller_id).unwrap(),
-            genesis_salt: arkret_wire::GenesisSalt::new(
-                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            )
-            .unwrap(),
-            trust_domain: arkret_wire::TypedTrustDomainId::new("ak:trust_domain:soland.local")
-                .unwrap(),
-            capability_action_registry_digest:
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
-            created_at,
-        },
-    )
-    .expect("SDK managed Agent PCR create payload");
-    let mut create = arkret_wire::test_support::raw_event(
-        arkret_wire::EventKind::RealmCreate.as_str(),
-        // A genesis carries the closed `realm_genesis` scope and no id: the
-        // Realm id is derived from the exact create Event.
-        arkret_wire::ScopeRef::RealmGenesis,
-        arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
-        soland_test_support::fixture_principal_server_id(),
-        0,
-        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
-        serde_json::to_value(create_payload).unwrap(),
-    )
-    .unwrap();
-    create.created_at = created_at;
-    create.executed_by = Some(arkret_identifiers::DidCoreId::new(controller_id).unwrap());
-    create.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
-            .unwrap(),
-    );
-    create.refs.clear();
-    // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
-    // array. The genesis write set is now derived by the receiver, and the only
-    // thing a producer can still get wrong is a payload whose registered
-    // contract lands somewhere other than the canonical registered genesis cells —
-    // which is exactly what `arkret_bootstrap` and soland's admission both
-    // assert. Restate the old assignment as that check.
-    assert_eq!(
-        projected_cell_targets(&serde_json::to_value(&create).unwrap()),
-        arkret_bootstrap::expected_realm_create_cells(&create),
-        "managed Agent PCR create must derive the canonical registered genesis cells"
-    );
+    let create = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(&realm_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
+        .expect("completed managed Agent provisioning has an accepted PCR genesis");
+    let created_at = create.created_at;
     let signing_key = SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED);
-    let device_key = test_ed25519_multibase_public(&signing_key);
     let signer = ControllerSealSigner {
         did: arkret_identifiers::DidFullId::new(controller_id).unwrap(),
         verification_method: arkret_wire::DidUrl::new(format!(
@@ -1585,124 +1562,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .unwrap(),
         signing_key: signing_key.clone(),
     };
-    let seal_signer = ControllerSealSigner {
-        did: arkret_identifiers::DidFullId::new(controller_id).unwrap(),
-        verification_method: arkret_wire::DidUrl::new(format!("did:key:{device_key}#{device_key}"))
-            .unwrap(),
-        signing_key,
-    };
     let event_verification_method = signer.verification_method.clone();
-    arkret_signatures::sign_event(
-        &mut create,
-        &signer,
-        &event_verification_method,
-        arkret_signatures::SignEventOptions {
-            domain: None,
-            audience: None,
-            created_at: Some(created_at),
-        },
-    )
-    .unwrap();
-    let genesis_authority =
-        arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_delegated_create(
-            &create,
-            &super::agents::genesis_projector,
-        )
-        .expect("managed Agent PCR candidate genesis authority");
-    let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
-    let proposal_digest = arkret_wire::Hash::new(create.event_digest().unwrap()).unwrap();
-    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
-        create.realm_id.clone(),
-        proposal_digest,
-        genesis_authority.authority_set_ref().clone(),
-        chrono::Utc::now(),
-        proposal_policy,
-        &signer,
-    )
-    .expect("delegated-controller genesis proposal authority Ack");
-    let control_proposal_ack = arkret_wire::ControlProposalAck::from_authority_acks(
-        vec![proposal_member],
-        proposal_policy,
-    )
-    .expect("managed Agent PCR genesis Control Proposal Ack");
-    let create_submission = arkret_wire::EventInitialSubmission {
-        event: create.clone(),
-        authorization_lease: None,
-        cba_proof_bundles: Vec::new(),
-        control_proposal_ack: Some(control_proposal_ack),
-        membership_compensation_evidence: None,
-    };
-    create_submission
-        .validate_structural_in_context(arkret_wire::EventSubmitContext::AnchorUnit)
-        .expect("managed Agent PCR genesis initial submission");
-    let create_submission_body = arkret_canonical::canonical_json_bytes(&create_submission)
-        .expect("canonical managed Agent PCR genesis submission");
-    // Inkson publishes the managed genesis as a one-Event bootstrap batch,
-    // then replays the accepted Event as a single submission before the first
-    // Seal so the stored Control Proposal Ack can be recovered. The second request
-    // must be an idempotent duplicate, never `realm_already_exists`.
-    let create_batch_submission_body = arkret_canonical::canonical_json_bytes(
-        &serde_json::json!({ "events": [create_submission.clone()] }),
-    )
-    .expect("canonical managed Agent PCR genesis batch submission");
-    let mut create_response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(create_batch_submission_body)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let event_status = create_response.status_code.expect("create Event status");
-    let event_body: Value = create_response
-        .take_json()
-        .await
-        .expect("create Event body");
-    assert_eq!(
-        event_status,
-        StatusCode::OK,
-        "managed Agent PCR create Event failed: {event_body}"
-    );
-    assert_eq!(
-        event_body["status"], "accepted",
-        "managed Agent PCR create was not accepted: {event_body}"
-    );
-    let stored_create = state
-        .test_persistence()
-        .events()
-        .get(create.event_id.as_str())
-        .await
-        .unwrap()
-        .expect("accepted managed Agent PCR create must be queryable by Event id");
-    assert_eq!(
-        stored_create.envelope,
-        serde_json::to_value(&create).unwrap()
-    );
-
-    let mut replay_response = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(create_submission_body)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let replay_status = replay_response
-        .status_code
-        .expect("managed Agent PCR replay status");
-    let replay_body: Value = replay_response
-        .take_json()
-        .await
-        .expect("managed Agent PCR replay body");
-    assert_eq!(
-        replay_status,
-        StatusCode::OK,
-        "managed Agent PCR replay failed: {replay_body}"
-    );
-    assert_eq!(replay_body["status"], "duplicate");
-    assert_eq!(replay_body["duplicate"][0], create.event_id.as_str());
-    assert_eq!(
-        replay_body["control_proposal_acks"][0]["proposal_digest"],
-        create.event_digest().unwrap(),
-        "managed Agent PCR replay must recover the stored Control Proposal Ack"
-    );
-
     let records = state
         .test_persistence()
         .events()
@@ -1714,30 +1574,6 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(events.len(), 1, "managed Agent PCR must start at create");
-    let seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
-        &events,
-        None,
-        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
-        &seal_signer,
-        &super::agents::genesis_projector,
-    )
-    .unwrap();
-    let seal_body_bytes =
-        arkret_canonical::canonical_json_bytes(&seal).expect("canonical managed Agent PCR Seal");
-    let mut seal_response = TestClient::post("http://server/_arkret/self/events/seals")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(seal_body_bytes)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let seal_status = seal_response.status_code.expect("Seal submit status");
-    let seal_body: Value = seal_response.take_json().await.expect("Seal submit body");
-    assert_eq!(
-        seal_status,
-        StatusCode::OK,
-        "managed Agent PCR Seal submit failed: {seal_body}"
-    );
-
     let mut frontier_response = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(&serde_json::json!({"realm_id": realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1756,16 +1592,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     let returned_head: arkret_wire::Seal =
         serde_json::from_value(frontier_body["receipts"][0]["seal"].clone())
             .expect("managed PCR frontier signed-head receipt");
-    assert_eq!(returned_head.id, seal.id);
-    assert_eq!(
-        returned_head.control_event_set_root,
-        seal.control_event_set_root
-    );
-    assert_eq!(returned_head.state_root, seal.state_root);
-    assert_eq!(
-        returned_head.covered_event_digests,
-        seal.covered_event_digests
-    );
+    let seal = returned_head;
 
     // Accepted Events may advance before the controller submits the next
     // device-signed Seal. Frontier must keep returning the accepted signed
@@ -1782,7 +1609,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         },
         arkret_identifiers::DidCoreId::new(agent_id.clone()).unwrap(),
         soland_test_support::fixture_principal_server_id(),
-        2,
+        1,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
         serde_json::json!({
             "mls_group_id": "YXJrcmV0LW1scy1tYW5hZ2VkLXNjcg",
@@ -1806,7 +1633,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     )
     .unwrap();
     pending.created_at = created_at;
-    pending.executed_by = Some(arkret_identifiers::DidCoreId::new(controller_id).unwrap());
+    pending.prev_refs = vec![create.event_id.clone()];
+    pending.executed_by = Some(controller_core_id);
     pending.authorization_ref = Some(
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),
@@ -1868,7 +1696,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &events,
         Some(&lagging_head),
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce3").unwrap(),
-        &seal_signer,
+        &signer,
         &super::agents::genesis_projector,
     )
     .unwrap();
@@ -1880,8 +1708,9 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .body(successor_body_bytes)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(successor_response.status_code, Some(StatusCode::OK));
+    let successor_status = successor_response.status_code;
     let successor_body: Value = successor_response.take_json().await.unwrap();
+    assert_eq!(successor_status, Some(StatusCode::OK), "{successor_body}");
     assert_eq!(successor_body["seal_id"], successor.id.as_str());
     let trusted_anchor_seal_id = successor.id.to_string();
 
@@ -2095,7 +1924,8 @@ async fn account_subscribe_realms_filter_excludes_out_of_scope_realms() {
 async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
     let state = soland_test_support::app_state(test_config());
     let actor = test_event_signer_did();
-    let token = dev_token_for_device(
+    let actor_core = fixture_actor_core_id(actor);
+    let token = verified_dev_token_for_device(
         state.clone(),
         actor,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -2128,7 +1958,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
         assert!(sent["operation_id"].as_str().is_some());
     }
 
-    let read_body = serde_json::json!({"limit": 1, "actors": [actor]});
+    let read_body = serde_json::json!({"limit": 1, "actors": [actor_core]});
     let query_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&read_body)
@@ -2150,7 +1980,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages() {
 
     let second_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"limit": 1, "actors": [actor], "after": next_cursor}))
+        .json(&serde_json::json!({"limit": 1, "actors": [actor_core], "after": next_cursor}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

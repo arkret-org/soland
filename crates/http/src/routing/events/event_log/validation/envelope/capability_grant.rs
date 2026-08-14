@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn accepts_grant_without_a_nested_proof() {
-        let actor = "did:key:z6Mktest";
+        let actor = "ak:did_core:web:alice.example";
         let event = event(actor);
         validate_capability_grant_body(
             arkret_wire::EventKind::CapabilityGrant.as_str(),
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn rejects_legacy_nested_proofs_and_actor_mismatch() {
-        let actor = "did:key:z6Mktest";
+        let actor = "ak:did_core:web:alice.example";
         let mut legacy = event(actor);
         legacy["payload"]["grant"]["proofs"] = json!([]);
         assert!(
@@ -96,7 +96,7 @@ mod tests {
         assert!(
             validate_capability_grant_body(
                 arkret_wire::EventKind::CapabilityGrant.as_str(),
-                "did:key:z6Mkother",
+                "ak:did_core:web:mallory.example",
                 event.as_object().unwrap(),
             )
             .is_err()

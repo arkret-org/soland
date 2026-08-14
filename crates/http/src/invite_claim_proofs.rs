@@ -409,10 +409,12 @@ mod tests {
 
     const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
     const INVITE: &str = "ak:invite:AUftf_3k2fRKMG0NFlHe5iEMBOUpxMwYMRu-yhMJl-yz";
-    const SUBJECT: &str = "did:web:bob.example";
+    const SUBJECT: &str = "ak:did_core:web:bob.example";
+    const SUBJECT_FULL: &str = "did:web:bob.example";
     const SUBJECT_CURRENT_METHOD: &str = "did:web:bob.example#device-current";
     const SUBJECT_OLD_METHOD: &str = "did:web:bob.example#device-old";
-    const SERVICE: &str = "did:web:verify.example";
+    const SERVICE: &str = "ak:did_core:web:verify.example";
+    const SERVICE_FULL: &str = "did:web:verify.example";
     const SERVICE_METHOD: &str = "did:web:verify.example#invite-key";
     const TOKEN_A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const TOKEN_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -554,8 +556,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_proof = signed_subject_proof(
@@ -575,8 +577,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let mut binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         binding_proof["signature"] = json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
@@ -601,8 +603,8 @@ mod tests {
         let current_subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let old_subject_key = SigningKey::from_bytes(&[33u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT, SUBJECT_CURRENT_METHOD, &current_subject_key);
+            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &current_subject_key);
 
         let binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_proof = signed_subject_proof(
@@ -625,8 +627,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_a = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_a = signed_subject_proof(
@@ -655,8 +657,8 @@ mod tests {
         let service_key = SigningKey::from_bytes(&[11u8; 32]);
         let subject_key = SigningKey::from_bytes(&[22u8; 32]);
         let resolver = StubResolver::default()
-            .with_method(SERVICE, SERVICE_METHOD, &service_key)
-            .with_method(SUBJECT, SUBJECT_CURRENT_METHOD, &subject_key);
+            .with_method(SERVICE_FULL, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_FULL, SUBJECT_CURRENT_METHOD, &subject_key);
 
         let binding_a = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
         let subject_b = signed_subject_proof(

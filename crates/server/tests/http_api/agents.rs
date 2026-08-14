@@ -1175,7 +1175,8 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         let persistence = std::sync::Arc::new(SolandMemoryPersistenceStore::new_with_demo_data());
         let injector = persistence.fault_injector();
         let state =
-            soland_test_support::app_state_with_persistence(test_config(), persistence.clone());
+            soland_test_support::app_state_with_persistence(test_config(), persistence.clone())
+                .await;
         let controller = "did:web:alice.example";
         let token = format!("agent-provision-fault-{index}");
         seed_controller_session(&state, &token, controller).await;
@@ -1604,7 +1605,7 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
     let provision_ref = state
         .test_persistence()
         .agents()
-        .list_for_controller(controller)
+        .list_for_controller(controller_authority.principal_id.as_str())
         .await
         .unwrap()[0]
         .provision_event_refs

@@ -770,6 +770,23 @@ mod tests {
                 "capability_action_registry_digest": REGISTRY_DIGEST
             }}),
         );
+        let mut creator_member = event(
+            EventKind::MemberState,
+            7,
+            json!({
+                "realm_id": REALM,
+                "actor_id": ACTOR_CORE,
+                "membership": "join",
+                "delivery_status": "unroutable"
+            }),
+        );
+        creator_member.preconditions = vec![
+            serde_json::from_value(json!({
+                "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR_CORE}"),
+                "predicate": { "op": "head_eq", "value": null }
+            }))
+            .expect("creator member head_eq precondition"),
+        ];
         let events = vec![
             create,
             event(
@@ -798,16 +815,7 @@ mod tests {
                 6,
                 json!({"allow_unroutable_members": true}),
             ),
-            event(
-                EventKind::MemberState,
-                7,
-                json!({
-                    "realm_id": REALM,
-                    "actor_id": ACTOR,
-                    "membership": "join",
-                    "delivery_status": "unroutable"
-                }),
-            ),
+            creator_member,
         ];
 
         let context = anchor_context(&events)
@@ -823,7 +831,7 @@ mod tests {
             .authority_root
             .expect("staged authority root must survive lease pre-admission");
 
-        assert!(root.is_genesis_for(ACTOR));
+        assert!(root.is_genesis_for(ACTOR_CORE));
         assert_eq!(
             root.capability_action_registry_digest.as_str(),
             REGISTRY_DIGEST

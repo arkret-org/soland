@@ -89,6 +89,11 @@ fn pair_device_signing_key(device_id: &str) -> SigningKey {
 }
 
 fn account_device_pair_body(new_device_id: &str) -> Value {
+    use arkret_models_collaboration::events_payloads::device_identity::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
+    };
+    use arkret_models_collaboration::http_bodies::UnsignedDevicePairingTargetAttestation;
+
     let public_key_value = pair_device_pubkey(new_device_id);
     let public_key = serde_json::from_value(public_key_value.clone()).unwrap();
     let pairing_code =
@@ -112,12 +117,73 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
         &pair_device_signing_key(new_device_id),
     )
     .unwrap();
+    let hpke_key = arkret_wire::NonEmptyString::new("z6LSDevicePairingHpkeKey".to_owned()).unwrap();
+    let algorithms = vec![
+        arkret_wire::NonEmptyString::new("Ed25519".to_owned()).unwrap(),
+        arkret_wire::NonEmptyString::new("HPKE-X25519-HKDF-SHA256".to_owned()).unwrap(),
+    ];
+    let target_key = &pair_device_signing_key(new_device_id);
+    let target_attestation =
+        arkret_signatures::device_pairing::sign_device_pairing_target_attestation(
+            UnsignedDevicePairingTargetAttestation::new(
+                arkret_wire::DeviceId::new(new_device_id.to_owned()).unwrap(),
+                arkret_wire::DidKey::new(format!(
+                    "did:key:{}",
+                    arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                        target_key.verifying_key().as_bytes()
+                    )
+                ))
+                .unwrap(),
+                hpke_key.clone(),
+                algorithms.clone(),
+                proof.transcript_digest.clone(),
+            )
+            .unwrap(),
+            target_key,
+        )
+        .unwrap();
+    let actor = "did:web:alice.example";
+    let actor_core = fixture_actor_core_id(actor);
+    let authorizing_device =
+        arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())
+            .unwrap();
+    let authorize_payload = serde_json::json!({
+        "principal_id": actor_core,
+        "device_id": new_device_id,
+        "device_public_key": target_attestation.device_public_key,
+        "hpke_key": hpke_key,
+        "algorithms": algorithms,
+        "device_key_algorithm": "Ed25519",
+        "authorized_by": DeviceOrPrincipalRef::DeviceId(authorizing_device.clone()),
+        "not_before": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
+        "authorization_binding_kind": DeviceAuthorizationBindingKind::AcceptedDevice,
+        "device_signature": target_attestation.device_signature,
+    });
+    let authorize_event: arkret_wire::Event = serde_json::from_value(signed_canonical_event(
+        "device-pair-authorize-fixture",
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        actor,
+        authorizing_device.as_str(),
+        &soland_test_support::fixture_principal_control_realm(actor),
+        2,
+        vec![],
+        authorize_payload,
+    ))
+    .unwrap();
     serde_json::json!({
         "pairing_code": pairing_code,
         "new_device_pubkey": public_key_value,
+        "hpke_key": hpke_key,
+        "device_signature": target_attestation.device_signature,
         "challenge_proof": proof,
-        "challenge_transcript": challenge
+        "challenge_transcript": challenge,
+        "authorize_event": arkret_wire::EventInitialSubmission::online(authorize_event),
     })
+}
+
+fn bind_pair_authorize_predecessor(body: &mut Value, predecessor: &str) {
+    body["authorize_event"]["event"]["prev_refs"] = serde_json::json!([predecessor]);
+    resign_canonical_event(&mut body["authorize_event"]["event"]);
 }
 
 async fn post_account_device_pair(
@@ -125,8 +191,10 @@ async fn post_account_device_pair(
     token: &str,
     new_device_id: &str,
     challenge_signature: &str,
+    predecessor: &str,
 ) -> (StatusCode, Value) {
     let mut body = account_device_pair_body(new_device_id);
+    bind_pair_authorize_predecessor(&mut body, predecessor);
     if challenge_signature == "!" {
         body["challenge_proof"]["signature"] = Value::String("!".to_owned());
     }
@@ -145,8 +213,16 @@ async fn post_account_device_pair(
 async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let predecessor = project_test_authorized_device(
+        &state,
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
+    .await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
-    let sibling_pair_body = account_device_pair_body(sibling);
+    let mut sibling_pair_body = account_device_pair_body(sibling);
+    bind_pair_authorize_predecessor(&mut sibling_pair_body, &predecessor);
 
     let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("content-type", "application/json", true)
@@ -158,40 +234,29 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let mut sibling_pair_body = sibling_pair_body;
     sibling_pair_body["display_name"] = Value::String("Paired Phone".to_owned());
     sibling_pair_body["device_metadata"] = serde_json::json!({"platform": "ios"});
-    let mut unsupported = post_authenticated_canonical(
+    let mut paired = post_authenticated_canonical(
         state.clone(),
         &token,
         "http://server/_arkret/gate/account/device-pair",
         &sibling_pair_body,
     )
     .await;
-    assert_eq!(unsupported.status_code, Some(StatusCode::NOT_IMPLEMENTED));
-    let body: Value = unsupported.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
-    assert!(
-        state
-            .test_persistence()
-            .devices()
-            .get(
-                fixture_actor_core_id("did:web:alice.example").as_str(),
-                sibling,
-            )
-            .await
-            .unwrap()
-            .is_none(),
-        "fail-closed pairing must not create a device inventory record"
-    );
-    assert!(
-        state
-            .test_persistence()
-            .audit()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .iter()
-            .all(|event| event["action"] != "account.device_pair"),
-        "fail-closed pairing must not append an accepted audit record"
-    );
+    let status = paired.status_code;
+    let body: Value = paired.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "{body}");
+    assert_eq!(body["device_id"], sibling);
+    assert!(body["authorized_event_ref"].as_str().is_some());
+    let paired_device = state
+        .test_persistence()
+        .devices()
+        .get(
+            fixture_actor_core_id("did:web:alice.example").as_str(),
+            sibling,
+        )
+        .await
+        .unwrap()
+        .expect("accepted pairing projects the sibling device");
+    assert_eq!(paired_device.verification_state, "verified");
 }
 
 #[tokio::test]
@@ -207,55 +272,68 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs() {
         dev_token_for_device(state.clone(), actor, trusted_device, "Alice Desktop").await;
     let unverified_token =
         dev_token_for_device(state.clone(), actor, unverified_device, "Alice Browser").await;
+    let predecessor = project_test_authorized_device(
+        &state,
+        actor,
+        trusted_device,
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
+    .await;
 
-    let (status, body) =
-        post_account_device_pair(state.clone(), &unverified_token, first_new_device, "c2ln").await;
+    let (status, body) = post_account_device_pair(
+        state.clone(),
+        &unverified_token,
+        first_new_device,
+        "c2ln",
+        &predecessor,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "device_unauthorized", "{body}");
 
-    let (status, body) =
-        post_account_device_pair(state.clone(), &trusted_token, second_new_device, "!").await;
+    let (status, body) = post_account_device_pair(
+        state.clone(),
+        &trusted_token,
+        second_new_device,
+        "!",
+        &predecessor,
+    )
+    .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"]["code"], "schema_violation", "{body}");
 
-    let (status, body) =
-        post_account_device_pair(state.clone(), &trusted_token, trusted_device, "c2ln").await;
+    let (status, body) = post_account_device_pair(
+        state.clone(),
+        &trusted_token,
+        trusted_device,
+        "c2ln",
+        &predecessor,
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(
         body["error"]["code"], "cannot_pair_current_device",
         "{body}"
     );
 
-    let (status, body) =
-        post_account_device_pair(state.clone(), &trusted_token, first_new_device, "c2ln").await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
-    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
-    assert!(
-        state
-            .test_persistence()
-            .devices()
-            .get(actor, first_new_device)
-            .await
-            .unwrap()
-            .is_none(),
-        "a valid proof must still fail closed before device persistence"
-    );
-
-    let audit = state
+    let (status, body) = post_account_device_pair(
+        state.clone(),
+        &trusted_token,
+        first_new_device,
+        "c2ln",
+        &predecessor,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["device_id"], first_new_device);
+    let paired = state
         .test_persistence()
-        .audit()
-        .snapshot_all()
+        .devices()
+        .get(fixture_actor_core_id(actor).as_str(), first_new_device)
         .await
-        .unwrap();
-    assert_eq!(
-        audit
-            .iter()
-            .filter(
-                |event| event["action"] == "account.device_pair" && event["outcome"] == "accepted"
-            )
-            .count(),
-        0
-    );
+        .unwrap()
+        .expect("valid pairing persists the candidate device");
+    assert_eq!(paired.verification_state, "verified");
 }
 
 #[tokio::test]
@@ -267,7 +345,15 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let existing_token =
         dev_token_for_device(state.clone(), actor, existing_device, "Alice Desktop").await;
     let new_token = dev_token_for_device(state.clone(), actor, new_device, "Alice Browser").await;
-    let pair_body = account_device_pair_body(new_device);
+    let predecessor = project_test_authorized_device(
+        &state,
+        actor,
+        existing_device,
+        &SigningKey::from_bytes(&[21_u8; 32]),
+    )
+    .await;
+    let mut pair_body = account_device_pair_body(new_device);
+    bind_pair_authorize_predecessor(&mut pair_body, &predecessor);
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
         "from_device": new_device,
@@ -295,7 +381,8 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         device_message_target("ak.key.verification.request", request_content.clone()),
     );
     let mut actor_targets = serde_json::Map::new();
-    actor_targets.insert(actor.to_owned(), Value::Object(device_targets));
+    let actor_core = fixture_actor_core_id(actor).to_string();
+    actor_targets.insert(actor_core.clone(), Value::Object(device_targets));
     let message_batch = serde_json::json!({"messages": actor_targets});
     let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {new_token}"), true)
@@ -308,16 +395,16 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         .await
         .unwrap();
     assert_eq!(sent["ok"], true);
-    assert_eq!(sent["delivered"][actor][0], existing_device);
+    assert_eq!(sent["delivered"][&actor_core][0], existing_device);
 
     let subscribe =
         account_subscribe_frame(state.clone(), Some(&existing_token), "catchup=true").await;
     let subscribe_messages = subscribe["to_device"]["messages"].as_array().unwrap();
     assert_eq!(subscribe_messages.len(), 1);
     assert_eq!(subscribe_messages[0]["kind"], "ak.key.verification.request");
-    assert_eq!(subscribe_messages[0]["sender_principal_id"], actor);
+    assert_eq!(subscribe_messages[0]["sender_principal_id"], actor_core);
     assert_eq!(subscribe_messages[0]["sender_device_id"], new_device);
-    assert_eq!(subscribe_messages[0]["recipient_principal_id"], actor);
+    assert_eq!(subscribe_messages[0]["recipient_principal_id"], actor_core);
     assert_eq!(
         subscribe_messages[0]["recipient_device_id"],
         existing_device
@@ -352,30 +439,32 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let before = state
         .test_persistence()
         .devices()
-        .get(actor, new_device)
+        .get(&actor_core, new_device)
         .await
         .unwrap()
         .expect("unverified device fixture");
-    let mut unsupported = post_authenticated_canonical(
+    let mut paired = post_authenticated_canonical(
         state.clone(),
         &existing_token,
         "http://server/_arkret/gate/account/device-pair",
         &approved_body,
     )
     .await;
-    assert_eq!(unsupported.status_code, Some(StatusCode::NOT_IMPLEMENTED));
-    let body: Value = unsupported.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "unsupported_feature", "{body}");
+    let status = paired.status_code;
+    let body: Value = paired.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "{body}");
+    assert_eq!(body["device_id"], new_device);
     let after = state
         .test_persistence()
         .devices()
-        .get(actor, new_device)
+        .get(&actor_core, new_device)
         .await
         .unwrap()
-        .expect("unverified device fixture remains");
-    assert_eq!(after.verification_state, before.verification_state);
-    assert_eq!(after.payload, before.payload);
-    assert_eq!(after.updated_at, before.updated_at);
+        .expect("paired device projection");
+    assert_eq!(before.verification_state, "unverified");
+    assert_eq!(after.verification_state, "verified");
+    assert_ne!(after.payload, before.payload);
+    assert!(after.updated_at >= before.updated_at);
 }
 
 #[tokio::test]
@@ -401,7 +490,8 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
             ),
         );
         let mut actor_targets = serde_json::Map::new();
-        actor_targets.insert(bob.to_owned(), Value::Object(device_targets));
+        let bob_core = fixture_actor_core_id(bob).to_string();
+        actor_targets.insert(bob_core.clone(), Value::Object(device_targets));
         let sent: Value = TestClient::post("http://server/_arkret/self/device_messages")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
             .add_header("Idempotency-Key", format!("capacity-{seq}"), true)
@@ -415,7 +505,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark() {
             .await
             .unwrap();
         assert_eq!(sent["ok"], true);
-        assert_eq!(sent["delivered"][bob][0], bob_device);
+        assert_eq!(sent["delivered"][&bob_core][0], bob_device);
     }
 
     let pulled: Value = TestClient::get("http://server/_arkret/self/device_messages")
@@ -1086,6 +1176,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
     install_media_service_epoch(&state, good_media_service_epoch());
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
+    let bob_core = fixture_actor_core_id(bob);
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
@@ -1107,7 +1198,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": bob,
+            "actor_id": bob_core,
             "device_id": bob_device,
             "focus_id": "ak:focus:livekit:green"
         })))
@@ -1126,7 +1217,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         &session_id,
         None,
         vec![serde_json::json!({
-            "actor_id": bob,
+            "actor_id": bob_core,
             "action": "ban",
             "removed_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         })],
@@ -1140,7 +1231,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": DEMO_REALM_ID,
             "call_id": session_id,
-            "actor_id": bob,
+            "actor_id": bob_core,
             "device_id": bob_device,
             "focus_id": "ak:focus:livekit:green"
         })))

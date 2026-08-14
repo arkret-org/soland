@@ -40,7 +40,6 @@ use soland_test_support::signed_event::{
 const ALICE: &str = "did:web:alice.example";
 const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const POLICY_CELL: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
-const EVENT_SIGNING_SEED: [u8; 32] = FIXTURE_EVENT_SIGNING_SEED;
 const TRUST_DOMAIN: &str = "ak:trust_domain:soland-policy-test.local";
 
 fn test_config() -> AppConfig {
@@ -55,13 +54,6 @@ fn test_config() -> AppConfig {
 
 fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
-}
-
-fn ed25519_public_multibase(signing: &SigningKey) -> String {
-    let mut bytes = Vec::with_capacity(34);
-    bytes.extend_from_slice(&[0xed, 0x01]);
-    bytes.extend_from_slice(signing.verifying_key().as_bytes());
-    format!("z{}", bs58::encode(bytes).into_string())
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
@@ -85,24 +77,9 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
 
 async fn prepare_alice(state: &AppState) -> String {
     let token = dev_token(state.clone(), ALICE, ALICE_DEVICE, "Alice").await;
-    let alice_core =
-        arkret_wire::project_full_id_to_core_id(&DidFullId::new(ALICE).unwrap()).unwrap();
-    let signing = SigningKey::from_bytes(&EVENT_SIGNING_SEED);
-    let mut device = state
-        .test_persistence()
-        .devices()
-        .get(alice_core.as_str(), ALICE_DEVICE)
-        .await
-        .unwrap()
-        .unwrap();
-    device.payload["device_public_key"] = json!(ed25519_public_multibase(&signing));
-    device.verification_state = "verified".to_owned();
-    state
-        .test_persistence()
-        .devices()
-        .put(&device)
-        .await
-        .unwrap();
+    let signing = SigningKey::from_bytes(&FIXTURE_EVENT_SIGNING_SEED);
+    soland_test_support::project_authorized_principal_device(state, ALICE, ALICE_DEVICE, &signing)
+        .await;
     token
 }
 
@@ -382,15 +359,29 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
 }
 
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
+    let actor_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(ALICE.to_owned()).expect("fixture frontier actor full DID"),
+    )
+    .expect("fixture frontier actor core DID");
+    let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(
+            &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
+                actor_id: Some(actor_core),
+                realm_id: Some(
+                    RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
+                ),
+            },
+        )
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .expect("typed actor Realm frontier");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": ALICE, "realm_id": realm_id}))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .expect("typed actor Realm frontier");
+        serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
+            panic!("invalid typed actor Realm frontier: {error}; {frontier_value}")
+        });
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {
@@ -444,7 +435,7 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = soland_test_support::app_state_with_persistence(test_config(), persistence);
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let child_realm = bootstrap_realm(&state, &token, "policy server lifecycle child").await;
@@ -476,7 +467,11 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         declared[0]["payload"]["policy_server_service_id"],
         "ak:did_core:web:org-policy.example"
     );
-    assert_eq!(declared[0]["actor_id"], ALICE);
+    let alice_core = arkret_wire::project_full_id_to_core_id(
+        &DidFullId::new(ALICE.to_owned()).expect("fixture actor full DID"),
+    )
+    .expect("fixture actor core DID");
+    assert_eq!(declared[0]["actor_id"], alice_core.as_str());
 
     // The self-management handler runs a local notary signing pass, so the
     // accepted Seal frontier advances: the Move is Seal-covered, not merely
@@ -571,7 +566,8 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_declaration_survives_restart() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = soland_test_support::app_state_with_persistence(test_config(), persistence.clone());
+    let state =
+        soland_test_support::app_state_with_persistence(test_config(), persistence.clone()).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let org_realm = bootstrap_realm(&state, &token, "policy server restart org").await;
@@ -591,7 +587,7 @@ async fn policy_server_declaration_survives_restart() {
     // no `ak.realm.policy_server` replay arm at all, so a restart silently lost
     // every declaration.
     let restarted =
-        soland_test_support::app_state_with_persistence(test_config(), persistence.clone());
+        soland_test_support::app_state_with_persistence(test_config(), persistence.clone()).await;
     restarted.hydrate().await.expect("restarted state hydrates");
     let restarted_token = dev_token(restarted.clone(), ALICE, ALICE_DEVICE, "Alice").await;
 
@@ -633,7 +629,7 @@ async fn policy_server_declaration_survives_restart() {
     let (status, deleted) = delete_policy_server(&state, &token, org_realm).await;
     assert_eq!(status, StatusCode::OK, "settled DELETE: {deleted}");
     let restarted_again =
-        soland_test_support::app_state_with_persistence(test_config(), persistence);
+        soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     restarted_again
         .hydrate()
         .await
@@ -664,7 +660,7 @@ async fn policy_server_declaration_survives_restart() {
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_same_basis_sibling_fails_closed() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = soland_test_support::app_state_with_persistence(test_config(), persistence);
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let child_realm = bootstrap_realm(&state, &token, "policy server sibling child").await;
@@ -759,7 +755,7 @@ async fn policy_server_same_basis_sibling_fails_closed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn policy_server_replace_without_head_eq_is_refused() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = soland_test_support::app_state_with_persistence(test_config(), persistence);
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm = bootstrap_realm(&state, &token, "policy server unguarded write").await;
@@ -828,7 +824,7 @@ async fn policy_server_replace_without_head_eq_is_refused() {
 #[tokio::test(flavor = "multi_thread")]
 async fn events_resolve_returns_the_seal_covering_each_resolved_event() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = soland_test_support::app_state_with_persistence(test_config(), persistence);
+    let state = soland_test_support::app_state_with_persistence(test_config(), persistence).await;
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm = bootstrap_realm(&state, &token, "events resolve derived seals").await;

@@ -307,8 +307,8 @@ mod tests {
     #[test]
     fn admin_actor_unknown_field_fails_closed() {
         let wire = serde_json::json!({
-            "id": "did:web:alice.example",
-            "did": "did:web:alice.example",
+            "id": "ak:did_core:web:alice.example",
+            "did": "ak:did_core:web:alice.example",
             "surprise": true,
         });
         assert!(serde_json::from_value::<AdminActor>(wire).is_err());
@@ -317,8 +317,8 @@ mod tests {
     #[test]
     fn admin_actor_security_fields_default_to_unknown_not_false() {
         let wire = serde_json::json!({
-            "id": "did:web:alice.example",
-            "did": "did:web:alice.example",
+            "id": "ak:did_core:web:alice.example",
+            "did": "ak:did_core:web:alice.example",
         });
         let actor: AdminActor = serde_json::from_value(wire).expect("minimal row parses");
         assert_eq!(actor.status, None);
@@ -330,8 +330,8 @@ mod tests {
     #[test]
     fn admin_actor_status_is_closed_set() {
         let wire = serde_json::json!({
-            "id": "did:web:alice.example",
-            "did": "did:web:alice.example",
+            "id": "ak:did_core:web:alice.example",
+            "did": "ak:did_core:web:alice.example",
             "status": "very_active",
         });
         assert!(serde_json::from_value::<AdminActor>(wire).is_err());

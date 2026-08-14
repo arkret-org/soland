@@ -35,7 +35,8 @@ fn verify_actor_headers_reject_destination_mismatch() {
     assert_auth_rejection_is_minimal(error);
 }
 
-const SIG_TEST_DID: &str = "did:web:test.local";
+const SIG_TEST_FULL_ID: &str = "did:webvh:z6mkfixture:test.local";
+const SIG_TEST_CORE_ID: &str = "ak:did_core:webvh:z6mkfixture";
 
 fn signature_input(
     service_did: &str,
@@ -52,8 +53,8 @@ fn signature_input(
 #[test]
 fn signature_input_accepts_expected_federation_key() {
     validate_signature_input(
-        &signature_input(SIG_TEST_DID, "federation-fanout-key"),
-        SIG_TEST_DID,
+        &signature_input(SIG_TEST_FULL_ID, "federation-fanout-key"),
+        SIG_TEST_CORE_ID,
         "test",
     )
     .expect("matching federation key must pass deployment binding");
@@ -62,8 +63,8 @@ fn signature_input_accepts_expected_federation_key() {
 #[test]
 fn signature_input_accepts_other_controller_owned_service_key() {
     validate_signature_input(
-        &signature_input(SIG_TEST_DID, "service-key"),
-        SIG_TEST_DID,
+        &signature_input(SIG_TEST_FULL_ID, "service-key"),
+        SIG_TEST_CORE_ID,
         "test",
     )
     .expect("a controller-owned service verification method must be accepted");
@@ -72,8 +73,8 @@ fn signature_input_accepts_other_controller_owned_service_key() {
 #[test]
 fn signature_input_rejects_mismatched_federation_key() {
     let error = validate_signature_input(
-        &signature_input("did:web:other.local", "service-key"),
-        SIG_TEST_DID,
+        &signature_input("did:webvh:z6mkother:other.local", "service-key"),
+        SIG_TEST_CORE_ID,
         "test",
     )
     .expect_err("mismatched federation key must fail closed");

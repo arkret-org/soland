@@ -1574,7 +1574,8 @@ mod tests {
             "ak:realm:Ad45OVvW8PvF-UFqAF8ApvgyX0o6xBWwpg8UvABbuY40",
         )
         .unwrap();
-        let actor_full_id = arkret_identifiers::DidFullId::new("did:web:alice.example").unwrap();
+        let actor_full_id =
+            arkret_identifiers::DidFullId::new("did:webvh:z6mkalice:alice.example").unwrap();
         let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
         let scope_ref = arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
@@ -1633,7 +1634,7 @@ mod tests {
             );
             event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
                 actor_id: crate::test_actor_id(&actor_full_id),
-                key_id: "did:web:alice.example#device-1".to_owned(),
+                key_id: "did:webvh:z6mkalice:alice.example#device-1".to_owned(),
                 key_epoch: 0,
                 credential_epoch: None,
             });
@@ -1645,8 +1646,10 @@ mod tests {
             event.proofs = vec![
                 arkret_wire::primitives::Proof {
                     kind: "detached_jws".to_owned(),
-                    verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
-                        .unwrap(),
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:webvh:z6mkalice:alice.example#device-1",
+                    )
+                    .unwrap(),
                     event_digest: event_digest.clone(),
                     created_at: issued_at,
                     domain: None,
@@ -1656,6 +1659,29 @@ mod tests {
                 }
                 .into(),
             ];
+            let producer_proof = event.proofs[0]
+                .as_producer()
+                .expect("fixture producer proof")
+                .clone();
+            event.proofs.push(
+                arkret_wire::primitives::PrincipalServerAdmissionProof {
+                    kind: arkret_wire::primitives::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#federation-fanout-key",
+                    )
+                    .unwrap(),
+                    event_digest: producer_proof.event_digest.clone(),
+                    producer_proof_digest: arkret_wire::primitives::PrincipalServerAdmissionProof::producer_proof_digest(&producer_proof).unwrap(),
+                    producer_verification_method: producer_proof.verification_method.clone(),
+                    producer_signing_key: arkret_wire::DidKey::new(
+                        "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
+                    )
+                    .unwrap(),
+                    accepted_at: issued_at,
+                    jws: "admission..signature".to_owned(),
+                }
+                .into(),
+            );
             let event_digest =
                 arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
 

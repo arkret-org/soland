@@ -926,14 +926,14 @@ mod tests {
         // service_id + trust_domain + supported_operations.
         let describe = json!({
             "service_kind": "identity_registry",
-            "service_id": "did:web:starid.example",
+            "service_id": "ak:did_core:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.read.describe"]
         });
         validate_webvh_provider_describe(
             &describe,
-            Some("did:web:starid.example"),
+            Some("ak:did_core:web:starid.example"),
             Some("ak:trust_domain:example.net"),
         )
         .expect("valid canonical identity_registry describe should pass");
@@ -943,14 +943,14 @@ mod tests {
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
         let mut describe = json!({
             "service_kind": "identity_registry",
-            "service_id": "did:web:starid.example",
+            "service_id": "ak:did_core:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
             "supported_operations": ["ak.server.read.describe"]
         });
         let err = validate_webvh_provider_describe(
             &describe,
-            Some("did:web:starid.example"),
+            Some("ak:did_core:web:starid.example"),
             Some("ak:trust_domain:other.example"),
         )
         .expect_err("trust-domain mismatch must fail closed");
@@ -959,7 +959,7 @@ mod tests {
         describe["development_mode"] = json!(true);
         let err = validate_webvh_provider_describe(
             &describe,
-            Some("did:web:starid.example"),
+            Some("ak:did_core:web:starid.example"),
             Some("ak:trust_domain:example.net"),
         )
         .expect_err("development-mode provider must fail closed");

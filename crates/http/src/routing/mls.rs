@@ -1072,6 +1072,7 @@ async fn peer_claim_policy_authorized(
                 state,
                 body.requester.as_str(),
                 source_service_id,
+                None,
                 body.intended_realm_id.as_str(),
                 None,
             )
@@ -1471,19 +1472,25 @@ async fn claim_keypackage(
             "requester must match the calling session",
         ));
     }
-    json_ok(claim_keypackages_for_request(state, &body).await?)
+    let session_device_id =
+        arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
+            AppError::capability_denied(format!("session device is invalid: {error}"))
+        })?;
+    json_ok(claim_keypackages_for_request(state, &body, &session_device_id).await?)
 }
 
 pub(crate) async fn claim_keypackages_for_request(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
+    session_device_id: &arkret_identifiers::DeviceId,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    claim_keypackages_for_request_inner(state, body).await
+    claim_keypackages_for_request_inner(state, body, session_device_id).await
 }
 
 async fn claim_keypackages_for_request_inner(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
+    session_device_id: &arkret_identifiers::DeviceId,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
     let authority = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service core id invalid: {error}")))?;
@@ -1493,11 +1500,14 @@ async fn claim_keypackages_for_request_inner(
         .map_err(|error| {
             AppError::param_invalid(format!("KeyPackage self-claim proof invalid: {error}"))
         })?;
-    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+    let authority_key =
+        arkret_wire::PrincipalAuthorityKey::new(body.requester.clone(), authority.clone());
+    crate::jws_verify::verify_principal_authorized_jws_with_account_authority_async(
         &binding,
         &proof.jws,
         proof.verification_method.as_str(),
-        body.requester.as_str(),
+        &authority_key,
+        session_device_id,
         state,
     )
     .await
@@ -3426,34 +3436,6 @@ async fn keypackage_claim_record(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_claim_evidence_selector(
-    agent_id: &arkret_wire::DidCoreId,
-    verification_method: &arkret_wire::DidUrl,
-    operation_id: &str,
-    request_digest: &Hash,
-    verifier_id: &arkret_wire::DidCoreId,
-    audience: &arkret_wire::DidCoreId,
-    claim_nonce: &str,
-    keypackage_ref: &str,
-    keypackage_digest: &str,
-) -> Result<arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector, AppError>
-{
-    Ok(arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-        agent_id: agent_id.clone(),
-        verification_method: verification_method.clone(),
-        operation_id: arkret_wire::ProtocolOperationId::new(operation_id.to_owned())
-            .map_err(|error| AppError::internal(format!("Agent evidence operation id invalid: {error}")))?,
-        request_digest: request_digest.clone(),
-        verifier_id: verifier_id.clone(),
-        audience: audience.clone(),
-        challenge: arkret_wire::NonEmptyString::new(format!(
-            "keypackage-claim:{claim_nonce}:{keypackage_ref}:{keypackage_digest}"
-        ))
-        .map_err(|error| AppError::internal(format!("Agent evidence challenge invalid: {error}")))?,
-    })
-}
-
 fn unix_timestamp_datetime(timestamp: i64) -> Result<DateTime<Utc>, AppError> {
     Utc.timestamp_opt(timestamp, 0)
         .single()
@@ -3493,49 +3475,41 @@ mod trust_binding_tests {
     }
 
     #[test]
-    fn native_agent_claim_evidence_is_bound_to_request_and_exact_keypackage() {
-        let agent_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:agent.example".to_owned()).unwrap();
-        let verifier_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:target.example".to_owned()).unwrap();
-        let audience =
-            arkret_wire::DidCoreId::new("ak:did_core:web:requester.example".to_owned()).unwrap();
-        let verification_method =
-            arkret_wire::DidUrl::new("did:web:agent.example#runtime-1".to_owned()).unwrap();
-        let request_digest = Hash::new(format!("sha256:{}", "ab".repeat(32))).unwrap();
-        let selector = agent_claim_evidence_selector(
-            &agent_id,
-            &verification_method,
-            "ak.peer.keys.keypackages.command.claim",
-            &request_digest,
-            &verifier_id,
-            &audience,
-            "nonce-1",
-            "kp-ref-1",
-            "sha256:keypackage",
-        )
-        .unwrap();
-        let arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            request_digest: actual_digest,
-            audience: actual_audience,
-            challenge,
-            ..
-        } = selector
-        else {
-            panic!("claim producer must use current-admission evidence");
-        };
-        assert_eq!(actual_digest, request_digest);
-        assert_eq!(actual_audience, audience);
-        assert_eq!(
-            challenge.as_str(),
-            "keypackage-claim:nonce-1:kp-ref-1:sha256:keypackage"
-        );
-    }
-
-    #[test]
     fn local_claim_terminal_replays_exact_response_and_rejects_nonce_rebinding() {
         let response_value = json!({
             "claims": [],
+            "claim_receipt": {
+                "operation_id": "ak.self.keys.keypackages.command.claim",
+                "claim_request_id": "Y2xhaW0tbm9uY2U",
+                "request_digest": format!("sha256:{}", "c".repeat(64)),
+                "claims_digest": format!("sha256:{}", "d".repeat(64)),
+                "source_service_id": "ak:did_core:web:local.example",
+                "destination_service_id": "ak:did_core:web:local.example",
+                "request": {
+                    "target_principal_id": "ak:did_core:web:alice.example",
+                    "intended_realm_id": "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
+                    "requester": "ak:did_core:web:alice.example",
+                    "required_capabilities": [],
+                    "claim_nonce": "Y2xhaW0tbm9uY2U",
+                    "expires_at": "2099-01-01T00:00:00.000Z",
+                    "holder_acceptance_proof": {
+                        "kind": "detached_jws",
+                        "verification_method": "did:web:alice.example#ak:device:01904100-0000-7000-8000-000000000001",
+                        "payload_digest": format!("sha256:{}", "e".repeat(64)),
+                        "created_at": "2098-12-31T23:59:00.000Z",
+                        "audience": "ak:did_core:web:local.example",
+                        "proof_purpose": "holder_acceptance",
+                        "jws": "a..b"
+                    }
+                },
+                "claimed_at": "2098-12-31T23:59:30.000Z",
+                "expires_at": "2099-01-01T00:00:00.000Z",
+                "signature": {
+                    "kid": "did:web:local.example#notary-key",
+                    "signature_algorithm": "Ed25519",
+                    "sig": "c2ln"
+                }
+            },
             "failures": [],
             "available_count": 7
         });
@@ -3543,7 +3517,7 @@ mod trust_binding_tests {
             serde_json::from_value(response_value).expect("fixture response");
         let response = serde_json::to_value(response).expect("canonical fixture response");
         let record = PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "did:web:local.example".to_owned(),
+            source_service_id: "ak:did_core:web:local.example".to_owned(),
             claim_request_id: "local-last-resort:fixture".to_owned(),
             request_digest: "sha256:first".to_owned(),
             state: "claimed".to_owned(),
@@ -3566,7 +3540,7 @@ mod trust_binding_tests {
         );
 
         let failed = PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "did:web:local.example".to_owned(),
+            source_service_id: "ak:did_core:web:local.example".to_owned(),
             claim_request_id: "local-last-resort:failed-fixture".to_owned(),
             request_digest: "sha256:failed".to_owned(),
             state: "claim_failed".to_owned(),

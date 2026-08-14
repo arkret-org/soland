@@ -710,11 +710,31 @@ async fn verify_mimi_consent_actor_proof(
         AppError::param_invalid(format!("MIMI consent proof binding is invalid: {error}"))
             .with_wire_code("invalid_proof")
     })?;
-    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+    let device_id = proof
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .ok_or_else(|| {
+            AppError::param_invalid("MIMI consent proof method has no device fragment")
+                .with_wire_code("invalid_proof")
+        })?;
+    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned()).map_err(|error| {
+        AppError::param_invalid(format!(
+            "MIMI consent proof method device fragment is invalid: {error}"
+        ))
+        .with_wire_code("invalid_proof")
+    })?;
+    let authority = arkret_wire::PrincipalAuthorityKey::new(
+        body.actor_id.clone(),
+        body.consent_event.event.principal_server_id.clone(),
+    );
+    crate::jws_verify::verify_principal_authorized_jws_with_account_authority_async(
         &binding,
         &proof.jws,
         &proof.verification_method,
-        body.actor_id.as_str(),
+        &authority,
+        &device_id,
         state,
     )
     .await
@@ -1092,12 +1112,13 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 }
 #[cfg(test)]
 mod consent_proof_tests {
-    use arkret_identifiers::{ConsentId, DidFullId, Hash, Hlc, RealmId};
+    use arkret_identifiers::{ConsentId, DeviceId, DidCoreId, DidFullId, Hash, Hlc, RealmId};
     use arkret_models_collaboration::http_bodies::MimiConsentDecision;
     use arkret_wire::{
         Audience, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
     };
     use soland_http::error::ErrorCode;
+    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
     use soland_storage_postgres::Db;
 
     use super::*;
@@ -1111,7 +1132,8 @@ mod consent_proof_tests {
     fn request(state: &AppState) -> MimiUpdateConsentRequestBody {
         let actor_full_id = DidFullId::new("did:web:mimi-proof-test.invalid".to_owned()).unwrap();
         let actor_id = arkret_wire::project_full_id_to_core_id(&actor_full_id).unwrap();
-        let verification_method = format!("{actor_full_id}#cotest");
+        let verification_method =
+            format!("{actor_full_id}#ak:device:01964137-0000-7000-8000-000000000777");
         let consent_id =
             ConsentId::new("ak:consent:01964137-0000-7000-8000-000000000777".to_owned()).unwrap();
         let realm_id =
@@ -1157,6 +1179,141 @@ mod consent_proof_tests {
         request
     }
 
+    fn canonical_event_record(
+        event: &arkret_wire::Event,
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> soland_storage::CanonicalEventRecord {
+        soland_storage::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.to_string(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(event.realm_id.to_string()),
+            kind: event.kind.to_string(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest: event.event_digest().unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().unwrap(),
+            )
+            .unwrap(),
+            envelope: serde_json::to_value(event).unwrap(),
+            received_at,
+        }
+    }
+
+    async fn install_authorized_actor_device(
+        state: &AppState,
+        request: &MimiUpdateConsentRequestBody,
+    ) {
+        let (actor_full_id, device_id) = request
+            .signature
+            .verification_method
+            .as_str()
+            .rsplit_once('#')
+            .expect("device verification method");
+        let actor_full_id = DidFullId::new(actor_full_id.to_owned()).unwrap();
+        let device_id = DeviceId::new(device_id.to_owned()).unwrap();
+        let principal_server_id = request.consent_event.event.principal_server_id.clone();
+        let created_at = now();
+        let genesis = arkret_wire::test_support::raw_event_at(
+            EventKind::RealmCreate.as_str(),
+            ScopeRef::RealmGenesis,
+            request.actor_id.clone(),
+            principal_server_id.clone(),
+            0,
+            Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
+            json!({"fixture": "mimi-consent-authority"}),
+            created_at,
+        )
+        .unwrap();
+        let pcr_realm_id = genesis.realm_id.clone();
+        let signing_key = arkret_signatures::development_signing_key(
+            request.signature.verification_method.as_str(),
+        );
+        let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            signing_key.verifying_key().as_bytes(),
+        );
+        let authorize = arkret_wire::test_support::raw_event_at(
+            EventKind::DeviceAuthorize.as_str(),
+            ScopeRef::Realm {
+                realm_id: pcr_realm_id.clone(),
+            },
+            request.actor_id.clone(),
+            principal_server_id.clone(),
+            1,
+            Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
+            json!({
+                "principal_id": request.actor_id,
+                "device_id": device_id,
+                "device_public_key": device_public_key,
+                "hpke_key": "z6LSTestMimiConsentDeviceHpkeKey",
+                "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+                "authorized_by": request.actor_id,
+                "not_before": "2026-05-25T00:00:00.000Z",
+                "authorization_binding_kind": "registration_anchor",
+                "device_signature": "c2ln"
+            }),
+            created_at,
+        )
+        .unwrap();
+        state
+            .test_persistence()
+            .events()
+            .put(canonical_event_record(&authorize, created_at))
+            .await
+            .unwrap();
+        let resolution = state
+            .test_persistence()
+            .principal_resolutions()
+            .compare_and_set(
+                None,
+                soland_storage::PrincipalResolutionRecord {
+                    authority_key: arkret_wire::PrincipalAuthorityKey::new(
+                        request.actor_id.clone(),
+                        principal_server_id,
+                    ),
+                    pcr_realm_id,
+                    genesis_event: genesis.clone(),
+                    current_event: genesis.clone(),
+                    projection: arkret_models_identity::PrincipalResolutionProjection {
+                        full_id: actor_full_id,
+                        method_history_head: format!("sha256:{}", "1".repeat(64)),
+                        version_id: "1-QmMimiConsentAuthority".to_owned(),
+                        resolution_event_ref: genesis.event_id.to_string(),
+                        updated_at: genesis.created_at,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolution,
+            soland_storage::PrincipalResolutionCasResult::Applied(_)
+        ));
+        state
+            .identities()
+            .save_device(SaveDeviceCommand {
+                actor_id: request.actor_id.to_string(),
+                device_id: device_id.to_string(),
+                display_name: None,
+                device: DeviceIdentity {
+                    actor_id: request.actor_id.to_string(),
+                    device_id: device_id.to_string(),
+                    display_name: None,
+                    verification_state: "verified".to_owned(),
+                    payload: json!({
+                        "device_id": device_id,
+                        "device_public_key": device_public_key,
+                        "device_authorize_event_id": authorize.event_id
+                    }),
+                    created_at,
+                    updated_at: created_at,
+                    revoked_at: None,
+                },
+            })
+            .await
+            .unwrap();
+    }
+
     async fn install_correlation(
         state: &AppState,
         request: &MimiUpdateConsentRequestBody,
@@ -1183,19 +1340,7 @@ mod consent_proof_tests {
     async fn consent_actor_proof_preflight_is_verified_without_consuming_admission() {
         let state = state();
         let request = request(&state);
-        let binding = request.signature_binding_bytes().unwrap();
-        let direct_verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-            &binding,
-            &request.signature.jws,
-            &request.signature.verification_method,
-            request.actor_id.as_str(),
-            &state,
-        )
-        .await;
-        assert!(
-            direct_verification.is_ok(),
-            "direct proof verification failed: {direct_verification:?}"
-        );
+        install_authorized_actor_device(&state, &request).await;
 
         verify_mimi_consent_actor_proof(&state, &request)
             .await
@@ -1203,6 +1348,46 @@ mod consent_proof_tests {
         verify_mimi_consent_actor_proof(&state, &request)
             .await
             .expect("proof preflight must not consume Event admission");
+    }
+
+    #[tokio::test]
+    async fn consent_actor_proof_rejects_wrong_principal_server() {
+        let state = state();
+        let mut request = request(&state);
+        install_authorized_actor_device(&state, &request).await;
+        request.consent_event.event.principal_server_id =
+            DidCoreId::new("ak:did_core:web:other-principal-server.invalid".to_owned()).unwrap();
+        request
+            .consent_event
+            .event
+            .refresh_content_bound_identity()
+            .unwrap();
+
+        let error = verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect_err("a different Principal Server authority must fail closed");
+
+        assert_eq!(error.code, ErrorCode::ParamInvalid);
+        assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
+    }
+
+    #[tokio::test]
+    async fn consent_actor_proof_rejects_wrong_device() {
+        let state = state();
+        let mut request = request(&state);
+        install_authorized_actor_device(&state, &request).await;
+        request.signature.verification_method = arkret_wire::DidUrl::new(
+            "did:web:mimi-proof-test.invalid#ak:device:01964137-0000-7000-8000-000000000778"
+                .to_owned(),
+        )
+        .unwrap();
+
+        let error = verify_mimi_consent_actor_proof(&state, &request)
+            .await
+            .expect_err("an unaccepted device must fail closed");
+
+        assert_eq!(error.code, ErrorCode::ParamInvalid);
+        assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
     }
 
     #[tokio::test]

@@ -1921,9 +1921,6 @@ async fn verify_federated_event_admission(
     else {
         return Err("accepted Event proof set is not closed".to_owned());
     };
-    let producer_bytes = producer
-        .canonical_binding_bytes(&event.actor_id)
-        .map_err(|error| error.to_string())?;
     let producer_multibase = admission
         .producer_signing_key
         .as_str()
@@ -1931,11 +1928,7 @@ async fn verify_federated_event_admission(
         .ok_or_else(|| "admitted producer key is not an Ed25519 did:key".to_owned())?;
     let producer_key = arkret_canonical::decode_ed25519_multibase(producer_multibase)
         .map_err(|error| format!("admitted producer key is invalid: {error}"))?;
-    crate::jws_verify::verify_ed25519_signature_with_public_key(
-        &producer_bytes,
-        &producer.jws,
-        &producer_key,
-    )?;
+    verify_federated_producer_event_proof(event, producer, &producer_key)?;
     let admission_bytes = admission
         .canonical_binding_bytes()
         .map_err(|error| error.to_string())?;
@@ -1951,6 +1944,134 @@ async fn verify_federated_event_admission(
         producer.verification_method.clone(),
         admission.producer_signing_key.clone(),
     ))
+}
+
+/// Verify an admitted producer proof through the SDK's strict Event profile.
+///
+/// A generic detached-JWS verifier is insufficient here: it accepts protected
+/// `kid`, while Event proofs use the closed protected-header shape and also
+/// re-derive `event_digest` from the proof-less envelope bytes.
+fn verify_federated_producer_event_proof(
+    event: &arkret_wire::Event,
+    producer: &arkret_wire::Proof,
+    producer_key: &[u8; 32],
+) -> Result<(), String> {
+    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| format!("federated Event canonicalization failed: {error}"))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof(
+        producer,
+        &envelope_bytes,
+        &event.actor_id,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: producer_key.to_vec(),
+        },
+    )
+    .map_err(|error| format!("admitted producer signature is invalid: {error}"))
+}
+
+#[cfg(test)]
+mod federated_producer_event_proof_tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::verify_federated_producer_event_proof;
+
+    fn fixture_event() -> arkret_wire::Event {
+        let actor = arkret_wire::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
+        let actor_id = arkret_wire::project_full_id_to_core_id(&actor).unwrap();
+        let principal_server_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:remote.example".to_owned()).unwrap();
+        let verification_method = arkret_wire::DidUrl::new(format!(
+            "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000001"
+        ))
+        .unwrap();
+        let created_at = chrono::Utc::now();
+        let mut event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(
+                    "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
+                )
+                .unwrap(),
+            },
+            actor_id,
+            principal_server_id,
+            1,
+            arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
+            serde_json::json!({
+                "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC",
+                "track_name": "discussion",
+                "content": {"kind": "ak.content.text", "body": "strict proof", "format": "plain"}
+            }),
+            created_at,
+        )
+        .unwrap();
+        let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+            [21_u8; 32],
+            actor,
+            verification_method.clone(),
+        );
+        arkret_signatures::sign_event_with_digest_suite(
+            &mut event,
+            &signer,
+            &verification_method,
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        )
+        .unwrap();
+        event
+    }
+
+    fn sign_with_protected_header(
+        proof: &arkret_wire::Proof,
+        actor_id: &arkret_wire::DidCoreId,
+        key: &SigningKey,
+        header: serde_json::Value,
+    ) -> String {
+        let header = URL_SAFE_NO_PAD.encode(
+            arkret_canonical::canonical_json_bytes(&header).expect("canonical protected header"),
+        );
+        let binding = proof
+            .canonical_binding_bytes(actor_id)
+            .expect("canonical Event proof binding");
+        let signing_input = format!("{header}.{}", URL_SAFE_NO_PAD.encode(binding));
+        format!(
+            "{header}..{}",
+            URL_SAFE_NO_PAD.encode(key.sign(signing_input.as_bytes()).to_bytes())
+        )
+    }
+
+    #[test]
+    fn federated_producer_uses_strict_event_header_profile() {
+        let event = fixture_event();
+        let producer = event.proofs[0]
+            .as_producer()
+            .expect("fixture producer proof")
+            .clone();
+        let key = SigningKey::from_bytes(&[21_u8; 32]);
+
+        verify_federated_producer_event_proof(&event, &producer, key.verifying_key().as_bytes())
+            .expect("ordinary Event protected header verifies");
+
+        let mut forbidden_kid = producer.clone();
+        forbidden_kid.jws = sign_with_protected_header(
+            &forbidden_kid,
+            &event.actor_id,
+            &key,
+            serde_json::json!({
+                "alg": "Ed25519",
+                "kid": forbidden_kid.verification_method.as_str()
+            }),
+        );
+        verify_federated_producer_event_proof(
+            &event,
+            &forbidden_kid,
+            key.verifying_key().as_bytes(),
+        )
+        .expect_err("Event protected headers must reject kid even with a valid signature");
+    }
 }
 
 pub(crate) async fn submit_federation_events(
@@ -2484,11 +2605,39 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         };
-        if validate_did(&actor).is_err() {
+        if arkret_wire::DidCoreId::new(actor.clone()).is_err() {
             rejected.push(rejected_item(
                 id,
                 ReasonCode::from_wire("param_invalid"),
-                Some("actor_id must be a DID".to_owned()),
+                Some("actor_id must be a DID Core ID".to_owned()),
+            ));
+            continue;
+        }
+        let event_kind = event_string_field_from_value(&envelope, "kind");
+        let Some(event_principal_server_id) =
+            event_string_field_from_value(&envelope, "principal_server_id")
+        else {
+            rejected.push(rejected_item(
+                id,
+                ReasonCode::from_wire("missing_param"),
+                Some("principal_server_id is required".to_owned()),
+            ));
+            continue;
+        };
+        if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+            state,
+            &actor,
+            &source_service_id,
+            Some(&event_principal_server_id),
+            &binding_realm,
+            event_kind.as_deref(),
+        )
+        .await
+        {
+            rejected.push(rejected_item(
+                id,
+                ReasonCode::from_wire("capability_denied"),
+                Some("actor is outside the authenticated source service authority".to_owned()),
             ));
             continue;
         }
@@ -2500,10 +2649,7 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         }
-        let event_kind = event_string_field_from_value(&envelope, "kind");
-        if event_string_field_from_value(&envelope, "kind").as_deref()
-            == Some(arkret_wire::EventKind::MlsWelcome.as_str())
-        {
+        if event_kind.as_deref() == Some(arkret_wire::EventKind::MlsWelcome.as_str()) {
             let Some(payload) = envelope.get("payload") else {
                 rejected.push(rejected_item(
                     id,
@@ -2749,14 +2895,23 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
+    let event_principal_server_ids = submission
+        .events
+        .iter()
+        .map(|item| item.event.principal_server_id.as_str())
+        .collect::<Vec<_>>();
     if arkret_wire::DidCoreId::new(source_service_id.to_owned()).is_err()
-        || submission.events[0].event.principal_server_id != receipt.issuer_service_id
+        || !direct_founding_origin_ids_match(
+            source_service_id,
+            receipt.issuer_service_id.as_str(),
+            &event_principal_server_ids,
+        )
     {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "founding receipt issuer does not match the founder Event principal server",
+            "authenticated source, founding receipt issuer and every Event principal server must match",
         );
         return;
     }
@@ -2915,6 +3070,44 @@ async fn submit_direct_conversation_federation(
             "the atomic Direct Conversation founding unit is waiting for dependencies",
         ),
         Err(error) => render_submit_one_error(res, error),
+    }
+}
+
+fn direct_founding_origin_ids_match(
+    source_service_id: &str,
+    receipt_issuer_service_id: &str,
+    event_principal_server_ids: &[&str],
+) -> bool {
+    !source_service_id.is_empty()
+        && source_service_id == receipt_issuer_service_id
+        && event_principal_server_ids.len() == 3
+        && event_principal_server_ids
+            .iter()
+            .all(|principal_server_id| *principal_server_id == source_service_id)
+}
+
+#[cfg(test)]
+mod direct_founding_origin_tests {
+    use super::direct_founding_origin_ids_match;
+
+    #[test]
+    fn direct_founding_source_receipt_and_every_event_share_one_origin() {
+        let source = "ak:did_core:web:remote.example";
+        assert!(direct_founding_origin_ids_match(
+            source,
+            source,
+            &[source, source, source]
+        ));
+        assert!(!direct_founding_origin_ids_match(
+            source,
+            source,
+            &[source, "ak:did_core:web:other.example", source]
+        ));
+        assert!(!direct_founding_origin_ids_match(
+            source,
+            "ak:did_core:web:other.example",
+            &[source, source, source]
+        ));
     }
 }
 
@@ -3184,12 +3377,12 @@ mod federation_delivery_binding_tests {
         let now = Utc::now();
         let frontier = event_id(1);
         let result = federation_service_binding_check_from_members(
-            "did:web:local.example",
+            "ak:did_core:web:local.example",
             now,
             std::slice::from_ref(&frontier),
             vec![member_view(
-                "did:web:alice.example",
-                "did:web:local.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:local.example",
                 &frontier,
                 now,
             )],
@@ -3202,12 +3395,12 @@ mod federation_delivery_binding_tests {
     fn federation_service_binding_check_rejects_empty_frontier_as_schema_violation() {
         let now = Utc::now();
         let result = federation_service_binding_check_from_members(
-            "did:web:local.example",
+            "ak:did_core:web:local.example",
             now,
             &[],
             vec![member_view(
-                "did:web:alice.example",
-                "did:web:local.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:local.example",
                 &event_id(1),
                 now,
             )],
@@ -3225,12 +3418,12 @@ mod federation_delivery_binding_tests {
         let old_frontier = event_id(1);
         let new_frontier = event_id(2);
         let result = federation_service_binding_check_from_members(
-            "did:web:old.example",
+            "ak:did_core:web:old.example",
             now,
             std::slice::from_ref(&old_frontier),
             vec![member_view(
-                "did:web:alice.example",
-                "did:web:new.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:new.example",
                 &new_frontier,
                 now - Duration::seconds(60),
             )],
@@ -3240,9 +3433,9 @@ mod federation_delivery_binding_tests {
             FederationServiceBindingCheck::Stale(evidence) => {
                 assert_eq!(
                     evidence.new_recipient_service_id.as_str(),
-                    "did:web:new.example"
+                    "ak:did_core:web:new.example"
                 );
-                assert_eq!(evidence.actor_id.as_str(), "did:web:alice.example");
+                assert_eq!(evidence.actor_id.as_str(), "ak:did_core:web:alice.example");
                 assert_eq!(evidence.handover_frontier, vec![new_frontier]);
             }
             other => panic!("expected stale handover evidence, got {other:?}"),
@@ -3253,12 +3446,12 @@ mod federation_delivery_binding_tests {
     fn federation_service_binding_check_emits_handed_over_after_grace_expires() {
         let now = Utc::now();
         let result = federation_service_binding_check_from_members(
-            "did:web:old.example",
+            "ak:did_core:web:old.example",
             now,
             &[event_id(1)],
             vec![member_view(
-                "did:web:alice.example",
-                "did:web:new.example",
+                "ak:did_core:web:alice.example",
+                "ak:did_core:web:new.example",
                 &event_id(2),
                 now - Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS + 1),
             )],
@@ -3274,19 +3467,19 @@ mod federation_delivery_binding_tests {
     fn federation_service_binding_check_rejects_ambiguous_handover_targets() {
         let now = Utc::now();
         let result = federation_service_binding_check_from_members(
-            "did:web:old.example",
+            "ak:did_core:web:old.example",
             now,
             &[event_id(1)],
             vec![
                 member_view(
-                    "did:web:alice.example",
-                    "did:web:new.example",
+                    "ak:did_core:web:alice.example",
+                    "ak:did_core:web:new.example",
                     &event_id(2),
                     now,
                 ),
                 member_view(
-                    "did:web:bob.example",
-                    "did:web:other.example",
+                    "ak:did_core:web:bob.example",
+                    "ak:did_core:web:other.example",
                     &event_id(3),
                     now,
                 ),

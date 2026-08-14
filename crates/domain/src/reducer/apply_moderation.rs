@@ -208,22 +208,16 @@ impl ProjectionState {
                 {
                     continue;
                 }
-                rank = rank.max(
-                    match value
-                        .get("decision")
-                        .or_else(|| value.get("verdict"))
-                        .and_then(Value::as_str)
-                    {
-                        Some("hard_deny") => 3,
-                        Some("quarantine") => 2,
-                        Some("require_review") => 1,
-                        Some("dismiss" | "soft_deny") | None => 0,
-                        // Corrupt/unregistered values fail closed. Admission never
-                        // emits these, but a damaged projection must not weaken a
-                        // surviving moderation decision.
-                        Some(_) => 3,
-                    },
-                );
+                rank = rank.max(match value.get("decision").and_then(Value::as_str) {
+                    Some("hard_deny") => 3,
+                    Some("quarantine") => 2,
+                    Some("require_review") => 1,
+                    Some("dismiss" | "soft_deny") | None => 0,
+                    // Corrupt/unregistered values fail closed. Admission never
+                    // emits these, but a damaged projection must not weaken a
+                    // surviving moderation decision.
+                    Some(_) => 3,
+                });
             }
         }
         match rank {
@@ -611,7 +605,7 @@ impl ProjectionState {
                 && let Ok(verdict) = appeal_verdict(operation)
             {
                 map.insert(
-                    "verdict".to_owned(),
+                    "decision".to_owned(),
                     serde_json::to_value(verdict)
                         .expect("AppealDecision serialization cannot fail"),
                 );

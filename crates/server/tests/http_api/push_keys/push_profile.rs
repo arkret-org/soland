@@ -395,11 +395,12 @@ async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() 
 async fn push_profile_and_moderation_contracts_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     seed_verified_device_with_public_key(
         &state,
         ALICE,
         ALICE_DEVICE,
-        &test_ed25519_multibase_public(&test_ephemeral_device_signing_key(ALICE, ALICE_DEVICE)),
+        &test_ed25519_multibase_public(&event_signing_key),
     )
     .await;
 
@@ -500,18 +501,52 @@ async fn push_profile_and_moderation_contracts_work() {
         Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
     );
 
+    let reporter = fixture_actor_core_id(ALICE);
+    let actor_records = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(DEMO_REALM_ID)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.actor_id == reporter.as_str())
+        .collect::<Vec<_>>();
+    let actor_seq = actor_records
+        .iter()
+        .map(|record| record.actor_seq)
+        .max()
+        .unwrap_or(0);
+    let prev_refs = actor_records
+        .iter()
+        .filter(|record| record.actor_seq == actor_seq)
+        .map(|record| record.event_id.as_str())
+        .collect::<Vec<_>>();
+    let report_event: arkret_wire::Event = serde_json::from_value(signed_canonical_event(
+        "moderation-report-fixture",
+        arkret_wire::EventKind::SelfModerationReport.as_str(),
+        ALICE,
+        ALICE_DEVICE,
+        DEMO_REALM_ID,
+        actor_seq + 1,
+        prev_refs,
+        serde_json::json!({
+            "realm_id": DEMO_REALM_ID,
+            "target_ref": DEMO_REALM_ID,
+            "report_reason_code": "spam",
+            "reporter": reporter,
+            "provenance": "self"
+        }),
+    ))
+    .unwrap();
+    let report_event_id = report_event.event_id.to_string();
+    let report_request =
+        arkret_models_collaboration::governance::moderation::ModerationReportRequestBody {
+            report_event: arkret_wire::EventInitialSubmission::online(report_event),
+        };
     let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
-        .body(canonical_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            // content-moderation.md §3.1.1: target_ref must resolve to its
-            // actual Realm/effective_scope. The demo Realm is a real visible
-            // target; the former synthetic event id had no projection row.
-            "target_ref": DEMO_REALM_ID,
-            "report_reason_code": "spam",
-            "reporter": "did:web:alice.example"
-        })))
+        .body(canonical_body(&report_request))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -521,23 +556,17 @@ async fn push_profile_and_moderation_contracts_work() {
     assert!(
         state
             .test_persistence()
-            .audit()
-            .snapshot_all()
+            .events()
+            .realm_events_newest_first(DEMO_REALM_ID)
             .await
             .unwrap()
             .iter()
-            .any(|entry| {
-                entry["action"] == "moderation.report" && entry["outcome"] == "submitted"
-            })
+            .any(|record| record.event_id == report_event_id),
+        "a submitted moderation report must be durably represented by its accepted Event"
     );
     let unauthenticated_report = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("content-type", "application/json", true)
-        .body(canonical_body(&serde_json::json!({
-            "realm_id": DEMO_REALM_ID,
-            "target_ref": "ak:event:AVBEDgK8PBa2Re0BFMUv_vNsZ5PfPzJOBnuPK1nMUgx7",
-            "report_reason_code": "spam",
-            "reporter": "did:web:alice.example"
-        })))
+        .body(canonical_body(&report_request))
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated_report.status_code.unwrap().as_u16(), 401);

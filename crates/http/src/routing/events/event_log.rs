@@ -62,7 +62,7 @@ use super::{
     append_audit_log, auth_or_render, is_valid_hash_digest, now, query_param,
     realm_allows_plaintext_service_for_data_class, realm_event_visible_to_session,
     realm_has_member, render_error, sha256_hex, validate_agent_participation_ceiling,
-    validate_agent_reply_participation, validate_content_encryption_floor, validate_did,
+    validate_agent_reply_participation, validate_content_encryption_floor,
     validate_operation_policy, validate_operation_policy_with_plaintext_service_binding,
     validate_operation_semantics, validate_space_id,
 };

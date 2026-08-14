@@ -14,7 +14,7 @@ use super::*;
 const REALM_ID: &str = "ak:realm:AWBLVNs9HeoGO5lSMOgHAujzyX_u-d_6wfDWF_3lEM2J";
 const CALL_ID: &str = "ak:call:Aa5NVuAPR6HTlIsZAgPhBnb3iRqz7fRvyOkiCWbdOaLa";
 const FOCUS_ID: &str = "ak:focus:arkret_native:green";
-const ACTOR_ID: &str = "did:web:alice.example";
+const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
 const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
@@ -136,11 +136,11 @@ fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
     let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     // Flip the signed actor_id without re-signing → signature no longer
     // covers these bytes.
-    binding["actor_id"] = json!("did:web:mallory.example");
+    binding["actor_id"] = json!("ak:did_core:webvh:z6mkmallory");
     let mut op = call_state_op(binding);
     // Keep the participant entry consistent with the tampered binding so the
     // mismatch is caught by the signature, not the field cross-check.
-    op.payload["roster_delta"]["participant"]["actor_id"] = json!("did:web:mallory.example");
+    op.payload["roster_delta"]["participant"]["actor_id"] = json!("ak:did_core:webvh:z6mkmallory");
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("participant_binding_invalid"),
@@ -173,8 +173,8 @@ fn issuer_not_anchored_in_current_epoch_is_rejected_token_issuer_unauthorised() 
     // media-2026-06`.
     install_media_service_with_service_id(
         &state,
-        "did:web:other.example",
-        "did:web:other.example#media-1",
+        "ak:did_core:webvh:z6mkother",
+        "did:webvh:z6mkother:other.example#media-1",
     );
     let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();

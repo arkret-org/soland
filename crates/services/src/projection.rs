@@ -1521,12 +1521,7 @@ impl ProjectionService {
                 .map(ToOwned::to_owned)
         };
         let object_id = || {
-            operation
-                .payload
-                .get("object")
-                .and_then(|value| value.get("id"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
+            arkret_schema::derived_object_id_for_kind(kind.as_str(), &operation.context.event_id)
         };
         let state = self.state.lock();
         if is_circle_kind {

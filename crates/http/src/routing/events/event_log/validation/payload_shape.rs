@@ -351,7 +351,6 @@ mod tests {
     #[test]
     fn ordinary_message_and_exchange_control_outer_payload_pass_the_sidecar_scan() {
         let message = json!({
-            "message_id": "ak:message:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             "strand_id": "ak:strand:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1",
             "content": {"kind": "ak.content.text", "body": "hello"},
             "metadata": {"fields": {"jira_status": "open"}}

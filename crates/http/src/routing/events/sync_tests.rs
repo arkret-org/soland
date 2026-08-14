@@ -1,7 +1,7 @@
 use super::*;
 
 fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
-    crate::test_event::raw_event(
+    let mut event = crate::test_event::raw_event(
         arkret_wire::EventKind::MessageCreate.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(
@@ -17,7 +17,22 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
             "body": body,
         }),
     )
-    .unwrap()
+    .unwrap();
+    let event_digest = arkret_wire::Hash::new(event.event_digest().unwrap()).unwrap();
+    event.proofs = vec![arkret_wire::EventProof::Producer(arkret_wire::Proof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: arkret_wire::DidUrl::new(
+            "did:webvh:z6mkfixture:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
+        )
+        .unwrap(),
+        event_digest,
+        created_at: event.created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: "eyJhbGciOiJFZDI1NTE5In0..c2ln".to_owned(),
+    })];
+    event
 }
 
 #[test]
@@ -327,7 +342,7 @@ fn signal_envelope(
         proof: arkret_wire::SignalProof {
             kind: "detached_jws".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
-                "{sender_actor}#{sender_device}"
+                "{ROSTER_ACTOR_FULL}#{sender_device}"
             ))
             .unwrap(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
@@ -439,7 +454,7 @@ async fn signals_from_two_devices_of_one_principal_stay_independent() {
 #[tokio::test]
 async fn signal_delivery_is_once_per_subscriber_device_watermark() {
     let state = test_state();
-    let subscriber = "did:web:bob.example";
+    let subscriber = "ak:did_core:web:bob.example";
     let subscriber_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
     let sent_at = now();
     state

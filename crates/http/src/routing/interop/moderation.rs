@@ -20,7 +20,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 
-use super::{now, realm_has_member, sha256_hex, validate_did};
+use super::{now, realm_has_member, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
@@ -575,8 +575,8 @@ async fn validate_moderation_franking_proof(
         }
     }
     let received_by = required_string_field(object, "received_by", "franking_proof")?;
-    validate_did(received_by)
-        .map_err(|_| AppError::param_invalid("franking_proof.received_by must be a DID"))?;
+    arkret_wire::DidCoreId::new(received_by.to_owned())
+        .map_err(|_| AppError::param_invalid("franking_proof.received_by must be a DID Core ID"))?;
     let replay_nonce = required_string_field(object, "replay_nonce", "franking_proof")?;
     if !is_valid_replay_nonce(replay_nonce) {
         return Err(AppError::param_invalid(
@@ -692,8 +692,8 @@ fn validate_franking_sender_claim(object: &serde_json::Map<String, Value>) -> Re
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::param_invalid("franking_proof.sender_claim must be an object"))?;
     let actor_id = required_string_field(sender_claim, "actor_id", "franking_proof.sender_claim")?;
-    validate_did(actor_id).map_err(|_| {
-        AppError::param_invalid("franking_proof.sender_claim.actor_id must be a DID")
+    arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|_| {
+        AppError::param_invalid("franking_proof.sender_claim.actor_id must be a DID Core ID")
     })?;
     let device_id =
         required_string_field(sender_claim, "device_id", "franking_proof.sender_claim")?;
@@ -993,7 +993,7 @@ mod report_safety_tests {
     const REALM: &str = "ak:realm:AUFiO2if_pcrsCPNPTKGbSLg0Q25_sBaNHxyQyo5pn7z";
     const TARGET: &str = "ak:message:AUDcGyskAu9_TgDdHy4-tLmIbJp1s_rpjKSw3apHadK8";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
-    const REPORTER: &str = "did:web:alice.example";
+    const REPORTER: &str = "ak:did_core:web:alice.example";
 
     fn test_state() -> AppState {
         let state = AppState::new(
@@ -1087,6 +1087,7 @@ mod report_safety_tests {
 
     fn valid_franking() -> Value {
         let (event_id, ..) = franking_event_fixture();
+        let received_by = crate::test_event::principal_server_id();
         json!({
             "kind": "ak.moderation.franking_proof",
             "franking_proof_id": "ak:franking_proof:01904100-0000-7000-8000-000000000111",
@@ -1100,7 +1101,8 @@ mod report_safety_tests {
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000333",
                 "mls_group_id_digest": hash('f'),
             },
-            "received_by": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+            "received_by": received_by,
+            "verification_method": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key",
             "received_at": FRANKING_RECEIVED_AT,
             "replay_nonce": "nonce_0123456789",
             "signature": "sig",

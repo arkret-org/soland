@@ -209,7 +209,7 @@ fn pin_rejects_quarantined_message_target() {
             "value": {
                 "decision_id": "decision-pin-quarantine",
                 "target_ref": MESSAGE_EVENT_ID,
-                "verdict": "quarantine",
+                "decision": "quarantine",
                 "realm_id": REALM_ID
             }
         }])),

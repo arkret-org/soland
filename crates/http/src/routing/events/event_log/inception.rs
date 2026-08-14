@@ -418,12 +418,11 @@ mod tests {
 
     #[test]
     fn distinct_prev_refs_within_limit_ok() {
-        let refs = json!(["ak:event:e1", "ak:event:e2"]);
+        let first = event_ref(1);
+        let second = event_ref(2);
+        let refs = json!([first, second]);
         let out = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap();
-        assert_eq!(
-            out,
-            vec!["ak:event:e1".to_owned(), "ak:event:e2".to_owned()]
-        );
+        assert_eq!(out, vec![event_ref(1), event_ref(2)]);
     }
 
     #[test]

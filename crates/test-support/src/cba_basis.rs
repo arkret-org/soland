@@ -83,7 +83,7 @@ impl<'a> FixtureBasis<'a> {
     }
 }
 
-type BasisKey = (String, String, String, String, Vec<String>);
+type BasisKey = (String, String, String, String, String, Vec<String>);
 
 static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
@@ -92,6 +92,19 @@ static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
 pub fn realm_basis(
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
+    notary: &str,
+    basis: FixtureBasis<'_>,
+) -> RealmBasis {
+    realm_basis_for_principal_server(realm_id, subject, notary, notary, basis)
+}
+
+/// The sealed genesis unit for an actor whose exact Principal Server differs
+/// from the Realm notary. Federation fixtures use this to preserve the
+/// `(subject, principal_server_id)` capability authority pair.
+pub fn realm_basis_for_principal_server(
+    realm_id: &str,
+    subject: &arkret_identifiers::DidCoreId,
+    principal_server_id: &str,
     notary: &str,
     basis: FixtureBasis<'_>,
 ) -> RealmBasis {
@@ -104,6 +117,7 @@ pub fn realm_basis(
     let key = (
         realm_id.to_owned(),
         subject.to_owned(),
+        principal_server_id.to_owned(),
         notary.to_owned(),
         basis.id_domain.to_owned(),
         actions.clone(),
@@ -117,7 +131,7 @@ pub fn realm_basis(
                 realm_id,
                 subject,
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
-                    principal_server_id: notary,
+                    principal_server_id,
                     notary_authority: Some(notary),
                     data_plane_actions: &actions,
                     fixture_id_domain: basis.id_domain,
@@ -662,6 +676,12 @@ async fn persist_and_project_realm_genesis_event(
             event.created_at,
         )
         .expect("fixture bootstrap follow-up Event");
+        if kind == arkret_wire::EventKind::MemberState {
+            followup.preconditions = vec![crate::signed_event::head_eq_precondition(
+                &format!("ak:cell:ak.component.member.state.v1:{actor_id}"),
+                serde_json::Value::Null,
+            )];
+        }
         followup.prev_refs = vec![previous_event_id];
         followup
             .refresh_content_bound_identity()

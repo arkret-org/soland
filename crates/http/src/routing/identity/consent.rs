@@ -1279,11 +1279,11 @@ mod tests {
 
     #[test]
     fn complete_consent_cell_is_holder_private() {
-        let holder = "did:web:holder.example";
-        let peer = "did:web:peer.example";
+        let holder = "ak:did_core:web:holder.example";
+        let peer = "ak:did_core:web:peer.example";
         assert!(authorize_reader(holder, holder, peer).is_ok());
         assert!(authorize_reader(peer, holder, peer).is_err());
-        assert!(authorize_reader("did:web:other.example", holder, peer).is_err());
+        assert!(authorize_reader("ak:did_core:web:other.example", holder, peer).is_err());
     }
 
     #[test]
@@ -1293,8 +1293,8 @@ mod tests {
         assert_eq!(CONSENT_SCOPE_CASCADE.len(), 5);
     }
 
-    const HOLDER: &str = "did:web:holder.example";
-    const PEER: &str = "did:web:peer.example";
+    const HOLDER: &str = "ak:did_core:web:holder.example";
+    const PEER: &str = "ak:did_core:web:peer.example";
     const CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000041";
     const GRANT_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
     const HOLDER_PCR: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
@@ -1325,6 +1325,7 @@ mod tests {
             "realm_id": HOLDER_PCR,
             "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
             "actor_id": actor,
+            "principal_server_id": "ak:did_core:web:soland.test",
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -1373,7 +1374,7 @@ mod tests {
     fn a_consent_event_authored_by_someone_else_is_rejected() {
         let event = consent_event(
             arkret_wire::EventKind::ConsentGrant.as_str(),
-            "did:web:attacker.example",
+            "ak:did_core:web:attacker.example",
             grant_payload(),
         );
         caller_signed_consent_target(

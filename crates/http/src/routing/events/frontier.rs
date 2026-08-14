@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidFullId, EventId, Hash, RealmId};
+use arkret_identifiers::{DidCoreId, DidFullId, EventId, Hash, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -31,13 +31,13 @@ pub(crate) fn typed_realm_frontier(
 }
 
 /// Convert the actor -> seq upper bound table to the typed
-/// `BTreeMap<DidFullId, u64>` shape.
+/// `BTreeMap<DidCoreId, u64>` shape.
 pub(crate) fn typed_actor_upper_bounds(
     actor_to_seq: impl IntoIterator<Item = (String, u64)>,
-) -> BTreeMap<DidFullId, u64> {
+) -> BTreeMap<DidCoreId, u64> {
     let mut out = BTreeMap::new();
     for (actor, seq) in actor_to_seq {
-        if let Ok(did) = DidFullId::new(actor) {
+        if let Ok(did) = DidCoreId::new(actor) {
             out.insert(did, seq);
         }
     }
@@ -49,7 +49,7 @@ pub(crate) fn typed_actor_upper_bounds(
 /// being folded into a binary Merkle tree.
 pub(crate) fn frontier_root(
     realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
-    actor_upper_bounds: &BTreeMap<DidFullId, u64>,
+    actor_upper_bounds: &BTreeMap<DidCoreId, u64>,
 ) -> Result<Hash, String> {
     let mut heads = BTreeSet::new();
     for events in realm_frontier.values() {
@@ -161,8 +161,12 @@ mod tests {
         DidFullId::new("did:web:alice.example").unwrap()
     }
 
-    fn bob() -> DidFullId {
-        DidFullId::new("did:web:bob.example").unwrap()
+    fn alice_core() -> DidCoreId {
+        DidCoreId::new("ak:did_core:web:alice.example").unwrap()
+    }
+
+    fn bob_core() -> DidCoreId {
+        DidCoreId::new("ak:did_core:web:bob.example").unwrap()
     }
 
     fn event(id: &str) -> EventId {
@@ -187,7 +191,7 @@ mod tests {
                 event("ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"),
             ],
         );
-        let actors = BTreeMap::from_iter(vec![(alice(), 7), (bob(), 3)]);
+        let actors = BTreeMap::from_iter(vec![(alice_core(), 7), (bob_core(), 3)]);
 
         let root_a = frontier_root(&frontier_a, &actors).unwrap();
         let root_b = frontier_root(&frontier_b, &actors).unwrap();
@@ -207,7 +211,7 @@ mod tests {
                 "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             )],
         );
-        let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
+        let actors = BTreeMap::from_iter(vec![(alice_core(), 7)]);
         let root = frontier_root(&frontier, &actors).unwrap();
         let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00.000Z")
             .unwrap()

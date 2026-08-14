@@ -389,7 +389,7 @@ mod tests {
             &state,
             realm_id,
             &controller_id,
-            &realm_meta(controller_full_id.as_str()),
+            &realm_meta(controller_id.as_str()),
         )
         .expect("durable owner should repair the missing projection");
 
@@ -425,7 +425,7 @@ mod tests {
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
             &controller_id,
-            &realm_meta("did:webvh:z6mkfixture:example.test:users:bob"),
+            &realm_meta("ak:did_core:webvh:z6mkfixturebob"),
         )
         .expect_err("mismatched durable ownership must not be overwritten");
 

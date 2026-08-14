@@ -1213,6 +1213,7 @@ mod tests {
     const AGENT: &str = "ak:did_core:webvh:z6mkfixtureagent";
     const AGENT_FULL: &str = "did:webvh:z6mkfixtureagent:agent.example";
     const CONTROLLER: &str = "ak:did_core:web:controller.example";
+    const CONTROLLER_FULL: &str = "did:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
     const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
 
@@ -1227,7 +1228,30 @@ mod tests {
     }
 
     fn did_document() -> Value {
-        json!({"id": AGENT_FULL})
+        json!({
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "id": AGENT_FULL,
+            "alsoKnownAs": [],
+            "service": [
+                {
+                    "id": format!("{AGENT_FULL}#soland"),
+                    "type": "ArkretPrincipalServer",
+                    "serviceEndpoint": "https://agent.example"
+                },
+                {
+                    "id": format!("{AGENT_FULL}#managed-controller"),
+                    "type": "ArkretManagedPrincipalController",
+                    "serviceEndpoint": {
+                        "controller_did": CONTROLLER,
+                        "purposes": [
+                            "agent_control_authoring",
+                            "principal_control_realm_bootstrap",
+                            "principal_control_realm_recovery"
+                        ]
+                    }
+                }
+            ]
+        })
     }
 
     fn pcr_genesis() -> Value {
@@ -1265,7 +1289,7 @@ mod tests {
             .expect("identity-only managed Agent DID document must pass");
 
         let mut wrong_id = did_document();
-        wrong_id["id"] = json!(CONTROLLER);
+        wrong_id["id"] = json!(CONTROLLER_FULL);
         assert!(validate_agent_did_identity_anchor(&wrong_id, &agent_full_id).is_err());
 
         let mut authority_bearing = did_document();
@@ -1336,7 +1360,7 @@ mod tests {
         let mut event = crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
-            crate::test_actor_id_str(AGENT),
+            crate::test_actor_id_str(AGENT_FULL),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({"object": pcr_genesis()}),
@@ -1376,7 +1400,7 @@ mod tests {
     fn recovery_signing_key_cannot_be_used_as_managed_agent_backup_recipient() {
         let now: DateTime<Utc> = "2026-07-15T00:00:00.000Z".parse().unwrap();
         let agreement = RecoveryKeyAgreementEntry {
-            key_agreement_ref: arkret_wire::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
+            key_agreement_ref: arkret_wire::DidUrl::new(format!("{CONTROLLER_FULL}#backup-hpke-1"))
                 .unwrap(),
             key_agreement_algorithm:
                 arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
@@ -1398,7 +1422,7 @@ mod tests {
         ));
         assert!(!current_backup_hpke_agreement(
             &agreement,
-            &format!("{CONTROLLER}#recovery-proof-1"),
+            &format!("{CONTROLLER_FULL}#recovery-proof-1"),
             now
         ));
     }

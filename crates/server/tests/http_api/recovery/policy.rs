@@ -11,7 +11,7 @@ use crate::common::*;
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = shared_recovery_state(persistence.clone());
+    let state = shared_recovery_state(persistence.clone()).await;
     let signing = SigningKey::from_bytes(&[71u8; 32]);
     let (principal_id, vm) = did_webvh_principal(&signing);
 
@@ -19,7 +19,7 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays(
 
     // Restart over the same persistence and verify that the active policy still
     // participates in monotonic version admission.
-    let restarted = shared_recovery_state(persistence.clone());
+    let restarted = shared_recovery_state(persistence.clone()).await;
     let token = recovery_token_for_principal(restarted.clone(), &principal_id).await;
 
     let duplicate_version =
@@ -36,7 +36,7 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_tampered_signature_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
@@ -60,7 +60,8 @@ async fn recovery_policy_production_accepts_verified_payload() {
     let mut config = test_config();
     config.development_mode = false;
     let state =
-        shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
+        shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config)
+            .await;
     let token = "prod_recovery_token";
     let signing = SigningKey::from_bytes(&[77u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
@@ -80,10 +81,10 @@ async fn recovery_policy_production_accepts_verified_payload() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_accepts_genesis_session_device_signature() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let principal_signing = SigningKey::from_bytes(&[82u8; 32]);
     let device_signing = SigningKey::from_bytes(&[83u8; 32]);
-    let (principal_id, _vm) = did_key_principal(&principal_signing);
+    let (principal_id, principal_vm) = did_key_principal(&principal_signing);
     let token = "device_signed_policy_token";
     seed_bearer_session_with_device_public_key(
         &state,
@@ -92,7 +93,11 @@ async fn recovery_policy_accepts_genesis_session_device_signature() {
         &test_ed25519_multibase_public(&device_signing),
     )
     .await;
-    let verification_method = format!("{principal_id}#{RECOVERY_TEST_DEVICE}");
+    let principal_full_id = principal_vm
+        .split_once('#')
+        .map(|(controller, _)| controller)
+        .expect("principal verification method has a Full DID controller");
+    let verification_method = format!("{principal_full_id}#{RECOVERY_TEST_DEVICE}");
     let policy = signed_recovery_policy(
         &device_signing,
         &principal_id,
@@ -102,20 +107,14 @@ async fn recovery_policy_accepts_genesis_session_device_signature() {
         POLICY_FIELDS,
     );
 
-    let body = post_recovery_policy(
-        state,
-        token,
-        &policy,
-        &principal_signing,
-        StatusCode::CREATED,
-    )
-    .await;
+    let body =
+        post_recovery_policy(state, token, &policy, &device_signing, StatusCode::CREATED).await;
     assert_eq!(body["ok"], true);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_missing_signed_field_coverage() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let signing = SigningKey::from_bytes(&[73u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
@@ -141,7 +140,7 @@ async fn recovery_policy_rejects_missing_signed_field_coverage() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
-    let state = shared_recovery_state(persistence.clone());
+    let state = shared_recovery_state(persistence.clone()).await;
     let signing = SigningKey::from_bytes(&[76u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
@@ -155,7 +154,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
     );
     post_recovery_policy(state.clone(), &token, &v1, &signing, StatusCode::CREATED).await;
 
-    let restarted = shared_recovery_state(persistence);
+    let restarted = shared_recovery_state(persistence).await;
     let v2_wrong_supersedes = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -179,7 +178,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_null_without_active_policy() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let signing = SigningKey::from_bytes(&[90u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -202,7 +201,7 @@ async fn recovery_policy_get_returns_null_without_active_policy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_policy_get_returns_active_and_history() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let signing = SigningKey::from_bytes(&[91u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     // Authenticate AS the principal so the read APIs (principal-isolated) see it.
@@ -225,7 +224,10 @@ async fn recovery_policy_get_returns_active_and_history() {
     )
     .await;
     assert_eq!(active["active_policy"]["version"], 2);
-    assert_eq!(active["active_policy"]["principal_id"], principal_id);
+    assert_eq!(
+        active["active_policy"]["principal_id"],
+        fixture_actor_core_id(&principal_id).as_str()
+    );
 
     let history = get_recovery(
         state,

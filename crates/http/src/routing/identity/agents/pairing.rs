@@ -876,13 +876,25 @@ pub(super) fn service_pairing_controller_device_id(
                 "delegated pairing Event must carry a controller device proof",
             )
         })?;
-    let device_id = verification_method
-        .strip_prefix(&format!("{controller_id}#"))
-        .ok_or_else(|| {
+    let (verification_method_principal, device_id) =
+        verification_method.split_once('#').ok_or_else(|| {
             AppError::capability_denied(
                 "delegated pairing Event proof must use a controller verification method",
             )
         })?;
+    let verification_method_controller =
+        arkret_wire::DidFullId::new(verification_method_principal.to_owned())
+            .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id))
+            .map_err(|_| {
+                AppError::capability_denied(
+                    "delegated pairing Event proof must use a controller verification method",
+                )
+            })?;
+    if verification_method_controller.as_str() != controller_id {
+        return Err(AppError::capability_denied(
+            "delegated pairing Event proof must use a controller verification method",
+        ));
+    }
     arkret_wire::DeviceId::new(device_id.to_owned()).map_err(|_| {
         AppError::capability_denied(
             "delegated pairing Event proof must name a typed controller device",
@@ -1919,10 +1931,10 @@ mod requested_scope_tests {
 
     fn agent_record(requested_scope: Option<Value>) -> AgentPrincipalRecord {
         let mut record = AgentPrincipalRecord::new(
-            "did:webvh:agent.example:agents:test".to_owned(),
-            "did:webvh:controller.example:users:test".to_owned(),
+            "ak:did_core:web:agent.example".to_owned(),
+            "ak:did_core:web:controller.example".to_owned(),
             "ak:realm:ASt7OPzypn1OkvoZOKtcz8H8ydfZ7fLDhL3nI1jLWTfX".to_owned(),
-            arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
+            arkret_wire::DidUrl::new("did:web:controller.example#controller").unwrap(),
             AgentLifecycleState::Active,
             chrono::Utc::now(),
         );
@@ -2024,7 +2036,7 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8529")
                 .expect("valid account uuid"),
         );
-        record.recipient_service_id = Some("did:webvh:soland.example".to_owned());
+        record.recipient_service_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
             Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
 

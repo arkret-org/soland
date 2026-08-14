@@ -70,7 +70,6 @@ pub(crate) async fn validate_device_authorization_binding(
             DeviceAuthorizationBindingKind::AcceptedDevice,
             DeviceOrPrincipalRef::DeviceId(authorizer),
         ) => {
-            let expected_method = format!("{actor_id}#{authorizer}");
             let proof_methods = event
                 .proofs
                 .iter()
@@ -78,9 +77,12 @@ pub(crate) async fn validate_device_authorization_binding(
                 .map(|proof| proof.verification_method.as_str())
                 .collect::<Vec<_>>();
             if proof_methods.is_empty()
-                || proof_methods
-                    .iter()
-                    .any(|method| *method != expected_method.as_str())
+                || proof_methods.iter().any(|method| {
+                    crate::jws_verify::validate_verification_method_controller(actor_id, method)
+                        .is_err()
+                        || method.rsplit_once('#').map(|(_, fragment)| fragment)
+                            != Some(authorizer.as_str())
+                })
             {
                 return Err(device_authorization_invalid(
                     "accepted_device authorization must be Event-signed by the declared authorizing device",

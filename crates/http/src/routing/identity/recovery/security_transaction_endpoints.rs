@@ -1503,7 +1503,9 @@ async fn continue_issue_terminal_receipt(
     let unsigned_completion = arkret_wire::UnsignedRecoveryCompletionAttestation::new(
         completion_attestation_body,
         arkret_wire::DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            crate::routing::federation::federation_service_signature_key_id(
+                state.service_full_id().as_str(),
+            ),
         )
         .map_err(|error| {
             AppError::internal(format!(

@@ -250,7 +250,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXcqvP9Thao2eXqknSBLXjG8NxtO5wk_BeJVsTgbCqoP";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -1625,12 +1625,6 @@ impl AppState {
 }
 
 impl AppState {
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_set_service_id(&mut self, service_id: String) {
-        self.service_id = service_id;
-    }
-
     #[cfg(test)]
     pub(crate) fn test_persistence(
         &self,
@@ -1950,12 +1944,14 @@ mod membership_hydration_tests {
         received_at: chrono::DateTime<chrono::Utc>,
     ) -> CanonicalEventRecord {
         let kind = kind.as_ref();
+        let actor_id = arkret_wire::DidCoreId::new(actor_id.to_owned())
+            .unwrap_or_else(|_| crate::test_actor_id_str(actor_id));
         let event = crate::test_event::raw_event_at(
             kind,
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(realm_id).unwrap(),
             },
-            crate::test_actor_id_str(&actor_id),
+            actor_id.clone(),
             actor_seq,
             arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
             payload,
@@ -1971,7 +1967,7 @@ mod membership_hydration_tests {
         let envelope = serde_json::to_value(event).unwrap();
         CanonicalEventRecord {
             event_id,
-            actor_id: actor_id.to_owned(),
+            actor_id: actor_id.to_string(),
             actor_seq,
             realm_id: Some(realm_id.to_owned()),
             kind: kind.to_owned(),
@@ -2311,7 +2307,7 @@ mod membership_hydration_tests {
         use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
 
         let store = SolandMemoryPersistenceStore::new();
-        let actor = "did:web:alice.example";
+        let actor = "ak:did_core:web:alice.example";
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
         let now = chrono::Utc::now();
@@ -2325,7 +2321,7 @@ mod membership_hydration_tests {
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "device_generation_ref": "device-generation-ref-1"
+                "device_generation_ref": "1-device-generation-ref"
             },
             "issued_at": "2026-07-18T00:00:00.000Z",
             "auth_data": {
@@ -2398,7 +2394,7 @@ mod membership_hydration_tests {
             "previous_series_ids": [],
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "device_generation_ref": "device-generation-ref-1"
+                "device_generation_ref": "1-device-generation-ref"
             },
             "issued_at": "2026-07-18T00:01:00.000Z",
             "auth_data": {

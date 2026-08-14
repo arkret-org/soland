@@ -10,6 +10,7 @@ use soland_storage::RealmMetaRecord;
 use super::common::*;
 
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
+const PEER_SOURCE_ID: &str = "ak:did_core:web:remote.example";
 const PEER_DELIVERY_FRONTIER: &str = "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD";
 
 fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningKey {
@@ -33,12 +34,41 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     // transported DataEvent's `seal_ref` resolves locally. Without it every
     // inbound Event is deferred as `federation_dependencies_pending` before the
     // check under test is ever reached.
-    seed_test_realm_basis_seal(state, TEST_REALM_ID, "did:web:alice.example").await;
+    seed_test_realm_basis_seal_for_principal_server(
+        state,
+        TEST_REALM_ID,
+        "did:web:alice.example",
+        PEER_SOURCE_ID,
+    )
+    .await;
     let now = Utc::now();
+    let alice = fixture_actor_core_id("did:web:alice.example").to_string();
     state.test_projection().lock().members.insert(
-        (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
+        (TEST_REALM_ID.to_owned(), alice.clone()),
         soland_domain::reducer::SolandMembershipState {
-            member: "did:web:alice.example".to_owned(),
+            member: alice,
+            realm_id: TEST_REALM_ID.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_id: Some(PEER_SOURCE_ID.to_owned()),
+            recipient_service_resolution: None,
+            membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+    // The destination binding is a Realm-wide receiver frontier, distinct
+    // from Alice's exact origin authority pair. Keep a local routable member
+    // on that frontier so the inbound destination is current while Alice is
+    // hosted by the authenticated remote Principal Server.
+    state.test_projection().lock().members.insert(
+        (TEST_REALM_ID.to_owned(), "did:web:bob.example".to_owned()),
+        soland_domain::reducer::SolandMembershipState {
+            member: "did:web:bob.example".to_owned(),
             realm_id: TEST_REALM_ID.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -77,8 +107,7 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
         .collect();
     signed_event_envelope(fixture_label, actor_seq + 1, frontier_event_ids)
 }
-const SERVICE_ID: &str =
-    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+const SERVICE_ID: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 const DESTINATION_TRUST_DOMAIN: &str = "ak:trust_domain:soland.local";
 const TEST_REALM_ID: &str = DEMO_REALM_ID;
 const TEST_CIRCLE_ID: &str = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
@@ -90,12 +119,33 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
 }
 
 fn resign_federation_event(event: Value) -> Value {
+    resign_federation_event_as(event, "did:web:alice.example")
+}
+
+fn resign_federation_event_as(event: Value, actor_full_id: &str) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
-    let verification_method = arkret_wire::DidUrl::new("did:web:alice.example#cotest")
-        .expect("fixture verification method is a DID URL");
+    event.principal_server_id = arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
+        .expect("fixture peer source is a service core ID");
+    if event.seal_ref.is_some() {
+        event.seal_ref = Some(
+            test_realm_basis_for_principal_server(
+                event.realm_id.as_str(),
+                actor_full_id,
+                PEER_SOURCE_ID,
+            )
+            .seal
+            .id,
+        );
+    }
+    let verification_method = soland_test_support::signed_event::fixture_verification_method(
+        actor_full_id,
+        "01904100-0000-7000-8000-a11ce0000001",
+    );
+    let producer_seed = arkret_signatures::development_signing_key_seed(&verification_method);
+    let producer_signing_key = ed25519_dalek::SigningKey::from_bytes(&producer_seed);
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        arkret_signatures::development_signing_key_seed(&verification_method),
+        producer_seed,
         arkret_identity::verification_method_did(verification_method.as_str()).unwrap(),
         verification_method.clone(),
     );
@@ -108,6 +158,63 @@ fn resign_federation_event(event: Value) -> Value {
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .expect("federation fixture signs with its development verification method");
+    let producer = event.proofs[0]
+        .as_producer()
+        .expect("fixture has one producer proof")
+        .clone();
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &producer.jws,
+            &producer
+                .canonical_binding_bytes(&event.actor_id)
+                .expect("fixture producer binding canonicalizes"),
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: producer_signing_key.verifying_key().as_bytes().to_vec(),
+            },
+        )
+        .expect("fixture producer signature verifies against its admitted key");
+    let admission_verification_method =
+        arkret_wire::DidUrl::new(format!("{PEER_SOURCE_DID}#notary-key"))
+            .expect("fixture admission verification method is a DID URL");
+    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
+        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        verification_method: admission_verification_method.clone(),
+        event_digest: producer.event_digest.clone(),
+        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
+            &producer,
+        )
+        .expect("fixture producer proof digest"),
+        producer_verification_method: producer.verification_method.clone(),
+        producer_signing_key: arkret_wire::DidKey::new(format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                producer_signing_key.verifying_key().as_bytes()
+            )
+        ))
+        .expect("fixture producer signing key is a did:key"),
+        accepted_at: event.created_at,
+        jws: String::new(),
+    };
+    let admission_bytes = admission
+        .canonical_binding_bytes()
+        .expect("fixture admission binding canonicalizes");
+    admission.jws = URL_SAFE_NO_PAD.encode(
+        publication_signing_key(admission_verification_method.as_str())
+            .sign(&admission_bytes)
+            .to_bytes(),
+    );
+    soland_http::jws_verify::verify_ed25519_signature_with_public_key(
+        &admission_bytes,
+        &admission.jws,
+        publication_signing_key(admission_verification_method.as_str())
+            .verifying_key()
+            .as_bytes(),
+    )
+    .expect("fixture admission signature verifies against the installed peer key");
+    event.proofs.push(admission.into());
+    event
+        .validate_principal_server_admission_binding()
+        .expect("fixture admission proof binds the accepted Event");
     serde_json::to_value(event).expect("federation fixture serializes")
 }
 
@@ -148,7 +255,7 @@ async fn peer_events_describe_advertises_formal_surface() {
 #[tokio::test]
 async fn peer_events_query_and_frontier_use_peer_surface() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
+    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
     let mut event = signed_event_envelope(
         "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD",
         1,
@@ -157,7 +264,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
     let created_at = Utc::now();
     event["created_at"] =
         serde_json::json!(arkret_canonical::format_timestamp_canonical(created_at));
-    resign_canonical_event(&mut event);
+    event = resign_federation_event(event);
     let expected_event_id = authored_event_id(&event).to_owned();
     put_event_record(&state, event, created_at).await;
 
@@ -385,7 +492,7 @@ async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
 #[tokio::test]
 async fn peer_events_frontier_exposes_current_sibling_heads() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
+    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
     let now = Utc::now();
     let mut expected_heads = Vec::new();
     for (idx, event_id) in [
@@ -426,7 +533,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
         );
     }
     assert_eq!(
-        frontier["actor_seq_upper_bounds"]["did:web:alice.example"],
+        frontier["actor_seq_upper_bounds"][fixture_actor_core_id("did:web:alice.example").as_str()],
         42
     );
 }
@@ -446,8 +553,8 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     );
     // Re-author the envelope as an actor that is neither hosted by the source
     // service authority nor a member of the demo Realm's membership index.
-    event["actor_id"] = serde_json::json!("did:web:intruder.evil");
-    resign_canonical_event(&mut event);
+    event["actor_id"] = serde_json::json!(fixture_actor_core_id("did:web:intruder.evil").as_str());
+    event = resign_federation_event_as(event, "did:web:intruder.evil");
     let body = peer_submit_body(&event);
     let target = "http://server/_arkret/peer/events";
     let mut submit = TestClient::post(target).json(&body);
@@ -560,7 +667,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
 #[tokio::test]
 async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:bob.example").await;
+    seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:bob.example").await;
     install_test_circle(&state, TEST_CIRCLE_ID, &["did:web:alice.example"]);
     let now = Utc::now();
     put_event_record(
@@ -576,7 +683,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     .await;
     let hidden_event_id = "ak:event:ATq9Ua5Klw2I-KCZo-6gt8LNi-Z31nyaZaZVZI1sMp5X";
     let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
-    event["actor_id"] = serde_json::json!("did:web:alice.example");
+    event["actor_id"] = serde_json::json!(fixture_actor_core_id("did:web:alice.example").as_str());
     // The Circle security scope of a message is the producer-SIGNED
     // `scope_ref` (`conformance/encoding.md` §6, and the spec's
     // `circle-scope-fixture.json`: message payloads carry no `scope_circle_id`
@@ -591,7 +698,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     event["created_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(
         now - ChronoDuration::seconds(5)
     ));
-    resign_canonical_event(&mut event);
+    event = resign_federation_event(event);
     put_event_record(&state, event, now - ChronoDuration::seconds(10)).await;
 
     let query_target = "http://server/_arkret/peer/events";

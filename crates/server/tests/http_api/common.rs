@@ -82,8 +82,15 @@ pub(crate) fn test_config() -> AppConfig {
 }
 
 pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
-    let mut state = soland_test_support::app_state(test_config());
-    state.test_set_service_id(service_id.to_owned());
+    if let Ok(full_id) = arkret_wire::DidFullId::new(service_id.to_owned()) {
+        return soland_test_support::app_state_with_service_full_id(test_config(), full_id);
+    }
+    let state = soland_test_support::app_state(test_config());
+    assert_eq!(
+        state.service_id(),
+        service_id,
+        "a core-only test service id must match the fixture identity"
+    );
     state
 }
 
@@ -434,14 +441,18 @@ fn signed_federation_request_headers(
         source_trust_domain_override,
         idempotency_key,
     } = request;
+    let origin_full_id = arkret_wire::DidFullId::new(origin.to_owned())
+        .expect("federation test origin must be a full DID");
+    let origin_service_id = arkret_wire::project_full_id_to_core_id(&origin_full_id)
+        .expect("federation test origin must project to a service core ID");
     let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = source_trust_domain_override
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| trust_domain_from_service_id(origin));
+        .unwrap_or_else(|| trust_domain_from_service_id(origin_full_id.as_str()));
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
-    let keyid = format!("{origin}#federation-fanout-key");
+    let keyid = format!("{origin_full_id}#federation-fanout-key");
     let covered_components = if idempotency_key.is_some() {
         "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"idempotency-key\""
     } else {
@@ -456,7 +467,7 @@ fn signed_federation_request_headers(
          \"@target-uri\": {target_uri}\n\
          \"@authority\": {authority}\n\
          \"content-digest\": {content_digest}\n\
-         \"source-service-id\": {origin}\n\
+         \"source-service-id\": {origin_service_id}\n\
          \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}",
@@ -465,10 +476,11 @@ fn signed_federation_request_headers(
         signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
     }
     signature_base.push_str(&format!("\n\"@signature-params\": {signature_params}"));
-    let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
+    let signature =
+        development_service_signing_key(origin_service_id.as_str()).sign(signature_base.as_bytes());
     let mut headers = vec![
         ("content-digest", content_digest),
-        ("source-service-id", origin.to_owned()),
+        ("source-service-id", origin_service_id.to_string()),
         ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),
         (
@@ -1558,26 +1570,44 @@ pub(crate) async fn seed_verified_device_with_public_key(
     device_public_key: &str,
 ) {
     let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
+    let actor = fixture_actor_core_id(actor).to_string();
+    let persistence = state.test_persistence();
+    let devices = persistence.devices();
+    let mut record = devices
+        .get(&actor, device_id)
+        .await
+        .unwrap()
+        .unwrap_or_else(|| soland_storage::DeviceInventoryRecord {
+            actor: actor.clone(),
             device_id: device_id.to_owned(),
             display_name: Some("Directory Test Device".to_owned()),
             verification_state: "verified".to_owned(),
             payload: serde_json::json!({
                 "device_id": device_id,
                 "verification": "verified",
-                "device_public_key": device_public_key,
                 "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
             }),
             created_at: now,
             updated_at: now,
             revoked_at: None,
-        })
-        .await
-        .unwrap();
+        });
+    record.actor = actor;
+    record.verification_state = "verified".to_owned();
+    record.revoked_at = None;
+    record.updated_at = now;
+    let payload = record
+        .payload
+        .as_object_mut()
+        .expect("fixture device payload is an object");
+    payload.insert(
+        "device_public_key".to_owned(),
+        Value::String(device_public_key.to_owned()),
+    );
+    payload.insert(
+        "verification".to_owned(),
+        Value::String("verified".to_owned()),
+    );
+    devices.put(&record).await.unwrap();
 }
 
 /// Project an accepted `ak.device.authorize` fixture so strict principal-device
@@ -1813,6 +1843,44 @@ fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBas
         notary,
         HTTP_API_FIXTURE_BASIS,
     )
+}
+
+pub(crate) fn test_realm_basis_for_principal_server(
+    realm_id: &str,
+    subject: &str,
+    principal_server_id: &str,
+) -> TestRealmBasis {
+    let subject_core = fixture_actor_core_id(subject);
+    soland_test_support::cba_basis::realm_basis_for_principal_server(
+        realm_id,
+        &subject_core,
+        principal_server_id,
+        &fixture_notary_did(),
+        HTTP_API_FIXTURE_BASIS,
+    )
+}
+
+pub(crate) async fn seed_test_realm_basis_seal_for_principal_server(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+    principal_server_id: &str,
+) -> arkret_wire::SealId {
+    let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let basis = test_realm_basis_for_principal_server(realm_id, subject, principal_server_id);
+    state.test_put_seal(&basis.seal).unwrap();
+    state
+        .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .unwrap();
+    for grant in &basis.grants {
+        if let Some(grant) =
+            soland_domain::reducer::engine_grant_from_cell_body(&grant.grant_id, &grant.body, false)
+        {
+            state.upsert_projected_grant_for_test(grant);
+        }
+    }
+    seed_realm_genesis_event(state, realm_id, "did:web:alice.example").await;
+    basis.seal.id
 }
 
 /// The service DID every fixture Realm designates as its notary.
@@ -2811,7 +2879,7 @@ pub(crate) async fn persist_test_message_with_actor_seq(
         event_id: event_id.clone(),
         message_id: event_id.replacen("ak:event:", "ak:message:", 1),
         realm_id: realm_id.to_owned(),
-        sender: sender.to_owned(),
+        sender: fixture_actor_core_id(sender).to_string(),
         thread_id: expected_strand_id_for_scope(realm_id),
         content: serde_json::json!({"body": body}),
         encrypted: false,

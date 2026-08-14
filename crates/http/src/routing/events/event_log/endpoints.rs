@@ -1054,6 +1054,18 @@ async fn events_frontier(
                 && record.state != AgentLifecycleState::Deactivated
         })
         .map(|record| record.principal_control_realm_id);
+    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|_| AppError::internal("local principal server id is invalid"))?;
+    let actor_authority =
+        arkret_wire::PrincipalAuthorityKey::new(actor_id.clone(), principal_server_id);
+    let own_actor_pcr = state
+        .persistence()
+        .principal_resolution_by_authority_key(&actor_authority)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("principal resolution lookup failed: {error}"))
+        })?
+        .map(|resolution| resolution.pcr_realm_id.to_string());
     let records = state
         .event_queries()
         .canonical_events_for_actor(actor_id.as_str())
@@ -1067,7 +1079,8 @@ async fn events_frontier(
     realm_ids.dedup();
     let mut realms = Vec::new();
     for realm_value in realm_ids {
-        let visible = managed_actor_pcr.as_deref() == Some(realm_value.as_str())
+        let visible = own_actor_pcr.as_deref() == Some(realm_value.as_str())
+            || managed_actor_pcr.as_deref() == Some(realm_value.as_str())
             || crate::routing::spaces::space::realm_id_accessible(
                 state,
                 &realm_value,

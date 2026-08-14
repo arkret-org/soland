@@ -638,15 +638,14 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
 
-    let audit_events: Value = TestClient::get(
-        "http://server/_soland/admin/audit/events?actor=did:web:alice.example&limit=50",
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
+    let audit_actor = fixture_actor_core_id("did:web:alice.example");
+    let audit_events: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=50")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
     let status_transitions: Vec<&Value> = audit_events["events"]
         .as_array()
         .expect("audit events array")
@@ -659,10 +658,10 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
         "only accepted status transitions should be audited"
     );
     let first_transition = &status_transitions[0]["payload"];
-    assert_eq!(status_transitions[0]["actor"], "did:web:alice.example");
+    assert_eq!(status_transitions[0]["actor"], audit_actor.as_str());
     assert_eq!(status_transitions[0]["outcome"], "accepted");
     assert_eq!(first_transition["kind"], "incident.status.transition");
-    assert_eq!(first_transition["actor"], "did:web:alice.example");
+    assert_eq!(first_transition["actor"], audit_actor.as_str());
     assert_eq!(first_transition["strand_id"], task_strand_id);
     assert_eq!(first_transition["incident_id"], task_strand_id);
     assert_eq!(first_transition["realm_id"], DEMO_REALM_ID);
@@ -676,7 +675,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     );
 
     let second_transition = &status_transitions[1]["payload"];
-    assert_eq!(second_transition["actor"], "did:web:alice.example");
+    assert_eq!(second_transition["actor"], audit_actor.as_str());
     assert_eq!(second_transition["strand_id"], task_strand_id);
     assert_eq!(second_transition["incident_id"], task_strand_id);
     assert_eq!(second_transition["realm_id"], DEMO_REALM_ID);

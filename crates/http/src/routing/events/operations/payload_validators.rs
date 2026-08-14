@@ -791,7 +791,6 @@ pub fn validate_encrypted_payload_envelope(
 
 #[cfg(test)]
 mod tests {
-    use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;
 
     use super::validate_encrypted_payload_envelope;

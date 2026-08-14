@@ -85,7 +85,7 @@ pub(crate) async fn get_recovery(
     body
 }
 
-pub(crate) fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
+pub(crate) async fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
     let mut config = test_config();
     config.embedded_webvh_provider_enabled = true;
     if !config
@@ -95,14 +95,14 @@ pub(crate) fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> A
     {
         config.did_resolver_allow_methods.push("webvh".to_owned());
     }
-    soland_test_support::app_state_with_persistence(config, persistence)
+    soland_test_support::app_state_with_persistence(config, persistence).await
 }
 
-pub(crate) fn shared_recovery_state_with_config(
+pub(crate) async fn shared_recovery_state_with_config(
     persistence: Arc<dyn PersistenceStore>,
     config: soland_http::config::AppConfig,
 ) -> AppState {
-    soland_test_support::app_state_with_persistence(config, persistence)
+    soland_test_support::app_state_with_persistence(config, persistence).await
 }
 
 pub(crate) async fn seed_recovery_policy(
@@ -387,9 +387,6 @@ pub(crate) async fn post_recovery_policy(
     event_signing_key: &SigningKey,
     expected_status: StatusCode,
 ) -> Value {
-    let principal_id = policy["principal_id"]
-        .as_str()
-        .expect("recovery policy principal_id");
     let verification_method = arkret_wire::DidUrl::new(
         policy["auth_data"]["verification_method"]
             .as_str()
@@ -607,10 +604,11 @@ pub(crate) async fn post_recovery_policy(
         covered.insert(event_digest.clone());
         let control_root =
             arkret_state::control_event_set_root(&covered).expect("recovery policy control root");
+        let notary_full_id = state.service_full_id();
         let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
             [0x62; 32],
-            arkret_identifiers::DidFullId::new(principal_id.to_owned()).unwrap(),
-            arkret_wire::DidUrl::new(format!("{principal_id}#recovery-policy-notary")).unwrap(),
+            notary_full_id.clone(),
+            arkret_wire::DidUrl::new(format!("{notary_full_id}#recovery-policy-notary")).unwrap(),
         );
         let successor = arkret_wire::Seal::sign_single_kind_with_control_root(
             realm,

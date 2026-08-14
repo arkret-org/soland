@@ -47,6 +47,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let alice = "did:web:alice.example";
+    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_key = SigningKey::from_bytes(&[61u8; 32]);
     let alice_device_public = test_ed25519_multibase_public(&alice_device_key);
@@ -83,7 +84,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": [alice_device]}
+            "device_keys": {(alice_core.as_str()): [alice_device]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -91,7 +92,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .await
         .unwrap();
     assert!(query["device_keys"].is_object());
-    let alice_desktop = &query["device_keys"][alice][alice_device];
+    let alice_desktop = &query["device_keys"][alice_core.as_str()][alice_device];
     assert_eq!(
         alice_desktop["algorithms"]["signed_curve25519:otk1"]["key"],
         "one-time"
@@ -149,7 +150,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("Idempotency-Key", "bad-txn", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": {
                         "kind": "ak.mls.welcome",
                         "content": "not-an-object",
@@ -181,7 +182,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": device_message.clone()
                 }
             }
@@ -198,7 +199,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header("Idempotency-Key", "txn1", true)
         .json(&serde_json::json!({
             "messages": {
-                "did:web:alice.example": {
+                (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": device_message
                 }
             }
@@ -631,16 +632,21 @@ async fn auth_keys_device_messages_and_blobs_work() {
     // exactly once, and no unrequested one appears.
     let registered_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let unregistered_device = "ak:device:01904100-0000-7000-8000-71551c000004";
-    let notify: PushNotifyOutcome = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&push_notify_request(
-            push_target_id,
-            &[registered_device, unregistered_device],
-        ))
+    let notify_request =
+        push_notify_request(push_target_id, &[registered_device, unregistered_device]);
+    let mut notify_response = TestClient::post("http://server/_arkret/edge/push/notify")
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(&notify_request)
+                .expect("canonical push notification request"),
+        )
         .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+        .await;
+    let notify_status = notify_response.status_code;
+    let notify_body: Value = notify_response.take_json().await.unwrap();
+    assert_eq!(notify_status, Some(StatusCode::OK), "body={notify_body}");
+    let notify: PushNotifyOutcome = serde_json::from_value(notify_body.clone())
+        .unwrap_or_else(|error| panic!("typed push outcome: {error}; body={notify_body}"));
 
     assert_eq!(
         notify.push_target_id, push_target_id,
@@ -726,6 +732,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let state = soland_test_support::app_state(test_config());
 
     let alice = "did:web:alice.example";
+    let alice_core = core_principal(alice);
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
     let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
@@ -746,14 +753,14 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
-            "device_keys": { alice: [alice_device] }
+            "device_keys": {(alice_core.as_str()): [alice_device]}
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][alice][alice_device];
+    let entry = &query["device_keys"][alice_core.as_str()][alice_device];
     assert_eq!(
         entry["device_signing_key"], expected_principal_id_key,
         "expected authoritative did:key, got {entry}"
@@ -765,7 +772,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let mut revoked = state
         .test_persistence()
         .devices()
-        .get(alice, alice_device)
+        .get(alice_core.as_str(), alice_device)
         .await
         .unwrap()
         .unwrap();
@@ -780,14 +787,14 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     let post_revoke: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .json(&serde_json::json!({
-            "device_keys": { alice: [alice_device] }
+            "device_keys": {(alice_core.as_str()): [alice_device]}
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let revoked_entry = &post_revoke["device_keys"][alice][alice_device];
+    let revoked_entry = &post_revoke["device_keys"][alice_core.as_str()][alice_device];
     assert_eq!(revoked_entry["device_status"], "revoked");
     assert!(revoked_entry["device_signing_key"].is_null());
     assert!(
@@ -804,12 +811,14 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
     let state = soland_test_support::app_state(test_config());
 
     let bob = "did:web:bob.example";
+    let bob_core = core_principal(bob);
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_device_key = SigningKey::from_bytes(&[204u8; 32]);
     let bob_device_multibase = test_ed25519_multibase_public(&bob_device_key);
     let expected_principal_id_key = format!("did:key:{bob_device_multibase}");
     seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_multibase).await;
     let carol = "did:web:carol.example";
+    let carol_core = core_principal(carol);
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
     let carol_device_multibase = test_ed25519_multibase_public(&carol_device_key);
@@ -834,7 +843,7 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
         .test_projection()
         .lock()
         .members
-        .get_mut(&(DEMO_REALM_ID.to_owned(), bob.to_owned()))
+        .get_mut(&(DEMO_REALM_ID.to_owned(), bob_core.to_string()))
         .expect("Bob membership projection exists")
         .state = "ban".to_owned();
 
@@ -843,8 +852,8 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
         .add_header("authorization", format!("Bearer {alice}"), true)
         .json(&serde_json::json!({
             "device_keys": {
-                bob: [bob_device],
-                carol: [carol_device]
+                (bob_core.as_str()): [bob_device],
+                (carol_core.as_str()): [carol_device]
             }
         }))
         .send(&app_from_state(state.clone()))
@@ -852,11 +861,11 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][bob][bob_device];
+    let entry = &query["device_keys"][bob_core.as_str()][bob_device];
     assert_eq!(entry["device_status"], "active", "query body: {query}");
     assert_eq!(entry["device_signing_key"], expected_principal_id_key);
     assert!(
-        query["device_keys"].get(carol).is_none(),
+        query["device_keys"].get(carol_core.as_str()).is_none(),
         "never-member key material must remain hidden: {query}"
     );
 }
@@ -1029,7 +1038,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "device_keys": { alice: [alice_device] }
+            "device_keys": {(alice_core.as_str()): [alice_device]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -1048,6 +1057,7 @@ async fn keys_query_exposes_accepted_device_anchor() {
 #[tokio::test]
 async fn keys_query_hides_revoked_device() {
     let state = soland_test_support::app_state(test_config());
+    let alice_core = core_principal("did:web:alice.example");
     let desktop = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -1132,7 +1142,7 @@ async fn keys_query_hides_revoked_device() {
     let pre_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
+            "device_keys": {(alice_core.as_str()): ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
         }))
         .send(&app_from_state(state.clone()))
         .await
@@ -1140,12 +1150,12 @@ async fn keys_query_hides_revoked_device() {
         .await
         .unwrap();
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        pre_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
-        pre_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-9b04e0000007"]
+        pre_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-9b04e0000007"]
             ["algorithms"]["signed_curve25519:phone"]["key"],
         "phone-device-key"
     );
@@ -1171,19 +1181,19 @@ async fn keys_query_hides_revoked_device() {
     let post_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
         .json(&serde_json::json!({
-            "device_keys": {"did:web:alice.example": ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
+            "device_keys": {(alice_core.as_str()): ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
         }))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let revoked_phone = &post_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-9b04e0000007"];
+    let revoked_phone = &post_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-9b04e0000007"];
     assert_eq!(revoked_phone["device_status"], "revoked");
     assert!(revoked_phone["device_signing_key"].is_null());
     assert!(revoked_phone["algorithms"].as_object().unwrap().is_empty());
     assert_eq!(
-        post_revoke_query["device_keys"]["did:web:alice.example"]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        post_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
@@ -1192,6 +1202,7 @@ async fn keys_query_hides_revoked_device() {
 #[tokio::test]
 async fn revoked_device_blocks_encrypted_writes() {
     let state = soland_test_support::app_state(test_config());
+    let alice_core = core_principal("did:web:alice.example");
     let stale_session = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
@@ -1219,7 +1230,7 @@ async fn revoked_device_blocks_encrypted_writes() {
         .test_persistence()
         .devices()
         .get(
-            "did:web:alice.example",
+            alice_core.as_str(),
             "ak:device:01904100-0000-7000-8000-30b11e000005",
         )
         .await

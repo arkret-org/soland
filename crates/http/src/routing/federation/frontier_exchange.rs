@@ -335,7 +335,7 @@ mod tests {
         let body = serde_json::json!({
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "heads": [],
-            "issuer": "did:web:peer.example",
+            "issuer": "ak:did_core:webvh:z6mkpeer",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
             "observed_at": "2026-01-01T00:00:00.000Z",
             "signature": {"value": "c2ln"}
@@ -345,7 +345,7 @@ mod tests {
         assert!(
             validate_frontier_response(
                 &state,
-                "did:web:peer.example",
+                "ak:did_core:webvh:z6mkpeer",
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"
             )
             .is_ok()
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(
             validate_frontier_response(
                 &state,
-                "did:web:other.example",
+                "ak:did_core:webvh:z6mkother",
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"
             )
             .unwrap_err(),

@@ -1263,7 +1263,8 @@ mod tests {
 
     use super::*;
 
-    const LIFECYCLE_ACTOR: &str = "did:web:owner.example";
+    const LIFECYCLE_ACTOR: &str = "ak:did_core:web:owner.example";
+    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
     const LIFECYCLE_REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
 
     fn realm_lifecycle_event(kind: &str, actor: &str, realm_id: &str) -> arkret_wire::Event {
@@ -1273,6 +1274,7 @@ mod tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -1292,7 +1294,7 @@ mod tests {
             },
             soland_storage_postgres::Db { pool: None },
         );
-        let invitee = "did:web:bob.example";
+        let invitee = "ak:did_core:web:bob.example";
         let invited_at = "2026-08-14T00:00:00.000Z".parse().unwrap();
         state
             .realm_invites()
@@ -1323,7 +1325,7 @@ mod tests {
             realm_member_invited_or_joined_at_for_id(
                 &state,
                 LIFECYCLE_REALM,
-                "did:web:mallory.example"
+                "ak:did_core:web:mallory.example"
             )
             .await,
             None
@@ -1377,7 +1379,7 @@ mod tests {
             &arkret_wire::EventKind::RealmArchive,
             &realm_lifecycle_event(
                 arkret_wire::EventKind::RealmArchive.as_str(),
-                "did:web:someone-else.example",
+                "ak:did_core:web:someone-else.example",
                 LIFECYCLE_REALM,
             ),
         )

@@ -88,7 +88,7 @@ mod tests {
 
     use super::*;
 
-    const ACTOR: &str = "did:web:alice.example";
+    const ACTOR: &str = "ak:did_core:web:alice.example";
     const BACKUP_ID: &str = "ak:backup:01964137-0000-7000-8000-000000000001";
     const DEVICE_ID: &str = "ak:device:01964137-0000-7000-8000-000000000001";
 

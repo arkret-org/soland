@@ -159,12 +159,16 @@ mod tests {
         DidCoreId::new("ak:did_core:web:alice.example").unwrap()
     }
 
+    fn principal_server() -> DidCoreId {
+        DidCoreId::new("ak:did_core:web:principal.example").unwrap()
+    }
+
     fn genesis_event() -> Event {
         arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
-            DidCoreId::from(principal()),
-            DidCoreId::from(principal()),
+            principal(),
+            principal_server(),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"sequence": 0}),
@@ -179,8 +183,8 @@ mod tests {
             ScopeRef::Realm {
                 realm_id: genesis.realm_id.clone(),
             },
-            DidCoreId::from(principal()),
-            DidCoreId::from(principal()),
+            principal(),
+            principal_server(),
             1,
             Hlc::new("019f00000000-0001-00000001").unwrap(),
             serde_json::json!({"sequence": 1}),
@@ -191,10 +195,7 @@ mod tests {
 
     fn record(genesis: &Event, current: Event) -> PrincipalResolutionRecord {
         PrincipalResolutionRecord {
-            authority_key: PrincipalAuthorityKey::new(
-                principal(),
-                DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-            ),
+            authority_key: PrincipalAuthorityKey::new(principal(), principal_server()),
             pcr_realm_id: genesis.realm_id.clone(),
             genesis_event: genesis.clone(),
             projection: PrincipalResolutionProjection {

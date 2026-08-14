@@ -335,6 +335,7 @@ mod cba_capability_cell_tests {
                     "id": grant_id,
                     "realm_id": realm_id,
                     "issuer": "ak:did_core:web:owner.example",
+                    "issuer_principal_server_id": "ak:did_core:web:owner.example",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": realm_id,
@@ -343,6 +344,7 @@ mod cba_capability_cell_tests {
                         "authority_generation": 0
                     }],
                     "subject": "ak:did_core:web:owner.example",
+                    "subject_principal_server_id": "ak:did_core:web:owner.example",
                     "actions": ["ak.realm.admin"],
                     "capability_action_registry_digest": registry_digest,
                     "resources": [{
@@ -2141,10 +2143,16 @@ mod agent_key_tests {
 
     fn op(event_kind: EventKind, mut payload: serde_json::Value) -> Operation {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000ff";
+        let issuer = payload
+            .get("grant")
+            .and_then(|grant| grant.get("issuer"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(REALM_OWNER)
+            .to_owned();
         let object = payload.as_object_mut().expect("test payload object");
         object
             .entry("sender".to_owned())
-            .or_insert_with(|| serde_json::Value::String(REALM_OWNER.to_owned()));
+            .or_insert_with(|| serde_json::Value::String(issuer));
         if let Some(accepted_event_id) = object.remove("accepted_event_id") {
             object.insert("event_id".to_owned(), accepted_event_id);
         }
@@ -2886,6 +2894,7 @@ mod authority_cycle_tests {
                 )
                 .expect("fixture grant is Event-derived")
                 .to_string(),
+                "sender": "ak:did_core:web:alice.example",
                 "grant": {
                     "issuer": "ak:did_core:web:alice.example",
                     "issuer_authority_refs": [
@@ -2916,6 +2925,7 @@ mod authority_cycle_tests {
             arkret_wire::EventKind::CapabilityGrant.as_str(),
             json!({
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
+                "sender": issuer,
                 "grant": {
                     "issuer": issuer,
                     "issuer_authority_refs": [{
@@ -2926,6 +2936,7 @@ mod authority_cycle_tests {
                         "authority_generation": 0
                     }],
                     "subject": subject,
+                    "subject_principal_server_id": subject,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -3337,6 +3348,7 @@ mod realm_owner_authority_tests {
             arkret_wire::EventKind::CapabilityGrant.as_str(),
             json!({
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
+                "sender": issuer,
                 "grant": {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,

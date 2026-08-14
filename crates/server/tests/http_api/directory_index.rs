@@ -197,8 +197,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let service_id = soland_test_support::fixture_principal_server_id().to_string();
     config.trust_domain =
         arkret_identifiers::TrustDomainId::new(trust_domain_from_service_id(&service_id)).unwrap();
-    let mut state = soland_test_support::app_state(config);
-    state.test_set_service_id(service_id);
+    let state = soland_test_support::app_state(config);
     let did = "did:web:registered-handle.example";
     let device = "ak:device:01904100-0000-7000-8000-00000000a11c";
     seed_did_document_also_known_as(&state, did, &["acct:alice@local.host"]).await;
@@ -267,8 +266,9 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
 
 #[tokio::test]
 async fn directory_resolve_handle_invite_accepts_canonical_handles_without_contact() {
-    let state =
-        test_state_with_service_id(soland_test_support::fixture_principal_server_id().as_str());
+    let mut config = test_config();
+    config.public_base_url = "https://local.host".to_owned();
+    let state = soland_test_support::app_state(config);
     let alice = dev_token(state.clone()).await;
     // resolve_handle only discloses handles with an account_localparts binding
     // (discovery-directory.md §9 resolve_handle); register bob with the canonical
@@ -346,7 +346,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     let body: Value = resolved.take_json().await.unwrap();
     assert_eq!(resolved_status, StatusCode::OK, "resolve response: {body}");
     assert_eq!(
-        body["did"],
+        body["principal_id"],
         fixture_actor_core_id("did:web:bob.example").as_str()
     );
     assert_eq!(body["handle"], "bob-example:local.host");
@@ -407,7 +407,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         .json(&serde_json::json!({
             "handle": "bob:remote.example",
             "intent": "invite",
-            "requester": "did:web:alice.example",
+            "requester": fixture_actor_core_id("did:web:alice.example"),
             "realm_id": realm_id,
             "audience": realm_id,
         }))

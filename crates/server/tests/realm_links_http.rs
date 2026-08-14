@@ -54,13 +54,6 @@ fn canonical_body<T: serde::Serialize>(body: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(body).expect("canonical operation body")
 }
 
-fn ed25519_public_multibase(signing: &SigningKey) -> String {
-    let mut bytes = Vec::with_capacity(34);
-    bytes.extend_from_slice(&[0xed, 0x01]);
-    bytes.extend_from_slice(signing.verifying_key().as_bytes());
-    format!("z{}", bs58::encode(bytes).into_string())
-}
-
 /// A session plus the device key the submitted Events are signed with.
 ///
 /// The Move is admitted on the caller's own signature now, so the device
@@ -84,21 +77,8 @@ async fn prepare_alice(state: &AppState) -> String {
         .unwrap();
     let token = login["session_credential"].as_str().unwrap().to_owned();
     let signing = SigningKey::from_bytes(&FIXTURE_EVENT_SIGNING_SEED);
-    let mut device = state
-        .test_persistence()
-        .devices()
-        .get(alice_core.as_str(), ALICE_DEVICE)
-        .await
-        .unwrap()
-        .unwrap();
-    device.payload["device_public_key"] = json!(ed25519_public_multibase(&signing));
-    device.verification_state = "verified".to_owned();
-    state
-        .test_persistence()
-        .devices()
-        .put(&device)
-        .await
-        .unwrap();
+    soland_test_support::project_authorized_principal_device(state, ALICE, ALICE_DEVICE, &signing)
+        .await;
     token
 }
 

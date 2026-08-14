@@ -133,7 +133,7 @@ fn signed_control_proof(
 #[tokio::test]
 async fn organization_registration_http_round_trip_and_get_are_non_enumerable() {
     let mut config = test_config();
-    config.admin_principal_dids = vec!["did:web:alice.example".to_owned()];
+    config.admin_principal_dids = vec![fixture_actor_core_id("did:web:alice.example").to_string()];
     let mut state = soland_test_support::app_state(config);
     let persistence = state.test_persistence();
     let (organization_id, full_id, admin_id, pinned, control_signer) = organization_fixture();
@@ -343,7 +343,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable() 
     let unauthorized_body: serde_json::Value = unauthorized.take_json().await.unwrap();
 
     let mut absent = TestClient::get(
-        "http://server/_arkret/root/identity/organization-registrations?organization_id=did:webvh:z6mkfixture:absent.example",
+        "http://server/_arkret/root/identity/organization-registrations?organization_id=ak:did_core:webvh:z6mkfixtureabsentexample",
     )
     .add_header("authorization", format!("Bearer {bob_token}"), true)
     .send(&app)

@@ -451,7 +451,8 @@ mod caller_signed_link_tests {
 
     use super::*;
 
-    const ACTOR: &str = "did:web:alice.example";
+    const ACTOR: &str = "ak:did_core:web:alice.example";
+    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const TARGET: &str = "ak:realm:Aecquu2ZIUwLuIg7DMz4btG1XlSYIhHHpmDNMl1Z2E4s";
 
@@ -462,6 +463,7 @@ mod caller_signed_link_tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
+            "principal_server_id": PRINCIPAL_SERVER,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -499,7 +501,7 @@ mod caller_signed_link_tests {
     #[test]
     fn an_event_signed_by_someone_else_is_rejected() {
         caller_signed_realm_link_edge(
-            "did:web:bob.example",
+            "ak:did_core:web:bob.example",
             REALM,
             None,
             &link_event(ACTOR, REALM, active_edge()),

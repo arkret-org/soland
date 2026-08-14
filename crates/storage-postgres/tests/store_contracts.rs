@@ -13,8 +13,9 @@ use soland_storage::{
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgContactStore, PgControlProposalAuthorityAckStore,
     PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
-    PgFederationOutboxStore, PgIdempotencyStore, PgMimiConsentCorrelationStore,
-    PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgFederationOutboxStore, PgIdempotencyStore, PgInviteReceivePolicyStore,
+    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
+    PgProjectionEventStore,
 };
 
 #[tokio::test]
@@ -107,7 +108,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
     let outbox = PgFederationOutboxStore { pool: pool.clone() };
     let device_pairings = soland_storage_postgres::PgDevicePairingStore { pool: pool.clone() };
     let contacts = PgContactStore { pool: pool.clone() };
-    let invite_policies = soland_storage_postgres::PgInviteReceivePolicyStore { pool };
+    let invite_policies = PgInviteReceivePolicyStore { pool: pool.clone() };
     let namespace = format!("postgres-event-commit-{}", uuid::Uuid::now_v7());
     assert_event_commit_unit_of_work_contract(
         EventCommitContractStores {

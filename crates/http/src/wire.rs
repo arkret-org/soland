@@ -1451,8 +1451,8 @@ mod tests {
         assert_eq!(
             value["privacy_derivation"]["push_target_id"]["input_binding"],
             json!([
-                "recipient_service_id",
-                "principal_id",
+                "recipient_did_core_id",
+                "did_core_id",
                 "device_id",
                 "push_route_id",
                 "salt_epoch_id"

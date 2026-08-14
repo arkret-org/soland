@@ -340,9 +340,7 @@ async fn verifying_key_for_service_id(
     {
         return Ok(key);
     }
-    let development_method =
-        crate::routing::federation::federation_service_signature_key_id(service_id);
-    if state.config().development_mode && verification_method == development_method {
+    if state.config().development_mode && verification_method.ends_with("#federation-fanout-key") {
         tracing::warn!(
             service_id,
             "development_mode accepted deterministic federation service key fallback"

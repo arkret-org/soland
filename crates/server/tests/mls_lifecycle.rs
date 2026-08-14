@@ -277,6 +277,124 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
+async fn project_authorized_principal_device(
+    state: &AppState,
+    principal_full_id: &str,
+    device_id: &str,
+    signing_key: &SigningKey,
+) -> String {
+    let principal_full = arkret_identifiers::DidFullId::new(principal_full_id.to_owned()).unwrap();
+    let principal_id = arkret_wire::project_full_id_to_core_id(&principal_full).unwrap();
+    let principal_server_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let pcr_realm_id = arkret_identifiers::RealmId::new(
+        soland_test_support::fixture_principal_control_realm(principal_full_id),
+    )
+    .unwrap();
+    soland_test_support::cba_basis::seed_realm_genesis_event(
+        state,
+        pcr_realm_id.as_str(),
+        principal_full_id,
+    )
+    .await;
+    let genesis_record = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(pcr_realm_id.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .expect("PCR genesis Event");
+    let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
+    let now = Utc::now();
+    let mut authorize = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: pcr_realm_id.clone(),
+        },
+        principal_id.clone(),
+        principal_server_id.clone(),
+        1,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
+        json!({
+            "principal_id": principal_id,
+            "device_id": device_id,
+            "device_public_key": ed25519_public_multibase(signing_key),
+            "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": principal_id,
+            "not_before": "2026-05-25T00:00:00.000Z",
+            "authorization_binding_kind": "registration_anchor",
+            "device_signature": "c2ln"
+        }),
+        now,
+    )
+    .unwrap();
+    authorize.prev_refs = vec![genesis.event_id.clone()];
+    authorize.refresh_content_bound_identity().unwrap();
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+            "ak:operation:",
+        ))
+        .unwrap(),
+        arkret_wire::OperationKind::Create,
+        None,
+        &authorize,
+    )
+    .unwrap();
+    let authorize_event_id = authorize.event_id.to_string();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &authorize,
+            Some(pcr_realm_id.as_str()),
+            now,
+        ))
+        .await
+        .unwrap();
+    let authority_key =
+        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    if state
+        .test_persistence()
+        .principal_resolutions()
+        .by_authority_key(&authority_key)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        let applied = state
+            .test_persistence()
+            .principal_resolutions()
+            .compare_and_set(
+                None,
+                soland_storage::PrincipalResolutionRecord {
+                    authority_key,
+                    pcr_realm_id: pcr_realm_id.clone(),
+                    genesis_event: genesis.clone(),
+                    current_event: genesis.clone(),
+                    projection: arkret_models_identity::PrincipalResolutionProjection {
+                        full_id: principal_full,
+                        method_history_head: format!("sha256:{}", "1".repeat(64)),
+                        version_id: "1-QmMlsLifecycleAuthority".to_owned(),
+                        resolution_event_ref: genesis.event_id.to_string(),
+                        updated_at: genesis.created_at,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            applied,
+            soland_storage::PrincipalResolutionCasResult::Applied(_)
+        ));
+    }
+    soland_test_support::project_accepted_operations(state, principal_id.as_str(), &[operation])
+        .await;
+    authorize_event_id
+}
+
 #[tokio::test]
 async fn mls_lifecycle_end_to_end() {
     let state = soland_test_support::app_state(test_config());
@@ -290,26 +408,9 @@ async fn mls_lifecycle_end_to_end() {
     )
     .unwrap();
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
-    let mut alice_device_record = state
-        .test_persistence()
-        .devices()
-        .get(alice_core.as_str(), alice_device)
-        .await
-        .unwrap()
-        .unwrap();
-    alice_device_record.payload["device_public_key"] =
-        json!(ed25519_public_multibase(&event_signing_key));
     let alice_device_authorize_event_id =
-        soland_test_support::fixture_content_bound_id("ak:event:");
-    alice_device_record.payload["device_authorize_event_id"] =
-        json!(alice_device_authorize_event_id.clone());
-    alice_device_record.verification_state = "verified".to_owned();
-    state
-        .test_persistence()
-        .devices()
-        .put(&alice_device_record)
-        .await
-        .unwrap();
+        project_authorized_principal_device(&state, alice_did, alice_device, &event_signing_key)
+            .await;
     let realm_genesis = CallerSignedEvent::realm_genesis(
         alice_did,
         alice_device,
@@ -348,12 +449,12 @@ async fn mls_lifecycle_end_to_end() {
         serde_json::from_value(json!({
             "principal_id": alice_core,
             "device_id": alice_device,
-            "key_packages": [
+            "keypackages": [
                 {
                     "keypackage_id": keypackage_id,
                     "keypackage_ref": uploaded_keypackage_ref,
                     "keypackage_digest": keypackage_digest.clone(),
-                    "key_package": b64(keypackage_bytes),
+                    "keypackage": b64(keypackage_bytes),
                     "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                     "capabilities": capabilities.clone(),
                     "expires_at": "2100-01-01T00:00:00.000Z",
@@ -363,7 +464,7 @@ async fn mls_lifecycle_end_to_end() {
                     "keypackage_id": keypackage_id_mismatch,
                     "keypackage_ref": mismatch_keypackage_ref,
                     "keypackage_digest": mismatch_keypackage_digest,
-                    "key_package": b64(mismatch_keypackage_bytes),
+                    "keypackage": b64(mismatch_keypackage_bytes),
                     "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                     "capabilities": mismatch_capabilities,
                     "expires_at": "2100-01-01T00:00:00.000Z",
@@ -458,6 +559,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     let claims = claim_json["claims"].as_array().expect("claims array");
     assert_eq!(claims.len(), 1);
+    let self_claim_receipt = claim_json["claim_receipt"].clone();
     assert_eq!(claims[0]["keypackage_ref"], json!(uploaded_keypackage_ref));
     assert_eq!(claims[0]["keypackage_digest"], json!(keypackage_digest));
     assert_eq!(claims[0]["capabilities"], capabilities);
@@ -568,11 +670,11 @@ async fn mls_lifecycle_end_to_end() {
         serde_json::from_value(json!({
             "principal_id": bob_core,
             "device_id": bob_device,
-            "key_packages": [{
+            "keypackages": [{
                 "keypackage_id": lifecycle_keypackage_id,
                 "keypackage_ref": lifecycle_keypackage_ref,
                 "keypackage_digest": lifecycle_keypackage_digest,
-                "key_package": b64(lifecycle_keypackage_bytes),
+                "keypackage": b64(lifecycle_keypackage_bytes),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": lifecycle_capabilities,
                 "expires_at": arkret_canonical::format_timestamp_canonical(
@@ -772,6 +874,7 @@ async fn mls_lifecycle_end_to_end() {
         "claim_id": claim_id,
         "requester_actor_id": alice_core,
         "requester_device_id": alice_device,
+        "requester_device_authorize_event_id": alice_device_authorize_event_id,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02.000Z",
@@ -812,6 +915,7 @@ async fn mls_lifecycle_end_to_end() {
                 "device_authorize_event_id": claimed_device_authorize_event_id
             },
             "claim_envelope": claim_envelope,
+            "self_claim_receipt": self_claim_receipt,
             "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00.000Z",

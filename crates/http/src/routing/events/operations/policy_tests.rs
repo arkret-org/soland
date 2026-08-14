@@ -11,6 +11,10 @@ use soland_storage_postgres::Db;
 
 use super::*;
 
+const ALICE_FULL_ID: &str = "did:webvh:z6mkalice:alice.example";
+const ALICE_CORE_ID: &str = "ak:did_core:webvh:z6mkalice";
+const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
+
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
         object_storage: crate::config::ObjectStorageConfig::local(
@@ -33,10 +37,9 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     )
     .unwrap();
     let now = chrono::Utc::now();
-    let alice_full =
-        arkret_identifiers::DidFullId::new("did:web:alice.example".to_owned()).unwrap();
+    let alice_full = arkret_identifiers::DidFullId::new(ALICE_FULL_ID.to_owned()).unwrap();
     let alice = crate::test_actor_id(&alice_full);
-    let bob = crate::test_actor_id_str("did:web:bob.example");
+    let bob = crate::test_actor_id_str("did:webvh:z6mkbob:bob.example");
     let mut realm_create = op(
         realm_id.clone(),
         "000000000691",
@@ -105,15 +108,15 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                "did:web:alice.example".to_owned(),
-                "did:web:bob.example".to_owned(),
+                ALICE_CORE_ID.to_owned(),
+                "ak:did_core:webvh:z6mkbob".to_owned(),
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: now,
         },
         DirectConversationEndorsement {
-            actor_id: "did:web:alice.example".to_owned(),
+            actor_id: ALICE_CORE_ID.to_owned(),
             binding_event_ref: "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
         },
     );
@@ -175,6 +178,9 @@ fn op(
     let executed_by = payload
         .as_object_mut()
         .and_then(|payload| payload.remove("executed_by"));
+    let sender = payload
+        .as_object_mut()
+        .and_then(|payload| payload.remove("sender"));
     let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!(
             "ak:operation:01904100-0000-7000-8000-{seed}"
@@ -184,8 +190,17 @@ fn op(
         kind.as_ref(),
         payload,
     );
+    operation.context.principal_server_id = crate::test_event::principal_server_id();
     if let Some(executed_by) = executed_by {
         operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
+    }
+    if let Some(sender) = sender {
+        let sender = match sender.as_str().unwrap() {
+            "ak:did_core:web:alice.example" => ALICE_CORE_ID,
+            "ak:did_core:web:agent.example" => AGENT_CORE_ID,
+            sender => sender,
+        };
+        operation.context.sender = arkret_identifiers::DidCoreId::new(sender.to_owned()).unwrap();
     }
     operation
 }
@@ -208,16 +223,16 @@ fn canonical_event_storage_identity(
 fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::Value {
     json!({
         "schema": "ak.schema.accountability_grant.v1",
-        "sender": "ak:did_core:web:alice.example",
-        "issuer": "ak:did_core:web:alice.example",
-        "subject": "ak:did_core:web:agent.example",
+        "sender": ALICE_CORE_ID,
+        "issuer": ALICE_CORE_ID,
+        "subject": AGENT_CORE_ID,
         "accountability_scope": "agent_operator",
         "not_before": "2026-01-01T00:00:00.000Z",
         "expires_at": expires_at,
         "grant_status": status,
         "proof": {
             "kind": "detached_jws",
-            "verification_method": "did:web:alice.example#key-1",
+            "verification_method": format!("{ALICE_FULL_ID}#key-1"),
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
             "jws": "AAAA.BBBB.CCCC"
@@ -345,6 +360,30 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
+fn install_projected_grant(
+    authorization: &soland_services::authorization::AuthorizationService,
+    realm_id: String,
+    issuer: String,
+    subject: String,
+    resource: String,
+    actions: Vec<String>,
+    constraints: Vec<crate::authz::Constraint>,
+) -> crate::authz::Grant {
+    let mut grant = crate::authz::projected_grant_fixture(
+        realm_id,
+        issuer,
+        subject,
+        resource,
+        actions,
+        constraints,
+    );
+    let principal_server_id = crate::test_event::principal_server_id().into_string();
+    grant.issuer_principal_server_id = principal_server_id.clone();
+    grant.subject_principal_server_id = Some(principal_server_id);
+    authorization.upsert_projected_grant(grant.clone());
+    grant
+}
+
 fn signed_device_authorize_payload(
     device_signer: &SigningKey,
     signing_key: &SigningKey,
@@ -359,7 +398,7 @@ fn signed_device_authorize_payload(
             device_signer.verifying_key().as_bytes(),
         )
     );
-    let principal_id = crate::test_actor_id_str("did:web:alice.example");
+    let principal_id = crate::test_actor_id_str(ALICE_FULL_ID);
     let unsigned = UnsignedDeviceAuthorizePayload::new(
         principal_id.clone(),
         arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6")
@@ -424,7 +463,7 @@ fn grant_circle_action(
     actor: &str,
     action: &str,
 ) {
-    crate::authz::install_projected_grant(
+    install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -444,7 +483,7 @@ fn grant_moderation_decision(
     realm_id: &arkret_identifiers::RealmId,
     actor: &str,
 ) {
-    crate::authz::install_projected_grant(
+    install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -465,7 +504,7 @@ fn grant_call_action(
     actor: &str,
     action: &str,
 ) {
-    crate::authz::install_projected_grant(
+    install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
@@ -826,9 +865,9 @@ async fn register_agent_selection(
 ) {
     let mut record = soland_services::identity::AgentPairingState::new(
         agent_id.to_owned(),
-        "did:web:alice.example".to_owned(),
+        ALICE_CORE_ID.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{agent_id}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{ALICE_FULL_ID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         chrono::Utc::now(),
     );
@@ -869,19 +908,19 @@ async fn register_native_agent_membership_context(
     encrypted: bool,
     with_claimable_keypackage: bool,
 ) {
-    let controller = "did:web:alice.example";
-    let agent = "did:web:agent.example";
+    let controller = ALICE_CORE_ID;
+    let agent = AGENT_CORE_ID;
     let now = chrono::Utc::now();
     let mut record = soland_storage::AgentPrincipalRecord::new(
         agent.to_owned(),
         controller.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{ALICE_FULL_ID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         now,
     );
     record.agent_slug = Some("summary".to_owned());
-    let verification_method = "did:web:agent.example#runtime-1";
+    let verification_method = "did:webvh:z6mkfixtureagent:agent.example#runtime-1";
     let (authorize_event_id, authorize_canonical_digest, authorize_canonical_bytes) =
         canonical_event_storage_identity(&json!({
             "kind": arkret_wire::EventKind::AgentKeyAuthorize,
@@ -909,7 +948,7 @@ async fn register_native_agent_membership_context(
         "expires_at": "2099-01-01T00:00:00.000Z",
         "proof": {
             "kind": "detached_jws",
-            "verification_method": "did:web:alice.example#key-1",
+            "verification_method": format!("{ALICE_FULL_ID}#key-1"),
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
             "jws": "test"
@@ -1010,12 +1049,7 @@ async fn register_native_agent_membership_context(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        arkret_wire::DidCoreId::from(
-            arkret_wire::project_full_id_to_core_id(
-                &arkret_identifiers::DidFullId::new(agent.to_owned()).unwrap(),
-            )
-            .unwrap(),
-        ),
+        arkret_wire::DidCoreId::new(agent.to_owned()).unwrap(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0001-000007d2").unwrap(),
         authorize_payload.clone(),
@@ -1098,8 +1132,8 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
         "0000000007d1",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "ak:did_core:web:alice.example",
-            "actor_id": "did:web:agent.example",
+            "sender": ALICE_CORE_ID,
+            "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
             "delivery_status": "unroutable"
@@ -1126,8 +1160,8 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
         "0000000007d2",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "ak:did_core:web:alice.example",
-            "actor_id": "did:web:agent.example",
+            "sender": ALICE_CORE_ID,
+            "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
             "delivery_status": "unroutable"
@@ -1151,8 +1185,8 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
         "0000000007d3",
         arkret_wire::EventKind::MemberState,
         json!({
-            "sender": "ak:did_core:web:alice.example",
-            "actor_id": "did:web:agent.example",
+            "sender": ALICE_CORE_ID,
+            "actor_id": AGENT_CORE_ID,
             "membership": "join",
             "reason": "controller_add_agent",
             "delivery_status": "unroutable"
@@ -1167,7 +1201,7 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
 fn agent_context(agent_id: &str, authorization_ref: &str) -> serde_json::Value {
     json!({
         "agent_id": agent_id,
-        "operator_or_controller": "did:web:alice.example",
+        "operator_or_controller": ALICE_CORE_ID,
         "authorization_ref": authorization_ref,
         "execution_purpose": "test_action",
     })
@@ -1184,7 +1218,7 @@ fn reply_message(
         seed,
         arkret_wire::EventKind::MessageCreate,
         json!({
-            "sender": crate::test_actor_id_str(agent_id),
+            "sender": agent_id,
             "content": [{"type": "text", "text": "agent reply"}],
             "agent_context": agent_context(agent_id, authorization_ref),
         }),
@@ -1507,9 +1541,9 @@ async fn act_on_behalf_agent_requires_participation_bit() {
         "ak:realm:AT2g1B8NlsTQnu9kxPR0nPvh-bVNWGGMseceRnfLYwih".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1541,9 +1575,9 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
         "ak:realm:AZeoe8skvYdUZma_1pH3dCWvAy7ap4MWYRpM5f16O5yw".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1575,7 +1609,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
         "ak:realm:AVRRrROGV2ARk6OPXu6lATgiM5XQyZ_JcgwRjMC3Im1B".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
         realm_id,
@@ -1606,9 +1640,9 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
         "ak:realm:AUfNT7qSwkDpB8SgZULB6UEnLA6DCqyGx6yfhKn-RnJj".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1647,7 +1681,7 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
         "ak:realm:AeMbHcOGMt3VgaQzdMnK0nUaMYOGvt35z9V139HW8NEU".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let operation = op(
         realm_id,
@@ -1674,9 +1708,9 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         "ak:realm:ASX9zvSqYNXNYx7VQIbISCPKKTvGMcKOCnY1RxTDpEgU".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let envelope_grant = crate::authz::install_projected_grant(
+    let envelope_grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1685,7 +1719,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         vec![arkret_wire::EventKind::RelationCreate.as_str().to_owned()],
         Vec::new(),
     );
-    let context_grant = crate::authz::install_projected_grant(
+    let context_grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1756,9 +1790,9 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
         "ak:realm:AXlr1KB1QbTZsNhXulSUBNz9IMWJGKWMVdYyTD28xF4T".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1796,9 +1830,9 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
         "ak:realm:AUKn_6c6DSK-7snjal8Dk5AtaL1dGSwfNAhvsig6jsbY".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1835,9 +1869,9 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
         "ak:realm:AeAr0dq27Y12394LKAb3Xv0CnKBcTVG6R0EQTJCQbIe6".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1852,7 +1886,7 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
         "0000000007c6",
         "ak.agent.unknown.reply",
         json!({
-            "sender": crate::test_actor_id_str(agent),
+            "sender": agent,
             "agent_context": agent_context(agent, grant_id.as_str()),
         }),
     );
@@ -1872,9 +1906,9 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         "ak:realm:Ad_TMwzMUtHlpgBlzEjvQtjThJ2GNykuHvEjDxchCErV".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -1912,9 +1946,9 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
         "ak:realm:AVvje1NQM-IzvlES2WgCeHRlHlw9b_oeEp3ZmYauIeIj".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -2021,10 +2055,10 @@ async fn profile_accountable_principal_accepts_active_atomic_grant() {
         "0000000007a9",
         "ak.profile.create",
         json!({
-            "sender": "ak:did_core:web:agent.example",
-            "principal_id": "ak:did_core:web:agent.example",
+            "sender": AGENT_CORE_ID,
+            "principal_id": AGENT_CORE_ID,
             "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
+            "accountable_principal_ids": [ALICE_CORE_ID]
         }),
     );
 
@@ -2090,10 +2124,10 @@ async fn profile_accountability_uses_signed_frozen_time() {
         "0000000007ae",
         "ak.profile.update",
         json!({
-            "sender": "ak:did_core:web:agent.example",
-            "principal_id": "ak:did_core:web:agent.example",
+            "sender": AGENT_CORE_ID,
+            "principal_id": AGENT_CORE_ID,
             "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
+            "accountable_principal_ids": [ALICE_CORE_ID]
         }),
     );
     profile.created_at = chrono::DateTime::parse_from_rfc3339("2026-05-01T00:00:00.000Z")
@@ -2207,7 +2241,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         &state,
         &realm_id,
         circle_id,
-        "did:web:alice.example",
+        ALICE_CORE_ID,
         "ak.circle.member.manage",
     );
     let member_add = op(
@@ -2262,7 +2296,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         &state,
         &realm_id,
         circle_id,
-        "did:web:alice.example",
+        ALICE_CORE_ID,
         "ak.circle.manage",
     );
     validate_operation_policy(&state, &[tombstone])
@@ -2277,9 +2311,9 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         "ak:realm:AY3EjcWF5Gxh89mCnOZzpF_bpwVEmMWIXv9IkSHmVmMD".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -2309,9 +2343,9 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
         "ak:realm:AXmGXr7blOycfvMmgehmJJCEpeYG165UnBvugl6pO_40".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -2343,9 +2377,9 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
         "ak:realm:AXaV71ycRWgQPn3H4tFrOYekLOPFiR6LNl9sGqWBs1T2".to_owned(),
     )
     .unwrap();
-    let agent = "did:web:agent.example";
+    let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = crate::authz::install_projected_grant(
+    let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
@@ -2387,7 +2421,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     {
         let mut projection = state.test_projection().lock();
         let mut members = std::collections::BTreeSet::new();
-        members.insert("did:web:alice.example".to_owned());
+        members.insert(ALICE_CORE_ID.to_owned());
         projection.circles.insert(
             circle_id.to_owned(),
             soland_domain::reducer::CircleProjection {
@@ -2406,7 +2440,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: ALICE_CORE_ID.to_owned(),
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
@@ -2581,7 +2615,7 @@ async fn call_recording_start_defaults_to_record_capability() {
     grant_call_action(
         &state,
         &realm_id,
-        "did:web:recorder.example",
+        "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
@@ -2592,7 +2626,7 @@ async fn call_recording_start_defaults_to_record_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
             "recording_id": "recording-904",
-            "recording_agent": "did:web:recorder.example",
+            "recording_agent": "ak:did_core:web:recorder.example",
             "capture_kind": "recording",
             "mode": "audio_video",
             "visible_notice": true,
@@ -2617,7 +2651,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
     grant_call_action(
         &state,
         &realm_id,
-        "did:web:recorder.example",
+        "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let start = op(
@@ -2628,7 +2662,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
             "recording_id": "transcript-905",
-            "recording_agent": "did:web:recorder.example",
+            "recording_agent": "ak:did_core:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
@@ -2663,7 +2697,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
     grant_call_action(
         &state,
         &realm_id,
-        "did:web:recorder.example",
+        "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_TRANSCRIBE,
     );
     let start = op(
@@ -2674,7 +2708,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
             "recording_id": "transcript-906",
-            "recording_agent": "did:web:recorder.example",
+            "recording_agent": "ak:did_core:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
@@ -2699,14 +2733,14 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
     grant_call_action(
         &state,
         &realm_id,
-        "did:web:recorder.example",
+        "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
     );
     let payload = json!({
         "sender": "ak:did_core:web:recorder.example",
         "call_id": "ak:call:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",
         "recording_id": "recording-907",
-        "recording_agent": "did:web:recorder.example",
+        "recording_agent": "ak:did_core:web:recorder.example",
         "capture_kind": "recording",
         "visible_notice": true,
         "result": {
@@ -2960,7 +2994,8 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
         "ak:realm:AZquEEE7ly4W-MA4shMoS_Jwvj_0MhqLDtIVHmnlPP4X".to_owned(),
     )
     .unwrap();
-    let recovery_principal = "did:web:hr.example";
+    let recovery_principal = "ak:did_core:webvh:z6mkfixturehr";
+    let recovery_verification_method = "did:webvh:z6mkfixturehr:hr.example#rrk-1";
 
     // Seed the projected policy_bundle cell with an exporter-AEAD scheme +
     // org RRK durability policy naming `recovery_principal` as a recipient.
@@ -2976,7 +3011,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
                     "recovery_recipients": [{
                         "recipient_id": "rrk-1",
                         "principal_id": recovery_principal,
-                        "verification_method": format!("{recovery_principal}#rrk-1")
+                        "verification_method": recovery_verification_method
                     }]
                 }
             })),
@@ -2990,7 +3025,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
         json!({
             "share_kind": "realm_recovery_key",
             "recipient_principal_id": recovery_principal,
-            "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
+            "recipient_verification_method": recovery_verification_method,
             "recovery_recipient_id": "rrk-1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
             "source_authorization_ref": "ak:event:ASvPdNAOWXf8kk2Jd-FbnlIFnNiMFE5H2L2hHGSmQP4_",
@@ -3021,7 +3056,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-05T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let bob = "did:web:bob.example";
+    let bob = "ak:did_core:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-00000000d3d1";
 
     state
@@ -3159,8 +3194,8 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
                     "mode": "org_recovery_key",
                     "recovery_recipients": [{
                         "recipient_id": "rrk-1",
-                        "principal_id": "did:web:hr.example",
-                        "verification_method": "did:web:hr.example#rrk-1"
+                        "principal_id": "ak:did_core:webvh:z6mkfixturehr",
+                        "verification_method": "did:webvh:z6mkfixturehr:hr.example#rrk-1"
                     }]
                 }
             })),
@@ -3173,7 +3208,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         arkret_wire::EventKind::RealmKeyShare,
         json!({
             "share_kind": "member_device",
-            "recipient_principal_id": "did:web:stranger.example",
+            "recipient_principal_id": "ak:did_core:web:stranger.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
             "source_authorization_ref": "ak:event:ARj82v99exuqCarIqXhrBbP7-PnlaJkPBbkwanCUgGwc",

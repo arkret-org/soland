@@ -382,7 +382,7 @@ mod tests {
     fn parsed(kind: &str) -> ValidatedEventEnvelope {
         ValidatedEventEnvelope {
             event_id: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
+            actor_id: "ak:did_core:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
             realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
@@ -399,8 +399,8 @@ mod tests {
     const WRITE_ID: &str = "ak:event:AcLYVbj_1rgVJeGiPPDHp4GUgpcNGjkVCg8NW-2p21m6";
     const WRITE_DIGEST: &str =
         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-    const WRITER: &str = "did:web:alice.example";
-    const TARGET: &str = "did:web:bob.example";
+    const WRITER: &str = "ak:did_core:web:alice.example";
+    const TARGET: &str = "ak:did_core:web:bob.example";
     const STRAND: &str = "ak:strand:AU6JCWNYlBGUETxX5NBB9hy8YgtevzngI2Yj3vKnYDWb";
 
     fn others_watch_write() -> Value {
@@ -474,7 +474,7 @@ mod tests {
             .expect_err("an audit that names another write does not pair");
 
         let mut wrong_target = paired_audit();
-        wrong_target["payload"]["target_actor_id"] = json!("did:web:carol.example");
+        wrong_target["payload"]["target_actor_id"] = json!("ak:did_core:web:carol.example");
         check(&[others_watch_write(), wrong_target])
             .expect_err("an audit for another target does not pair");
     }

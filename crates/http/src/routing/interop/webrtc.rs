@@ -210,7 +210,7 @@ async fn issue_ice_config(
         constraints: None,
         next_retry_at: None,
         signature: MediaIceConfigSignature {
-            kid: format!("{}#notary-key", state.service_id()),
+            kid: format!("{}#notary-key", state.service_full_id()),
             signature_algorithm: MediaIceSignatureAlgorithm::Ed25519,
             signature_input: MediaIceSignatureInput::IceConfigV1,
             payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))

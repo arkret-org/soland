@@ -449,6 +449,7 @@ async fn describe_returns_development_mode_field() {
     // shape sodmin must NOT render a red banner for.
     let prod_config = AppConfig {
         development_mode: false,
+        public_base_url: "https://server".to_owned(),
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
         to_device_queue_capacity: 10_000,
         ..test_config()
@@ -472,7 +473,10 @@ async fn describe_returns_development_mode_field() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(prod_describe["development_mode"], false);
+    assert_eq!(
+        prod_describe["development_mode"], false,
+        "production describe: {prod_describe}"
+    );
     assert!(prod_describe.get("proof_verifier_mode").is_none());
     assert!(prod_describe.get("admin_auth_mode").is_none());
 
@@ -527,6 +531,7 @@ async fn healthz_exposes_hardening_status() {
     // should rise materially.
     let prod_config = AppConfig {
         development_mode: false,
+        public_base_url: "https://server".to_owned(),
         admin_principal_dids: vec!["did:web:ops.example".to_owned()],
         to_device_queue_capacity: 10_000,
         tls_cert_path: Some(std::path::PathBuf::from("/etc/soland/tls.crt")),
@@ -565,5 +570,8 @@ async fn healthz_exposes_hardening_status() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(describe["hardening"]["development_mode"], false);
+    assert_eq!(
+        describe["hardening"]["development_mode"], false,
+        "operator describe: {describe}"
+    );
 }
