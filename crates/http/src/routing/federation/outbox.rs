@@ -342,6 +342,20 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
             None => Some("invalid_peer_operation_outcome"),
         };
     }
+    if endpoint == "/_arkret/peer/invites" {
+        // `invite-addressing.md` §5.1 / §7 step 9 — `accepted`, `duplicate` and
+        // `deferred` are all authoritative receive outcomes; `deferred` covers
+        // quarantine and every indistinguishable denial, so none of them is a
+        // resubmittable failure. Only a body that is not a typed
+        // `invite_delivery_outcome` at all is an application failure.
+        return match serde_json::from_str::<
+            arkret_models_collaboration::governance::invite_addressing::InviteDeliveryOutcome,
+        >(body)
+        {
+            Ok(_) => None,
+            Err(_) => Some("invalid_peer_invite_outcome"),
+        };
+    }
     if endpoint != "/_arkret/peer/events" {
         return None;
     }

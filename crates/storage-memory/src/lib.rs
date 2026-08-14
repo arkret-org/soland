@@ -23,21 +23,22 @@ pub(crate) use soland_storage::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingRecord,
-    DevicePairingStore, DirectConversationFoundingCommitOutcome,
-    DirectConversationFoundingSlotRecord, DriftResult, EnqueueAgentRuntimeMessage, EventStore,
-    FederationFrontierExchangeRecord, FederationFrontierExchangeStore, FederationOperationsStore,
-    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
-    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
-    FederationOutboxState, FederationOutboxStateDepth, FederationOutboxStore,
-    FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
-    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    IssueAgentProvisioningAbandonmentChallenge, KeyBackupDeleteChallengeRecord, KeyBackupStore,
-    MessageRecord, MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
-    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis,
-    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    DevicePairingStore, DeviceRevocationGateSelector, DeviceRevocationGateStatus,
+    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord, DriftResult,
+    EnqueueAgentRuntimeMessage, EventStore, FederationFrontierExchangeRecord,
+    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
+    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
+    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
+    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
+    InviteLocatorStore, InviteReceivePolicyStore, IssueAgentProvisioningAbandonmentChallenge,
+    KeyBackupDeleteChallengeRecord, KeyBackupStore, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
+    MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore,
+    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
+    MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
     OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
     OrganizationRegistrationStore, OrganizationStore, OutboundPushBridgeCacheRecord,
@@ -80,6 +81,7 @@ mod blobs;
 mod contacts;
 mod control_proposal_acks;
 mod device_pairings;
+mod device_revocations;
 mod devices;
 mod events;
 #[cfg(feature = "fault-injection")]
@@ -127,6 +129,7 @@ pub(crate) use contacts::{
 };
 pub(crate) use control_proposal_acks::MemoryControlProposalAuthorityAckStore;
 pub(crate) use device_pairings::MemoryDevicePairingStore;
+pub(crate) use device_revocations::{MemoryDeviceRevocationState, MemoryDeviceRevocationStore};
 pub(crate) use devices::{
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryOneTimeKeyStore,

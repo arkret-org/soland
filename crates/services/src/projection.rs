@@ -10,8 +10,9 @@ use arkret_models_collaboration::event_sync::{
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellLatticeBinding, ControlEventStore, ControlMoveReject, PendingControlEventRecord,
-    SealEffect, SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreResult,
+    CellLatticeBinding, ControlEventStore, ControlMoveReject, ControlProposalSnapshot,
+    PendingControlEventRecord, SealEffect, SealLeafUnionProof, SealReject, SealStore,
+    SealedControlEventRecord, StoreError, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
@@ -140,6 +141,8 @@ pub struct ProjectionService {
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
+    device_revocations: Option<Arc<dyn soland_storage::DeviceRevocationStore>>,
+    control_decision_commit_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
 
@@ -388,8 +391,20 @@ impl ProjectionService {
             cell_store,
             cell_registry,
             event_seal_committer,
+            device_revocations: None,
+            control_decision_commit_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
+    }
+
+    #[must_use]
+    pub fn with_device_revocation_store(
+        mut self,
+        store: Arc<dyn soland_storage::DeviceRevocationStore>,
+    ) -> Self {
+        store.bind_control_event_store(self.control_event_store.clone());
+        self.device_revocations = Some(store);
+        self
     }
 
     pub async fn hydrate_from_persistence(
@@ -512,6 +527,17 @@ impl ProjectionService {
             .control_proposal_ack(event_digest)
     }
 
+    /// Load one exact proposal/Ack/decision/Seal view from the backend's
+    /// single durable snapshot. HTTP observation and decision admission use
+    /// this instead of composing independently-timed point reads.
+    pub fn control_proposal_snapshot(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<ControlProposalSnapshot>> {
+        self.control_event_store()
+            .control_proposal_snapshot(event_digest)
+    }
+
     pub fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
         self.control_event_store().get(event_digest)
     }
@@ -524,6 +550,45 @@ impl ProjectionService {
     ) -> StoreResult<()> {
         self.control_event_store()
             .record_proposal_decision(event_digest, decision, policy)
+    }
+
+    pub async fn commit_control_proposal_decision(
+        &self,
+        event_digest: &Hash,
+        decision: &ControlProposalDecision,
+        policy: ControlProposalDecisionPolicy,
+    ) -> StoreResult<soland_storage::ControlProposalDecisionCommitOutcome> {
+        if let Some(store) = &self.device_revocations {
+            return store
+                .commit_decision(event_digest.as_str(), decision, policy.clone())
+                .await
+                .map_err(|error| match error {
+                    soland_storage::PersistenceError::NotFound(detail) => {
+                        StoreError::NotFound(detail)
+                    }
+                    soland_storage::PersistenceError::Conflict(detail) => {
+                        StoreError::Conflict(detail)
+                    }
+                    soland_storage::PersistenceError::SchemaViolation(detail) => {
+                        StoreError::Conflict(format!("schema_violation: {detail}"))
+                    }
+                    soland_storage::PersistenceError::Database(detail)
+                    | soland_storage::PersistenceError::Internal(detail) => {
+                        StoreError::Backend(detail)
+                    }
+                });
+        }
+        let _guard = self.control_decision_commit_lock.lock();
+        if self
+            .control_event_store()
+            .control_proposal_snapshot(event_digest)?
+            .is_some_and(|snapshot| snapshot.decisions.contains(decision))
+        {
+            return Ok(soland_storage::ControlProposalDecisionCommitOutcome::Duplicate);
+        }
+        self.control_event_store()
+            .record_proposal_decision(event_digest, decision, policy)?;
+        Ok(soland_storage::ControlProposalDecisionCommitOutcome::Accepted)
     }
 
     pub fn pending_control_records(
@@ -1154,6 +1219,26 @@ impl ProjectionService {
             new_ops,
             covered,
         )
+    }
+
+    pub async fn commit_event_seal_if_frontier_with_revocations(
+        &self,
+        seal: &Seal,
+        expected_store_frontier: &[SealId],
+        new_ops: &[(CellRef, IssuedOp)],
+        covered: &std::collections::BTreeSet<Hash>,
+    ) -> StoreResult<bool> {
+        let inserted =
+            self.commit_event_seal_if_frontier(seal, expected_store_frontier, new_ops, covered)?;
+        if inserted && let Some(store) = &self.device_revocations {
+            for digest in covered {
+                store
+                    .mark_sealed(digest.as_str(), seal.id.as_str(), seal.sealed_at)
+                    .await
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+            }
+        }
+        Ok(inserted)
     }
 
     #[doc(hidden)]
@@ -2085,59 +2170,57 @@ impl ProjectionService {
         group_id: &str,
         effective_scope: &Value,
         clear_pending_removals: bool,
-    ) {
-        let Some(scope) = effective_scope.as_object() else {
-            return;
-        };
-        if scope.get("kind").and_then(Value::as_str) != Some("circle") {
-            return;
-        }
-        let (Some(realm_id), Some(circle_id)) = (
-            scope.get("realm_id").and_then(Value::as_str),
-            scope.get("circle_id").and_then(Value::as_str),
-        ) else {
-            return;
+    ) -> Vec<MlsRemoveObligation> {
+        let Some((realm_id, circle_id)) = mls_scope_parts(effective_scope) else {
+            return Vec::new();
         };
         let mut state = self.state.lock();
-        {
+        if let Some(circle_id) = circle_id.as_deref() {
             let Some(circle) = state.circles.get_mut(circle_id) else {
                 tracing::warn!(%realm_id, %circle_id, %group_id, "MLS circle scope has no Circle projection");
-                return;
+                return Vec::new();
             };
             if circle.realm_id != realm_id {
                 tracing::warn!(%realm_id, %circle_id, circle_realm_id = %circle.realm_id, %group_id, "MLS circle scope realm mismatch");
-                return;
+                return Vec::new();
             }
             if circle.encryption_profile != "mls_rfc9420" {
                 tracing::warn!(%realm_id, %circle_id, %group_id, "MLS scope bound to non-MLS Circle projection");
-                return;
+                return Vec::new();
             }
             match circle.mls_group_ref.as_deref() {
                 Some(existing) if existing != group_id => {
                     tracing::warn!(%realm_id, %circle_id, %group_id, existing, "MLS group mismatch for Circle projection");
-                    return;
+                    return Vec::new();
                 }
                 Some(_) => {}
                 None => circle.mls_group_ref = Some(group_id.to_owned()),
             }
         }
-        if clear_pending_removals {
-            let before = state.pending_mls_removals.len();
-            state.pending_mls_removals.retain(|obligation| {
-                !(obligation.realm_id == realm_id
-                    && obligation.circle_id.as_deref() == Some(circle_id)
-                    && obligation
-                        .mls_group_ref
-                        .as_deref()
-                        .is_none_or(|expected| expected == group_id))
-            });
-            let cleared = before.saturating_sub(state.pending_mls_removals.len());
-            if cleared > 0 {
-                tracing::info!(%realm_id, %circle_id, %group_id, cleared, "cleared pending MLS remove obligations");
-            }
+        if !clear_pending_removals {
+            return Vec::new();
         }
+        let pending = std::mem::take(&mut state.pending_mls_removals);
+        let (cleared, retained): (Vec<_>, Vec<_>) = pending.into_iter().partition(|obligation| {
+            obligation.realm_id == realm_id
+                && obligation.circle_id == circle_id
+                && obligation
+                    .mls_group_ref
+                    .as_deref()
+                    .is_none_or(|expected| expected == group_id)
+        });
+        state.pending_mls_removals = retained;
+        if !cleared.is_empty() {
+            tracing::info!(%realm_id, ?circle_id, %group_id, cleared = cleared.len(), "cleared pending MLS remove obligations");
+        }
+        cleared
     }
 
+    /// Rebuild process-local MLS removal obligations from one durable sealed
+    /// cleanup intent. Enqueueing here is idempotent but is not durable and
+    /// therefore must never acknowledge the intent's MLS completion step;
+    /// callers acknowledge only after a durable obligation or covering MLS
+    /// commit is observable.
     pub fn enqueue_device_revoke_mls_removals(
         &self,
         actor_id: &str,

@@ -122,8 +122,8 @@ pub(crate) async fn validate_device_authorization_binding(
                 || record
                     .payload
                     .get("authorized_generation_ref")
-                    .and_then(Value::as_str)
-                    != Some(current.current_ref.as_str())
+                    .and_then(Value::as_u64)
+                    != Some(current.current_ref)
             {
                 return Err(device_authorization_invalid(
                     "authorizing device is not active at the current generation",

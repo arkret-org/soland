@@ -161,6 +161,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     intended_realm_id: intended_realm_id.as_deref(),
                     device_authorize_event_id: None,
                     agent_key_authorize_event_id: None,
+                    device_revocation_gate: None,
                     claimed_at: *claimed_at,
                     claim_expires_at_unix_ms: operation
                         .payload
@@ -231,7 +232,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS genesis epoch");
             }
-            bind_circle_mls_group(state, group_id, effective_scope, false);
+            bind_circle_mls_group(state, group_id, effective_scope, false).await;
         }
         MlsProjectionEffect::CommitEpochAdvanced {
             group_id,
@@ -261,7 +262,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             {
                 tracing::warn!(%error, group_id = %group_id, "failed to mirror MLS commit epoch");
             }
-            bind_circle_mls_group(state, group_id, effective_scope, true);
+            bind_circle_mls_group(state, group_id, effective_scope, true).await;
         }
         MlsProjectionEffect::CommitFrontierContested {
             group_id,
@@ -283,15 +284,43 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
     }
 }
 
-fn bind_circle_mls_group(
+async fn bind_circle_mls_group(
     state: &AppState,
     group_id: &str,
     effective_scope: &Value,
     clear_pending_removals: bool,
 ) {
-    state
-        .projections()
-        .bind_circle_mls_group(group_id, effective_scope, clear_pending_removals);
+    let cleared = state.projections().bind_circle_mls_group(
+        group_id,
+        effective_scope,
+        clear_pending_removals,
+    );
+    if !clear_pending_removals || cleared.is_empty() {
+        return;
+    }
+    let completed_at = chrono::Utc::now();
+    let proposal_event_ids = cleared
+        .iter()
+        .flat_map(|obligation| obligation.membership_frontier.iter())
+        .collect::<std::collections::BTreeSet<_>>();
+    for proposal_event_id in proposal_event_ids {
+        match state
+            .persistence()
+            .complete_device_revocation_mls_obligation_by_event_id(proposal_event_id, completed_at)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => tracing::debug!(
+                proposal_event_id,
+                "cleared MLS obligation was not a device-revocation cleanup task"
+            ),
+            Err(error) => tracing::error!(
+                %error,
+                proposal_event_id,
+                "durable device-revocation MLS cleanup acknowledgement failed"
+            ),
+        }
+    }
 }
 
 /// After the deterministic reducer mutates the in-memory
@@ -890,7 +919,14 @@ async fn project_mls_welcome_to_device(
         content,
         created_at: operation.created_at,
     };
-    if let Err(error) = state.deliveries().append_device_message(message).await {
+    // This is the deterministic effect of an Event that already crossed the
+    // atomic Event-write revocation gate; replay must not reinterpret it
+    // against a later device state.
+    if let Err(error) = state
+        .deliveries()
+        .append_device_message(None, message)
+        .await
+    {
         tracing::warn!(
             %error,
             %welcome_id,
@@ -967,7 +1003,9 @@ async fn project_realm_key_share_to_device(
         content,
         created_at: operation.created_at,
     };
-    if let Err(error) = state.deliveries().append_device_message(record).await {
+    // The accepted Event is the authorization linearization point for this
+    // projection effect, so no second, time-shifted device gate is applied.
+    if let Err(error) = state.deliveries().append_device_message(None, record).await {
         tracing::warn!(
             %error,
             operation_id = %operation.operation_id,
@@ -1091,7 +1129,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         if let Some(generation_ref) = authorized_generation_ref {
             map.insert(
                 "authorized_generation_ref".to_owned(),
-                Value::String(generation_ref),
+                Value::Number(generation_ref.into()),
             );
         }
         if let Some(binding_kind) = operation.payload.get("authorization_binding_kind") {

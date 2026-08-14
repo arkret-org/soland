@@ -528,7 +528,7 @@ pub(super) async fn recovery_session_create(
             };
             (
             RecoveryIdentityModel::RootAnchored,
-            Some(NonEmptyString::new(generation.current_ref).map_err(|error| {
+            Some(NonEmptyString::new(generation.current_ref.to_string()).map_err(|error| {
                 AppError::internal(format!("invalid accepted device generation ref: {error}"))
             })?),
             Some(match generation.status {

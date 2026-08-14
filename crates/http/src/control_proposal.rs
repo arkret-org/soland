@@ -239,6 +239,89 @@ pub(crate) async fn verify_control_proposal_ack(
     Ok(())
 }
 
+/// Verify one externally submitted decision against the immutable durable Ack,
+/// the exact preceding defer chain and the current proposal authority profile.
+/// Every proof is checked against its own canonical transcript; proof-set
+/// quorum validation alone never substitutes for cryptographic verification.
+pub(crate) async fn verify_control_proposal_decision(
+    state: &AppState,
+    event: &Event,
+    ack: &ControlProposalAck,
+    previous_decisions: &[ControlProposalDecision],
+    decision: &ControlProposalDecision,
+    policy: ControlProposalDecisionPolicy,
+) -> Result<(), String> {
+    let event_digest = Hash::new(event.event_digest().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    if event.realm_id != *decision.realm_id()
+        || event_digest != *decision.proposal_digest()
+        || ack.realm_id != event.realm_id
+        || ack.proposal_digest != event_digest
+    {
+        return Err("proposal decision does not bind the accepted Event and Ack".to_owned());
+    }
+    if previous_decisions
+        .iter()
+        .any(ControlProposalDecision::is_reject)
+    {
+        return Err("proposal decision chain is already terminal".to_owned());
+    }
+    verify_control_proposal_ack(state, event, ack, policy).await?;
+    let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+    let Some((notary, authority_set_ref)) = worker
+        .current_notary_profile_for_events(state, &event.realm_id, std::slice::from_ref(event))
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("current proposal authority profile is unavailable".to_owned());
+    };
+    if authority_set_ref != ack.authority_set_ref {
+        return Err("proposal decision Ack is outside the current authority profile".to_owned());
+    }
+    decision
+        .validate_chain_for_notary(ack, previous_decisions, policy, &notary)
+        .map_err(|error| error.to_string())?;
+
+    let proofs = match decision {
+        ControlProposalDecision::SignedReject { proofs, .. }
+        | ControlProposalDecision::SignedDefer { proofs, .. } => proofs,
+    };
+    for proof in proofs {
+        let binding = decision
+            .proof_binding_bytes(proof)
+            .map_err(|error| error.to_string())?;
+        let signer_full_id = arkret_identity::verification_method_did(&proof.verification_method)
+            .map_err(|error| error.to_string())?;
+        let signer = arkret_wire::project_full_id_to_core_id(&signer_full_id)
+            .map_err(|error| error.to_string())?;
+        let device_method = proof
+            .verification_method
+            .strip_prefix(&format!("{signer_full_id}#"))
+            .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
+        if device_method {
+            crate::jws_verify::verify_principal_authorized_control_ack_jws_async(
+                &binding,
+                &proof.jws,
+                &proof.verification_method,
+                &signer,
+                event,
+                state,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        } else {
+            crate::jws_verify::verify_did_controlled_jws_async(
+                &binding,
+                &proof.jws,
+                &proof.verification_method,
+                signer_full_id.as_str(),
+                state,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod control_proposal_ack_quorum_tests {
     use arkret_wire::notary::{ForensicAttribution, NotaryValue};

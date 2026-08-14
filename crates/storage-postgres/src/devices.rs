@@ -1,7 +1,8 @@
 use super::{
     AsyncConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord, DeviceInventoryStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
-    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore, Jsonb, MaxSeqRow, Nullable,
+    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DeviceRevocationGateSelector, DeviceRevocationGateStatus, Jsonb, MaxSeqRow, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait,
     ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
@@ -75,29 +76,40 @@ struct DeviceMessageSnapshotRow {
 }
 #[async_trait]
 impl DeviceMessageStore for PgDeviceMessageStore {
-    async fn append(&self, mut message: DeviceMessageRecord) -> PersistenceResult<()> {
+    async fn append(
+        &self,
+        device_revocation_gate: Option<&DeviceRevocationGateSelector>,
+        mut message: DeviceMessageRecord,
+    ) -> PersistenceResult<()> {
         ensure_device_message_id(&mut message);
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO device_messages \
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if let Some(selector) = device_revocation_gate {
+                crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
+            }
+            sql_query(
+                "INSERT INTO device_messages \
              (id, idempotency_key, sender, recipient, device_id, position, content, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (recipient, device_id, position) DO NOTHING",
-        )
-        .bind::<SqlUuid, _>(Uuid::new_v4())
-        .bind::<Text, _>(&message.idempotency_key)
-        .bind::<Text, _>(&message.sender)
-        .bind::<Text, _>(&message.recipient)
-        .bind::<Text, _>(&message.device_id)
-        .bind::<BigInt, _>(message.position)
-        .bind::<Jsonb, _>(&message.content)
-        .bind::<Timestamptz, _>(message.created_at)
-        .execute(&mut *conn)
+            )
+            .bind::<SqlUuid, _>(Uuid::new_v4())
+            .bind::<Text, _>(&message.idempotency_key)
+            .bind::<Text, _>(&message.sender)
+            .bind::<Text, _>(&message.recipient)
+            .bind::<Text, _>(&message.device_id)
+            .bind::<BigInt, _>(message.position)
+            .bind::<Jsonb, _>(&message.content)
+            .bind::<Timestamptz, _>(message.created_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok::<(), PgTransactionError>(())
+        })
         .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn inspect_batch(
@@ -207,6 +219,25 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 } else {
                     Ok(DeviceMessageBatchCommitOutcome::RequestConflict)
                 };
+            }
+
+            if let Some(selector) = batch.device_revocation_gate.as_ref() {
+            match crate::gate_status_in_transaction(conn, selector).await? {
+                DeviceRevocationGateStatus::Active => {}
+                DeviceRevocationGateStatus::Pending { .. } => {
+                    return Ok(DeviceMessageBatchCommitOutcome::DeviceRevocationPending);
+                }
+                DeviceRevocationGateStatus::Revoked { .. } => {
+                    return Ok(DeviceMessageBatchCommitOutcome::DeviceRevoked);
+                }
+                DeviceRevocationGateStatus::AuthorityMismatch
+                | DeviceRevocationGateStatus::GenerationMismatch => {
+                    return Err(PersistenceError::Conflict(
+                        "failed_precondition: device gate selector mismatch".to_owned(),
+                    )
+                    .into());
+                }
+            }
             }
 
             if let Some(expected) = &batch.target_snapshot_guard {

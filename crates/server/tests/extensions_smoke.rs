@@ -166,7 +166,48 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             reason: None,
         },
     );
-    dev_login_token(state, actor, device_suffix).await
+    let token = dev_login_token(state.clone(), actor, device_suffix).await;
+    let device_id = format!("ak:device:01904100-0000-7000-8000-{device_suffix}");
+    let verification_method = format!("{actor}#{device_id}");
+    let signing_key = SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(
+        &verification_method,
+    ));
+    soland_test_support::project_authorized_principal_device(
+        &state,
+        actor,
+        &device_id,
+        &signing_key,
+    )
+    .await;
+    token
+}
+
+async fn applet_service_token(
+    state: AppState,
+    package: &AppletPackage,
+    device_suffix: &str,
+) -> String {
+    let token = dev_login_token(state.clone(), package.service_id.as_str(), device_suffix).await;
+    let device_id = format!("ak:device:01904100-0000-7000-8000-{device_suffix}");
+    let service_full_id = package
+        .webhook_auth
+        .key_ref
+        .as_str()
+        .split_once('#')
+        .expect("Applet webhook verification method has a controller")
+        .0;
+    let verification_method = format!("{service_full_id}#{device_id}");
+    let signing_key = SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(
+        &verification_method,
+    ));
+    soland_test_support::project_authorized_principal_device(
+        &state,
+        service_full_id,
+        &device_id,
+        &signing_key,
+    )
+    .await;
+    token
 }
 
 /// A citable accepted Seal of the demo Realm that establishes this service as
@@ -774,8 +815,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
-    let service_token =
-        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000002").await;
+    let service_token = applet_service_token(state.clone(), &package, "a11ce0000002").await;
 
     let ghost_actor_id = ghost_actor_core_id(&namespace, "u123");
     let mut rejected_body = signed_ghost_provision_body(
@@ -1010,8 +1050,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("partially_installed"));
-    let service_token =
-        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000003").await;
+    let service_token = applet_service_token(state.clone(), &package, "a11ce0000003").await;
 
     let ghost_actor_id = ghost_actor_core_id(&namespace, "u-denied");
     let rejected: Value = TestClient::post(format!(
@@ -1059,8 +1098,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
-    let service_token =
-        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000004").await;
+    let service_token = applet_service_token(state.clone(), &package, "a11ce0000004").await;
     let mismatched_ghost = "ak:did_core:web:other.applet.example:ghost:u123";
 
     let rejected: Value = TestClient::post(format!(
@@ -1341,8 +1379,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     )
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
-    let service_token =
-        dev_login_token(state.clone(), package.service_id.as_str(), "a11ce0000005").await;
+    let service_token = applet_service_token(state.clone(), &package, "a11ce0000005").await;
     allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
     let message_grant_ref =

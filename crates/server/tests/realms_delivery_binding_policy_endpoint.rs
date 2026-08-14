@@ -14,6 +14,7 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
 use soland_http::config::AppConfig;
 use soland_http::service;
+use soland_http::state::AppState;
 
 /// Build a minimal dev-mode `AppConfig`. Identical posture to the
 /// helper in `tests/http_api/common.rs` (kept in-line so this test file
@@ -28,18 +29,19 @@ fn test_config() -> AppConfig {
     }
 }
 
-fn app() -> salvo::Service {
-    service(soland_test_support::app_state(test_config()))
+fn app_from_state(state: AppState) -> salvo::Service {
+    service(state)
 }
 
 /// Acquire a dev-mode bearer token for an arbitrary actor. Mirrors the
 /// helper in `tests/http_api/common.rs`; admin handlers in `development_mode`
 /// accept any authenticated session per `require_admin_principal`.
-async fn dev_token(svc: &salvo::Service) -> String {
+async fn dev_token(state: &AppState, svc: &salvo::Service) -> String {
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
             "actor": "ak:did_core:web:alice.example",
-            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_id": device_id,
             "display_name": "Alice Desktop"
         }))
         .send(svc)
@@ -47,7 +49,16 @@ async fn dev_token(svc: &salvo::Service) -> String {
         .take_json()
         .await
         .unwrap();
-    login["session_credential"].as_str().unwrap().to_owned()
+    let token = login["session_credential"].as_str().unwrap().to_owned();
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
+    soland_test_support::project_authorized_principal_device(
+        state,
+        "did:web:alice.example",
+        device_id,
+        &signing_key,
+    )
+    .await;
+    token
 }
 
 /// R2.2 — happy path. Unset policy MUST still respond 200 with the
@@ -56,8 +67,9 @@ async fn dev_token(svc: &salvo::Service) -> String {
 /// `api/delivery_binding.rs::get_delivery_binding_policy` consumer.
 #[tokio::test]
 async fn realms_delivery_binding_policy_endpoint_responds() {
-    let svc = app();
-    let token = dev_token(&svc).await;
+    let state = soland_test_support::app_state(test_config());
+    let svc = app_from_state(state.clone());
+    let token = dev_token(&state, &svc).await;
     let realm_id = "ak:realm:ATtvDFNJFO-h1zle3_ulQJQNAk1tSUamRsHo37ll6mBW";
     let body: Value = TestClient::get(format!(
         "http://server/_soland/admin/realms/{realm_id}/delivery-binding-policy"
@@ -85,8 +97,9 @@ async fn realms_delivery_binding_policy_endpoint_responds() {
 /// accepting raw strings as Realm identifiers.
 #[tokio::test]
 async fn realms_delivery_binding_policy_endpoint_rejects_invalid_id() {
-    let svc = app();
-    let token = dev_token(&svc).await;
+    let state = soland_test_support::app_state(test_config());
+    let svc = app_from_state(state.clone());
+    let token = dev_token(&state, &svc).await;
     let response = TestClient::get(
         "http://server/_soland/admin/realms/not-a-typed-id/delivery-binding-policy",
     )

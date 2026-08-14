@@ -76,18 +76,31 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 
 async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String {
     let actor_core = core_actor_id(actor);
+    let device_id = format!("ak:device:01904100-0000-7000-8000-{device_suffix}");
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
             "actor": actor_core,
-            "device_id": format!("ak:device:01904100-0000-7000-8000-{device_suffix}"),
+            "device_id": device_id,
             "display_name": actor,
         }))
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    login["session_credential"].as_str().unwrap().to_owned()
+    let token = login["session_credential"].as_str().unwrap().to_owned();
+    let verification_method = format!("{actor}#{device_id}");
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(
+        &arkret_signatures::development_signing_key_seed(&verification_method),
+    );
+    soland_test_support::project_authorized_principal_device(
+        &state,
+        actor,
+        &device_id,
+        &signing_key,
+    )
+    .await;
+    token
 }
 
 /// Author the Realm genesis Event, then seed local read projections so the
@@ -1230,6 +1243,7 @@ async fn chat_projection_exposes_reactions_reply_and_mention_routing() {
                     "mentioned": [bob_core]
                 },
                 "mentions": [{
+                    "kind": "mention",
                     "subject_id": bob_core,
                     "mention_text_original": "@bob"
                 }]

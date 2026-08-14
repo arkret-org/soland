@@ -413,6 +413,7 @@ fn persistence_device_message_batch(
                 devices: guard.devices,
             }
         }),
+        device_revocation_gate: batch.device_revocation_gate,
         items: batch
             .items
             .into_iter()
@@ -466,6 +467,12 @@ fn application_device_message_commit_outcome(
         soland_storage::DeviceMessageBatchCommitOutcome::SnapshotConflict => {
             crate::delivery::DeviceMessageBatchCommitOutcome::SnapshotConflict
         }
+        soland_storage::DeviceMessageBatchCommitOutcome::DeviceRevocationPending => {
+            crate::delivery::DeviceMessageBatchCommitOutcome::DeviceRevocationPending
+        }
+        soland_storage::DeviceMessageBatchCommitOutcome::DeviceRevoked => {
+            crate::delivery::DeviceMessageBatchCommitOutcome::DeviceRevoked
+        }
     }
 }
 
@@ -473,11 +480,12 @@ fn application_device_message_commit_outcome(
 impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
     async fn append(
         &self,
+        device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
         message: crate::delivery::DeviceMessageState,
     ) -> crate::ServiceResult<()> {
         self.0
             .device_messages()
-            .append(persistence_device_message(message))
+            .append(device_revocation_gate, persistence_device_message(message))
             .await?;
         Ok(())
     }

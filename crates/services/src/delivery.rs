@@ -121,6 +121,7 @@ pub struct DeviceMessageBatchRecord {
     pub request_digest: String,
     pub idempotency_expires_at: DateTime<Utc>,
     pub target_snapshot_guard: Option<DeviceMessageTargetSnapshotGuard>,
+    pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
     pub items: Vec<DeviceMessageBatchItemRecord>,
 }
 
@@ -149,6 +150,8 @@ pub enum DeviceMessageBatchCommitOutcome {
     RequestConflict,
     MessageConflict { message_key: String },
     SnapshotConflict,
+    DeviceRevocationPending,
+    DeviceRevoked,
 }
 
 /// One admitted `SignalEnvelope` held for its TTL (`sync/signal.md` §4).
@@ -278,7 +281,11 @@ pub trait SignalRelayPort: Send + Sync {
 
 #[async_trait]
 pub trait DeviceMessagePort: Send + Sync {
-    async fn append(&self, message: DeviceMessageState) -> ServiceResult<()>;
+    async fn append(
+        &self,
+        device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        message: DeviceMessageState,
+    ) -> ServiceResult<()>;
     async fn inspect_batch(
         &self,
         request_key: &str,
@@ -461,8 +468,14 @@ impl DeliveryService {
         self.device_delivery.push_devices().await
     }
 
-    pub async fn append_device_message(&self, message: DeviceMessageState) -> ServiceResult<()> {
-        self.device_messages.append(message).await
+    pub async fn append_device_message(
+        &self,
+        device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+        message: DeviceMessageState,
+    ) -> ServiceResult<()> {
+        self.device_messages
+            .append(device_revocation_gate, message)
+            .await
     }
 
     pub async fn commit_device_message_batch(
@@ -790,7 +803,11 @@ mod tests {
 
     #[async_trait]
     impl DeviceMessagePort for NoDeviceMessages {
-        async fn append(&self, _message: DeviceMessageState) -> ServiceResult<()> {
+        async fn append(
+            &self,
+            _device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
+            _message: DeviceMessageState,
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn inspect_batch(

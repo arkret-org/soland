@@ -23,7 +23,7 @@ use crate::{JsonResult, json_ok};
 
 struct DeviceGenerationEventSealContext {
     principal_id: String,
-    current_generation_ref: Option<String>,
+    current_generation_ref: Option<u64>,
     records: Vec<soland_services::events::CanonicalEventRecord>,
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
@@ -737,8 +737,8 @@ async fn try_apply_device_generation_event_seal(
                 signer
                     .payload
                     .get("authorized_generation_ref")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(generation.as_str())
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(*generation)
             })
     {
         return Err(device_generation_fenced(
@@ -904,8 +904,8 @@ async fn try_apply_device_generation_event_seal(
                         event_device
                             .payload
                             .get("authorized_generation_ref")
-                            .and_then(serde_json::Value::as_str)
-                            != Some(generation.as_str())
+                            .and_then(serde_json::Value::as_u64)
+                            != Some(*generation)
                     })
             {
                 return Err(device_generation_fenced(
@@ -1258,8 +1258,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
                 || device
                     .payload
                     .get("authorized_generation_ref")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(generation.current_ref.as_str())
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(generation.current_ref)
         })
     {
         return Err(device_generation_fenced(

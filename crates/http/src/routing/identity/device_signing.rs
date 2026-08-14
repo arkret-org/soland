@@ -229,7 +229,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     pub trust_algorithms: Option<Vec<String>>,
     pub status: DeviceStatus,
     pub device_authorize_event_id: Option<EventId>,
-    pub authorized_generation_ref: Option<arkret_wire::NonEmptyString>,
+    pub authorized_generation_ref: Option<u64>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -243,7 +243,7 @@ pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
     pub device_authorize_event_id: Option<String>,
     #[serde(default)]
-    pub authorized_generation_ref: Option<arkret_wire::NonEmptyString>,
+    pub authorized_generation_ref: Option<u64>,
 }
 
 pub(crate) async fn resolve_device_signing_directory_facet(
@@ -287,8 +287,7 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
         Some(generation) => {
             generation.status
                 == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-                && payload.authorized_generation_ref.as_deref()
-                    == Some(generation.current_ref.as_str())
+                && payload.authorized_generation_ref == Some(generation.current_ref)
         }
         None => payload.authorized_generation_ref.is_none(),
     };

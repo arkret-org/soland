@@ -774,6 +774,8 @@ pub struct CommitAcceptedEventCommand {
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
     pub control_proposal_ack: Option<arkret_wire::ControlProposalAck>,
+    pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
+    pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
     pub self_principal_pcr_device_authorized: bool,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
@@ -1646,6 +1648,7 @@ pub struct ClaimMlsKeyPackageCommand<'a> {
     pub intended_realm_id: Option<&'a str>,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
+    pub device_revocation_gate: Option<&'a soland_storage::DeviceRevocationGateSelector>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: Option<i64>,
 }
@@ -1715,6 +1718,7 @@ pub struct PeerKeyPackageClaimCommand<'a> {
     pub mls_group_id: &'a str,
     pub device_authorize_event_id: Option<&'a str>,
     pub agent_key_authorize_event_id: Option<&'a str>,
+    pub device_revocation_gate: Option<&'a soland_storage::DeviceRevocationGateSelector>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: i64,
     pub ledger: &'a PeerKeyPackageClaimLedgerState,
@@ -2362,6 +2366,8 @@ mod tests {
                     received_at: now,
                 },
                 control_proposal_ack: None,
+                device_revocation_transition: None,
+                device_revocation_gate: None,
                 self_principal_pcr_device_authorized: false,
                 projections: vec![ProjectedEvent {
                     event_id,

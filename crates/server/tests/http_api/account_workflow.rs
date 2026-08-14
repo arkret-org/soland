@@ -446,14 +446,14 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
     let state = soland_test_support::app_state(test_config());
     let first_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let second_device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-    let _first = dev_token_for_device(
+    let first_token = verified_dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
         first_device,
         "Alice Desktop",
     )
     .await;
-    let second = dev_token_for_device(
+    let _second = dev_token_for_device(
         state.clone(),
         "did:web:alice.example",
         second_device,
@@ -462,7 +462,7 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
     .await;
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
-        .add_header("authorization", format!("Bearer {second}"), true)
+        .add_header("authorization", format!("Bearer {first_token}"), true)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -480,7 +480,8 @@ async fn account_viewer_does_not_authorize_unverified_session_device() {
         .expect("second device summary");
     assert_eq!(first["status"], "active");
     assert!(first.get("authorized_at").is_some());
-    assert_eq!(second["status"], "unknown");
+    assert_eq!(second["status"], "active");
+    assert_eq!(second["verification_state"], "unresolved");
     assert!(second.get("authorized_at").is_none());
 }
 
@@ -530,8 +531,8 @@ async fn account_viewer_authorizes_founding_device_registered_with_account() {
         .iter()
         .find(|device| device["device_id"] == founding_device)
         .expect("founding device summary");
-    assert_eq!(founding["status"], "unknown", "viewer: {viewer}");
-    assert_eq!(founding["verification_state"], "unverified");
+    assert_eq!(founding["status"], "active", "viewer: {viewer}");
+    assert_eq!(founding["verification_state"], "unresolved");
     assert!(founding["authorized_at"].is_null());
 }
 
@@ -1129,9 +1130,11 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
         serde_json::json!({
             "kind": "ak.content.composite",
             "body": "structured hello",
-            "mentions": [
-                {"kind": "mention", "subject_id": bob_core.as_str()}
-            ],
+            "mentions": [{
+                "kind": "mention",
+                "subject_id": bob_core.as_str(),
+                "mention_text_original": "@bob"
+            }],
             "parts": [
                 {"kind": "ak.content.text", "body": "structured hello"},
                 {"kind": "ak.content.location", "body": "location", "latitude": 312304000, "longitude": 1214737000},

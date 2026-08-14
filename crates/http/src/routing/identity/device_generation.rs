@@ -28,7 +28,7 @@ pub fn device_generation_admission_lock(scope_id: &str) -> Arc<tokio::sync::Mute
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceGenerationView {
-    pub current_ref: String,
+    pub current_ref: u64,
     pub status: DeviceGenerationStatus,
 }
 
@@ -47,21 +47,113 @@ pub async fn current_device_generation(
     generation_view_from_records(state, principal_id, &records).await
 }
 
-async fn generation_view_from_records(
+/// Resolve the exact accepted device authorization tuple used by every
+/// revocation-sensitive durable write. The returned selector is derived from
+/// accepted local state; it is never accepted from an authoring payload.
+pub async fn active_device_revocation_gate_selector(
     state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> Result<soland_storage::DeviceRevocationGateSelector, ServiceError> {
+    let principal_id =
+        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            ServiceError::SchemaViolation(format!("principal id is invalid: {error}"))
+        })?;
+    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| {
+            ServiceError::Internal(format!("local Principal Server id is invalid: {error}"))
+        })?;
+    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
+        .map_err(|error| ServiceError::SchemaViolation(format!("device id is invalid: {error}")))?;
+    let device = state
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
+            actor_id: principal_id.to_string(),
+            device_id: device_id.to_string(),
+        })
+        .await?
+        .ok_or_else(|| ServiceError::NotFound("device authorization is unavailable".to_owned()))?;
+    if device.verification_state != "verified" || device.revoked_at.is_some() {
+        return Err(ServiceError::Conflict(
+            "device authorization is not active".to_owned(),
+        ));
+    }
+    let target_device_authorize_event_id = device
+        .payload
+        .get("device_authorize_event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServiceError::SchemaViolation(
+                "device authorization omits its accepted Event id".to_owned(),
+            )
+        })?;
+    let target_device_authorize_event_id = arkret_identifiers::EventId::new(
+        target_device_authorize_event_id.to_owned(),
+    )
+    .map_err(|error| {
+        ServiceError::SchemaViolation(format!("device authorization Event id is invalid: {error}"))
+    })?;
+    let authorize_event = state
+        .event_queries()
+        .canonical_event(target_device_authorize_event_id.as_str())
+        .await
+        .map_err(|error| ServiceError::Internal(error.to_string()))?
+        .ok_or_else(|| {
+            ServiceError::Conflict("accepted device authorization Event is unavailable".to_owned())
+        })?;
+    let event_principal_server_id = authorize_event
+        .envelope
+        .get("principal_server_id")
+        .and_then(Value::as_str);
+    let event_device_id = authorize_event
+        .envelope
+        .pointer("/payload/device_id")
+        .and_then(Value::as_str);
+    if authorize_event.actor_id != principal_id.as_str()
+        || authorize_event.kind != arkret_wire::EventKind::DeviceAuthorize.as_str()
+        || event_principal_server_id != Some(principal_server_id.as_str())
+        || event_device_id != Some(device_id.as_str())
+    {
+        return Err(ServiceError::Conflict(
+            "accepted device authorization Event does not bind the current authority tuple"
+                .to_owned(),
+        ));
+    }
+    let generation = current_device_generation(state, principal_id.as_str())
+        .await?
+        .filter(|generation| generation.status == DeviceGenerationStatus::Active)
+        .ok_or_else(|| ServiceError::Conflict("device generation is not active".to_owned()))?;
+    let target_device_generation_ref = generation.current_ref;
+    let authorized_generation_ref = device
+        .payload
+        .get("authorized_generation_ref")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            ServiceError::SchemaViolation(
+                "device authorization omits its generation binding".to_owned(),
+            )
+        })?;
+    if authorized_generation_ref != target_device_generation_ref {
+        return Err(ServiceError::Conflict(
+            "device authorization is outside the current generation".to_owned(),
+        ));
+    }
+    Ok(soland_storage::DeviceRevocationGateSelector {
+        principal_id: principal_id.to_string(),
+        principal_server_id: principal_server_id.to_string(),
+        device_id: device_id.to_string(),
+        target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
+        target_device_generation_ref,
+    })
+}
+
+async fn generation_view_from_records(
+    _state: &AppState,
     principal_id: &str,
     records: &[CanonicalEventRecord],
 ) -> Result<Option<DeviceGenerationView>, ServiceError> {
     let Some(mut last_unconflicted) = bootstrap_generation_ref(principal_id, records) else {
-        let devices = state.identities().devices_for_actor(principal_id).await?;
-        return Ok(federated_generation_view_from_payloads(
-            devices
-                .iter()
-                .filter(|device| {
-                    device.verification_state == "verified" && device.revoked_at.is_none()
-                })
-                .map(|device| &device.payload),
-        ));
+        return Ok(None);
     };
     let mut status = DeviceGenerationStatus::Active;
     let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
@@ -96,10 +188,10 @@ async fn generation_view_from_records(
             .envelope
             .pointer("/payload/new_device_generation")
             .and_then(Value::as_u64);
-        if previous == last_unconflicted.parse::<u64>().ok()
+        if previous == Some(last_unconflicted)
             && let Some(next) = next
         {
-            last_unconflicted = next.to_string();
+            last_unconflicted = next;
             status = DeviceGenerationStatus::Active;
         }
     }
@@ -109,47 +201,7 @@ async fn generation_view_from_records(
     }))
 }
 
-fn federated_generation_view_from_payloads<'a>(
-    payloads: impl IntoIterator<Item = &'a Value>,
-) -> Option<DeviceGenerationView> {
-    let mut generations = BTreeMap::<u64, BTreeSet<String>>::new();
-    for payload in payloads {
-        if payload.get("federated_authorization").is_none() {
-            continue;
-        }
-        let Some(generation_ref) = payload
-            .get("authorized_generation_ref")
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        let Some(height) = generation_ref
-            .split_once('-')
-            .and_then(|(height, _)| height.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        generations
-            .entry(height)
-            .or_default()
-            .insert(generation_ref.to_owned());
-    }
-    let (_, candidates) = generations.into_iter().next_back()?;
-    let current_ref = candidates.iter().next()?.clone();
-    Some(DeviceGenerationView {
-        current_ref,
-        status: if candidates.len() == 1 {
-            DeviceGenerationStatus::Active
-        } else {
-            DeviceGenerationStatus::Conflicted
-        },
-    })
-}
-
-fn bootstrap_generation_ref(
-    principal_id: &str,
-    records: &[CanonicalEventRecord],
-) -> Option<String> {
+fn bootstrap_generation_ref(principal_id: &str, records: &[CanonicalEventRecord]) -> Option<u64> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
@@ -185,7 +237,7 @@ fn bootstrap_generation_ref(
     if !paired {
         return None;
     }
-    Some("1".to_owned())
+    Some(1)
 }
 
 fn reanchor_unit_fingerprint(
@@ -207,7 +259,7 @@ fn reanchor_unit_fingerprint(
 pub async fn authorized_generation_for_event(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<Option<String>, ServiceError> {
+) -> Result<Option<u64>, ServiceError> {
     let records = state
         .event_queries()
         .accepted_events_for_actor(&record.actor_id)
@@ -229,8 +281,7 @@ pub async fn authorized_generation_for_event(
         return Ok(reanchor
             .envelope
             .pointer("/payload/new_device_generation")
-            .and_then(Value::as_u64)
-            .map(|generation| generation.to_string()));
+            .and_then(Value::as_u64));
     }
     Ok(
         generation_view_from_records(state, &record.actor_id, &records)
@@ -431,28 +482,6 @@ mod tests {
             envelope,
             received_at: Utc::now(),
         }
-    }
-
-    #[test]
-    fn federated_device_evidence_uses_latest_unconflicted_did_generation() {
-        let first = json!({
-            "authorized_generation_ref": "1-QmFirst",
-            "federated_authorization": {"accepted_at": "2026-07-25T01:00:00Z"}
-        });
-        let second = json!({
-            "authorized_generation_ref": "2-QmSecond",
-            "federated_authorization": {"accepted_at": "2026-07-25T02:00:00Z"}
-        });
-        let view = federated_generation_view_from_payloads([&first, &second]).unwrap();
-        assert_eq!(view.current_ref, "2-QmSecond");
-        assert_eq!(view.status, DeviceGenerationStatus::Active);
-
-        let fork = json!({
-            "authorized_generation_ref": "2-QmFork",
-            "federated_authorization": {"accepted_at": "2026-07-25T02:00:01Z"}
-        });
-        let conflicted = federated_generation_view_from_payloads([&first, &second, &fork]).unwrap();
-        assert_eq!(conflicted.status, DeviceGenerationStatus::Conflicted);
     }
 
     #[test]

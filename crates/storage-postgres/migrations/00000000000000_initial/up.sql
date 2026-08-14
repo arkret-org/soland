@@ -670,6 +670,72 @@ ALTER TABLE ONLY public.devices
 
 CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, updated_at DESC);
 
+CREATE TABLE public.device_revocation_linearization_heads (
+    principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
+    device_id text NOT NULL,
+    last_seq bigint DEFAULT 0 NOT NULL CHECK (last_seq >= 0),
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    PRIMARY KEY (principal_id, principal_server_id, device_id)
+);
+
+CREATE TABLE public.device_revocation_targets (
+    proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
+    principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
+    device_id text NOT NULL,
+    target_device_authorize_event_id text NOT NULL,
+    target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
+    proposal_event_id text NOT NULL,
+    accepted_at timestamp with time zone NOT NULL,
+    acceptance_seq bigint NOT NULL CHECK (acceptance_seq > 0),
+    control_proposal_ack jsonb NOT NULL,
+    UNIQUE (principal_id, principal_server_id, device_id,
+            target_device_authorize_event_id, target_device_generation_ref, acceptance_seq)
+);
+
+CREATE INDEX device_revocation_targets_selector_idx
+    ON public.device_revocation_targets
+    (principal_id, principal_server_id, device_id,
+     target_device_authorize_event_id, target_device_generation_ref, acceptance_seq);
+
+CREATE TABLE public.device_revocation_gate_receipts (
+    principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
+    device_id text NOT NULL,
+    action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
+        'session_grant_issue', 'session_grant_refresh', 'keypackage_claim',
+        'to_device_write', 'event_write', 'principal_server_admission_proof_issue'
+    ])),
+    intent_digest text NOT NULL,
+    decision_payload jsonb NOT NULL,
+    linearization_seq bigint NOT NULL CHECK (linearization_seq > 0),
+    linearized_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (principal_id, principal_server_id, device_id, action_class, intent_digest),
+    UNIQUE (principal_id, principal_server_id, device_id,
+            linearization_seq),
+    CHECK (expires_at > linearized_at AND expires_at <= linearized_at + interval '30 seconds')
+);
+
+CREATE TABLE public.device_revocation_cleanup_intents (
+    proposal_digest text PRIMARY KEY REFERENCES public.device_revocation_targets(proposal_digest) ON DELETE RESTRICT,
+    proposal_event_id text NOT NULL,
+    covering_seal_id text NOT NULL,
+    principal_id text NOT NULL,
+    principal_server_id text NOT NULL,
+    device_id text NOT NULL,
+    target_device_authorize_event_id text NOT NULL,
+    target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
+    created_at timestamp with time zone NOT NULL,
+    material_cleanup_completed_at timestamp with time zone,
+    mls_obligation_completed_at timestamp with time zone
+);
+
+CREATE INDEX device_revocation_cleanup_pending_idx
+    ON public.device_revocation_cleanup_intents (created_at, proposal_digest)
+    WHERE material_cleanup_completed_at IS NULL OR mls_obligation_completed_at IS NULL;
+
 CREATE TABLE public.device_pairings (
     device_pairing_request_id text NOT NULL,
     pairing_code text NOT NULL,

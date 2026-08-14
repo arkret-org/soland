@@ -1567,47 +1567,9 @@ pub(crate) async fn seed_verified_device_with_public_key(
     state: &AppState,
     actor: &str,
     device_id: &str,
-    device_public_key: &str,
+    signing_key: &SigningKey,
 ) {
-    let now = chrono::Utc::now();
-    let actor = fixture_actor_core_id(actor).to_string();
-    let persistence = state.test_persistence();
-    let devices = persistence.devices();
-    let mut record = devices
-        .get(&actor, device_id)
-        .await
-        .unwrap()
-        .unwrap_or_else(|| soland_storage::DeviceInventoryRecord {
-            actor: actor.clone(),
-            device_id: device_id.to_owned(),
-            display_name: Some("Directory Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": device_id,
-                "verification": "verified",
-                "device_authorize_event_id": "ak:event:AXiocVW8Xmy9RA45CmA2fxYVqzb47EY_lBGbSWZ1VFqf"
-            }),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        });
-    record.actor = actor;
-    record.verification_state = "verified".to_owned();
-    record.revoked_at = None;
-    record.updated_at = now;
-    let payload = record
-        .payload
-        .as_object_mut()
-        .expect("fixture device payload is an object");
-    payload.insert(
-        "device_public_key".to_owned(),
-        Value::String(device_public_key.to_owned()),
-    );
-    payload.insert(
-        "verification".to_owned(),
-        Value::String("verified".to_owned()),
-    );
-    devices.put(&record).await.unwrap();
+    project_test_authorized_device(state, actor, device_id, signing_key).await;
 }
 
 /// Project an accepted `ak.device.authorize` fixture so strict principal-device

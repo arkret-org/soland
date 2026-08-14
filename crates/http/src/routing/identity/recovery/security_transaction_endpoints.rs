@@ -1182,12 +1182,8 @@ async fn continue_issue_terminal_receipt(
         ) => (
             RecoveryBinding::RootAnchored(binding.clone()),
             arkret_models_crypto::RecoveryIdentityModel::RootAnchored,
-            arkret_wire::RecoveryModelGenerationRef::RootAnchored(
-                plan.previous_model_generation_ref.clone(),
-            ),
-            arkret_wire::RecoveryModelGenerationRef::RootAnchored(
-                plan.result_model_generation_ref.clone(),
-            ),
+            plan.previous_model_generation_ref,
+            plan.result_model_generation_ref,
             plan.proof_digest.clone(),
             binding.authorize_event_id.clone(),
             Some(binding.reanchor_event_id.clone()),

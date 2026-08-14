@@ -39,10 +39,12 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 use soland_services::events::{
+    CanonicalEventRecord, FederationDelivery,
     InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord, RealmInviteState as RealmInviteRecord,
 };
+use soland_services::federation::EnqueueFederationDeliveryCommand;
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
 };
@@ -54,6 +56,9 @@ use crate::wire::now;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
+/// HTTP binding of `ak.peer.invites.command.submit` — the only endpoint a
+/// remote private invite delivery is ever addressed to.
+const PEER_INVITES_ENDPOINT: &str = "/_arkret/peer/invites";
 const ACTIVE_LOCATOR_LIMIT: usize = 16;
 const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
@@ -73,6 +78,7 @@ pub(crate) fn self_router() -> Router {
         .push(Router::with_path("invite-locators").post(issue_invite_locator))
         .push(Router::with_path("invite-locators/rotate").post(rotate_invite_locator))
         .push(Router::with_path("invite-locators/revoke").post(revoke_invite_locator))
+        .push(Router::with_path("invites/dispatch").post(self_invites_dispatch))
 }
 
 fn new_invite_locator(
@@ -252,28 +258,94 @@ async fn peer_invites_submit(
             "Destination-Service-ID must equal invite_address.recipient_service_id",
         ));
     }
+    let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
 
-    validate_invite_delivery_consistency(&body, &delivery, state)?;
+    // Steps 1-3 are the service-to-service binding: the peer session below
+    // exists only so the delivered envelope can be verified against a
+    // trust-domain-bound identity. It is never a principal session and MUST NOT
+    // be reused by the authenticated self dispatch surface.
+    let trust_headers =
+        crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
+            .map_err(|violation| {
+                super::events::peer::schema_violation(violation.message())
+                    .with_wire_code(violation.error_code())
+            })?;
+    let request_hash = canonical_digest(&body)?;
+    let session = SessionRecord {
+        token_hash: format!(
+            "peer-invite:{}:{request_hash}",
+            trust_headers.source_trust_domain
+        ),
+        actor: delivery.invite_event.actor_id.as_str().to_owned(),
+        device_id: format!("peer-invite:{source_service_id}"),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: now() + Duration::minutes(5),
+        created_at: now(),
+        revoked_at: None,
+    };
+
+    json_ok(
+        receive_private_invite_delivery(
+            state,
+            &delivery,
+            &body,
+            &source_service_id,
+            "peer.invites.submit",
+            InvitePrivateProjection::FromDeliveredEvent { session: &session },
+        )
+        .await?,
+    )
+}
+
+/// How the notify branch of a private invite delivery materializes the
+/// holder-private invite row (spec invite-addressing.md §7 steps 4 / 8 / 9).
+enum InvitePrivateProjection<'a> {
+    /// Peer ingress. This service holds no shared-Realm copy of the delivered
+    /// `ak.invite.create`, so the envelope is verified here under the
+    /// service-to-service session and projected into the holder's private
+    /// invite row.
+    FromDeliveredEvent { session: &'a SessionRecord },
+    /// Local self dispatch. This service already accepted the Event — which is
+    /// exactly what the three `invite_event` preconditions proved — so its
+    /// registered reducer contract already owns the holder-visible invite row
+    /// and the notify branch owes no second write of it.
+    AlreadyAcceptedLocally { record: &'a CanonicalEventRecord },
+}
+
+/// Spec invite-addressing.md §7 steps 4-9 — the receive half of a private
+/// invite delivery, shared by the peer service-to-service ingress and the local
+/// `ak.self.invites.command.dispatch` branch.
+///
+/// Steps 1-3 are the service-to-service binding and stay with the caller. The
+/// local branch substitutes "authenticated self session + the three
+/// `invite_event` preconditions" for them, and MUST NOT synthesize federation
+/// trust headers or a peer session to reach this path.
+async fn receive_private_invite_delivery(
+    state: &AppState,
+    delivery: &InviteDeliveryRequestBody,
+    body: &Value,
+    source_service_id: &str,
+    audit_operation: &'static str,
+    projection: InvitePrivateProjection<'_>,
+) -> Result<InviteDeliveryOutcome, AppError> {
+    validate_invite_delivery_consistency(body, delivery, state)?;
 
     // The inviter is the actor that signed the durable `ak.invite.create`
     // event; it is the `peer` we test `denied_subjects` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
-    let actor = body
-        .pointer("/invite_event/actor_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| super::events::peer::schema_violation("invite_event.actor_id is required"))?
-        .to_owned();
-    let inviter = actor.clone();
+    let inviter = delivery.invite_event.actor_id.as_str().to_owned();
     let subject_id = delivery.invite_address.subject_id.clone();
     let subject = subject_id.as_str().to_owned();
-    let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
 
     // Spec invite-addressing.md §5..§8 — resolve the subject's private
     // receive policy, derive the effective trust tier (downgrading
     // `consent_grant` to `explicit_address` when the grant cannot be
     // verified), then apply blocklist + allowlist + behavior to pick a
     // receive action and a graded-disclosure outcome.
-    let policy = resolve_core_invite_receive_policy(state, &subject_id)?;
+    let policy = resolve_core_invite_receive_policy(state, &subject_id);
     let decision = evaluate_invite_receive(
         state,
         &policy,
@@ -281,7 +353,7 @@ async fn peer_invites_submit(
         &inviter,
         &subject,
         delivery.invite_address.recipient_service_id.as_str(),
-        &source_service_id,
+        source_service_id,
     );
 
     if decision.action != InviteReceiveAction::Notify {
@@ -289,10 +361,10 @@ async fn peer_invites_submit(
             persist_invite_quarantine_entry(
                 state,
                 &subject,
-                &source_service_id,
+                source_service_id,
                 &inviter,
-                &delivery,
-                &body,
+                delivery,
+                body,
                 &decision,
             )
             .await?
@@ -302,7 +374,7 @@ async fn peer_invites_submit(
         super::append_audit_log(
             state,
             None,
-            "peer.invites.submit",
+            audit_operation,
             json!({
                 "idempotency_key": delivery.idempotency_key,
                 "invitee": delivery.invite_address.subject_id,
@@ -316,82 +388,67 @@ async fn peer_invites_submit(
             "deferred",
         )
         .await;
-        let outcome = InviteDeliveryOutcome {
+        // §5.1 — quarantine and drop share one wire class: `deferred` without
+        // `disclosed_outcome` unless the graded disclosure explicitly permits
+        // the `blocked` answer.
+        return Ok(InviteDeliveryOutcome {
             status: InviteDeliveryOutcomeStatus::Deferred,
             disclosed_outcome: decision.disclosed_outcome,
             received_at: Some(now()),
             retry_after_ms: None,
-        };
-        return json_ok(outcome);
+        });
     }
 
-    let trust_headers =
-        crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
-            .map_err(|violation| {
-                super::events::peer::schema_violation(violation.message())
-                    .with_wire_code(violation.error_code())
+    let (event_id, event_canonical_digest, duplicate) = match projection {
+        InvitePrivateProjection::FromDeliveredEvent { session } => {
+            let validated = super::events::event_log::validate_private_invite_envelope(
+                state,
+                session,
+                &body["invite_event"],
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::SchemaViolation, error.message)
+                    .with_status(error.status)
+                    .with_wire_code(error.code)
             })?;
-    let request_hash = canonical::canonical_sha256(&body).map_err(|error| {
-        super::events::peer::schema_violation(format!(
-            "ak.peer.invites.command.submit body is not canonical-hashable: {error}"
-        ))
-    })?;
-    let session = SessionRecord {
-        token_hash: format!(
-            "peer-invite:{}:{request_hash}",
-            trust_headers.source_trust_domain
+            let duplicate = persist_private_invite_projection(
+                state,
+                delivery.invite_address.subject_id.as_str(),
+                body,
+                &validated,
+            )
+            .await?;
+            (validated.event_id, validated.canonical_digest, duplicate)
+        }
+        InvitePrivateProjection::AlreadyAcceptedLocally { record } => (
+            record.event_id.clone(),
+            record.canonical_digest.clone(),
+            false,
         ),
-        actor,
-        device_id: format!("peer-invite:{source_service_id}"),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        session_grant: None,
-        expires_at: now() + Duration::minutes(5),
-        created_at: now(),
-        revoked_at: None,
     };
-
-    let validated = super::events::event_log::validate_private_invite_envelope(
-        state,
-        &session,
-        &body["invite_event"],
-    )
-    .await
-    .map_err(|error| {
-        AppError::new(ErrorCode::SchemaViolation, error.message)
-            .with_status(error.status)
-            .with_wire_code(error.code)
-    })?;
-    let duplicate = persist_private_invite_projection(
-        state,
-        delivery.invite_address.subject_id.as_str(),
-        &body,
-        &validated,
-    )
-    .await?;
 
     let status = if duplicate { "duplicate" } else { "accepted" };
     super::append_audit_log(
         state,
         None,
-        "peer.invites.submit",
+        audit_operation,
         json!({
             "idempotency_key": delivery.idempotency_key,
-            "event_id": validated.event_id,
+            "event_id": event_id,
             "invitee": delivery.invite_address.subject_id,
             "recipient_service_id": delivery.invite_address.recipient_service_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "effective_kind": decision.effective_kind,
             "trust_tier": decision.trust_tier.as_str(),
-            "request_canonical_digest": request_hash,
-            "event_canonical_digest": validated.canonical_digest,
+            "request_canonical_digest": canonical_digest(body)?,
+            "event_canonical_digest": event_canonical_digest,
             "projection": "holder_private_invite",
         }),
         status,
     )
     .await;
-    let outcome = InviteDeliveryOutcome {
+    Ok(InviteDeliveryOutcome {
         status: if duplicate {
             InviteDeliveryOutcomeStatus::Duplicate
         } else {
@@ -400,8 +457,211 @@ async fn peer_invites_submit(
         disclosed_outcome: decision.disclosed_outcome,
         received_at: Some(now()),
         retry_after_ms: None,
+    })
+}
+
+#[endpoint(
+    operation_id = "ak.self.invites.command.dispatch",
+    summary = "Dispatch a private invite delivery",
+    tags("invites")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.invites.command.dispatch"))]
+async fn self_invites_dispatch(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<InviteDeliveryOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    // The remote branch forwards the caller's own bytes, so the raw payload is
+    // read here instead of re-encoding a typed model back onto the wire.
+    let raw_body = req
+        .payload()
+        .await
+        .map_err(|_| {
+            AppError::json_invalid("invalid ak.self.invites.command.dispatch request body")
+        })?
+        .to_vec();
+    let body: Value = serde_json::from_slice(&raw_body).map_err(|_| {
+        AppError::json_invalid("invalid ak.self.invites.command.dispatch request body")
+    })?;
+    let delivery: InviteDeliveryRequestBody =
+        serde_json::from_value(body.clone()).map_err(|error| {
+            AppError::param_invalid(format!("invalid invite delivery request: {error}"))
+        })?;
+    delivery
+        .validate_minimal()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+
+    let accepted = require_dispatchable_invite_event(state, &session, &delivery, &body).await?;
+
+    if delivery.invite_address.recipient_service_id.as_str() == state.service_id() {
+        // §7 — the local target runs the same steps 4-9 the peer ingress runs.
+        return json_ok(
+            receive_private_invite_delivery(
+                state,
+                &delivery,
+                &body,
+                state.service_id(),
+                "self.invites.dispatch",
+                InvitePrivateProjection::AlreadyAcceptedLocally { record: &accepted },
+            )
+            .await?,
+        );
+    }
+    json_ok(enqueue_remote_invite_delivery(state, &delivery, &body, &accepted).await?)
+}
+
+/// Spec invite-addressing.md §7 — the three closed `invite_event` preconditions
+/// of `ak.self.invites.command.dispatch`.
+///
+/// The order is closed: resolve the accepted Event by `event_id` first, then
+/// compare its stored signing actor, then compare the stored canonical bytes.
+/// Each failure is `failed_precondition` carrying its own reason code, and none
+/// of them may produce a delivery, an outbox enqueue or a holder-private write,
+/// so they are evaluated before either dispatch branch does anything at all.
+///
+/// This operation MUST NOT re-verify the signature of an Event this service
+/// already admitted: a tampered body is answered by `invite_event_bytes_mismatch`,
+/// never by a generic proof error. The comparison therefore reads the raw
+/// canonical Event bytes stored at admission and never re-serializes them.
+async fn require_dispatchable_invite_event(
+    state: &AppState,
+    session: &SessionRecord,
+    delivery: &InviteDeliveryRequestBody,
+    body: &Value,
+) -> Result<CanonicalEventRecord, AppError> {
+    let Some(accepted) = state
+        .event_queries()
+        .canonical_event(delivery.invite_event.event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("invite event lookup: {error}")))?
+    else {
+        return Err(invite_event_precondition(
+            arkret_wire::ReasonCode::INVITE_EVENT_UNACCEPTED,
+            "invite_event has not been accepted by this Principal Server",
+        ));
     };
-    json_ok(outcome)
+    let session_actor = DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let accepted_actor = DidCoreId::new(accepted.actor_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Event actor is invalid: {error}")))?;
+    if accepted_actor != session_actor {
+        return Err(invite_event_precondition(
+            arkret_wire::ReasonCode::INVITE_EVENT_ACTOR_MISMATCH,
+            "invite_event was not signed by the authenticated session actor",
+        ));
+    }
+    let submitted_canonical_bytes =
+        super::events::event_log::event_canonical_bytes(&body["invite_event"]).map_err(|_| {
+            invite_event_precondition(
+                arkret_wire::ReasonCode::INVITE_EVENT_BYTES_MISMATCH,
+                "invite_event does not equal the stored canonical Event bytes",
+            )
+        })?;
+    if submitted_canonical_bytes != accepted.canonical_bytes {
+        return Err(invite_event_precondition(
+            arkret_wire::ReasonCode::INVITE_EVENT_BYTES_MISMATCH,
+            "invite_event does not equal the stored canonical Event bytes",
+        ));
+    }
+    Ok(accepted)
+}
+
+fn invite_event_precondition(reason_code: &'static str, message: &'static str) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_wire_code("failed_precondition")
+        .with_reason_code(reason_code)
+}
+
+/// Spec invite-addressing.md §7 — hand the exact canonical request body to the
+/// durable service-to-service outbox bound for `ak.peer.invites.command.submit`.
+///
+/// The payload is the JCS form of the bytes the caller sent, never a
+/// re-encoding of the typed model, so every retry under the same
+/// `idempotency_key` reproduces byte-identical wire bytes and the receiver
+/// computes the same request digest. Deduplication is the outbox's own
+/// `(peer_did, idempotency_key)` uniqueness.
+async fn enqueue_remote_invite_delivery(
+    state: &AppState,
+    delivery: &InviteDeliveryRequestBody,
+    body: &Value,
+    accepted: &CanonicalEventRecord,
+) -> Result<InviteDeliveryOutcome, AppError> {
+    validate_invite_delivery_event_binding(body, delivery)?;
+    let recipient_service_id = &delivery.invite_address.recipient_service_id;
+    let resolver = state
+        .service_route_resolver()
+        .map_err(|error| AppError::internal(error.to_owned()))?;
+    let entry = resolver
+        .resolve_carrier(
+            &delivery.invite_address.service_resolution,
+            recipient_service_id,
+            "principal_server",
+            now(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                format!("recipient service has no verified route: {error}"),
+            )
+        })?;
+    let payload_json =
+        String::from_utf8(canonical::canonical_json_bytes(body).map_err(|error| {
+            super::events::peer::schema_violation(format!(
+                "ak.self.invites.command.dispatch body is not canonicalizable: {error}"
+            ))
+        })?)
+        .map_err(|error| {
+            AppError::internal(format!("invite delivery body is not utf8: {error}"))
+        })?;
+    let enqueued_id = uuid::Uuid::new_v4().to_string();
+    let enqueued = state
+        .federation()
+        .enqueue_delivery(EnqueueFederationDeliveryCommand {
+            delivery: FederationDelivery {
+                id: enqueued_id.clone(),
+                peer_did: recipient_service_id.as_str().to_owned(),
+                peer_url: entry.base_url.trim_end_matches('/').to_owned(),
+                endpoint: PEER_INVITES_ENDPOINT.to_owned(),
+                idempotency_key: delivery.idempotency_key.clone(),
+                payload_json,
+                created_at: now().timestamp(),
+            },
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("invite delivery enqueue: {error}")))?;
+    let duplicate = enqueued.id != enqueued_id;
+    super::append_audit_log(
+        state,
+        None,
+        "self.invites.dispatch",
+        json!({
+            "idempotency_key": delivery.idempotency_key,
+            "event_id": accepted.event_id,
+            "invitee": delivery.invite_address.subject_id,
+            "recipient_service_id": delivery.invite_address.recipient_service_id,
+            "introduction_kind": delivery.introduction_evidence.kind(),
+            "outbox_id": enqueued.id,
+            "endpoint": PEER_INVITES_ENDPOINT,
+        }),
+        if duplicate { "duplicate" } else { "accepted" },
+    )
+    .await;
+    Ok(InviteDeliveryOutcome {
+        status: if duplicate {
+            InviteDeliveryOutcomeStatus::Duplicate
+        } else {
+            InviteDeliveryOutcomeStatus::Accepted
+        },
+        // The recipient's receive decision is not knowable here, and §5.1
+        // forbids inventing one, so the sender never echoes a disclosed
+        // outcome for a remote target.
+        disclosed_outcome: None,
+        received_at: Some(now()),
+        retry_after_ms: None,
+    })
 }
 
 async fn persist_private_invite_projection(
@@ -833,21 +1093,23 @@ pub(crate) struct ReceiveDecision {
     pub(crate) disclosed_outcome: Option<DisclosedOutcome>,
 }
 
-/// Read the subject's private `invite_receive_policy`. There is no default
-/// fallback here: a policy that is not bound to the local exact
-/// `(principal_id, principal_server_id)` account authority pair cannot gate an
-/// inbound invite, so the caller fails closed.
+/// Read the subject's private `invite_receive_policy`, falling back to the
+/// conservative protocol default when the subject has never published one.
+///
+/// `invite-addressing.md` section 5 makes that default normative: a subject
+/// without a published policy accepts only the high-trust introduction kinds
+/// and quarantines or drops everything else. Erroring out instead would both
+/// break that default and leak, through a distinguishable status, whether the
+/// subject has ever published a policy — which section 5.1 requires to stay
+/// indistinguishable from an ordinary quarantine.
 fn resolve_core_invite_receive_policy(
     state: &AppState,
     subject: &DidCoreId,
-) -> Result<InviteReceivePolicy, AppError> {
-    if let Some(policy) = state.contacts().invite_policy(subject.as_str()) {
-        return Ok(policy);
-    }
-    Err(AppError::new(
-        ErrorCode::FailedPrecondition,
-        "recipient invite policy is not bound to the local principal authority pair",
-    ))
+) -> InviteReceivePolicy {
+    state
+        .contacts()
+        .invite_policy(subject.as_str())
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(subject.clone()))
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
@@ -878,9 +1140,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
-    let Ok(policy) = resolve_core_invite_receive_policy(state, &subject_id) else {
-        return false;
-    };
+    let policy = resolve_core_invite_receive_policy(state, &subject_id);
     let decision = match intent {
         Some(DirectoryIntent::ContactRequest) => {
             let evidence = ContactIntroductionEvidence::HandleClaim {
@@ -1579,6 +1839,17 @@ fn validate_invite_delivery_consistency(
             "invite_address.recipient_service_id does not match this service",
         ));
     }
+    validate_invite_delivery_event_binding(body, delivery)
+}
+
+/// Spec invite-addressing.md §7 steps 4-7 — the target-independent bindings
+/// between `invite_event` and the delivery envelope. The receiving service and
+/// the dispatching service both owe these; only the recipient-service identity
+/// check above is local to the receiver.
+fn validate_invite_delivery_event_binding(
+    body: &Value,
+    delivery: &InviteDeliveryRequestBody,
+) -> Result<(), AppError> {
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
         != Some(arkret_wire::EventKind::InviteCreate.as_str())
     {

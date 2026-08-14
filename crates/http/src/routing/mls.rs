@@ -711,6 +711,17 @@ async fn peer_claim_keypackage(
             expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
             updated_at: now_secs,
         };
+        let device_revocation_gate = match keypackage_device_revocation_gate(
+            state,
+            &predicted.actor_id,
+            &predicted.device_id,
+            binding.device_authorize_event_id.as_deref(),
+        )
+        .await
+        {
+            Ok(selector) => selector,
+            Err(_) => continue,
+        };
         match state
             .mls_key_packages()
             .claim_peer_key_package(PeerKeyPackageClaimAttempt {
@@ -718,6 +729,7 @@ async fn peer_claim_keypackage(
                 mls_group_id: body.mls_group_id.as_str(),
                 device_authorize_event_id: binding.device_authorize_event_id.as_deref(),
                 agent_key_authorize_event_id: binding.agent_key_authorize_event_id.as_deref(),
+                device_revocation_gate: device_revocation_gate.as_ref(),
                 claimed_at: now_secs,
                 claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
                 ledger: &ledger,
@@ -1672,6 +1684,17 @@ async fn claim_keypackages_for_request_inner(
             &outcome,
             now_secs,
         )?;
+        let device_revocation_gate = match keypackage_device_revocation_gate(
+            state,
+            &predicted.actor_id,
+            &predicted.device_id,
+            claim_binding.device_authorize_event_id.as_deref(),
+        )
+        .await
+        {
+            Ok(selector) => selector,
+            Err(_) => continue,
+        };
 
         match state
             .mls_key_packages()
@@ -1680,6 +1703,7 @@ async fn claim_keypackages_for_request_inner(
                 mls_group_id: &mls_group_ref,
                 device_authorize_event_id: claim_binding.device_authorize_event_id.as_deref(),
                 agent_key_authorize_event_id: claim_binding.agent_key_authorize_event_id.as_deref(),
+                device_revocation_gate: device_revocation_gate.as_ref(),
                 claimed_at: now_secs,
                 claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
                 ledger: &ledger,
@@ -2589,6 +2613,7 @@ async fn revoke_keypackages(
                         intended_realm_id: None,
                         device_authorize_event_id: None,
                         agent_key_authorize_event_id: None,
+                        device_revocation_gate: None,
                         claimed_at: revoked_at,
                         claim_expires_at_unix_ms: None,
                     })
@@ -2652,6 +2677,7 @@ pub(crate) async fn retire_device_keypackages(
                 intended_realm_id: None,
                 device_authorize_event_id: None,
                 agent_key_authorize_event_id: None,
+                device_revocation_gate: None,
                 claimed_at: retired_at,
                 claim_expires_at_unix_ms: None,
             })
@@ -2679,6 +2705,37 @@ pub(crate) async fn retire_device_keypackages(
 // invoked from the events submission strand; no dedicated REST surface.
 
 // ── helpers ───────────────────────────────────────────────────────────
+
+async fn keypackage_device_revocation_gate(
+    state: &AppState,
+    actor_id: &str,
+    device_id: &str,
+    device_authorize_event_id: Option<&str>,
+) -> Result<Option<soland_storage::DeviceRevocationGateSelector>, AppError> {
+    let Some(device_authorize_event_id) = device_authorize_event_id else {
+        return Ok(None);
+    };
+    let selector =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state, actor_id, device_id,
+        )
+        .await
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "KeyPackage device authorization is unavailable",
+            )
+            .with_wire_code("claim_failed")
+        })?;
+    if selector.target_device_authorize_event_id != device_authorize_event_id {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "KeyPackage device authorization is not current",
+        )
+        .with_wire_code("claim_failed"));
+    }
+    Ok(Some(selector))
+}
 
 fn validate_capabilities(capabilities: &[String]) -> Result<Vec<String>, String> {
     if capabilities.is_empty() {

@@ -2,6 +2,9 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
 
+#[path = "control_proposal_decisions.rs"]
+mod control_proposal_decisions;
+
 /// Resolve governance health with the one Ack-less authority class proven
 /// against current accepted state.
 ///
@@ -94,6 +97,14 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(
             Router::with_path("control-proposal-acks")
                 .post(super::control_proposal_ack_issue::issue_control_proposal_ack),
+        )
+        .push(
+            Router::with_path("control-proposal-decisions")
+                .post(control_proposal_decisions::submit_control_proposal_decision),
+        )
+        .push(
+            Router::with_path("control-proposal-decisions/query")
+                .post(control_proposal_decisions::read_control_proposal_decision),
         )
         .push(Router::with_path("events/describe").query(events_describe))
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))

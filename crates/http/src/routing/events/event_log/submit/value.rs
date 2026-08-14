@@ -628,6 +628,13 @@ async fn stored_control_proposal_ack(
             format!("stored Control Move is not canonical wire: {error}"),
         )
     })?;
+    if event.kind == arkret_wire::EventKind::DeviceRevoke {
+        return Err(SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "accepted device revoke is missing its mandatory Control Proposal Ack",
+        ));
+    }
     let recovered_digest = Hash::new(event.event_digest().map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -827,8 +834,8 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     if device
         .payload
         .get("authorized_generation_ref")
-        .and_then(Value::as_str)
-        != Some(generation.current_ref.as_str())
+        .and_then(Value::as_u64)
+        != Some(generation.current_ref)
     {
         return Ok(Some(
             "event proof device is not bound to the current device generation",
@@ -1222,16 +1229,18 @@ pub(super) async fn submit_event_value_with_context(
                     && event.seal_ref.is_none()
                     && event.auth_context.is_none()
             });
-    let self_principal_pcr_device_authorized =
-        if let Some(event) = control_event_for_proposal.as_ref() {
-            is_authority_authored_self_principal_pcr_control_move(state, event)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-                })?
-        } else {
-            false
-        };
+    let self_principal_pcr_device_authorized = if let Some(event) = control_event_for_proposal
+        .as_ref()
+        .filter(|event| event.kind != arkret_wire::EventKind::DeviceRevoke)
+    {
+        is_authority_authored_self_principal_pcr_control_move(state, event)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+            })?
+    } else {
+        false
+    };
     if self_principal_pcr_device_authorized && submitted_control_proposal_ack.is_some() {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -1898,77 +1907,13 @@ pub(super) async fn submit_event_value_with_context(
         }
     }
 
-    // SPEC-SOL-003 follow-through — an accepted durable `ak.device.revoke`
-    // is the canonical revocation trigger (device-lifecycle.md §2.2).
-    // Validate the revocation against the submitting session, then flip the
-    // device record the auth gate reads BEFORE persisting the event: a
-    // failed flip rejects the submission (no event-without-enforcement),
-    // while a flipped record with a failed persist only over-revokes — the
-    // safe direction, the peer device can resubmit.
-    if parsed.kind == "ak.device.revoke" {
-        let target_device_id = validate_device_revoke_submission(session, &parsed, &envelope)?;
-        crate::routing::identity::auth::revoke_device_record(
-            state,
-            &parsed.actor_id,
-            &target_device_id,
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("device revocation enforcement failed: {error}"),
-            )
-        })?;
-        let keypackages_retired = crate::routing::mls::retire_device_keypackages(
-            state,
-            &parsed.actor_id,
-            &target_device_id,
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("device KeyPackage retirement failed: {error}"),
-            )
-        })?;
-        // device-lifecycle.md §7 grace drop — a to-device message already queued
-        // for the revoked device MUST be dropped on revocation: a lost or
-        // compromised device that comes back online MUST NOT drain key-exchange
-        // or verification bootstrap material queued before the revoke. Runs after
-        // the record flip so `GET /_arkret/self/device_messages` for that device
-        // returns nothing once the revoke is accepted.
-        let mls_remove_obligations = crate::routing::mls::enqueue_device_revoke_mls_removals(
-            state,
-            &parsed.actor_id,
-            &target_device_id,
-            &parsed.event_id,
-        );
-        let purge_outcome = crate::routing::identity::auth::purge_device_delivery_state(
-            state,
-            &parsed.actor_id,
-            &target_device_id,
-        )
-        .await;
-        append_audit_log(
-            state,
-            Some(&parsed.actor_id),
-            "device.revoke",
-            json!({
-                "revoked_device_id": target_device_id,
-                "by_device_id": session.device_id.clone(),
-                "via": "ak.device.revoke",
-                "event_id": parsed.event_id.clone(),
-                "keypackages_retired": keypackages_retired,
-                "mls_remove_obligations": mls_remove_obligations,
-                "to_device_messages_dropped": purge_outcome.to_device_messages_dropped,
-                "push_registrations_removed": purge_outcome.push_registrations_removed,
-            }),
-            "accepted",
-        )
-        .await;
-    }
+    // `ak.device.revoke` acceptance is only a reversible durable pending
+    // transition. Irreversible device/key/delivery cleanup belongs to the
+    // covering-Seal path. Keep the validated target for the atomic Event UOW;
+    // never mutate device state before the canonical Event and Ack commit.
+    let device_revoke_target_device_id = (parsed.kind == "ak.device.revoke")
+        .then(|| validate_device_revoke_submission(session, &parsed, &envelope))
+        .transpose()?;
 
     // morph.md §4.1 S3 — a breaking / transformation schema migration that
     // reached this point passed the profile gate + capability check + CAS, and
@@ -2172,6 +2117,75 @@ pub(super) async fn submit_event_value_with_context(
     } else {
         None
     };
+    let local_device_revocation_gate = if !session.token_hash.starts_with("federation:")
+        && arkret_identifiers::DeviceId::new(parsed.device_id.clone()).is_ok()
+    {
+        let producer_principal_id = envelope
+            .get("executed_by")
+            .and_then(Value::as_str)
+            .unwrap_or(&parsed.actor_id);
+        let selector =
+            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+                state,
+                producer_principal_id,
+                &parsed.device_id,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    if error.is_conflict_kind() || error.is_not_found() {
+                        StatusCode::PRECONDITION_FAILED
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    },
+                    if error.is_conflict_kind() || error.is_not_found() {
+                        "device_unauthorized"
+                    } else {
+                        "internal_error"
+                    },
+                    format!("Event author device authorization unavailable: {error}"),
+                )
+            })?;
+        let gate_status = state
+            .persistence()
+            .device_revocation_gate_status(&selector)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Event author revocation gate unavailable: {error}"),
+                )
+            })?;
+        match gate_status {
+            soland_storage::DeviceRevocationGateStatus::Active => {}
+            soland_storage::DeviceRevocationGateStatus::Pending { .. } => {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "device_revocation_pending",
+                    "Event author device has a pending revocation proposal",
+                ));
+            }
+            soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "device_revoked",
+                    "Event author device generation is revoked",
+                ));
+            }
+            soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
+            | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "device_unauthorized",
+                    "Event author device generation no longer matches accepted authority state",
+                ));
+            }
+        }
+        Some(selector)
+    } else {
+        None
+    };
     let (envelope, accepted_canonical_bytes) =
         accepted_event_envelope(state, session, envelope, &parsed, received_at).await?;
     envelope_for_bootstrap = envelope.clone();
@@ -2286,6 +2300,46 @@ pub(super) async fn submit_event_value_with_context(
             "Event commit cannot carry two idempotency outcomes",
         ));
     }
+    let device_revocation_transition =
+        if let Some(target_device_id) = device_revoke_target_device_id.as_deref() {
+            let control_proposal_ack = control_proposal_ack.clone().ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    "ak.device.revoke requires a canonical Control Proposal Ack",
+                )
+            })?;
+            let selector =
+            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+                state,
+                &parsed.actor_id,
+                target_device_id,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    if error.is_conflict_kind() || error.is_not_found() {
+                        StatusCode::PRECONDITION_FAILED
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    },
+                    if error.is_conflict_kind() || error.is_not_found() {
+                        "device_unauthorized"
+                    } else {
+                        "internal_error"
+                    },
+                    format!("revoke target device authorization unavailable: {error}"),
+                )
+            })?;
+            Some(soland_storage::DeviceRevocationTransition {
+                selector,
+                proposal_event_id: parsed.event_id.clone(),
+                proposal_digest: parsed.canonical_digest.clone(),
+                control_proposal_ack,
+            })
+        } else {
+            None
+        };
     let command = soland_services::events::CommitAcceptedEventCommand {
         device_pairing_authorization: device_pairing_authorization.cloned(),
         contact_projection: contact_projection.cloned(),
@@ -2302,6 +2356,8 @@ pub(super) async fn submit_event_value_with_context(
             received_at,
         },
         control_proposal_ack: control_proposal_ack.clone(),
+        device_revocation_transition,
+        device_revocation_gate: local_device_revocation_gate,
         self_principal_pcr_device_authorized,
         projections: projected_event
             .iter()
@@ -2407,6 +2463,20 @@ pub(super) async fn submit_event_value_with_context(
                     StatusCode::NOT_FOUND,
                     "not_found",
                     "device pairing request not found",
+                ));
+            }
+            if conflict == Some(ConflictCode::DeviceRevocationPending) {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "device_revocation_pending",
+                    "device revocation is pending",
+                ));
+            }
+            if conflict == Some(ConflictCode::DeviceRevoked) {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "device_revoked",
+                    "device generation is revoked",
                 ));
             }
             if conflict == Some(ConflictCode::DuplicateConflict) {

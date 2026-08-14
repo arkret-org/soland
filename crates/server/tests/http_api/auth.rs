@@ -362,29 +362,35 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device() 
     state
         .test_persistence()
         .device_messages()
-        .append(DeviceMessageRecord {
-            idempotency_key: "logout-device-a".to_owned(),
-            sender: actor.to_owned(),
-            recipient: actor.to_owned(),
-            device_id: device_a.to_owned(),
-            position: 1,
-            content: serde_json::json!({"type": "ak.test.device_message"}),
-            created_at: chrono::Utc::now(),
-        })
+        .append(
+            None,
+            DeviceMessageRecord {
+                idempotency_key: "logout-device-a".to_owned(),
+                sender: actor.to_owned(),
+                recipient: actor.to_owned(),
+                device_id: device_a.to_owned(),
+                position: 1,
+                content: serde_json::json!({"type": "ak.test.device_message"}),
+                created_at: chrono::Utc::now(),
+            },
+        )
         .await
         .unwrap();
     state
         .test_persistence()
         .device_messages()
-        .append(DeviceMessageRecord {
-            idempotency_key: "logout-device-b".to_owned(),
-            sender: actor.to_owned(),
-            recipient: actor.to_owned(),
-            device_id: device_b.to_owned(),
-            position: 2,
-            content: serde_json::json!({"type": "ak.test.device_message"}),
-            created_at: chrono::Utc::now(),
-        })
+        .append(
+            None,
+            DeviceMessageRecord {
+                idempotency_key: "logout-device-b".to_owned(),
+                sender: actor.to_owned(),
+                recipient: actor.to_owned(),
+                device_id: device_b.to_owned(),
+                position: 2,
+                content: serde_json::json!({"type": "ak.test.device_message"}),
+                created_at: chrono::Utc::now(),
+            },
+        )
         .await
         .unwrap();
 

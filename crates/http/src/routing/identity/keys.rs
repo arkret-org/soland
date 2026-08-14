@@ -239,12 +239,7 @@ async fn keys_query(
             device_generations.insert(
                 actor_core.clone(),
                 arkret_models_crypto::keys::DeviceGenerationState {
-                    current_device_generation_ref: arkret_wire::NonEmptyString::new(
-                        generation.current_ref,
-                    )
-                    .map_err(|error| {
-                        AppError::internal(format!("stored device generation is invalid: {error}"))
-                    })?,
+                    current_device_generation_ref: generation.current_ref,
                     device_generation_status: match generation.status {
                         crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
                             arkret_models_crypto::keys::DeviceGenerationStatus::Active

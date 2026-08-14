@@ -592,6 +592,7 @@ pub(in crate::routing) async fn accept_peer_relay(
             request_key,
             request_digest: request_digest.clone(),
             idempotency_expires_at: expires_at + chrono::Duration::days(1),
+            device_revocation_gate: None,
             target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
                 recipient: recipient.to_string(),
                 devices: devices
@@ -613,6 +614,12 @@ pub(in crate::routing) async fn accept_peer_relay(
         DeviceMessageBatchCommitOutcome::SnapshotConflict => {
             return Err(direct_repair_precondition(
                 "repair recipient device snapshot changed concurrently",
+            ));
+        }
+        DeviceMessageBatchCommitOutcome::DeviceRevocationPending
+        | DeviceMessageBatchCommitOutcome::DeviceRevoked => {
+            return Err(AppError::internal(
+                "server-authored repair batch unexpectedly carried a device revocation gate",
             ));
         }
     };

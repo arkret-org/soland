@@ -6,8 +6,9 @@ use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, PendingControlEventRecord, SealStore,
-    SealedControlEventRecord, StoreError, StoreResult, compute_state_root, control_event_digest,
+    CellRegistry, CellStore, ControlEventStore, ControlProposalSnapshot, PendingControlEventRecord,
+    SealStore, SealedControlEventRecord, StoreError, StoreResult, compute_state_root,
+    control_event_digest,
 };
 use arkret_wire::{
     Bottom, ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event,
@@ -195,6 +196,20 @@ struct ControlProposalStateRow {
 }
 
 #[derive(QueryableByName)]
+struct ControlProposalSnapshotRow {
+    #[diesel(sql_type = Jsonb)]
+    event_json: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    control_proposal_ack: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    proposal_decisions: Value,
+    #[diesel(sql_type = Nullable<Text>)]
+    sealed_by: Option<String>,
+    #[diesel(sql_type = Bool)]
+    decision_overdue: bool,
+}
+
+#[derive(QueryableByName)]
 struct OptionalJsonRow {
     #[diesel(sql_type = Nullable<Jsonb>)]
     value: Option<Value>,
@@ -297,6 +312,9 @@ async fn mark_control_event_sealed_in_transaction(
     .bind::<Timestamptz, _>(sealed_at)
     .execute(conn)
     .await?;
+    crate::stage_sealed_revocation_in_transaction(conn, digest, seal_id, sealed_at)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
     Ok(())
 }
 
@@ -664,6 +682,44 @@ impl ControlEventStore for PgControlEventStore {
             row.and_then(|row| row.value)
                 .map(|value| serde_json::from_value(value).map_err(serde_to_store))
                 .transpose()
+        })
+    }
+
+    fn control_proposal_snapshot(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<ControlProposalSnapshot>> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "SELECT event_json, control_proposal_ack, proposal_decisions, sealed_by, \
+                        decision_overdue FROM state_control_events WHERE event_digest=$1",
+            )
+            .bind::<Text, _>(&digest)
+            .get_result::<ControlProposalSnapshotRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.map(|row| {
+                Ok(ControlProposalSnapshot {
+                    event: serde_json::from_value(row.event_json).map_err(serde_to_store)?,
+                    control_proposal_ack: row
+                        .control_proposal_ack
+                        .map(|value| serde_json::from_value(value).map_err(serde_to_store))
+                        .transpose()?,
+                    decisions: serde_json::from_value(row.proposal_decisions)
+                        .map_err(serde_to_store)?,
+                    sealed_by: row
+                        .sealed_by
+                        .map(SealId::new)
+                        .transpose()
+                        .map_err(|error| StoreError::Backend(error.to_string()))?,
+                    decision_overdue: row.decision_overdue,
+                })
+            })
+            .transpose()
         })
     }
 

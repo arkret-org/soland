@@ -798,6 +798,9 @@ async fn enforce_device_generation_fence(
     if root_anchor || is_identity_anchor_authorize {
         return Ok(());
     }
+    if event_uses_active_applet_registration_epoch(state, object).await? {
+        return Ok(());
+    }
     if let Some(verification_method) = object
         .get("proofs")
         .and_then(Value::as_array)
@@ -882,8 +885,8 @@ async fn enforce_device_generation_fence(
     let authorized_generation_ref = device
         .payload
         .get("authorized_generation_ref")
-        .and_then(Value::as_str);
-    if authorized_generation_ref != Some(generation.current_ref.as_str()) {
+        .and_then(Value::as_u64);
+    if authorized_generation_ref != Some(generation.current_ref) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "device_generation_fenced",
@@ -891,6 +894,76 @@ async fn enforce_device_generation_fence(
         ));
     }
     Ok(())
+}
+
+async fn event_uses_active_applet_registration_epoch(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+) -> Result<bool, EventValidationError> {
+    let Some(applet_id) = object.get("applet_id").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(verification_method) = object
+        .get("proofs")
+        .and_then(Value::as_array)
+        .and_then(|proofs| proofs.first())
+        .and_then(|proof| proof.get("verification_method"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(false);
+    };
+    let signer_id = object
+        .get("executed_by")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("actor_id").and_then(Value::as_str));
+    let Some(signer_id) = signer_id else {
+        return Ok(false);
+    };
+    let Some(method_controller) = verification_method.split_once('#').map(|(root, _)| root) else {
+        return Ok(false);
+    };
+    let method_controller = arkret_wire::DidFullId::new(method_controller.to_owned())
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id));
+    if !matches!(method_controller, Ok(ref id) if id.as_str() == signer_id) {
+        return Ok(false);
+    }
+    let record = state
+        .event_queries()
+        .applet(applet_id)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Applet proof authority lookup failed: {error}"),
+            )
+        })?;
+    let Some(record) = record else {
+        return Ok(false);
+    };
+    let record: crate::routing::extensions::applet_bridge::AppletRecord =
+        serde_json::from_value(record).map_err(|error| {
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Applet proof authority is invalid: {error}"),
+            )
+        })?;
+    if record.revoked_at.is_some()
+        || !matches!(record.status.as_str(), "installed" | "partially_installed")
+    {
+        return Ok(false);
+    }
+    let Some(package) = record.package.as_ref() else {
+        return Ok(false);
+    };
+    let evidence = record
+        .registration_epoch_evidence
+        .as_ref()
+        .or(package.registration_epoch_evidence.as_ref());
+    Ok(package.service_id.as_str() == signer_id
+        && package.webhook_auth.key_ref.as_str() == verification_method
+        && evidence.is_some_and(|evidence| evidence.contains_signing_key(verification_method)))
 }
 
 /// Run the registry cell contract for every reducer-input kind whose registry

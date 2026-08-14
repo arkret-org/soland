@@ -142,6 +142,8 @@ fn persistence_event_commit_request(
             }
         }),
         control_proposal_ack: command.control_proposal_ack,
+        device_revocation_transition: command.device_revocation_transition,
+        device_revocation_gate: command.device_revocation_gate,
         self_principal_pcr_device_authorized: command.self_principal_pcr_device_authorized,
         projections: command
             .projections
@@ -1128,6 +1130,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 intended_realm_id: command.intended_realm_id,
                 device_authorize_event_id: command.device_authorize_event_id,
                 agent_key_authorize_event_id: command.agent_key_authorize_event_id,
+                device_revocation_gate: command.device_revocation_gate.cloned(),
                 claimed_at: command.claimed_at,
                 claim_expires_at_unix_ms: command.claim_expires_at_unix_ms,
             })
@@ -1174,6 +1177,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     mls_group_id: attempt.mls_group_id,
                     device_authorize_event_id: attempt.device_authorize_event_id,
                     agent_key_authorize_event_id: attempt.agent_key_authorize_event_id,
+                    device_revocation_gate: attempt.device_revocation_gate.cloned(),
                     claimed_at: attempt.claimed_at,
                     claim_expires_at_unix_ms: attempt.claim_expires_at_unix_ms,
                     ledger: &ledger,
@@ -1294,6 +1298,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     intended_realm_id: None,
                     device_authorize_event_id: None,
                     agent_key_authorize_event_id: None,
+                    device_revocation_gate: None,
                     claimed_at: retired_at,
                     claim_expires_at_unix_ms: None,
                 })

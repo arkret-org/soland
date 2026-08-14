@@ -250,7 +250,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXcqvP9Thao2eXqknSBLXjG8NxtO5wk_BeJVsTgbCqoP";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:ASf6d36fSmDB2HaMTfH-vMnDsHFgG0SaUykX5sgGkFuY";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -2321,7 +2321,7 @@ mod membership_hydration_tests {
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "device_generation_ref": "1-device-generation-ref"
+                "device_generation_ref": 1
             },
             "issued_at": "2026-07-18T00:00:00.000Z",
             "auth_data": {
@@ -2394,7 +2394,7 @@ mod membership_hydration_tests {
             "previous_series_ids": [],
             "frontier_ref": {
                 "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "device_generation_ref": "1-device-generation-ref"
+                "device_generation_ref": 1
             },
             "issued_at": "2026-07-18T00:01:00.000Z",
             "auth_data": {

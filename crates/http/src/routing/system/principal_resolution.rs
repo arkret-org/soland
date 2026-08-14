@@ -1,18 +1,16 @@
 use arkret_models_identity::{
     DidDocument, PrincipalResolutionProjection, PrincipalResolutionProjectionAttestationCore,
-    PublicPrincipalResolution,
-    ResolutionDidBindingEvidenceKind, ResolutionDidBindingEvidenceReceipt,
-    ResolutionDidBindingMethodProof, ResolutionDidBindingMethodProofKind,
-    ResolutionMethodEvidenceBoundary, ResolutionMethodHistoryEvidence,
+    PublicPrincipalResolution, ResolutionDidBindingEvidenceKind,
+    ResolutionDidBindingEvidenceReceipt, ResolutionDidBindingMethodProof,
+    ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
+    ResolutionMethodHistoryEvidence,
 };
 use arkret_wire::{DidCoreId, DidFullId, Hash, PrincipalAuthorityKey};
-use chrono::Duration;
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::PinnedDidVersionStatus;
 
-use super::service_resolution::service_assertion_method;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -23,7 +21,9 @@ pub(super) fn open_router() -> Router {
 /// Freshness window of the projection attestation.
 ///
 /// A consumer performing a security-sensitive action refetches at or after
-/// `expires_at`; a cache never extends it.
+/// `expires_at`; a cache never extends it. This is first-contact identity
+/// resolution, not an issuance fence, so it is not the 30-second bound the
+/// device-revocation gate receipt uses.
 const PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 600;
 
 #[salvo::oapi::endpoint(operation_id = "ak.open.identity.read.resolution", tags("identity"))]
@@ -37,7 +37,7 @@ async fn open_principal_resolution(
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
     let principal_server_id = DidCoreId::new(principal_server_id.into_inner())
         .map_err(|_| AppError::param_invalid("invalid principal_server_id"))?;
-    let authority = PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id.clone());
+    let authority = PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
     let record = state
         .persistence()
         .principal_resolution_by_authority_key(&authority)
@@ -50,47 +50,47 @@ async fn open_principal_resolution(
 
     let method_history_evidence =
         principal_method_history_evidence(state, &record.projection).await?;
-    let method_history_evidence_digest = canonical_digest(&method_history_evidence)?;
-
-    // The public surface carries no PCR realm id, genesis Event, receipt, Seal
-    // or cell proof. Without this attestation the remaining fields would be an
-    // unproven server assertion, so it is signed here rather than left optional.
-    let issued_at =
-        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
-            .ok_or_else(|| AppError::internal("projection attestation timestamp is invalid"))?;
-    let stored = state
-        .stored_service_identity()
-        .await
-        .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
-    let attestation = arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
-        PrincipalResolutionProjectionAttestationCore {
-            principal_id: principal_id.clone(),
-            principal_server_id: principal_server_id.clone(),
-            resolution_projection: record.projection.clone(),
-            method_history_evidence_digest,
-            issued_at,
-            expires_at: issued_at + Duration::seconds(PROJECTION_ATTESTATION_TTL_SECONDS),
-        },
-        service_assertion_method(state, &stored)?,
-        state.notary_signing_key().as_ref(),
+    let issued_at = chrono::Utc::now();
+    let method_history_evidence_digest = Hash::new(
+        arkret_canonical::canonical_sha256(&method_history_evidence).map_err(|error| {
+            AppError::internal(format!("method history evidence digest failed: {error}"))
+        })?,
     )
-    .map_err(|error| {
-        AppError::internal(format!("projection attestation signing failed: {error}"))
-    })?;
-
-    let resolution = PublicPrincipalResolution {
+    .map_err(|error| AppError::internal(format!("method history digest is invalid: {error}")))?;
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let projection_attestation =
+        arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
+            PrincipalResolutionProjectionAttestationCore {
+                principal_id: principal_id.clone(),
+                principal_server_id: authority.principal_server_id.clone(),
+                resolution_projection: record.projection.clone(),
+                method_history_evidence_digest,
+                issued_at,
+                expires_at: issued_at
+                    + chrono::Duration::seconds(PROJECTION_ATTESTATION_TTL_SECONDS),
+            },
+            verification_method,
+            state.notary_signing_key().as_ref(),
+        )
+        .map_err(|error| {
+            AppError::internal(format!("principal resolution attestation failed: {error}"))
+        })?;
+    let evidence = PublicPrincipalResolution {
         principal_id,
-        principal_server_id,
+        principal_server_id: authority.principal_server_id,
         resolution_projection: record.projection,
         method_history_evidence,
-        projection_attestation: attestation,
+        projection_attestation,
     };
-    resolution.validate_attestation_binding().map_err(|error| {
+    evidence.validate_attestation_binding().map_err(|error| {
         AppError::internal(format!(
-            "public principal resolution attestation binding is invalid: {error}"
+            "principal resolution attestation binding is invalid: {error}"
         ))
     })?;
-    json_ok(resolution)
+    json_ok(evidence)
 }
 
 async fn principal_method_history_evidence(

@@ -142,10 +142,13 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             intended_realm_id,
             device_authorize_event_id,
             agent_key_authorize_event_id,
+            device_revocation_gate,
             claimed_at,
             claim_expires_at_unix_ms,
         } = claim;
         const REVOKED_CLAIM_SENTINEL: &str = "revoked";
+        let gate_required = matches!(target, MlsKeyPackageClaimTarget::Group(_))
+            && device_authorize_event_id.is_some();
         let group_id = match target {
             MlsKeyPackageClaimTarget::Group(group_id) => group_id,
             MlsKeyPackageClaimTarget::Retire => "retired",
@@ -154,7 +157,16 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        if gate_required {
+            let selector = device_revocation_gate.as_ref().ok_or_else(|| {
+                PersistenceError::SchemaViolation(
+                    "device KeyPackage claim is missing revocation selector".to_owned(),
+                )
+            })?;
+            crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
+        }
+        let row = sql_query(
             "UPDATE mls_key_packages \
              SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN claimed_by_mls_group_id ELSE $2 END, \
                  last_resort_realm_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
@@ -192,7 +204,11 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .optional()
         .map_err(PersistenceError::database)?
         .map(validated_keypackage_row)
-        .transpose()
+        .transpose()?;
+        Ok::<Option<MlsKeyPackageRow>, PgTransactionError>(row)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn consume_claim(
@@ -284,6 +300,23 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 .await?
                 {
                     return Ok(PeerKeyPackageClaimAttemptResult::Existing(Box::new(existing)));
+                }
+                if attempt.device_authorize_event_id.is_some() {
+                    let selector = attempt.device_revocation_gate.as_ref().ok_or_else(|| {
+                        PersistenceError::SchemaViolation(
+                            "peer device KeyPackage claim is missing revocation selector"
+                                .to_owned(),
+                        )
+                    })?;
+                    match crate::gate_status_in_transaction(conn, selector).await? {
+                        soland_storage::DeviceRevocationGateStatus::Active => {}
+                        soland_storage::DeviceRevocationGateStatus::Pending { .. }
+                        | soland_storage::DeviceRevocationGateStatus::Revoked { .. }
+                        | soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
+                        | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
+                            return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
+                        }
+                    }
                 }
                 let claimed = sql_query(
                     "UPDATE mls_key_packages \

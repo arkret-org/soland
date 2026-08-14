@@ -527,6 +527,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
             issuer: grant.issuer.clone(),
             credential_class: grant.credential_class,
             holder_binding: grant.holder_binding.clone(),
+            device_binding: grant.device_binding.clone(),
             cnf_jkt: grant.cnf_jkt.clone(),
         }),
         expires_at: grant.expires_at,
@@ -654,6 +655,7 @@ pub(crate) fn session_from_verified_grant(
         issuer: grant.issuer.clone(),
         credential_class: grant.credential_class,
         holder_binding: grant.holder_binding.clone(),
+        device_binding: grant.device_binding.clone(),
         cnf_jkt: grant.cnf_jkt.clone(),
     };
     SessionRecord {
@@ -800,6 +802,19 @@ mod tests {
             service_account_id: "alice".to_owned(),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
+            ),
+            device_binding: Some(
+                arkret_models_identity::session_credential::SessionGrantDeviceBinding {
+                    device_id: DeviceId::new(
+                        "ak:device:0196419b-0000-7000-8000-000000000001",
+                    )
+                    .unwrap(),
+                    authorization_event_id: arkret_identifiers::EventId::from_digest(
+                        arkret_canonical::DigestSuite::Sha256,
+                        [0x42; 32],
+                    ),
+                    model_generation_ref: 1,
+                },
             ),
             audience: arkret_wire::DidCoreId::from(
                 arkret_wire::project_full_id_to_core_id(

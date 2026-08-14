@@ -18,7 +18,7 @@ fn active_series_payload() -> Value {
         "frontier_ref": {
             "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "device_generation_ref": "2-device-generation-ref"
+            "device_generation_ref": 2
         },
         "issued_at": "2026-04-27T00:00:00.000Z",
         "auth_data": {

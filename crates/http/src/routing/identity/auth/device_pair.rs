@@ -45,14 +45,14 @@ async fn authorize_account_device_pair(
             let authorizer_generation = authorizing_device
                 .payload
                 .get("authorized_generation_ref")
-                .and_then(Value::as_str);
-            if authorizer_generation != Some(generation.current_ref.as_str()) {
+                .and_then(Value::as_u64);
+            if authorizer_generation != Some(generation.current_ref) {
                 return Err(AppError::capability_denied(
                     "authorizing device is outside the active device generation",
                 )
                 .with_wire_code("device_unauthorized"));
             }
-            Ok(generation.current_ref.clone())
+            Ok(generation.current_ref)
         })
         .transpose()?;
     let pairing_code = body.pairing_code.as_str().trim();
@@ -248,11 +248,11 @@ async fn authorize_account_device_pair(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("accepted authorize Event has no device projection"))?;
     if projected.verification_state != "verified"
-        || authorized_generation_ref.as_deref()
+        || authorized_generation_ref
             != projected
                 .payload
                 .get("authorized_generation_ref")
-                .and_then(Value::as_str)
+                .and_then(Value::as_u64)
     {
         return Err(AppError::internal(
             "accepted authorize Event produced an inconsistent device projection",

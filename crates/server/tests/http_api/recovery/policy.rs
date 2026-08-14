@@ -181,7 +181,7 @@ async fn recovery_policy_get_returns_null_without_active_policy() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
     let signing = SigningKey::from_bytes(&[90u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
-    let token = dev_token_for_device(
+    let token = verified_dev_token_for_device(
         state.clone(),
         &principal_id,
         RECOVERY_TEST_DEVICE,
@@ -205,7 +205,7 @@ async fn recovery_policy_get_returns_active_and_history() {
     let signing = SigningKey::from_bytes(&[91u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     // Authenticate AS the principal so the read APIs (principal-isolated) see it.
-    let token = dev_token_for_device(
+    let token = verified_dev_token_for_device(
         state.clone(),
         &principal_id,
         RECOVERY_TEST_DEVICE,

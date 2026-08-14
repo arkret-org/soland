@@ -1,4 +1,4 @@
-use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
+use soland_services::identity::{FindDeviceQuery, SaveDeviceCommand};
 
 use super::*;
 
@@ -50,47 +50,6 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
         count += 1;
     }
     Ok(count)
-}
-
-/// Persist that the device is revoked. Used only by explicit device-management
-/// and account-lifecycle revocation flows; session logout must not call this.
-pub async fn revoke_device_record(
-    state: &AppState,
-    actor: &str,
-    device_id: &str,
-) -> Result<(), String> {
-    let revoked_at = now();
-    let mut record = state
-        .identities()
-        .find_device(FindDeviceQuery {
-            actor_id: actor.to_owned(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .unwrap_or_else(|| DeviceIdentity {
-            actor_id: actor.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: None,
-            verification_state: "unverified".to_owned(),
-            payload: json!({"device_id": device_id}),
-            created_at: revoked_at,
-            updated_at: revoked_at,
-            revoked_at: Some(revoked_at),
-        });
-    record.revoked_at = Some(revoked_at);
-    record.updated_at = revoked_at;
-    state
-        .identities()
-        .save_device(SaveDeviceCommand {
-            actor_id: actor.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: record.display_name.clone(),
-            device: record,
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 /// Returns true if the persistent device record has a `revoked_at` timestamp,

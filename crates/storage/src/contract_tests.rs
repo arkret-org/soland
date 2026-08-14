@@ -14,8 +14,8 @@ use super::{
     DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageRecord, DeviceMessageStore,
     DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit, DevicePairingRecord,
-    DevicePairingStore, EventCommitRequest, EventCommitUnitOfWork, EventStore,
-    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
+    DevicePairingStore, DeviceRevocationGateSelector, EventCommitRequest, EventCommitUnitOfWork,
+    EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
     FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
     FederationOutboxState, FederationOutboxStore, FederationOutboxTransition, IdempotencyRecord,
     IdempotencyStore, InviteReceivePolicyStore, MimiConsentCorrelationRecord,
@@ -61,6 +61,13 @@ pub async fn assert_device_message_snapshot_guard_contract(
         target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
             recipient: actor.clone(),
             devices: vec![(device_a.clone(), now), (device_b.clone(), now)],
+        }),
+        device_revocation_gate: Some(DeviceRevocationGateSelector {
+            principal_id: actor.clone(),
+            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+            device_id: "sender-device".to_owned(),
+            target_device_authorize_event_id: format!("ak:event:A{}", "a".repeat(43)),
+            target_device_generation_ref: 1,
         }),
         items: [&device_a, &device_b]
             .into_iter()
@@ -1004,6 +1011,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event,
         control_proposal_ack: Some(control_proposal_ack),
         self_principal_pcr_device_authorized: false,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -1130,6 +1139,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: pairing_event,
         control_proposal_ack: Some(pairing_ack),
         self_principal_pcr_device_authorized: false,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
             event_id: pairing_event_id.clone(),
             realm_id: realm_id.clone(),
@@ -1232,6 +1243,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         )),
         event: contact_event,
         self_principal_pcr_device_authorized: false,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
         projections: Vec::new(),
         idempotency: Some(IdempotencyRecord {
             principal_id: principal_id.clone(),
@@ -1315,6 +1328,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             )),
             event: failed_contact_event,
             self_principal_pcr_device_authorized: false,
+            device_revocation_transition: None,
+            device_revocation_gate: None,
             projections: Vec::new(),
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
@@ -1358,6 +1373,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
         event: rollback_event,
         control_proposal_ack: Some(rollback_ack),
         self_principal_pcr_device_authorized: false,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),
@@ -2016,6 +2033,14 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
         intended_realm_id: None,
         device_authorize_event_id: Some("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"),
         agent_key_authorize_event_id: None,
+        device_revocation_gate: Some(DeviceRevocationGateSelector {
+            principal_id: "ak:did_core:web:contract.example".to_owned(),
+            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            target_device_authorize_event_id:
+                "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
+            target_device_generation_ref: 1,
+        }),
         claimed_at: 10,
         claim_expires_at_unix_ms: Some(20_000),
     }

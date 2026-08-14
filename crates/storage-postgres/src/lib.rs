@@ -23,22 +23,26 @@ pub(crate) use soland_storage::{
     BlobStore, CanonicalEventRecord, CircleMemberProjectionRecord, CircleProjectionRecord,
     CircleProjectionStore, ConfirmAgentProvisioningAbandonment, ConsentCellKey, ConsentCellRecord,
     ConsentCellStore, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, CursorRevocation, DeviceInventoryRecord,
-    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
-    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DevicePairingRecord, DevicePairingStore, DirectConversationFoundingCommitOutcome,
-    DirectConversationFoundingSlotRecord, DriftResult, EnqueueAgentRuntimeMessage, EventStore,
-    FederationFrontierExchangeRecord, FederationFrontierExchangeStore, FederationOperationsStore,
-    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
-    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
-    FederationOutboxState, FederationOutboxStateDepth, FederationOutboxStore,
-    FederationOutboxTransition, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
-    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    IssueAgentProvisioningAbandonmentChallenge, JoinApplicationCommand,
-    JoinApplicationCommandOutcome, JoinApplicationMutation, JoinApplicationRecord,
-    JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    ControlProposalAuthorityAckStore, ControlProposalDecisionCommitOutcome, CursorRevocation,
+    DeviceInventoryRecord, DeviceInventoryStore, DeviceMessageBatchCommitOutcome,
+    DeviceMessageBatchInspection, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
+    DeviceMessageRecord, DeviceMessageStore, DevicePairingRecord, DevicePairingStore,
+    DeviceRevocationCleanupIntent, DeviceRevocationGateLinearization,
+    DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
+    DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetRecord,
+    DeviceRevocationTargetStatus, DeviceRevocationTransition,
+    DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord, DriftResult,
+    EnqueueAgentRuntimeMessage, EventStore, FederationFrontierExchangeRecord,
+    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
+    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
+    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
+    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
+    InviteLocatorStore, InviteReceivePolicyStore, IssueAgentProvisioningAbandonmentChallenge,
+    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
+    JoinApplicationRecord, JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
@@ -95,6 +99,7 @@ mod contacts;
 mod control_proposal_acks;
 mod device_pairing_row;
 mod device_pairings;
+mod device_revocations;
 mod devices;
 mod events;
 mod federation;
@@ -140,6 +145,7 @@ pub use contacts::*;
 pub use control_proposal_acks::*;
 pub(crate) use device_pairing_row::DevicePairingRow;
 pub use device_pairings::*;
+pub use device_revocations::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;
