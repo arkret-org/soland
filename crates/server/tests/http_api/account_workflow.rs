@@ -1130,8 +1130,7 @@ async fn account_contacts_and_realm_lifecycle_workflow() {
             "kind": "ak.content.composite",
             "body": "structured hello",
             "mentions": [
-                "did:web:bob.example",
-                {"type": "strand", "strand_id": "ak:strand:ATXMmec6gP5RFzDDw_bd6wat0rywpK-YNn9PqqX7WYWb"}
+                {"kind": "mention", "subject_id": bob_core.as_str()}
             ],
             "parts": [
                 {"kind": "ak.content.text", "body": "structured hello"},

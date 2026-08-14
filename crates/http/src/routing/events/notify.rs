@@ -112,29 +112,20 @@ fn actor_can_receive_watched_message(
     true
 }
 
-/// Mention subject DIDs from a message payload's `content.mentions[]`
-/// (string DID, `{subject_id}`, or `{did}` forms).
+/// Direct-mention subject DIDs of a message payload's Content Block.
+///
+/// Only the canonical `mention_node.subject_id` is authoritative for routing
+/// (strand-and-message.md §9.4.2); a payload that fails canonical mention
+/// admission routes to nobody.
 fn mention_subjects(payload: &Value) -> Vec<String> {
-    let content = payload
+    payload
         .get("content")
-        .or_else(|| payload.get("payload").and_then(|p| p.get("content")));
-    let Some(mentions) = content
-        .and_then(|c| c.get("mentions"))
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for mention in mentions {
-        if let Some(did) = mention.as_str() {
-            out.push(did.to_owned());
-        } else if let Some(subject) = mention.get("subject_id").and_then(Value::as_str) {
-            out.push(subject.to_owned());
-        } else if let Some(did) = mention.get("did").and_then(Value::as_str) {
-            out.push(did.to_owned());
-        }
-    }
-    out
+        .or_else(|| payload.get("payload").and_then(|p| p.get("content")))
+        .and_then(|content| crate::routing::events::operations::mention_subject_ids(content).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(arkret_identifiers::DidCoreId::into_string)
+        .collect()
 }
 
 fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
@@ -999,6 +990,7 @@ mod tests {
             "content": {
                 "body": "ping",
                 "mentions": [{
+                    "kind": "mention",
                     "subject_id": agent,
                     "mention_text_original": "@agent"
                 }]

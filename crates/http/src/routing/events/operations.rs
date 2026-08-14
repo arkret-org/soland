@@ -9,7 +9,8 @@
 //! - `validate_canonical_json_value` (+ `_inner`) — the canonical-JSON shape gate that operation
 //!   payloads MUST pass.
 //! - `validate_content_blocks` / `validate_mentions` / `validate_content_block` — message body
-//!   shape.
+//!   shape. Mention admission is canonical-only: the SDK mention models own the `mention` /
+//!   `audience_mention` AST node types.
 //! - `validate_encrypted_payload_envelope` — `ak.profile.encrypted_envelope.v1` envelope shape (MLS
 //!   sender / scheme / version / `key_ref`).
 //! - canonical RFC 3339 UTC-Z timestamp shape for `*_at` fields accepts the SDK's ordinary
@@ -32,7 +33,7 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 use soland_services::operation_semantics as kinds;
 
-use super::{is_valid_hash_digest, validate_did};
+use super::is_valid_hash_digest;
 use crate::routing::interop::participant_binding;
 use crate::state::AppState;
 
@@ -92,13 +93,6 @@ pub(crate) async fn lock_active_series_operations(
 
 const CONTENT_ENCRYPTION_FLOOR_VIOLATION: &str = "content_encryption_floor_violation";
 const CIRCLE_ENCRYPTION_PROFILE_CREATE_LOCKED: &str = "circle_encryption_profile_create_locked";
-const AUDIENCE_MENTION_ALLOWED_AUDIENCES: &[&str] = &[
-    "effective_scope_members",
-    "strand_participants",
-    "strand_watchers",
-    "strand_engaged",
-    "assigned_actors",
-];
 
 mod policy;
 pub(crate) use policy::*;

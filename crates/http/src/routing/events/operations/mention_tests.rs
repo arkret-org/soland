@@ -22,7 +22,7 @@ mod audience_mention_tests {
         });
 
         validate_content_blocks(&content).unwrap();
-        validate_audience_mentions(&content).unwrap();
+        validate_mentions(&content).unwrap();
     }
 
     #[test]
@@ -34,7 +34,7 @@ mod audience_mention_tests {
         });
 
         assert_eq!(
-            validate_audience_mentions(&content),
+            validate_mentions(&content),
             Err("presence-filtered audience mention requires an explicit profile")
         );
     }
@@ -87,10 +87,47 @@ mod direct_mention_tests {
             }]
         });
 
-        assert_eq!(
-            validate_mentions(&content),
-            Err("mention subject_id is invalid")
-        );
+        assert_eq!(validate_mentions(&content), Err("mention node is invalid"));
+    }
+
+    #[test]
+    fn non_canonical_mention_shapes_are_rejected() {
+        for entry in [
+            json!("ak:did_core:webvh:z6mkfixtureBob"),
+            json!({"type": "actor", "did": "did:web:bob.example"}),
+            json!({"type": "strand", "strand_id": "ak:strand:x"}),
+        ] {
+            let content = json!({
+                "kind": "ak.content.text",
+                "body": "hello",
+                "mentions": [entry]
+            });
+
+            assert_eq!(
+                validate_mentions(&content),
+                Err("mention node kind must be mention or audience_mention")
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_mention_in_composite_part_is_validated() {
+        let content = json!({
+            "kind": "ak.content.composite",
+            "body": "",
+            "parts": [
+                {
+                    "kind": "ak.content.text",
+                    "body": "hello @bob",
+                    "mentions": [{
+                        "kind": "mention",
+                        "subject_id": "did:web:bob.example"
+                    }]
+                }
+            ]
+        });
+
+        assert_eq!(validate_mentions(&content), Err("mention node is invalid"));
     }
 }
 

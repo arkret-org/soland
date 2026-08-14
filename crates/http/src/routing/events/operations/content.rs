@@ -249,70 +249,24 @@ pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'stat
     validate_content_block(content)
 }
 
+/// Canonical mention admission for a Message Content Block tree.
+///
+/// The only admissible shapes are the spec AST nodes — `{"kind":"mention"}`
+/// with a `did_core_id` `subject_id` and `{"kind":"audience_mention"}` with a
+/// closed `audience` — both parsed by the SDK models that own the wire types.
 pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
-    let Some(mentions) = content.get("mentions") else {
-        return Ok(());
-    };
-    let Some(mentions) = mentions.as_array() else {
-        return Err("mentions must be an array");
-    };
-    for mention in mentions {
-        if let Some(did) = mention.as_str() {
-            validate_did(did).map_err(|_| "mention DID is invalid")?;
-            continue;
-        }
-        let Some(mention) = mention.as_object() else {
-            return Err("mention must be a DID string or reference object");
-        };
-        if mention.get("kind").and_then(Value::as_str) == Some("audience_mention") {
-            validate_audience_mention_object(mention)?;
-            continue;
-        }
-        if let Some(subject_id) = mention.get("subject_id").and_then(|value| value.as_str()) {
-            arkret_identifiers::DidCoreId::new(subject_id.to_owned())
-                .map_err(|_| "mention subject_id is invalid")?;
-            continue;
-        }
-        match mention.get("type").and_then(|value| value.as_str()) {
-            Some("actor") => {
-                let Some(did) = mention.get("did").and_then(|value| value.as_str()) else {
-                    return Err("actor mention requires did");
-                };
-                validate_did(did).map_err(|_| "mention DID is invalid")?;
-            }
-            Some("strand") => {
-                if !mention
-                    .get("strand_id")
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|value| value.starts_with("ak:strand:"))
-                {
-                    return Err("strand mention requires strand_id");
-                }
-            }
-            _ => return Err("mention type must be actor or strand"),
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AudienceMentionNode {
-    audience: String,
-}
-
-impl AudienceMentionNode {
-    pub(crate) fn audience(&self) -> &str {
-        &self.audience
-    }
+    arkret_models_collaboration::events_payloads::collect_mention_nodes(content)
+        .map(|_| ())
+        .map_err(|error| error.message())
 }
 
 pub(crate) fn operation_audience_mentions(
     operation: &Operation,
-) -> Result<Vec<AudienceMentionNode>, &'static str> {
-    let mut mentions = Vec::new();
-    if let Some(content) = operation.payload.get("content") {
-        collect_audience_mentions(content, &mut mentions)?;
-    }
+) -> Result<Vec<arkret_models_collaboration::events_payloads::AudienceMention>, &'static str> {
+    let mentions = match operation.payload.get("content") {
+        Some(content) => audience_mention_nodes(content)?,
+        None => Vec::new(),
+    };
     if operation.payload.get("encrypted_content").is_some()
         && operation
             .payload
@@ -324,65 +278,19 @@ pub(crate) fn operation_audience_mentions(
     Ok(mentions)
 }
 
-pub fn validate_audience_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
-    let mut mentions = Vec::new();
-    collect_audience_mentions(content, &mut mentions)?;
-    Ok(())
+/// Direct-mention subject DIDs carried by a Message Content Block tree.
+pub(crate) fn mention_subject_ids(
+    content: &serde_json::Value,
+) -> Result<Vec<arkret_identifiers::DidCoreId>, &'static str> {
+    arkret_models_collaboration::events_payloads::collect_mention_subject_ids(content)
+        .map_err(|error| error.message())
 }
 
-fn collect_audience_mentions(
-    value: &serde_json::Value,
-    out: &mut Vec<AudienceMentionNode>,
-) -> Result<(), &'static str> {
-    match value {
-        Value::Object(object) => {
-            if object.get("kind").and_then(Value::as_str) == Some("audience_mention") {
-                let node = validate_audience_mention_object(object)?;
-                out.push(node);
-                return Ok(());
-            }
-            for value in object.values() {
-                collect_audience_mentions(value, out)?;
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                collect_audience_mentions(value, out)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn validate_audience_mention_object(
-    object: &serde_json::Map<String, Value>,
-) -> Result<AudienceMentionNode, &'static str> {
-    let audience = object
-        .get("audience")
-        .and_then(Value::as_str)
-        .ok_or("audience_mention requires audience")?;
-    if !AUDIENCE_MENTION_ALLOWED_AUDIENCES.contains(&audience) {
-        return Err("audience_mention audience is invalid");
-    }
-    if object
-        .get("mention_text_original")
-        .and_then(Value::as_str)
-        .is_some_and(|token| token.trim().eq_ignore_ascii_case("@online"))
-    {
-        return Err("presence-filtered audience mention requires an explicit profile");
-    }
-    if object
-        .get("mention_text_original")
-        .and_then(Value::as_str)
-        .is_some_and(|token| token.trim().eq_ignore_ascii_case("@here"))
-        && audience != "strand_engaged"
-    {
-        return Err("@here MUST map to audience strand_engaged");
-    }
-    Ok(AudienceMentionNode {
-        audience: audience.to_owned(),
-    })
+fn audience_mention_nodes(
+    content: &serde_json::Value,
+) -> Result<Vec<arkret_models_collaboration::events_payloads::AudienceMention>, &'static str> {
+    arkret_models_collaboration::events_payloads::collect_audience_mention_nodes(content)
+        .map_err(|error| error.message())
 }
 
 /// Validate the keys of a `ak.patch.v1` map as patch *paths* per

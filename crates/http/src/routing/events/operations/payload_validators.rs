@@ -238,7 +238,6 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
     } else if let Some(content) = operation.payload.get("content") {
         validate_content_blocks(content)?;
         validate_mentions(content)?;
-        validate_audience_mentions(content)?;
     }
     Ok(())
 }

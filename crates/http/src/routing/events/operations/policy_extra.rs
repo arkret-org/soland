@@ -904,9 +904,9 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         return Err("audience_mention_policy_missing");
     };
     for mention in mentions {
-        let count =
-            estimate_audience_recipient_count(mention.audience(), &members, operation, state);
-        audience_mention_policy_allows(&policy, mention.audience(), count)?;
+        let audience = mention.audience.as_wire();
+        let count = estimate_audience_recipient_count(audience, &members, operation, state);
+        audience_mention_policy_allows(&policy, audience, count)?;
     }
     Ok(())
 }
@@ -925,25 +925,10 @@ async fn validate_sidecar_mention_subjects(
     }) else {
         return Ok(());
     };
-    let subjects = operation
-        .payload
-        .get("content")
-        .and_then(|content| content.get("mentions"))
-        .and_then(Value::as_array)
-        .map(|mentions| {
-            mentions
-                .iter()
-                .filter_map(|mention| {
-                    mention.as_str().or_else(|| {
-                        mention
-                            .get("subject_id")
-                            .or_else(|| mention.get("did"))
-                            .and_then(Value::as_str)
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let subjects = match operation.payload.get("content") {
+        Some(content) => mention_subject_ids(content)?,
+        None => Vec::new(),
+    };
     if subjects.is_empty() {
         return Ok(());
     }
@@ -956,7 +941,7 @@ async fn validate_sidecar_mention_subjects(
     .map_err(|_| "addressed_agent_not_eligible")?;
     if subjects
         .iter()
-        .any(|subject| !desired.iter().any(|agent| agent == subject))
+        .any(|subject| !desired.iter().any(|agent| agent == subject.as_str()))
     {
         Err("addressed_agent_not_eligible")
     } else {

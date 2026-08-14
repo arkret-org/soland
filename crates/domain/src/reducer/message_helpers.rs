@@ -135,7 +135,6 @@ pub(crate) fn message_content_from_payload(
         for key in [
             "reply_to",
             "in_reply_to",
-            "mentions",
             "mention_routing_hint",
             "mention_sidecar_digest",
         ] {
