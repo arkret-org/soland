@@ -77,7 +77,7 @@ impl ContactStore for MemoryContactStore {
 }
 // In-memory invite-receive policy store
 pub(crate) struct MemoryInviteReceivePolicyStore {
-    data: Arc<
+    pub(crate) data: Arc<
         Mutex<
             BTreeMap<
                 String,

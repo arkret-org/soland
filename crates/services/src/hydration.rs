@@ -1053,10 +1053,11 @@ pub async fn hydrate_realms_from_canonical_events(
         if record.kind == arkret_wire::EventKind::RealmProfile.as_str() {
             hydrate_realm_profile_event(realms, record);
         } else if record.kind == arkret_wire::EventKind::MemberState.as_str() {
-            // Membership transitions MUST be replayed too, or every joined
-            // member except the realm creator (who is seeded by
-            // `hydrate_realm_create_event`) vanishes from `realm_entry.members`
-            // on restart. That silently breaks admin-side MLS admission: the
+            // Membership transitions MUST be replayed too, or joined members
+            // vanish from `realm_entry.members` on restart. In an ordinary
+            // Collaboration Realm the creator is established by the final
+            // explicit bootstrap `ak.member.state`, not by `ak.realm.create`.
+            // Losing that transition silently breaks admin-side MLS admission: the
             // admin's synced roster shows only itself, `other_joined` stays
             // false, and a newly-joined invitee is never claimed/Welcomed —
             // stuck "waiting for a Welcome" forever. Mirrors the live
@@ -1278,7 +1279,13 @@ pub async fn hydrate_realm_create_event(
     entry.realm_class = realm_class;
     entry.default_join_rule = default_join_rule;
     entry.public = discoverability == "public";
-    entry.members.insert(actor);
+    let create_seeds_membership = payload_object
+        .and_then(|object| object.get("purpose"))
+        .and_then(Value::as_str)
+        == Some("direct_conversation");
+    if create_seeds_membership {
+        entry.members.insert(actor);
+    }
     entry.as_of = record.received_at;
     entry.policy_revision = preview_policy_digest
         .clone()

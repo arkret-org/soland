@@ -30,6 +30,7 @@ use arkret_models_collaboration::event_sync::{
     ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind, RealmActorFrontierView,
     RealmSealFrontierView,
 };
+use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
 use arkret_models_collaboration::http_bodies::{
     EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
     EventsSubmitOutcome, EventsSubmitStatus,

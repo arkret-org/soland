@@ -559,19 +559,62 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID.to_owned(),
             };
         };
-
-        // The registered writes were already evaluated from the signed create
-        // payload. This private adapter only supplies the canonical subject and
-        // equivalent null→initial transition expected by the shared reducer.
-        let mut derived = operation.clone();
-        if let Some(payload) = derived.payload.as_object_mut() {
-            payload.insert("call_id".to_owned(), Value::String(call_id));
-            payload.insert(
-                "state_transition".to_owned(),
-                serde_json::json!({"from": null, "to": initial_state}),
-            );
+        let state_cell = match arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.call.state.v1:{call_id}"
+        )) {
+            Ok(cell) => cell,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+                };
+            }
+        };
+        let projected = self.projected_cell_writes();
+        let Some(state_write) = projected
+            .iter()
+            .find(|write| write.cell == state_cell)
+            .and_then(ProjectedCellWrite::as_direct)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        let op = &state_write.op;
+        if op.op_type != arkret_wire::cba::LatticeOpType::Transition
+            || op.from.as_ref() != Some(&Value::Null)
+            || op.to.as_ref().and_then(Value::as_str) != Some(initial_state)
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
         }
-        self.apply_call_cell_effects(&derived, false)
+        if self.cell_value(&state_cell).and_then(Value::as_str) == Some(initial_state) {
+            return ProjectionEffect::CallStateProjected { call_id };
+        }
+        let (Some(next), fsm_head) = (match project_call_fsm_transition(
+            self,
+            &state_cell,
+            arkret_wire::CellFamilyId::CALL_STATE_V1,
+            op,
+            operation,
+            false,
+        ) {
+            Ok(projected) => projected,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.to_owned(),
+                };
+            }
+        }) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
+        self.cells.insert(state_cell.clone(), next);
+        if let Some(head) = fsm_head {
+            self.call_fsm_heads.insert(state_cell, head);
+        }
+        ProjectionEffect::CallStateProjected { call_id }
     }
 
     /// Project a validated `ak.call.state` Event's exact registered effects

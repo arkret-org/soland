@@ -1221,6 +1221,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             record: contact_record.clone(),
             expected_updated_at: None,
             conflict_code: "contact_round_conflict".to_owned(),
+            invite_policy: None,
         }),
         control_proposal_ack: Some(contract_control_proposal_ack(
             &contact_event,
@@ -1303,6 +1304,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 record: conflicting_contact,
                 expected_updated_at: Some(now + Duration::seconds(1)),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                invite_policy: None,
             }),
             control_proposal_ack: Some(contract_control_proposal_ack(
                 &failed_contact_event,

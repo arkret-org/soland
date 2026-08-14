@@ -442,7 +442,7 @@ impl ProjectionState {
     /// ordinary Realm bootstrap unit.
     ///
     /// The closed unit validator has established that this is the genesis
-    /// actor's own `leave -> join` transition. Re-running the ordinary join
+    /// actor's own initial `null -> join` write. Re-running the ordinary join
     /// gate here would reject every invite-only Realm before it can acquire
     /// its first member. Keep the bypass narrow by independently checking the
     /// accepted envelope actor and the receiver-derived FSM write before

@@ -24,14 +24,35 @@ pub(super) fn recovery_policy_uses_session_device(
     record: &ValidatedRecoveryPolicy,
     session: &SessionRecord,
 ) -> bool {
-    let expected = format!("{}#{}", record.principal_id, session.device_id);
     payload
         .get("auth_data")
         .and_then(Value::as_object)
         .and_then(|auth_data| auth_data.get("verification_method"))
         .and_then(Value::as_str)
-        .map(str::trim)
-        == Some(expected.as_str())
+        .is_some_and(|verification_method| {
+            recovery_policy_verification_method_matches_session(
+                verification_method,
+                &record.principal_id,
+                &session.device_id,
+            )
+        })
+}
+
+fn recovery_policy_verification_method_matches_session(
+    verification_method: &str,
+    principal_core_id: &str,
+    device_id: &str,
+) -> bool {
+    let Some((principal_full_id, fragment)) = verification_method.trim().rsplit_once('#') else {
+        return false;
+    };
+    if fragment != device_id {
+        return false;
+    }
+    arkret_wire::DidFullId::new(principal_full_id.to_owned())
+        .ok()
+        .and_then(|full_id| arkret_wire::project_full_id_to_core_id(&full_id).ok())
+        .is_some_and(|core_id| core_id.as_str() == principal_core_id)
 }
 
 pub(super) async fn verify_recovery_policy_session_device_signature(
@@ -48,7 +69,6 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    let expected_verification_method = format!("{}#{}", record.principal_id, session.device_id);
     let auth_data = payload
         .get("auth_data")
         .and_then(Value::as_object)
@@ -59,9 +79,14 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::invalid_param("auth_data.verification_method is required"))?;
-    if verification_method != expected_verification_method {
+    if !recovery_policy_verification_method_matches_session(
+        verification_method,
+        &record.principal_id,
+        &session.device_id,
+    ) {
         return Err(recovery_signature_error(format!(
-            "genesis recovery policy device signature must use `{expected_verification_method}`"
+            "genesis recovery policy device signature must use the session principal's full DID and device fragment `{}`",
+            session.device_id
         )));
     }
 

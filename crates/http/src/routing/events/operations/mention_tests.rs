@@ -56,6 +56,44 @@ mod audience_mention_tests {
     }
 }
 
+mod direct_mention_tests {
+    use serde_json::json;
+
+    use super::super::*;
+
+    #[test]
+    fn canonical_mention_accepts_did_core_subject() {
+        let content = json!({
+            "kind": "ak.content.text",
+            "body": "hello @bob",
+            "mentions": [{
+                "kind": "mention",
+                "subject_id": "ak:did_core:webvh:z6mkfixtureBob",
+                "mention_text_original": "@bob"
+            }]
+        });
+
+        validate_mentions(&content).unwrap();
+    }
+
+    #[test]
+    fn canonical_mention_rejects_full_did_subject() {
+        let content = json!({
+            "kind": "ak.content.text",
+            "body": "hello @bob",
+            "mentions": [{
+                "kind": "mention",
+                "subject_id": "did:web:bob.example"
+            }]
+        });
+
+        assert_eq!(
+            validate_mentions(&content),
+            Err("mention subject_id is invalid")
+        );
+    }
+}
+
 mod reaction_and_window_policy_tests {
     use arkret_event_draft::ProjectedEventOperation as Operation;
     use serde_json::json;

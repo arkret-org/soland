@@ -106,7 +106,8 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
     let idempotency = PgIdempotencyStore { pool: pool.clone() };
     let outbox = PgFederationOutboxStore { pool: pool.clone() };
     let device_pairings = soland_storage_postgres::PgDevicePairingStore { pool: pool.clone() };
-    let contacts = PgContactStore { pool };
+    let contacts = PgContactStore { pool: pool.clone() };
+    let invite_policies = soland_storage_postgres::PgInviteReceivePolicyStore { pool };
     let namespace = format!("postgres-event-commit-{}", uuid::Uuid::now_v7());
     assert_event_commit_unit_of_work_contract(
         EventCommitContractStores {
@@ -117,6 +118,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
             outbox: &outbox,
             device_pairings: &device_pairings,
             contacts: &contacts,
+            invite_policies: &invite_policies,
         },
         &namespace,
     )

@@ -138,6 +138,7 @@ fn persistence_event_commit_request(
                 },
                 expected_updated_at: commit.expected_updated_at,
                 conflict_code: commit.conflict_code,
+                invite_policy: commit.invite_policy,
             }
         }),
         control_proposal_ack: command.control_proposal_ack,

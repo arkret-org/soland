@@ -57,6 +57,7 @@ async fn commit_contact_projection(
     commit: soland_storage::ContactProjectionCommit,
 ) -> PersistenceResult<()> {
     let conflict_code = commit.conflict_code;
+    let invite_policy = commit.invite_policy;
     let record = commit.record;
     let request_receipts = serde_json::to_value(&record.request_receipts).map_err(|error| {
         PersistenceError::Internal(format!("cannot encode Contact request receipts: {error}"))
@@ -158,6 +159,32 @@ async fn commit_contact_projection(
     };
     if affected != 1 {
         return Err(PersistenceError::Conflict(conflict_code));
+    }
+    if let Some(policy) = invite_policy {
+        let subject_id = policy.subject_id.as_str().to_owned();
+        let payload = serde_json::to_value(&policy).map_err(|error| {
+            PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
+        })?;
+        let denied_subjects = policy
+            .denied_subjects
+            .iter()
+            .map(|did| did.as_str().to_owned())
+            .collect::<Vec<_>>();
+        sql_query(
+            "INSERT INTO invite_receive_policies \
+             (subject_id, policy_payload, denied_subjects, updated_at) \
+             VALUES ($1, $2, $3, NOW()) \
+             ON CONFLICT (subject_id) DO UPDATE SET \
+                policy_payload = EXCLUDED.policy_payload, \
+                denied_subjects = EXCLUDED.denied_subjects, \
+                updated_at = NOW()",
+        )
+        .bind::<Text, _>(&subject_id)
+        .bind::<Jsonb, _>(&payload)
+        .bind::<Array<Text>, _>(&denied_subjects)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
     }
     Ok(())
 }

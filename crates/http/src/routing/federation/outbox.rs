@@ -166,7 +166,7 @@ fn rfc9421_sign_with_window(
 ) -> reqwest::header::HeaderMap {
     let created = now_unix_secs();
     let expires = created + validity_seconds;
-    let keyid = super::federation_service_signature_key_id(state.service_id());
+    let keyid = super::federation_service_signature_key_id(state.service_full_id().as_str());
     let mut covered = vec![
         Component::Method,
         Component::TargetUri,

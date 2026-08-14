@@ -222,6 +222,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut outbox = self.federation_outbox.data.lock();
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
+        let mut invite_policies = self.invite_receive_policies.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -230,6 +231,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_outbox = outbox.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
+        let mut staged_invite_policies = invite_policies.clone();
 
         stage_device_pairing_authorization(
             &mut staged_pairings,
@@ -304,6 +306,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
         stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
+        if let Some(policy) = request
+            .contact_projection
+            .as_ref()
+            .and_then(|commit| commit.invite_policy.as_ref())
+        {
+            staged_invite_policies.insert(policy.subject_id.to_string(), policy.clone());
+        }
         let event_id = request.event.event_id.clone();
         stage_canonical_event(&mut staged_events, request.event)?;
 
@@ -360,6 +369,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *outbox = staged_outbox;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
+        *invite_policies = staged_invite_policies;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -395,6 +405,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut applets = self.applets.records.lock();
         let mut pairings = self.device_pairings.data.lock();
         let mut contacts = self.contacts.data.lock();
+        let mut invite_policies = self.invite_receive_policies.data.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -405,6 +416,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_applets = applets.clone();
         let mut staged_pairings = pairings.clone();
         let mut staged_contacts = contacts.clone();
+        let mut staged_invite_policies = invite_policies.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
@@ -487,6 +499,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 &mut staged_contacts,
                 event_request.contact_projection.as_ref(),
             )?;
+            if let Some(policy) = event_request
+                .contact_projection
+                .as_ref()
+                .and_then(|commit| commit.invite_policy.as_ref())
+            {
+                staged_invite_policies.insert(policy.subject_id.to_string(), policy.clone());
+            }
             stage_canonical_event(&mut staged_events, event_request.event)?;
             event_inserted = true;
 
@@ -576,6 +595,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *applets = staged_applets;
         *pairings = staged_pairings;
         *contacts = staged_contacts;
+        *invite_policies = staged_invite_policies;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector

@@ -13,6 +13,10 @@ pub struct ContactProjectionCommit {
     pub record: ContactRecord,
     pub expected_updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub conflict_code: String,
+    /// Optional holder-private policy mutation committed in the same unit as
+    /// the Contact Event and lineage projection.
+    pub invite_policy:
+        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
 }
 
 /// All durable writes produced by accepting one canonical event.

@@ -785,6 +785,8 @@ pub struct CommitContactProjection {
     pub record: crate::identity::ContactRecord,
     pub expected_updated_at: Option<DateTime<Utc>>,
     pub conflict_code: String,
+    pub invite_policy:
+        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
 }
 
 #[derive(Clone, Debug)]

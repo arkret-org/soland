@@ -471,6 +471,15 @@ impl ContactService {
         self.runtime_invite_policies.lock().get(subject_id).cloned()
     }
 
+    pub fn cache_invite_policy(
+        &self,
+        policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    ) {
+        self.runtime_invite_policies
+            .lock()
+            .insert(policy.subject_id.to_string(), policy);
+    }
+
     /// or_set add for one accepted `ak.direct_conversation.bound` Event.
     ///
     /// `digest` is the endorsement identity — the canonical bytes of the

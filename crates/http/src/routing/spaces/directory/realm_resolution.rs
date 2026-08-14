@@ -734,6 +734,14 @@ pub(super) async fn join_candidates_for_resolved_realm(
     };
     let realm_id_typed =
         RealmId::new(realm_id.to_owned()).expect("directory realm id is validated");
+    let Some(encryption_profile) = state
+        .projections()
+        .snapshot()
+        .realm_encryption_profile(realm_id)
+        .and_then(|profile| serde_json::from_value(Value::String(profile)).ok())
+    else {
+        return Vec::new();
+    };
     let own_resolution = state
         .current_signed_service_resolution()
         .await
@@ -820,6 +828,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             endpoint: None,
             operations: vec!["ak.self.events.command.submit".to_owned()],
             join_methods,
+            encryption_profile,
             priority: Some(0),
             source: RealmJoinCandidateSource::DirectoryIngest,
             source_refs: Vec::new(),

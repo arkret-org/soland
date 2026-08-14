@@ -224,12 +224,7 @@ async fn keys_query(
     let body = body.into_inner();
     let mut result = BTreeMap::new();
     let mut device_generations = BTreeMap::new();
-    for (actor, devices) in body.device_keys {
-        let actor_core = arkret_wire::project_full_id_to_core_id(&actor)
-            .map(arkret_wire::DidCoreId::from)
-            .map_err(|error| {
-                AppError::invalid_param(format!("query actor cannot project: {error}"))
-            })?;
+    for (actor_core, devices) in body.device_keys {
         if !keys_query_actor_visible_to_requester(state, &session.actor, actor_core.as_str()) {
             continue;
         }

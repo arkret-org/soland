@@ -62,7 +62,15 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 "invite_only"
             });
             entry.public = discoverability == "public";
-            if let Ok(origin) = DidCoreId::new(origin.to_owned()) {
+            let create_seeds_membership = kinds::canonical_kind_for_operation(operation)
+                == Some(arkret_wire::EventKind::RealmCreate)
+                && operation
+                    .payload
+                    .get("object")
+                    .and_then(|object| object.get("purpose"))
+                    .and_then(Value::as_str)
+                    == Some("direct_conversation");
+            if create_seeds_membership && let Ok(origin) = DidCoreId::new(origin.to_owned()) {
                 entry.members.insert(origin);
             }
             let entry_public = entry.public;

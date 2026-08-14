@@ -768,6 +768,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         operation.realm_id.as_str(),
         invitee.as_str(),
     );
+    let delivery_pending = invite_delivery_target.is_some();
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
@@ -778,7 +779,11 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         third_party_id: None,
         join_rule_snapshot: None,
         invite_token,
-        status: "pending".to_owned(),
+        status: if delivery_pending {
+            "delivery_pending".to_owned()
+        } else {
+            "pending".to_owned()
+        },
         claim_nonces: std::collections::BTreeMap::new(),
         expires_at,
         created_at: operation.created_at,

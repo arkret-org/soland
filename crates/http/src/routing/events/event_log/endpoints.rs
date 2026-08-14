@@ -182,6 +182,14 @@ async fn submit_event_seal(
     } else {
         crate::routing::federation::move_seal::apply_inbound_seal(state, &seal).await?
     };
+    state
+        .projections()
+        .reload_cells_from_store(&seal.realm_id)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "refresh projected cells after principal Seal acceptance: {error}"
+            ))
+        })?;
     // The wire field is a set (byte-wise ascending, unique), the same
     // normalization `Seal.delta` carries. `SealEffect` holds reducer apply order
     // — causal, then digest-descending — which a client cannot reproduce.

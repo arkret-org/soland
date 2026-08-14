@@ -1532,7 +1532,7 @@ fn validate_contact_lineage_carrier(
                 )
             })?;
             if lineage.peer != payload.peer
-                || lineage.contact_round_id != payload.basis_id
+                || lineage.contact_round_id != payload.contact_round_id
                 || lineage.version != payload.version
                 || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
                 || lineage.granted_to_peer_scopes != payload.granted_to_peer_scopes
@@ -1554,7 +1554,7 @@ fn validate_contact_lineage_carrier(
                 )
             })?;
             if lineage.peer != payload.peer
-                || lineage.contact_round_id != payload.basis_id
+                || lineage.contact_round_id != payload.contact_round_id
                 || lineage.version != payload.version
                 || lineage.predecessor_event_ref.as_ref() != Some(&payload.predecessor_event_ref)
                 || !lineage.granted_to_peer_scopes.is_empty()
@@ -2667,7 +2667,7 @@ async fn project_delivered_contact_fact(
                 ));
             }
             if request_receipt.core.previous_terminal_contact_round_id
-                != request.previous_terminal_basis_id
+                != request.previous_terminal_contact_round_id
             {
                 return Err(super::super::events::peer::schema_violation(
                     "Contact request receipt continuity pointer does not match signed_event",
@@ -2698,7 +2698,7 @@ async fn project_delivered_contact_fact(
                             "terminal Contact round evidence is unavailable",
                         )
                     })?;
-                    if request.previous_terminal_basis_id.as_ref()
+                    if request.previous_terminal_contact_round_id.as_ref()
                         != Some(&terminal.contact_round_id)
                         || terminal.current_proofs.len() != 2
                         || terminal.current_proofs.iter().any(|proof| {
@@ -2773,7 +2773,7 @@ async fn project_delivered_contact_fact(
                         .contact_round_evidence_history
                         .first()
                         .map(|bundle| &bundle.contact_round_id);
-                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                    if request.previous_terminal_contact_round_id.as_ref() != expected_previous {
                         return Err(super::super::events::peer::schema_violation(
                             "new Contact request does not preserve terminal continuity",
                         ));
@@ -2837,7 +2837,7 @@ async fn project_delivered_contact_fact(
                         .contact_round_evidence_history
                         .first()
                         .map(|bundle| &bundle.contact_round_id);
-                    if request.previous_terminal_basis_id.as_ref() != expected_previous {
+                    if request.previous_terminal_contact_round_id.as_ref() != expected_previous {
                         return Err(super::super::events::peer::schema_violation(
                             "glare recontact requests do not bind the same terminal predecessor",
                         ));
@@ -2975,21 +2975,21 @@ async fn project_delivered_contact_fact(
             })?;
             if super::account::canonical_contact_digest(&response_receipt.request_receipt)?
                 != super::account::canonical_contact_digest(&request_receipt)?
-                || response_receipt.contact_round_id != accepted.basis_id
+                || response_receipt.contact_round_id != accepted.contact_round_id
             {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.accepted response receipt does not bind the durable request",
                 ));
             }
             let (contact_round, derived_contact_round_id) = normal_contact_round(&request_receipt)?;
-            if derived_contact_round_id != accepted.basis_id {
+            if derived_contact_round_id != accepted.contact_round_id {
                 return Err(super::super::events::peer::schema_violation(
                     "ak.contact.accepted contact_round id is not derived from the durable request",
                 ));
             }
             let expected_updated_at = contact.updated_at;
             contact.granted_to_requester_scopes = granted_scopes(payload);
-            contact.contact_round_id = Some(accepted.basis_id.to_string());
+            contact.contact_round_id = Some(accepted.contact_round_id.to_string());
             contact.version = Some(accepted.version);
             contact.status = "accepted".to_owned();
             contact.response_event_ref = Some(contact_event_id.to_owned());
@@ -3001,7 +3001,9 @@ async fn project_delivered_contact_fact(
                 contact.peer_service_id = Some(source.to_owned());
             }
             if let Some(remote_proof) = carrier_current_proof {
-                if remote_proof.contact_round_id != accepted.basis_id || remote_proof.terminal {
+                if remote_proof.contact_round_id != accepted.contact_round_id
+                    || remote_proof.terminal
+                {
                     return Err(super::super::events::peer::schema_violation(
                         "ak.contact.accepted current proof has invalid contact_round or terminal state",
                     ));
@@ -3021,7 +3023,7 @@ async fn project_delivered_contact_fact(
                         .cmp(right.issuer.as_str().as_bytes())
                 });
                 contact.contact_round_evidence = Some(ContactRoundEvidenceBundle {
-                    contact_round_id: accepted.basis_id.clone(),
+                    contact_round_id: accepted.contact_round_id.clone(),
                     previous_terminal_contact_round_id: request_receipt
                         .core
                         .previous_terminal_contact_round_id
@@ -3151,7 +3153,7 @@ async fn project_delivered_contact_fact(
                 contact.response_event_ref.as_deref()
             };
             if contact.status != "accepted"
-                || contact.contact_round_id.as_deref() != Some(update.basis_id.as_str())
+                || contact.contact_round_id.as_deref() != Some(update.contact_round_id.as_str())
                 || contact.version.and_then(|value| value.checked_add(1)) != Some(update.version)
                 || predecessor != Some(update.predecessor_event_ref.as_str())
             {
@@ -3241,7 +3243,7 @@ async fn project_delivered_contact_fact(
             } else {
                 row.response_event_ref.as_deref()
             };
-            if row.contact_round_id.as_deref() != Some(tombstone.basis_id.as_str())
+            if row.contact_round_id.as_deref() != Some(tombstone.contact_round_id.as_str())
                 || row.version.and_then(|value| value.checked_add(1)) != Some(tombstone.version)
                 || predecessor != Some(tombstone.predecessor_event_ref.as_str())
             {

@@ -62,6 +62,7 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
             outbox: store.federation_outbox(),
             device_pairings: store.device_pairings(),
             contacts: store.contacts(),
+            invite_policies: store.invite_receive_policies(),
         },
         "memory-event-commit",
     )

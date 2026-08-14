@@ -318,8 +318,9 @@ async fn verifying_key_for_service_id(
     verification_method: &str,
 ) -> Result<VerifyingKey, AppError> {
     if service_id == state.service_id() {
-        let expected_method =
-            crate::routing::federation::federation_service_signature_key_id(service_id);
+        let expected_method = crate::routing::federation::federation_service_signature_key_id(
+            state.service_full_id().as_str(),
+        );
         if verification_method != expected_method {
             return Err(signature_error(
                 "local service signature method is not the active federation key",

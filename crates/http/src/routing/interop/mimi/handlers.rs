@@ -98,17 +98,23 @@ pub(super) async fn mimi_room_update(
         .filter(|binding| binding.is_object())
     {
         Some(binding) => {
-            let event_id = emit_mimi_room_binding_event(state, &room_id, binding)
-                .await?
-                .ok_or_else(|| {
-                    AppError::invalid_param(
-                        "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
-                    )
-                    .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
-                })?;
-            Some(event_id)
+            let submission = body.get("room_binding_event").cloned().ok_or_else(|| {
+                AppError::invalid_param(
+                    "room_binding update requires a caller-authored room_binding_event",
+                )
+                .with_wire_code("mimi_room_binding_event_missing")
+            })?;
+            Some(admit_mimi_room_binding_event(state, &room_id, &body, binding, submission).await?)
         }
-        _ => None,
+        _ => {
+            if body.get("room_binding_event").is_some() {
+                return Err(AppError::invalid_param(
+                    "room_binding_event is only valid for a room binding update",
+                )
+                .with_wire_code("mimi_room_binding_event_unexpected"));
+            }
+            None
+        }
     };
 
     let room_state_ref = binding_event_id

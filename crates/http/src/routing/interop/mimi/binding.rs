@@ -270,28 +270,90 @@ pub(super) fn non_empty_json_value(value: &Value) -> bool {
     }
 }
 
-/// Emit a `ak.mimi.room_binding` projection event capturing the
-/// binding state. Returns the generated event_id so the caller can
-/// A binding becomes visible only after its caller-authored canonical Event is
-/// accepted. This facade has no signing authority for that Event.
-pub(super) async fn emit_mimi_room_binding_event(
-    _state: &AppState,
-    _room_id: &str,
+/// Admit the exact caller-authored room-binding Event carried by a MIMI update.
+pub(super) async fn admit_mimi_room_binding_event(
+    state: &AppState,
+    room_id: &str,
+    update_body: &Value,
     binding: &Value,
-) -> Result<Option<String>, AppError> {
+    submission: Value,
+) -> Result<String, AppError> {
+    let submission: arkret_wire::EventInitialSubmission = serde_json::from_value(submission)
+        .map_err(|error| {
+            AppError::invalid_param(format!("MIMI room binding Event is invalid: {error}"))
+                .with_wire_code("schema_violation")
+        })?;
     let realm_id = binding
         .get("binding_scope")
         .and_then(|s| s.get("realm_id"))
         .and_then(Value::as_str)
         .or_else(|| binding.get("realm_id").and_then(Value::as_str))
-        .map(str::to_owned);
-    let Some(realm_id) = realm_id else {
-        return Ok(None);
-    };
+        .ok_or_else(|| {
+            AppError::invalid_param(
+                "room_binding requires `binding_scope.realm_id` or a top-level `realm_id`",
+            )
+            .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+        })?;
     validate_mimi_room_binding_payload(binding)?;
-    Err(AppError::unsupported_feature(format!(
-        "MIMI Realm {realm_id} binding requires a caller-authored canonical ak.mimi.room_binding Event"
-    )))
+    let expected_room_uri = mimi_room_uri(state, room_id);
+    let event = &submission.event;
+    let sender_actor_id = update_body
+        .get("sender_actor_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::invalid_param("room binding update requires sender_actor_id")
+                .with_wire_code("mimi_room_binding_event_mismatch")
+        })?;
+    let binding_group_id = binding.get("mls_group_id").and_then(Value::as_str);
+    let update_group_id = update_body.get("mls_group_id").and_then(Value::as_str);
+    if event.kind != arkret_wire::EventKind::MimiRoomBinding
+        || event.realm_id.as_str() != realm_id
+        || event.actor_id.as_str() != sender_actor_id
+        || serde_json::to_value(&event.payload).ok().as_ref() != Some(binding)
+        || binding.get("mimi_room_uri").and_then(Value::as_str) != Some(expected_room_uri.as_str())
+        || binding_group_id.is_none()
+        || binding_group_id != update_group_id
+    {
+        return Err(AppError::invalid_param(
+            "room_binding_event does not match the authenticated MIMI room update",
+        )
+        .with_wire_code("mimi_room_binding_event_mismatch"));
+    }
+    let device_id = event
+        .proofs
+        .first()
+        .and_then(arkret_wire::EventProof::as_producer)
+        .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
+        .map(|(_, fragment)| fragment.to_owned())
+        .ok_or_else(|| {
+            AppError::invalid_param("MIMI room binding Event requires a DID URL proof key")
+                .with_wire_code("invalid_proof")
+        })?;
+    let now = chrono::Utc::now();
+    let session = soland_services::identity::SessionIdentityState {
+        token_hash: format!("mimi-room-binding:{}", event.event_id),
+        actor: event.actor_id.to_string(),
+        device_id,
+        audience: state.service_id().to_string(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: now + chrono::Duration::minutes(5),
+        created_at: now,
+        revoked_at: None,
+    };
+    let event_id = event.event_id.to_string();
+    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
+        .await
+        .map_err(|error| {
+            crate::routing::events::event_log::submit_one_error_to_app_error(
+                "MIMI room binding Event submit failed",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
+    Ok(event_id)
 }
 
 pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &str) -> Value {

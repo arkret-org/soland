@@ -1283,6 +1283,7 @@ async fn plan_contact_commit(
                 },
                 expected_updated_at,
                 conflict_code: "contact_round_conflict".to_owned(),
+                invite_policy: None,
             });
             ContactOperationOutcome::Accepted {
                 outcome: ContactAcceptedOutcome::Request {
@@ -1389,6 +1390,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                invite_policy: None,
             });
             let lineage = signed_lineage(
                 state,
@@ -1440,6 +1442,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                invite_policy: None,
             });
             let reject_digest =
                 Hash::new(event.event_digest().map_err(|error| {
@@ -1517,6 +1520,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                invite_policy: None,
             });
             let lineage = signed_lineage(
                 state,
@@ -1575,6 +1579,7 @@ async fn plan_contact_commit(
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
+                invite_policy: None,
             });
             let lineage = signed_lineage(
                 state,
@@ -1920,7 +1925,7 @@ pub(super) async fn request(
                 peer: body.peer.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
                 introduction_evidence_digest,
-                previous_terminal_basis_id: body.previous_terminal_contact_round_id.clone(),
+                previous_terminal_contact_round_id: body.previous_terminal_contact_round_id.clone(),
                 message: normalize_contact_message(body.message.as_deref())?,
             };
             prepare::<arkret_wire::event_spec::ContactRequested>(
@@ -1973,11 +1978,11 @@ pub(super) async fn respond(
             }
             let payload = ContactAcceptedPayload {
                 peer: peer.clone(),
-                basis_id: contact_round_id.clone(),
+                contact_round_id: contact_round_id.clone(),
                 version: 1,
                 request_event_ref: body.request_receipt.core.request_event_ref.clone(),
                 request_acceptance_receipt_digest: canonical_contact_digest(&body.request_receipt)?,
-                previous_terminal_basis_id: body
+                previous_terminal_contact_round_id: body
                     .request_receipt
                     .core
                     .previous_terminal_contact_round_id
@@ -2053,7 +2058,7 @@ pub(super) async fn scope_update(
             let payload = ContactScopeUpdatePayload {
                 schema: ContactScopeUpdateSchema::V1,
                 peer: body.peer.clone(),
-                basis_id: body.contact_round_id.clone(),
+                contact_round_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 granted_to_peer_scopes: body.granted_to_peer_scopes.clone(),
@@ -2087,7 +2092,7 @@ pub(super) async fn tombstone(
         ContactTombstoneRequestBody::Prepare(body) => {
             let payload = ContactTombstonedPayload {
                 peer: body.peer.clone(),
-                basis_id: body.contact_round_id.clone(),
+                contact_round_id: body.contact_round_id.clone(),
                 version: body.version,
                 predecessor_event_ref: body.predecessor_event_ref.clone(),
                 reason: None,

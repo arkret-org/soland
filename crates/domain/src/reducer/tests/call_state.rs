@@ -85,6 +85,79 @@ fn call_create_derives_call_id_and_establishes_initial_state() {
 }
 
 #[test]
+fn call_create_without_optional_focus_establishes_initial_state() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let input = call_input(
+        arkret_wire::EventKind::CallCreate.as_str(),
+        realm,
+        serde_json::json!({"initial_state": "connecting"}),
+    );
+    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
+
+    assert!(matches!(
+        apply_call(&mut state, &input, &hlc),
+        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
+    ));
+    assert_eq!(
+        state
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_STATE_V1,
+                &call_id
+            ))
+            .unwrap(),
+        &serde_json::json!("connecting")
+    );
+}
+
+#[test]
+fn call_create_is_idempotent_after_registered_cell_projection() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let input = call_input(
+        arkret_wire::EventKind::CallCreate.as_str(),
+        realm,
+        serde_json::json!({"initial_state": "ringing"}),
+    );
+    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
+    state.cells.insert(
+        call_cell(arkret_wire::CellFamilyId::CALL_STATE_V1, &call_id),
+        CellState::Value(serde_json::json!("ringing")),
+    );
+
+    assert!(matches!(
+        apply_call(&mut state, &input, &hlc),
+        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
+    ));
+}
+
+#[test]
+fn call_create_registry_dispatch_preserves_projected_writes() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let input = call_input(
+        arkret_wire::EventKind::CallCreate.as_str(),
+        realm,
+        serde_json::json!({"initial_state": "connecting"}),
+    );
+    let call_id = arkret_identifiers::CallId::from_event_id(&input.event_id).to_string();
+    let registry = super::super::lattice_kinds::default_lattice_registry();
+
+    assert!(matches!(
+        state.apply_via_lattice_registry(
+            &input.operation,
+            &input.cell_writes,
+            &hlc,
+            &registry,
+        ),
+        ProjectionEffect::CallStateProjected { call_id: id } if id == call_id
+    ));
+}
+
+#[test]
 fn call_state_projects_independent_state_focus_and_roster_cells() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

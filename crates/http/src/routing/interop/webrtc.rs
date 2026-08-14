@@ -31,6 +31,7 @@ use salvo::http::HeaderValue;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
@@ -420,6 +421,44 @@ struct MediaServiceEpoch {
     service_id: String,
     issuer_kids: BTreeSet<String>,
     foci: Vec<MediaProviderConfig>,
+}
+
+/// Typed view of the projected `ak.component.realm.media_service.v1` value.
+///
+/// The projection store is intentionally JSON-typed because it contains many
+/// unrelated cell families.  Once this particular cell crosses into the media
+/// token issuer, however, its protocol-defined fields must be decoded exactly
+/// once and the rest of the issuer should operate on Rust types.
+///
+/// Unknown descriptor fields remain forward-compatible: provider bindings may
+/// add fields that the token issuer does not consume.
+#[derive(Debug, Deserialize)]
+struct MediaServiceDescriptor {
+    #[serde(default)]
+    service_id: Option<String>,
+    #[serde(default)]
+    issuer_kid: Option<String>,
+    #[serde(default)]
+    audience: Option<String>,
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
+    foci: Vec<MediaFocusDescriptor>,
+}
+
+/// Provider-independent fields consumed from one media focus descriptor.
+#[derive(Debug, Deserialize)]
+struct MediaFocusDescriptor {
+    focus_id: String,
+    #[serde(rename = "type")]
+    provider: String,
+    #[serde(default)]
+    issuer_kid: Option<String>,
+    #[serde(default)]
+    audience: Option<String>,
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
+    #[serde(default)]
+    connect_url: Option<String>,
 }
 
 impl MediaServiceEpoch {
@@ -1015,54 +1054,63 @@ fn media_service_epoch_for_realm(
             "realm `{realm_id}` has no projected ak.realm.media_service epoch"
         ))
     })?;
-    parse_media_service_epoch(realm_id, &value)
+    let descriptor = decode_media_service_descriptor(value)?;
+    media_service_epoch_from_descriptor(realm_id, descriptor)
 }
 
-fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServiceEpoch, AppError> {
-    let service_id = value
-        .get("service_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let foci_value = normalized_media_foci(value)?;
-    let mut foci = Vec::new();
-    for focus_value in foci_value {
-        let focus_id = required_json_string(&focus_value, "focus_id")?;
-        let provider = focus_value
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("media focus type is required"))
-            .and_then(MediaProviderKind::parse)?;
-        let issuer_kid = focus_value
-            .get("issuer_kid")
-            .or_else(|| value.get("issuer_kid"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+fn decode_media_service_descriptor(value: Value) -> Result<MediaServiceDescriptor, AppError> {
+    let descriptor = value.get("value").cloned().unwrap_or(value);
+    serde_json::from_value(descriptor).map_err(|error| {
+        focus_unavailable_error(format!(
+            "projected realm media_service epoch is malformed: {error}"
+        ))
+    })
+}
+
+fn media_service_epoch_from_descriptor(
+    realm_id: &str,
+    descriptor: MediaServiceDescriptor,
+) -> Result<MediaServiceEpoch, AppError> {
+    let MediaServiceDescriptor {
+        service_id,
+        issuer_kid,
+        audience,
+        ttl_seconds,
+        foci: focus_descriptors,
+    } = descriptor;
+    if focus_descriptors.is_empty() {
+        return Err(focus_unavailable_error(
+            "realm media_service epoch has no foci",
+        ));
+    }
+
+    let service_id = trimmed_non_empty(service_id);
+    let default_issuer_kid = trimmed_non_empty(issuer_kid);
+    let default_audience = trimmed_non_empty(audience);
+    let mut foci = Vec::with_capacity(focus_descriptors.len());
+    for focus in focus_descriptors {
+        let focus_id = focus.focus_id.trim().to_owned();
+        if focus_id.is_empty() {
+            return Err(AppError::invalid_param("focus_id is required"));
+        }
+        let provider = focus.provider.trim();
+        if provider.is_empty() {
+            return Err(AppError::invalid_param("media focus type is required"));
+        }
+        let provider = MediaProviderKind::parse(provider)?;
+        let issuer_kid = trimmed_non_empty(focus.issuer_kid)
+            .or_else(|| default_issuer_kid.clone())
             .ok_or_else(|| {
                 token_issuer_unauthorised("media focus issuer_kid is required".to_owned())
-            })?
-            .to_owned();
-        let audience = focus_value
-            .get("audience")
-            .or_else(|| value.get("audience"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
+            })?;
+        let audience = trimmed_non_empty(focus.audience)
+            .or_else(|| default_audience.clone())
             .unwrap_or_else(|| format!("arkret:media:{realm_id}:{focus_id}"));
-        let ttl_seconds = focus_value
-            .get("ttl_seconds")
-            .or_else(|| value.get("ttl_seconds"))
-            .and_then(Value::as_u64)
+        let ttl_seconds = focus
+            .ttl_seconds
+            .or(ttl_seconds)
             .unwrap_or(arkret_wire::MEDIA_TOKEN_TTL_SHOULD_SECS);
-        let connect_url = focus_value
-            .get("connect_url")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+        let connect_url = trimmed_non_empty(focus.connect_url);
         foci.push(MediaProviderConfig {
             provider,
             focus_id,
@@ -1071,11 +1119,6 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             ttl_seconds,
             connect_url,
         });
-    }
-    if foci.is_empty() {
-        return Err(focus_unavailable_error(
-            "realm media_service epoch has no foci",
-        ));
     }
     let service_id = service_id
         .or_else(|| {
@@ -1096,13 +1139,10 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     })
 }
 
-fn normalized_media_foci(config: &Value) -> Result<Vec<Value>, AppError> {
-    if let Some(foci) = config.get("foci").and_then(Value::as_array) {
-        return Ok(foci.clone());
-    }
-    Err(focus_unavailable_error(
-        "realm media_service epoch must contain foci[]",
-    ))
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssuer> {
@@ -1271,16 +1311,6 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
-fn required_json_string(value: &Value, field: &str) -> Result<String, AppError> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| AppError::invalid_param(format!("{field} is required")))
-}
-
 fn service_id_from_issuer_kid(issuer_kid: &str) -> Option<String> {
     issuer_kid
         .split_once('#')
@@ -1443,9 +1473,29 @@ mod tests {
 
     #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
-        let epoch = parse_media_service_epoch(
+        let descriptor = decode_media_service_descriptor(json!({
+            "service_id": "did:web:media.example",
+            "foci": [{
+                "focus_id": "fra-1",
+                "type": "livekit",
+                "issuer_kid": "did:web:media.example#key-1",
+                "connect_url": "wss://media.example"
+            }]
+        }))
+        .expect("valid projected media descriptor");
+        let epoch = media_service_epoch_from_descriptor(
             "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
-            &json!({
+            descriptor,
+        )
+        .expect("spec focus ids are not required to use a private prefix");
+
+        assert_eq!(epoch.foci[0].focus_id, "fra-1");
+    }
+
+    #[test]
+    fn projected_media_epoch_unwraps_registered_state_payload_value() {
+        let descriptor = decode_media_service_descriptor(json!({
+            "value": {
                 "service_id": "did:web:media.example",
                 "foci": [{
                     "focus_id": "fra-1",
@@ -1453,9 +1503,14 @@ mod tests {
                     "issuer_kid": "did:web:media.example#key-1",
                     "connect_url": "wss://media.example"
                 }]
-            }),
+            }
+        }))
+        .expect("registered state payload wrapper");
+        let epoch = media_service_epoch_from_descriptor(
+            "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
+            descriptor,
         )
-        .expect("spec focus ids are not required to use a private prefix");
+        .expect("wrapped projected media descriptor");
 
         assert_eq!(epoch.foci[0].focus_id, "fra-1");
     }

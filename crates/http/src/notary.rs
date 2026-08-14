@@ -457,7 +457,13 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<(Hash, ControlMoveRejection)> = Vec::new();
+        let mut rejected: Vec<(
+            Hash,
+            String,
+            String,
+            Vec<arkret_wire::Precondition>,
+            ControlMoveRejection,
+        )> = Vec::new();
         let mut staged_anchor_state = pre_state.clone();
         let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
         for (digest, event) in ordered {
@@ -482,6 +488,9 @@ impl NotaryWorker {
             let Some(hlc) = event.hlc.clone() else {
                 rejected.push((
                     digest,
+                    event.event_id.to_string(),
+                    event.kind.as_str().to_owned(),
+                    event.preconditions.clone(),
                     ControlMoveRejection::new(
                         ControlProposalRejectReason::SchemaViolation,
                         "Control Move carries no hlc",
@@ -494,6 +503,9 @@ impl NotaryWorker {
                 Err(reason) => {
                     rejected.push((
                         digest,
+                        event.event_id.to_string(),
+                        event.kind.as_str().to_owned(),
+                        event.preconditions.clone(),
                         ControlMoveRejection::new(
                             ControlProposalRejectReason::SchemaViolation,
                             format!("reducer_projection_failed: {reason}"),
@@ -518,6 +530,9 @@ impl NotaryWorker {
                 // the envelope is invalid, not the pre-state it reads.
                 rejected.push((
                     digest,
+                    event.event_id.to_string(),
+                    event.kind.as_str().to_owned(),
+                    event.preconditions.clone(),
                     ControlMoveRejection::new(
                         ControlProposalRejectReason::SchemaViolation,
                         format!("replay_window: {reject}"),
@@ -549,7 +564,13 @@ impl NotaryWorker {
                         &pre_state,
                         &predecessor_closure,
                     ) {
-                        rejected.push((digest, ControlMoveRejection::from_verifier(&reject)?));
+                        rejected.push((
+                            digest,
+                            event.event_id.to_string(),
+                            event.kind.as_str().to_owned(),
+                            event.preconditions.clone(),
+                            ControlMoveRejection::from_verifier(&reject)?,
+                        ));
                         continue;
                     }
                     if leaves.is_empty() {
@@ -582,20 +603,33 @@ impl NotaryWorker {
                     });
                 }
                 Err(reject) => {
-                    rejected.push((digest, ControlMoveRejection::from_verifier(&reject)?));
+                    rejected.push((
+                        digest,
+                        event.event_id.to_string(),
+                        event.kind.as_str().to_owned(),
+                        event.preconditions.clone(),
+                        ControlMoveRejection::from_verifier(&reject)?,
+                    ));
                 }
             }
         }
-        for (digest, rejection) in &rejected {
+        for (digest, event_id, event_kind, preconditions, rejection) in &rejected {
             tracing::warn!(
                 %realm_id,
                 proposal_digest = %digest,
+                %event_id,
+                %event_kind,
+                ?preconditions,
                 reason = ?rejection.reason,
                 detail = %rejection.detail,
                 "control-seal coordinator signed a proposal rejection"
             );
         }
-        self.record_signed_rejections(state, realm_id, &rejected, proposal_policy)?;
+        let signed_rejections = rejected
+            .iter()
+            .map(|(digest, _, _, _, rejection)| (digest.clone(), rejection.clone()))
+            .collect::<Vec<_>>();
+        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)?;
         if accepted.is_empty() {
             // Everyone rejected — nothing to seal, but record diagnostics.
             return Ok(None);
@@ -743,7 +777,10 @@ impl NotaryWorker {
             // `apply_seal` rejects nothing: `SealEffect::rejected_events` is
             // constructed empty on every SDK path, so the coordinator's own
             // per-Move verdicts are the whole set.
-            rejected_events: rejected,
+            rejected_events: rejected
+                .into_iter()
+                .map(|(digest, _, _, _, rejection)| (digest, rejection))
+                .collect(),
             post_state_root: effect.post_state_root,
         }))
     }

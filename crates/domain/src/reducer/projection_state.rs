@@ -1203,11 +1203,12 @@ impl ProjectionState {
             );
             self.apply_projected(operation, cell_writes, hlc)
         } else {
-            // No cell-family mapping for this kind — durable-Event-only
-            // projection (messages / reactions / etc.) goes through the
-            // inline cache. This branch is the steady state for the
-            // ~10 message-domain kinds.
-            self.apply(operation, hlc)
+            // No cell-family implementation is registered for this kind, but
+            // the Event registry may still declare cell writes consumed by an
+            // inline reducer (for example `ak.call.create`). Preserve the
+            // receiver-derived writes here; dropping them through `apply()`
+            // turns a valid reducer input into an empty projection.
+            self.apply_projected(operation, cell_writes, hlc)
         }
     }
 

@@ -543,6 +543,9 @@ async fn project_accepted_operations_inner(
                     operation_id = %operation.operation_id,
                     kind = %kinds::canonical_kind(operation),
                     %reason,
+                    event_id = %reducer_operation.context.event_id,
+                    payload = ?reducer_operation.payload,
+                    cell_writes = ?canonical_cell_writes,
                     "invariant violation: durably accepted Event was rejected by the live reducer"
                 );
             }

@@ -521,18 +521,10 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     let signing_key = SigningKey::from_bytes(&seed);
     let verifying_key: VerifyingKey = signing_key.verifying_key();
 
-    // Build canonical bytes from the event payload sans `unsigned` — same
-    // shape as `cotest::conformance::canonical_proof_payload` (which strips
-    // `unsigned` from the signed coverage).
-    let mut payload = Map::new();
-    if let Some(object) = event.as_object() {
-        for (key, value) in object {
-            if key != "unsigned" {
-                payload.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    let canonical = canonical_json(&Value::Object(payload))
+    // Build the canonical Event digest preimage defined by encoding.md §2/§6.
+    // `event_id` is derived from this digest, so including it would make the
+    // definition circular; reducer-stamped `actor_kind` is also excluded.
+    let canonical = canonical_json(&canonical_event_digest_preimage(event))
         .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
     let signature = signing_key.sign(canonical.as_bytes());
@@ -544,6 +536,21 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
         public_key: URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
         algorithm: "ed25519".to_owned(),
     })
+}
+
+fn canonical_event_digest_preimage(event: &Value) -> Value {
+    let mut payload = Map::new();
+    if let Some(object) = event.as_object() {
+        for (key, value) in object {
+            if !matches!(
+                key.as_str(),
+                "proofs" | "unsigned" | "event_id" | "actor_kind"
+            ) {
+                payload.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Value::Object(payload)
 }
 
 #[salvo::oapi::endpoint(
@@ -1480,6 +1487,26 @@ mod tests {
                 "event_id": "ak:event:1",
                 "payload": { "kind": "msg" },
                 "sender": "did:alice",
+            })
+        );
+    }
+
+    #[test]
+    fn event_digest_preimage_excludes_derived_and_reducer_fields() {
+        let event = json!({
+            "event_id": "ak:event:derived",
+            "actor_kind": "principal",
+            "actor_id": "ak:did_core:web:alice.example",
+            "payload": {"body": "hello"},
+            "proofs": [{"kind": "detached_jws"}],
+            "unsigned": {"local": true}
+        });
+
+        assert_eq!(
+            canonical_event_digest_preimage(&event),
+            json!({
+                "actor_id": "ak:did_core:web:alice.example",
+                "payload": {"body": "hello"}
             })
         );
     }

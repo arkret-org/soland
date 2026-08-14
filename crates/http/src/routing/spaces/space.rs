@@ -1104,6 +1104,30 @@ pub async fn realm_member_invited_or_joined_at_for_id(
             }
         }
     }
+    // A private invite delivery is deliberately not projected as shared
+    // Realm membership state, but it is still the invitee's authoritative
+    // pre-join evidence. Account-client authoring surfaces must recognize it
+    // so the invitee can obtain an empty actor frontier and submit the
+    // invite-accept Control Move without widening general Realm reads.
+    let now = now();
+    if let Some(invited_at) = state
+        .realm_invites()
+        .snapshot_all()
+        .await
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter(|invite| {
+            invite.realm_id == realm_id
+                && invite.invitee.as_deref() == Some(actor)
+                && invite.status == "pending"
+                && invite.expires_at.is_none_or(|expires_at| expires_at > now)
+        })
+        .map(|invite| invite.created_at)
+        .min()
+    {
+        return Some(invited_at);
+    }
     realm_member_joined_at_for_id(state, realm_id, actor).await
 }
 
@@ -1235,6 +1259,8 @@ async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use soland_services::events::RealmInviteState;
+
     use super::*;
 
     const LIFECYCLE_ACTOR: &str = "did:web:owner.example";
@@ -1255,6 +1281,53 @@ mod tests {
             "proofs": [],
         }))
         .expect("realm lifecycle envelope")
+    }
+
+    #[tokio::test]
+    async fn private_pending_invite_is_pre_join_authoring_evidence() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let invitee = "did:web:bob.example";
+        let invited_at = "2026-08-14T00:00:00.000Z".parse().unwrap();
+        state
+            .realm_invites()
+            .put(RealmInviteState {
+                invite_id: "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg".to_owned(),
+                realm_id: LIFECYCLE_REALM.to_owned(),
+                inviter: LIFECYCLE_ACTOR.to_owned(),
+                invitee: Some(invitee.to_owned()),
+                invite_delivery_target: None,
+                introduction_evidence_digest: None,
+                third_party_id: None,
+                join_rule_snapshot: None,
+                invite_token: "private-token".to_owned(),
+                status: "pending".to_owned(),
+                claim_nonces: Default::default(),
+                expires_at: None,
+                created_at: invited_at,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, invitee).await,
+            Some(invited_at)
+        );
+        assert_eq!(
+            realm_member_invited_or_joined_at_for_id(
+                &state,
+                LIFECYCLE_REALM,
+                "did:web:mallory.example"
+            )
+            .await,
+            None
+        );
     }
 
     #[test]
