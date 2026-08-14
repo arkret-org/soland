@@ -9,7 +9,6 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
 }
 
 #[tokio::test]
-#[ignore = "spec-open: 2026-08-14-1054-principal-resolution-history-query-bounds"]
 async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
     let state = soland_test_support::app_state(test_config());
     let principal_server_id = state.service_id().clone();
@@ -21,10 +20,14 @@ async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principa
     let unknown = TestClient::get(&url).send(&service).await;
     assert_eq!(unknown.status_code, Some(StatusCode::NOT_FOUND));
 
-    let oversized = TestClient::get(format!("{url}&history_depth=257"))
+    // The public surface carries no PCR material, so it has no history
+    // selector at all: a leftover history_depth is not a bounded parameter
+    // here and must not change the outcome. Its closed 0..256 range moved to
+    // ak.self.identity.read.resolution_audit.
+    let with_stale_selector = TestClient::get(format!("{url}&history_depth=257"))
         .send(&service)
         .await;
-    assert_eq!(oversized.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(with_stale_selector.status_code, Some(StatusCode::NOT_FOUND));
 }
 
 #[tokio::test(flavor = "multi_thread")]
