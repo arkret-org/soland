@@ -2443,6 +2443,19 @@ pub(super) async fn submit_event_value_with_context(
     let (envelope, accepted_canonical_bytes) =
         accepted_event_envelope(state, session, envelope, &parsed, received_at).await?;
     envelope_for_bootstrap = envelope.clone();
+    let accepted_control_event_for_proposal = if control_event_for_proposal.is_some() {
+        Some(
+            serde_json::from_value::<Event>(envelope_for_bootstrap.clone()).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Control Move cannot be decoded: {error}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
@@ -2672,7 +2685,7 @@ pub(super) async fn submit_event_value_with_context(
                 "agent membership cascade may prepare only plain ak.member.state Events",
             ));
         }
-        let control_event = control_event_for_proposal.ok_or_else(|| {
+        let control_event = accepted_control_event_for_proposal.clone().ok_or_else(|| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
@@ -2894,7 +2907,7 @@ pub(super) async fn submit_event_value_with_context(
             "events store unavailable",
         ));
     }
-    if let Some(control_event) = control_event_for_proposal.as_ref() {
+    if let Some(control_event) = accepted_control_event_for_proposal.as_ref() {
         // Device-authorized self-principal PCR moves do not enter the external
         // proposal/decision rail. They remain canonical pending controls, with
         // a nullable Ack, until the same authority signs a successor Seal.

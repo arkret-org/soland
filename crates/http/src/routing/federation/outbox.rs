@@ -1912,10 +1912,15 @@ mod tests {
         let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
         let original_receipt =
             serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();
+        request
+            .validate_federation_transport()
+            .expect("fixture must remain a valid federation transport request");
         let response = format!(
             r#"{{
             "status":"partial",
             "accepted":["{}"],
+            "delivery_state":"complete",
+            "pending_delivery_count":0,
             "rejected":[{{
                 "id":"{pending_event_id}",
                 "reason_code":"dependency_missing",

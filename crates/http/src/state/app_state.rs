@@ -250,7 +250,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AREWNaKbiohkjttbQahJtzUSntiKs6oVegIOqTvIjPzH";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXvLzvHUG5julguSgjgL5yRlNfrSwcpo1TUt_VGq6ZkA";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();

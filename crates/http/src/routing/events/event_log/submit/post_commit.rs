@@ -644,7 +644,39 @@ pub(super) async fn peer_event_fanout_records(
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
-    let peers = dynamic_peer_event_targets(state, parsed).await?;
+    let mut peers = dynamic_peer_event_targets(state, parsed).await?;
+    // A standalone member join is evaluated before its projection becomes
+    // visible, so the joining member's own delivery binding cannot appear in
+    // `dynamic_peer_event_targets` yet. Treat the accepted Event as the
+    // authority witness for that exact target, matching the atomic Realm
+    // bootstrap path above.
+    if let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope) {
+        if service_id != state.service_id()
+            && !peers.iter().any(|peer| peer.service_id == service_id)
+        {
+            let url = crate::routing::federation::federation::resolved_peer_base_url(
+                state,
+                service_id,
+                "principal_server",
+                false,
+            )
+            .await
+            .ok();
+            peers.push(DynamicPeerEventTarget {
+                url,
+                service_id: service_id.to_owned(),
+                membership_frontier: vec![parsed.event_id.clone()],
+                delivery_binding_frontier: vec![parsed.event_id.clone()],
+                authority_witnesses: vec![
+                    soland_services::federation::RealmFanoutAuthorityWitness {
+                        member_id: member_id.to_owned(),
+                        membership_event_ref: parsed.event_id.clone(),
+                        delivery_binding_frontier: parsed.event_id.clone(),
+                    },
+                ],
+            });
+        }
+    }
     if peers.is_empty() {
         return Ok(Vec::new());
     }

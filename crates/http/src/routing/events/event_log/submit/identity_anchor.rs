@@ -641,7 +641,20 @@ pub(super) async fn submit_identity_anchor_batch(
     }
 
     if !reanchor_conflict {
-        for event in &typed_control_events {
+        let accepted_control_events = accepted_envelopes
+            .iter()
+            .cloned()
+            .map(|envelope| {
+                serde_json::from_value::<Event>(envelope).map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor Event cannot be decoded: {error}"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for event in &accepted_control_events {
             let digest = event.event_digest().map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,

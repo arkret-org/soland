@@ -283,6 +283,19 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 .0,
         );
     }
+    let accepted_typed_events = accepted_envelopes
+        .iter()
+        .cloned()
+        .map(|envelope| {
+            serde_json::from_value::<arkret_wire::Event>(envelope).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Realm bootstrap Event cannot be decoded: {error}"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let records = validated
         .iter()
         .zip(accepted_envelopes.iter().cloned())
@@ -406,7 +419,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ));
         }
     }
-    for (event, ack) in typed_events.iter().zip(&control_proposal_acks) {
+    for (event, ack) in accepted_typed_events.iter().zip(&control_proposal_acks) {
         state
             .projections()
             .put_pending_control_event_with_ack(event, ack)

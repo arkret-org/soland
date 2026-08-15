@@ -157,7 +157,7 @@ impl FederationOutboxStore for PgFederationOutboxStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let row_kind = sql_query(
-                "SELECT realm_fanout IS NOT NULL AS exists FROM federation_outbox \
+                "SELECT realm_fanout IS NOT NULL AS present FROM federation_outbox \
                  WHERE id = $1 AND lease_token = $2 FOR UPDATE",
             )
             .bind::<Text, _>(&transition.id)
