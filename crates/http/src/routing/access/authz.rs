@@ -22,7 +22,8 @@ use arkret_models_collaboration::governance::grant_constraint::{
 };
 use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
 use arkret_models_collaboration::governance::operation_wire::Invite;
-use arkret_wire::{AuthzDecision, Facet, InviteState};
+use arkret_wire::{AuthzDecision, DidCoreId, Facet, InviteState};
+use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -366,48 +367,57 @@ async fn effective_grants(
 ) -> soland_http::result::JsonResult<GrantList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
-    let realm_id = query_param(req, "realm_id").unwrap_or_else(|| "*".to_owned());
-    let subject_is_self = subject.as_str() == session.actor.as_str();
+    let subject = query_param(req, "subject")
+        .ok_or_else(|| AppError::param_invalid("subject is required"))
+        .and_then(|value| {
+            DidCoreId::new(value).map_err(|_| AppError::param_invalid("subject is invalid"))
+        })?;
+    let subject_principal_server_id = query_param(req, "subject_principal_server_id")
+        .ok_or_else(|| AppError::param_invalid("subject_principal_server_id is required"))
+        .and_then(|value| {
+            DidCoreId::new(value)
+                .map_err(|_| AppError::param_invalid("subject_principal_server_id is invalid"))
+        })?;
+    let realm_id = query_param(req, "realm_id")
+        .ok_or_else(|| AppError::param_invalid("realm_id is required"))
+        .and_then(|value| {
+            RealmId::new(value).map_err(|_| AppError::param_invalid("realm_id is invalid"))
+        })?;
+    let evaluated_at = query_param(req, "at")
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|_| AppError::param_invalid("at is invalid"))
+        })
+        .transpose()?
+        .unwrap_or_else(now);
+    let subject_is_self = subject.as_str() == session.actor.as_str()
+        && subject_principal_server_id.as_str() == session.audience.as_str();
     let caller_can_query_subject = subject_is_self
-        || (realm_id != "*" && session_owns_realm(state, session.actor.as_str(), &realm_id).await);
+        || session_owns_realm(state, session.actor.as_str(), realm_id.as_str()).await;
     if !caller_can_query_subject {
         return Err(AppError::capability_denied(
             "effective-grants subject requires self or realm owner scope",
         ));
     }
-    let grants = if realm_id == "*" {
-        // Return grants across all Realms.
-        state
-            .realms()
-            .realm_metadata_list()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .flat_map(|(sid, _)| {
-                state
-                    .authorization()
-                    .grants_for_subject(&subject, Some(state.service_id()), &sid)
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(capability_grant_from_authz_grant)
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        state
-            .authorization()
-            .grants_for_subject(&subject, Some(state.service_id()), &realm_id)
-            .into_iter()
-            .map(capability_grant_from_authz_grant)
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let grants = state
+        .authorization()
+        .grants_for_subject_at(
+            subject.as_str(),
+            Some(subject_principal_server_id.as_str()),
+            realm_id.as_str(),
+            evaluated_at,
+        )
+        .into_iter()
+        .map(capability_grant_from_authz_grant)
+        .collect::<Result<Vec<_>, _>>()?;
     soland_http::result::json_ok(GrantList {
         grants,
         state_digest: Some(
             Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
                 .map_err(|error| AppError::internal(error.to_string()))?,
         ),
-        evaluated_at: now(),
+        evaluated_at,
     })
 }
 

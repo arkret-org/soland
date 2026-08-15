@@ -1111,7 +1111,7 @@ pub fn describe(
                     "operation_id": "ak.self.authz.grants.read.effective",
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
-                    "query": ["realm_id", "subject", "at"],
+                    "query": ["realm_id", "subject", "subject_principal_server_id", "at"],
                     "response_shape": "GrantList",
                     "subject_scope": "authenticated_actor_or_realm_owner_for_realm_scoped_queries",
                     "operation_specific_error_codes": []

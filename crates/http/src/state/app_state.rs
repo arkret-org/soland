@@ -248,7 +248,7 @@ pub struct AppStateRuntime {
 /// Realm identity derived from the canonical deterministic development
 /// genesis fixture. Keep this single source shared with integration fixtures;
 /// changing the genesis payload must update the derived identity atomically.
-pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXvLzvHUG5julguSgjgL5yRlNfrSwcpo1TUt_VGq6ZkA";
+pub const DEVELOPMENT_DEMO_REALM_ID: &str = "ak:realm:AXCdgLbAeYp5QLVoa0yGlSTeJyScWZ-qB7wNKozodFBn";
 
 pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
@@ -1858,6 +1858,16 @@ impl AuthorizationPort for SolandAuthzEngine {
         realm_id: &str,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
         self.grants_for_subject(subject, subject_principal_server_id, realm_id)
+    }
+
+    fn grants_for_subject_at(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+        evaluated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<arkret_policy::authz::authority::Grant> {
+        self.grants_for_subject_at(subject, subject_principal_server_id, realm_id, evaluated_at)
     }
 
     fn grants_for_subject_all_realms(

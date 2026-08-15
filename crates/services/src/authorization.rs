@@ -55,6 +55,13 @@ pub trait AuthorizationPort: Send + Sync {
         subject_principal_server_id: Option<&str>,
         realm_id: &str,
     ) -> Vec<Grant>;
+    fn grants_for_subject_at(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+        evaluated_at: DateTime<Utc>,
+    ) -> Vec<Grant>;
     fn grants_for_subject_all_realms(
         &self,
         subject: &str,
@@ -106,6 +113,21 @@ impl AuthorizationService {
     ) -> Vec<Grant> {
         self.port
             .grants_for_subject(subject, subject_principal_server_id, realm_id)
+    }
+
+    pub fn grants_for_subject_at(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+        evaluated_at: DateTime<Utc>,
+    ) -> Vec<Grant> {
+        self.port.grants_for_subject_at(
+            subject,
+            subject_principal_server_id,
+            realm_id,
+            evaluated_at,
+        )
     }
 
     pub fn grants_for_subject_all_realms(

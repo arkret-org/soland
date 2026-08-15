@@ -297,7 +297,7 @@ pub fn apply_join_application_mutation(
                     let accepted = effective_accept_receipts(
                         &record.reviews,
                         &record.receipt.application_revision_digest,
-                    );
+                    )?;
                     if accepted.len() >= accept_threshold.max(1) {
                         record.required_accept_refs = accepted
                             .into_iter()
@@ -348,41 +348,38 @@ pub fn apply_join_application_mutation(
 fn effective_accept_receipts<'a>(
     reviews: &'a [JoinApplicationReviewReceipt],
     revision: &Hash,
-) -> Vec<&'a JoinApplicationReviewReceipt> {
-    let mut latest =
-        std::collections::BTreeMap::<String, (&JoinApplicationReviewReceipt, bool)>::new();
-    for review in reviews
-        .iter()
-        .filter(|review| &review.application_revision_digest == revision)
-    {
+) -> PersistenceResult<Vec<&'a JoinApplicationReviewReceipt>> {
+    let mut winners = std::collections::BTreeMap::<String, &JoinApplicationReviewReceipt>::new();
+    for review in reviews.iter().filter(|review| {
+        &review.application_revision_digest == revision
+            && review.decision == JoinApplicationDecision::Accept
+    }) {
         let key = review.reviewer_actor_id.as_str().to_owned();
-        match latest.get_mut(&key) {
+        match winners.get_mut(&key) {
             None => {
-                latest.insert(key, (review, false));
+                winners.insert(key, review);
             }
-            Some((current, conflict)) if review.reviewed_at > current.reviewed_at => {
-                *current = review;
-                *conflict = false;
+            Some(current) => {
+                let ordering = arkret_state::lattice::ordered_log::compare_canonical_digests(
+                    review.review_receipt_digest.as_str(),
+                    current.review_receipt_digest.as_str(),
+                )
+                .ok_or_else(|| {
+                    super::PersistenceError::SchemaViolation(
+                        "review_receipt_digest is not a canonical typed digest".to_owned(),
+                    )
+                })?;
+                if ordering.is_gt() {
+                    *current = review;
+                }
             }
-            Some((current, conflict))
-                if review.reviewed_at == current.reviewed_at
-                    && review.decision != current.decision =>
-            {
-                *conflict = true;
-            }
-            Some(_) => {}
         }
     }
-    let mut accepted = latest
-        .values()
-        .filter_map(|(review, conflict)| {
-            (!*conflict && review.decision == JoinApplicationDecision::Accept).then_some(*review)
-        })
-        .collect::<Vec<_>>();
+    let mut accepted = winners.into_values().collect::<Vec<_>>();
     accepted.sort_by(|left, right| {
         left.reviewer_actor_id
             .cmp(&right.reviewer_actor_id)
             .then_with(|| left.review_receipt_digest.cmp(&right.review_receipt_digest))
     });
-    accepted
+    Ok(accepted)
 }

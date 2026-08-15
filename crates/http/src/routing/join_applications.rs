@@ -350,6 +350,7 @@ async fn review_join_application(
     if body.receipt.realm_id != realm_id
         || body.receipt.application_ref != application_ref
         || body.receipt.reviewer_actor_id.as_str() != session.actor
+        || body.receipt.reviewer_principal_server_id.as_str() != session.audience
     {
         return Err(failed_precondition(
             "proof_invalid",
@@ -369,7 +370,7 @@ async fn review_join_application(
     let accept_threshold = state
         .projections()
         .snapshot()
-        .check_private_join_application_review(&body.receipt, state.service_id())
+        .check_private_join_application_review(&body.receipt)
         .map_err(projection_error)?;
     let existing = state
         .join_applications()

@@ -134,8 +134,23 @@ impl SolandAuthzEngine {
         subject_principal_server_id: Option<&str>,
         realm_id: &str,
     ) -> Vec<Grant> {
+        self.grants_for_subject_at(
+            subject,
+            subject_principal_server_id,
+            realm_id,
+            chrono::Utc::now(),
+        )
+    }
+
+    /// Return grants effective at the caller-selected evaluation instant.
+    pub fn grants_for_subject_at(
+        &self,
+        subject: &str,
+        subject_principal_server_id: Option<&str>,
+        realm_id: &str,
+        evaluated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
-        let now = chrono::Utc::now();
         snapshot
             .iter()
             .filter(|g| {
@@ -144,8 +159,9 @@ impl SolandAuthzEngine {
                     && g.realm_id == realm_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
-                    && !is_grant_expired(g, now)
-                    && authority_chain_intact(&snapshot, &g.grant_id, now)
+                    && g.created_at <= evaluated_at
+                    && !is_grant_expired(g, evaluated_at)
+                    && authority_chain_intact(&snapshot, &g.grant_id, evaluated_at)
             })
             .cloned()
             .collect()

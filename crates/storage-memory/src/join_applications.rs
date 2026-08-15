@@ -277,6 +277,22 @@ mod tests {
         digest_fill: char,
         second: u32,
     ) -> JoinApplicationReviewReceipt {
+        accept_review_at_authority(
+            reviewer,
+            "ak:did_core:web:principal.example",
+            grant,
+            digest_fill,
+            second,
+        )
+    }
+
+    fn accept_review_at_authority(
+        reviewer: &str,
+        reviewer_principal_server_id: &str,
+        grant: &str,
+        digest_fill: char,
+        second: u32,
+    ) -> JoinApplicationReviewReceipt {
         let digest = hash(digest_fill);
         let reviewer_verification_method = format!(
             "did:{}#device",
@@ -290,6 +306,7 @@ mod tests {
             "application_ref": hash('a'),
             "application_revision_digest": hash('c'),
             "reviewer_actor_id": reviewer,
+            "reviewer_principal_server_id": reviewer_principal_server_id,
             "decision": "accept",
             "evidence_refs": [],
             "reviewer_capability_proof": {
@@ -526,5 +543,98 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn quorum_deduplicates_actor_and_uses_digest_winner_independent_of_arrival() {
+        async fn run(digest_order: [char; 2]) -> Vec<String> {
+            let store = MemoryJoinApplicationStore::new();
+            store
+                .execute(command(
+                    "submit-quorum",
+                    "request-submit-quorum",
+                    JoinApplicationMutation::Submit {
+                        record: Box::new(application_record()),
+                        max_open_applications: 1,
+                        cooldown_after_reject_seconds: 60,
+                    },
+                ))
+                .await
+                .unwrap();
+
+            for (index, digest_fill) in digest_order.into_iter().enumerate() {
+                let receipt = accept_review_at_authority(
+                    "ak:did_core:web:reviewer-one.example",
+                    if index == 0 {
+                        "ak:did_core:web:principal-one.example"
+                    } else {
+                        "ak:did_core:web:principal-two.example"
+                    },
+                    "ak:grant:AVFSR4O2uTcP6zGsyewp0OdaGeDZBXQAUZ9VIEKLSXYo",
+                    digest_fill,
+                    index as u32 + 1,
+                );
+                let outcome = store
+                    .execute(command(
+                        &format!("review-same-{index}"),
+                        &format!("request-review-same-{index}"),
+                        JoinApplicationMutation::Review {
+                            realm_id: REALM.to_owned(),
+                            application_ref: arkret_wire::Hash::new(hash('a')).unwrap(),
+                            receipt,
+                            accept_threshold: 2,
+                        },
+                    ))
+                    .await
+                    .unwrap();
+                let JoinApplicationCommandOutcome::Applied { record, .. } = outcome else {
+                    panic!("same-actor review should apply");
+                };
+                assert_eq!(
+                    record.status,
+                    arkret_models_collaboration::governance::join_policy::JoinApplicationStatus::AwaitingReview,
+                    "multiple Principal Server accounts must still count as one reviewer"
+                );
+            }
+
+            let second_actor = accept_review(
+                "ak:did_core:web:reviewer-two.example",
+                "ak:grant:AeWYNl1hiGDuy4WCQ03g5lgs2NZzf_SFYgjsfhG-t9cg",
+                '2',
+                3,
+            );
+            let outcome = store
+                .execute(command(
+                    "review-distinct",
+                    "request-review-distinct",
+                    JoinApplicationMutation::Review {
+                        realm_id: REALM.to_owned(),
+                        application_ref: arkret_wire::Hash::new(hash('a')).unwrap(),
+                        receipt: second_actor,
+                        accept_threshold: 2,
+                    },
+                ))
+                .await
+                .unwrap();
+            let JoinApplicationCommandOutcome::Applied { record, .. } = outcome else {
+                panic!("distinct reviewer should complete quorum");
+            };
+            assert_eq!(
+                record.status,
+                arkret_models_collaboration::governance::join_policy::JoinApplicationStatus::Accepted
+            );
+            record
+                .required_accept_refs
+                .into_iter()
+                .map(|digest| digest.to_string())
+                .collect()
+        }
+
+        let forward = run(['1', '9']).await;
+        let reverse = run(['9', '1']).await;
+        assert_eq!(forward, reverse);
+        assert!(forward.contains(&hash('9')));
+        assert!(!forward.contains(&hash('1')));
+        assert_eq!(forward.len(), 2);
     }
 }

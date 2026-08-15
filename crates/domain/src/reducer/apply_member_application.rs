@@ -189,7 +189,6 @@ impl ProjectionState {
     pub fn check_private_join_application_review(
         &self,
         receipt: &JoinApplicationReviewReceipt,
-        reviewer_principal_server_id: &str,
     ) -> Result<usize, &'static str> {
         let realm_id = receipt.realm_id.as_str();
         let application = self
@@ -216,7 +215,7 @@ impl ProjectionState {
         if !self.projected_capability_grant_matches(
             receipt.reviewer_capability_proof.grant_id.as_str(),
             receipt.reviewer_actor_id.as_str(),
-            reviewer_principal_server_id,
+            receipt.reviewer_principal_server_id.as_str(),
             realm_id,
             &action,
             realm_id,
