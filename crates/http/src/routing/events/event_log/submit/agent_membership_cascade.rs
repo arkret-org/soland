@@ -515,19 +515,12 @@ async fn finalize_prepared_batch(
             &event.operation,
         )
         .await;
-        if let Err(error) = crate::routing::events::projection::persist_projected_operation(
-            state,
-            &event.actor_id,
-            &event.operation,
-        )
-        .await
-        {
-            tracing::warn!(
-                %error,
-                event_id = %event.command.event.event_id,
-                "accepted cascade operation projection persistence failed"
-            );
-        }
+        // `project_membership_operation` above is the whole projection write:
+        // it maintains `projection_spaces`, which is what every read path
+        // queries. The former `persist_projected_operation` companion wrote
+        // only into `spaces` / `space_members` / `space_state_events`, three
+        // tables with no SELECT anywhere, and was removed with them. The
+        // mainline submit path in `projection/apply.rs` projects the same way.
         let _ = state.publish_event_notification(crate::state::EventNotification::event(
             event.projected_event.realm_id.clone(),
             event.projected_event.event_id.clone(),

@@ -86,7 +86,7 @@ pub async fn install(
                 actor_seq: event.actor_seq,
                 realm_id: Some(event.realm_id.to_string()),
                 kind: event.kind.as_str().to_owned(),
-                schema_id: "ak.schema.event.v1".to_owned(),
+                schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
                 canonical_digest: event_digest,
                 canonical_bytes,
                 envelope,

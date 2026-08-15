@@ -684,7 +684,10 @@ async fn event_delivery_status(
 ) -> JsonResult<EventDeliveryStatusOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    super::super::require_agent_session_scope(&session, "ak.self.events.read.delivery_status")?;
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DELIVERY_STATUS,
+    )?;
     let body = body.into_inner();
     let event_id = body.event_id.as_str();
     let record = state

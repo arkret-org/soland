@@ -387,7 +387,7 @@ mod tests {
             actor_seq: 1,
             realm_id: "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
             kind: kind.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
             prev_refs: Vec::new(),
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
